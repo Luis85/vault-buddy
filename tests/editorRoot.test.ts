@@ -1,3 +1,15 @@
+/**
+ * The editor window's LIFECYCLE half: draining the Rust-owned stash, loading
+ * and resuming a staged capture, surviving a re-open, and the preview's two
+ * clocks (the element reports source time; every surface the user sees
+ * speaks output time).
+ *
+ * The EDITING half — the operations, the selection and playhead they
+ * re-index, the strip-to-composable seam and spec 8.2's shortcuts — lives in
+ * `editorEditing.test.ts`. The two files repeat the fixtures below rather
+ * than sharing a helper module: `vi.mock` is hoisted per file in any case,
+ * and each suite stays readable on its own.
+ */
 import { mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,77 +39,11 @@ vi.mock("../src/logging", () => ({
 
 import { logWarning } from "../src/logging";
 import EditorRoot from "../src/roots/EditorRoot.vue";
+import { type Call, DETAIL, mockEditor, open, segments, STAGED_MP4, video } from "./helpers/editorMount";
 
 // The strip's window-level pointerup listener (and the editor's own future
 // listeners) must not outlive their test.
 enableAutoUnmount(afterEach);
-
-/** `assetPath` is the staged file's OWN absolute path, the way
- * `load_staged_capture` hands it over. It was a bare file name until P-5;
- * `convertFileSrc` joins nothing, so that produced a URL naming no file on
- * disk and matching no entry in the asset protocol's scope. A Windows path
- * on purpose: it is the only platform this ships on, and it is the one whose
- * separators and drive letter have to survive percent-encoding. */
-const STAGED_MP4 =
-  "C:\\Users\\me\\AppData\\Local\\com.vaultbuddy.desktop\\screen-captures\\cap one.mp4";
-
-const DETAIL = {
-  base: "cap one",
-  assetPath: STAGED_MP4,
-  durationMs: 10_000,
-  sourceTitle: "Screen 1",
-  width: 1920,
-  height: 1080,
-  recordedAt: "2026-09-20T10:00:00Z",
-  timeline: null as unknown,
-};
-
-type Call = Record<string, unknown> & { cmd: string };
-
-/** Serve one staged capture, plus whatever `take_editor_request` should
- * hand back on each successive drain. */
-function mockEditor(
-  detail: unknown = DETAIL,
-  requests: (string | null)[] = ["cap one"],
-  details?: Record<string, unknown>,
-) {
-  const seen: Call[] = [];
-  const queue = [...requests];
-  mockIPC((cmd, args) => {
-    seen.push({ cmd, ...(args as object) });
-    if (cmd === "take_editor_request") return queue.length > 0 ? queue.shift() : null;
-    if (cmd === "load_staged_capture") {
-      const base = (args as { base: string }).base;
-      return details?.[base] ?? detail;
-    }
-    return undefined;
-  });
-  return seen;
-}
-
-async function open(detail?: unknown, requests?: (string | null)[], details?: Record<string, unknown>) {
-  mockEditor(detail, requests, details);
-  const w = mount(EditorRoot);
-  await flushPromises();
-  return w;
-}
-
-function segments(w: ReturnType<typeof mount>) {
-  return w.findAll('[data-testid^="segment-"]');
-}
-
-function video(w: ReturnType<typeof mount>) {
-  return w.get('[data-testid="preview-video"]').element as HTMLVideoElement;
-}
-
-/** happy-dom rects are zero-sized; the strip reads its own width for a drop.
- * 200px at the origin, so a clientX is the percentage doubled. */
-function sizeStrip(w: ReturnType<typeof mount>) {
-  const strip = w.get('[data-testid="timeline-strip"]');
-  strip.element.getBoundingClientRect = () =>
-    ({ left: 0, width: 200, top: 0, height: 64, right: 200, bottom: 64, x: 0, y: 0 }) as DOMRect;
-  return strip;
-}
 
 beforeEach(() => {
   for (const key of Object.keys(listeners)) delete listeners[key];
@@ -227,70 +173,6 @@ describe("EditorRoot", () => {
     expect(w.text()).not.toContain("No capture open");
   });
 
-  it("refuses a split on a boundary rather than consuming an undo step", async () => {
-    const w = await open();
-    // The playhead starts at 0, which is segment 0's own start.
-    await w.get('[data-testid="editor-split"]').trigger("click");
-    expect(segments(w)).toHaveLength(1);
-    expect(w.get('[data-testid="editor-undo"]').attributes("disabled")).toBeDefined();
-  });
-
-  it("splits at the playhead, enables undo, and undoes", async () => {
-    const w = await open();
-    await w.get('[data-testid="preview-scrub"]').setValue("4000");
-    await w.get('[data-testid="editor-split"]').trigger("click");
-    expect(segments(w)).toHaveLength(2);
-    // The real point of the shallowRef: a non-reactive binding leaves this
-    // disabled forever, because the computed that reads it never
-    // re-evaluates.
-    expect(w.get('[data-testid="editor-undo"]').attributes("disabled")).toBeUndefined();
-    await w.get('[data-testid="editor-undo"]').trigger("click");
-    expect(segments(w)).toHaveLength(1);
-    expect(w.get('[data-testid="editor-redo"]').attributes("disabled")).toBeUndefined();
-    await w.get('[data-testid="editor-redo"]').trigger("click");
-    expect(segments(w)).toHaveLength(2);
-  });
-
-  it("deletes the selected segment and nothing else", async () => {
-    const w = await open();
-    await w.get('[data-testid="preview-scrub"]').setValue("4000");
-    await w.get('[data-testid="editor-split"]').trigger("click");
-    await w.get('[data-testid="segment-1"]').trigger("click");
-    await w.get('[data-testid="editor-delete"]').trigger("click");
-    expect(segments(w)).toHaveLength(1);
-    // One block is 100% whichever one survived, so that alone proves
-    // nothing. Scrub to an output moment and read where it lands in the
-    // SOURCE: output 1000 is source 1000 in the first segment and source
-    // 5000 in the second, so this distinguishes them.
-    expect(segments(w)[0].attributes("style")).toContain("100%");
-    await w.get('[data-testid="preview-scrub"]').setValue("1000");
-    expect(video(w).currentTime).toBeCloseTo(1, 3);
-  });
-
-  // THE SEAM. `TimelineStrip` emits an insertion SLOT in [0, n];
-  // `useEditorTimeline.reorder` takes a destination INDEX in [0, n) and
-  // REFUSES anything else. Passing the slot straight through is not
-  // reinterpreted, it is rejected — so a missing conversion is a drag that
-  // silently does nothing, which no assertion on "did it error" would catch.
-  // Only the order itself proves the conversion ran.
-  it("converts the strip's drop slot into a destination index", async () => {
-    const w = await open({
-      ...DETAIL,
-      timeline: {
-        segments: [
-          { sourceStartMs: 0, sourceEndMs: 2000 },
-          { sourceStartMs: 6000, sourceEndMs: 9000 },
-        ],
-      },
-    });
-    expect(segments(w)[0].attributes("style")).toContain("40%");
-    const strip = sizeStrip(w);
-    await w.get('[data-testid="segment-0"]').trigger("pointerdown", { clientX: 10 });
-    await strip.trigger("pointerup", { clientX: 180 });
-    // Slot 2 on a two-segment timeline is "past the last block" -> index 1.
-    expect(segments(w)[0].attributes("style")).toContain("60%");
-    expect(segments(w)[1].attributes("style")).toContain("40%");
-  });
 
   it("scrubs in output time and seeks the element in source time", async () => {
     const w = await open({
@@ -377,92 +259,59 @@ describe("EditorRoot", () => {
     expect(src).toBe(`http://asset.localhost/${encodeURIComponent(STAGED_MP4)}`);
   });
 
-  // Spec 8.2's shortcuts. The editor fills its own window, so there is no
-  // narrower focus target than `window` to bind them to.
-  it("undoes and redoes from the keyboard", async () => {
-    const w = await open();
-    await w.get('[data-testid="preview-scrub"]').setValue("4000");
-    await w.get('[data-testid="editor-split"]').trigger("click");
-    expect(segments(w)).toHaveLength(2);
 
-    // A bare `z` is a keystroke, not a shortcut: without the modifier gate
-    // typing into any future field in this window would rewrite the edit.
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "z" }));
-    await flushPromises();
-    expect(segments(w)).toHaveLength(2);
-
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true }));
-    await flushPromises();
-    expect(segments(w)).toHaveLength(1);
-
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "z", ctrlKey: true, shiftKey: true }),
-    );
-    await flushPromises();
-    expect(segments(w)).toHaveLength(2);
-  });
-
-  // Ctrl+Y is what half of Windows expects; Ctrl+Shift+Z is what spec 8.2
-  // names. Both are asserted because supporting one is not supporting the
-  // other, and the whole app ships on Windows.
-  it("redoes on Ctrl+Y as well", async () => {
-    const w = await open();
-    await w.get('[data-testid="preview-scrub"]').setValue("4000");
-    await w.get('[data-testid="editor-split"]').trigger("click");
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true }));
-    await flushPromises();
-    expect(segments(w)).toHaveLength(1);
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "y", ctrlKey: true }));
-    await flushPromises();
-    expect(segments(w)).toHaveLength(2);
-  });
-
-  // The listener is on `window`, so an unmounted editor that kept listening
-  // would go on editing a timeline nobody can see — and, worse, go on
-  // WRITING it to the sidecar. That write is the observable: after the
-  // unmount there is no rendered strip left to count, which is exactly why
-  // an assertion on a segment count captured BEFORE the unmount proves
-  // nothing at all.
-  it("stops listening for shortcuts once unmounted", async () => {
-    const seen = mockEditor();
-    const w = mount(EditorRoot);
-    await flushPromises();
-    await w.get('[data-testid="preview-scrub"]').setValue("4000");
-    await w.get('[data-testid="editor-split"]').trigger("click");
-    await flushPromises();
-    const saves = () => seen.filter((c) => c.cmd === "save_capture_timeline").length;
-    expect(saves()).toBe(1);
-
-    w.unmount();
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true }));
-    await flushPromises();
-    // A surviving listener undoes the split and persists the result.
-    expect(saves()).toBe(1);
-  });
-
-  // I-7. Spec 10 promises "saved on each edit, so a crash loses at most the
-  // last one". When the sidecar write fails that promise is off and only the
-  // user can act on it, so it cannot stay a log line — but it also must not
-  // take the editor away: the edit is on screen and undo still works.
-  it("says so when an edit could not be saved, and keeps the editor usable", async () => {
-    mockIPC((cmd) => {
-      if (cmd === "take_editor_request") return "cap one";
-      if (cmd === "load_staged_capture") return DETAIL;
-      if (cmd === "save_capture_timeline") throw new Error("no space left on device");
+  // m-8. `load` replaces the composable outright, abandoning its save chain,
+  // and that chain writes the very sidecar the next load reads. Reopening
+  // inside the write window seeded the editor from the PRE-write content, so
+  // the next edit was derived from a timeline one operation out of date.
+  it("lets the previous capture's save land before reading the next sidecar", async () => {
+    const seen: Call[] = [];
+    let releaseSave: () => void = () => undefined;
+    const saveLanded = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const queue = ["cap one", "cap two"];
+    mockIPC((cmd, args) => {
+      seen.push({ cmd, ...(args as object) });
+      if (cmd === "take_editor_request") return queue.shift() ?? null;
+      if (cmd === "load_staged_capture") {
+        return (args as { base: string }).base === "cap two"
+          ? { ...DETAIL, base: "cap two", sourceTitle: "Firefox" }
+          : DETAIL;
+      }
+      if (cmd === "save_capture_timeline") return saveLanded;
       return undefined;
     });
     const w = mount(EditorRoot);
     await flushPromises();
-    expect(w.find('[data-testid="editor-save-failed"]').exists()).toBe(false);
-
     await w.get('[data-testid="preview-scrub"]').setValue("4000");
     await w.get('[data-testid="editor-split"]').trigger("click");
-    await flushPromises();
 
-    expect(w.get('[data-testid="editor-save-failed"]').text()).toContain("could not be saved");
-    // The edit itself landed, and the load-error banner (which REPLACES the
-    // editor) is not what was rendered.
-    expect(segments(w)).toHaveLength(2);
-    expect(w.find('[data-testid="editor-error"]').exists()).toBe(false);
+    const loadsOfTwo = () =>
+      seen.filter((c) => c.cmd === "load_staged_capture" && c.base === "cap two").length;
+
+    listeners["editor:open"]();
+    await flushPromises();
+    // The save is still in flight, so the read has not happened yet.
+    expect(loadsOfTwo()).toBe(0);
+
+    releaseSave();
+    await flushPromises();
+    expect(loadsOfTwo()).toBe(1);
+    expect(w.text()).toContain("Firefox");
   });
+
+  // m-1. The strip's empty state used to read "Nothing left to save — undo a
+  // delete or revert the edit": it named a delete that cannot have happened
+  // (`deleteSegment` refuses to remove the last segment, so this state is
+  // unreachable from the editor) and a Revert verb this window does not
+  // offer at all.
+  it("names no verb it does not offer when there is nothing to show", async () => {
+    const w = await open({ ...DETAIL, timeline: { segments: [] } });
+    const empty = w.get('[data-testid="strip-empty"]').text();
+    expect(empty).not.toMatch(/revert/i);
+    expect(empty).not.toMatch(/undo/i);
+  });
+
+
 });

@@ -641,6 +641,26 @@ staged captures" action.
 everything doing device or disk work is async on the blocking pool, per the
 documented rule.
 
+> **Reconciled after phase 4 (2026-09-20).** Both numbers above are now wrong
+> and the module names below are partly aspirational — read this table as the
+> DESIGN, and AGENTS.md's IPC table as what exists. The shipped surface is 85
+> commands (measure it, never increment it: the one-liner is in AGENTS.md),
+> and the phases landed differently from this section in three ways:
+> - Region selection is its OWN module, `region_commands.rs`, not part of
+>   `screen_commands.rs`: it is a window-lifecycle concern that touches no
+>   `CaptureGuard`, no `ScreenCaptureState` and no session.
+> - The editor's module is `editor_commands.rs`, and phase 4 shipped FOUR
+>   commands, none of them the ones named below: `open_capture_editor`
+>   *(sync — it stashes the base rather than reading disk)*,
+>   `take_editor_request` *(sync — the one-shot drain of that stash)*,
+>   `load_staged_capture` *(async)* and `save_capture_timeline` *(async)*.
+>   `list_staged_captures`, `export_and_save_capture`, `cancel_export`,
+>   `discard_staged_capture` and `open_screen_capture` are all still ahead —
+>   they are phase 5/6's, along with the vault write none of them can do yet.
+> - `screen_config_commands.rs` does not exist at all: five of the seven
+>   `screen_*` config fields are parsed and preserved but read by nothing
+>   until phase 6.
+
 | Defined in | Commands |
 | --- | --- |
 | `screen_commands.rs` | `list_capture_sources` *(async)*, `select_capture_region` *(async — shows the overlay, resolves to a rect or null)*, `start_screen_capture` *(async)*, `pause_screen_capture`, `resume_screen_capture`, `stop_screen_capture` *(async)*, `screen_capture_status` *(sync)* |

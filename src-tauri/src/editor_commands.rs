@@ -706,10 +706,19 @@ mod tests {
         );
     }
 
-    // Clearing is how "revert to the whole capture" is expressed, and it
-    // must remove the field rather than store an empty timeline — an empty
-    // segment list is a capture Save refuses (spec 8.1), which is not the
-    // same thing as an untouched one.
+    // NO production caller passes `None` today, and that is deliberate
+    // rather than an oversight: "clearing means untouched" WAS the design,
+    // and it was removed (C-1) because it is true only for a capture opened
+    // unedited — on spec 10's Resume the editor is handed a previous
+    // session's edit, so undoing back to it cleared the field and told the
+    // exporter the recording had never been touched. `useEditorTimeline`
+    // therefore always writes the timeline, never `null`, and "untouched"
+    // has exactly one authority: `Timeline::is_untouched(source_duration_ms)`.
+    //
+    // The `Option` stays for phase 5's discard, and this test stays with it:
+    // it pins that clearing REMOVES the field rather than storing an empty
+    // segment list — a timeline Save refuses (spec 8.1), which is not the
+    // same thing as an absent one.
     #[test]
     fn clearing_a_timeline_removes_it_rather_than_storing_an_empty_one() {
         let mut s = sidecar("cap");

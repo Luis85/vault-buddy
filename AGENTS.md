@@ -97,9 +97,11 @@ vault-buddy/
 │   ├── roots/                  # BuddyRoot / PanelRoot / BubbleRoot / RegionRoot / EditorRoot + rootFor() map
 │   ├── components/             # panel views + buddy character (ActionPanel is the shell)
 │   │   └── editor/             # CapturePreview + TimelineStrip (the editor window's surface)
-│   ├── stores/                 # Pinia: vaults, capture, updates, settings, notifications
+│   ├── stores/                 # Pinia: vaults, capture, screenCapture, documentImports,
+│   │                           #   pandoc, updates, settings, settingsStatus, notifications
 │   ├── composables/            # settings sync, startup update check, bubble, announcements,
-│   │                           #   tasks helpers, useEditorTimeline (undo/redo + persist-on-edit)
+│   │                           #   tasks helpers, useEditorTimeline (undo/redo + persist-on-edit),
+│   │                           #   useEditorSelection (the selection/playhead remap)
 │   └── utils/                  # highlight, recentSearches, formatDuration, timelineGeometry
 ├── src-tauri/                  # Rust workspace: root shell crate + 5 member crates
 │   ├── tauri.conf.json         # the 5 windows, updater endpoint, version,
@@ -112,7 +114,8 @@ vault-buddy/
 │   │                           #   screen_commands.rs, screen_capture_worker.rs,
 │   │                           #   region_commands.rs (the overlay's selection lifecycle),
 │   │                           #   editor_commands.rs (the editor's open/load/save surface),
-│   │                           #   window_close.rs (CloseRequested routing),
+│   │                           #   window_close.rs (CloseRequested routing) +
+│   │                           #     window_close_guard.rs (its structural test),
 │   │                           #   capture_exclusion.rs (WDA_EXCLUDEFROMCAPTURE apply/clear),
 │   │                           #   capture_guard.rs (cross-domain capture exclusion),
 │   │                           #   tray.rs, diagnostics.rs, config_lock_guard.rs, main.rs
@@ -273,8 +276,8 @@ Five OS windows, one frontend bundle, one Rust process:
 All 85 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands — and COUNT the
 `generate_handler![…]` list rather than adding to the previous number: this
-sentence has been wrong twice (73 when it was 79, then 79 when it was 81),
-and the count below was measured, not incremented:
+sentence has been wrong three times (73 when it was 79, 79 when it was 81,
+then 81 when it was 85), and the count below was measured, not incremented:
 
 ```bash
 awk '/generate_handler!\[/,/\]\)/' src-tauri/src/lib.rs | grep -cE '^\s+[a-z_]+::[a-z_]+,$'
@@ -1107,7 +1110,7 @@ it makes goes through `staging::write_sidecar` into
 
 - **The editor (phase 4) — `editor_commands.rs` + `EditorRoot.vue`.** A
   staged capture is opened in its own window, cut into segments, and saved
-  back into its own staging sidecar. Four facts a later phase must not get
+  back into its own staging sidecar. Six facts a later phase must not get
   wrong:
   - **The asset protocol's scope is a security boundary, not a detail.** The
     preview plays the staged `.mp4` through `convertFileSrc(…, "asset")`, and
@@ -1115,8 +1118,15 @@ it makes goes through `staging::write_sidecar` into
     `["$APPLOCALDATA/screen-captures/*"]`. That one line is what stops the
     editor webview reading arbitrary files off the disk through
     `asset.localhost`. Widening it to `$APPLOCALDATA/*`, or to a vault path,
-    would be a real escalation, and **no test pins it** (docs/Gaps.md
-    GAP-137). Nothing on the frontend side can widen it, which is why
+    would be a real escalation — and **a test pins it**:
+    `tray.rs`'s `the_asset_protocol_scope_is_pinned_to_the_staging_directory_alone`
+    parses `tauri.conf.json` and asserts the scope array EXACTLY, plus
+    `enable: true` and the CSP's `media-src` clause, so a widening edit turns
+    `cargo test -p vault-buddy --lib` red rather than shipping. (This file and
+    GAP-137 both claimed the opposite for three commits after that test
+    landed, which is worse than saying nothing: it invited the next agent to
+    widen the scope expecting nothing to stop them.) Nothing on the frontend
+    side can widen it, which is why
     `StagedCaptureDetail.assetPath` carrying a full absolute path is not a
     leak: the scope is enforced by Tauri on every request regardless.
   - **The preview is NOT authoritative and is NOT gapless.** It is one
@@ -1139,8 +1149,27 @@ it makes goes through `staging::write_sidecar` into
     single authority for "untouched" is
     `core::timeline::Timeline::is_untouched(source_duration_ms)`, which needs
     a duration the frontend is never given. Do not re-derive it in
-    TypeScript; there are already two implementations of this mapping and
-    nothing checks them against each other (docs/Gaps.md GAP-136).
+    TypeScript; there are already two implementations of this mapping
+    (docs/Gaps.md GAP-136).
+  - **The two implementations are held apart by ONE shared fixture table.**
+    `tests/fixtures/timeline-cases.json` is read by `tests/timelineFixtures.
+    test.ts` and by `core/src/timeline.rs`'s `shared_fixture_table_*` tests
+    (`include_str!`, so moving the file breaks the Rust build). Running it
+    through both found two REAL disagreements, now fixed on the TypeScript
+    side: a backwards segment (Rust's `saturating_sub` contributes nothing;
+    raw subtraction walked the accumulator backwards) and `whole(0)` (Rust
+    returns an empty timeline; the TS re-implementation minted a zero-length
+    segment). Add a row to the table, not a case to one language.
+  - **The selection and the playhead belong to the WINDOW, and every
+    operation re-indexes them.** `useEditorSelection` owns both and states the
+    rule once: the selection follows its own FOOTAGE (looked back up by value
+    after each operation) and is dropped only when that footage is gone; the
+    playhead is clamped into the shortened output. A bare index left alone
+    across a split pointed at different footage, and Delete then removed a
+    block the user never selected — recoverable by Undo, but with no error and
+    an immediate sidecar write. Any new verb goes through
+    `editKeepingSelection`, and a test asserting only that "something changed"
+    will not catch getting it wrong.
 - **Frontend.** `RecordMode.vue`'s chooser → `ScreenSourcePicker.vue`
   (Screen / Window / Region tabs — the Region tab is the presentational
   `ScreenRegionPicker.vue`, which lists the monitors as *targets* for
@@ -1163,12 +1192,23 @@ it makes goes through `staging::write_sidecar` into
   (`select_capture_region` sets `DIALOG_ACTIVE`, so the panel does not even
   auto-hide), so on a second monitor the user can press Start while still
   drawing. `ScreenCaptureBar.vue` renders the store's live state on the
-  panel's LIST view beside `RecordingBar` (the two domains cannot run at
-  once, so it is a sibling, never a stack) — elapsed via the store's own
-  `elapsedMs` so the paused-time arithmetic has ONE implementation, the
-  source title, an inline `screen:warning` (which is why the store withholds
-  that toast while a capture is live), a `dropped` chip only once frames
-  have actually dropped, and Pause/Resume/Stop. Its label has THREE arms,
+  panel's LIST view beside `RecordingBar` — a sibling while both are LIVE
+  (the CaptureGuard forbids two live captures), but NOT never-a-stack: since
+  phase 4 this bar also covers a FINISHED capture, so an audio recording
+  started after a screen capture renders both bars, stacked. That pairing is
+  accepted and pinned by a test, because the staged row is the only handle on
+  that footage until phase 5's browser and hiding it would put the editor out
+  of reach for the length of the recording. The live row renders elapsed via
+  the store's own `elapsedMs` so the paused-time arithmetic has ONE
+  implementation, the source title, an inline `screen:warning` — which is why
+  the store withholds that toast while a capture is live, and correspondingly
+  why the inline line is gated on the LIVE row alone: the bar now outlives the
+  capture, so an ungated line showed a late warning twice, as a toast AND as a
+  sticky line nothing clears — a `dropped` chip only once frames have actually
+  dropped, and Pause/Resume/Stop. Its 1 Hz clock is gated too
+  (`useNowTicker(() => staged === null)`): the bar stays mounted for the rest
+  of the process after any capture and the panel window is hidden rather than
+  unmounted, so an ungated ticker ran forever for a row with no clock in it. Its label has THREE arms,
   like `RecordingBar`'s: `status` stays `capturing` until `screen:stopped`
   lands and the ticker keeps ticking, so a bar without the `stopping`-keyed
   `Saving…` arm counts on through the whole finalize window (bounded at 30 s
@@ -1198,7 +1238,10 @@ it makes goes through `staging::write_sidecar` into
   absent at exactly the moment Edit exists, and the editor is unreachable
   from the running app with every bar-level test still green. Pause and Stop
   are not rendered in the finished state at all: that session is gone, so
-  both would address nothing.
+  both would address nothing. The finished row DOES keep naming the source:
+  `applyStopped` calls `reset()`, which nulls the store's `sourceTitle`, so
+  the row reads `lastStaged.sourceTitle ?? store.sourceTitle` rather than
+  dropping to the base name alone.
 
 ## The document-import domain (`core/src/document_import.rs` + `src-tauri/src/document_commands.rs` + `DocumentImportSettings.vue` / `ImportVaultPicker.vue`)
 

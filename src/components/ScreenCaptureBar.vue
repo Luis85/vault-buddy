@@ -11,8 +11,6 @@ import Chip from "./ui/Chip.vue";
 
 const store = useScreenCaptureStore();
 const notifications = useNotificationsStore();
-const now = useNowTicker();
-
 /** The finished capture this bar is offering, or `null` while one is
  * running.
  *
@@ -25,6 +23,17 @@ const now = useNowTicker();
  * order, so idle-with-nothing-staged is the state nobody should see this bar
  * in at all (`ActionPanel` does not render it there). */
 const staged = computed(() => (store.status === "idle" ? store.lastStaged : null));
+
+// Declared AFTER `staged` on purpose: `watch` evaluates its source getter
+// once at creation, so reading `staged` from above it is a temporal-dead-zone
+// ReferenceError, not a lazy closure.
+//
+// Gated on there being a clock to drive at all. This bar stays mounted for
+// the rest of the process once a capture has finished (the staged row below),
+// and the panel window is hidden rather than unmounted, so an ungated ticker
+// would run at 1 Hz forever to update a value the finished row renders
+// nowhere.
+const now = useNowTicker(() => staged.value === null);
 
 /** Phase 4's ONE way into the editor. Phase 5 replaces it with spec 10's
  * staged-capture browser, which lists every staged capture rather than just
@@ -78,6 +87,20 @@ const tone = computed(() => {
   if (staged.value) return "bg-white/5";
   return store.paused ? "bg-amber-500/15" : "bg-red-500/15";
 });
+// `applyStopped` calls `reset()`, which nulls the store's `sourceTitle`, so
+// the finished row would identify the capture by its base name alone — even
+// though the staged payload carries the very title the live row rendered a
+// second earlier. The staged capture's own copy wins where there is one.
+const sourceTitle = computed(() => staged.value?.sourceTitle ?? store.sourceTitle);
+// Spec 14: a vanished source or device warns and the capture finalizes
+// cleanly. The store withholds the TOAST while a capture is live precisely
+// because this bar shows the warning inline — but since phase 4 the bar
+// outlives the capture, so an ungated line rendered the same warning twice:
+// a toast AND a sticky line nothing clears until the next capture starts.
+// Resolved here rather than as `store.warning && !staged` in the markup for
+// the reason `dotTone` and `tone` above are: this template is a
+// complexity-gated surface and the ratchet counts every branch in it.
+const warning = computed(() => (staged.value ? null : store.warning));
 </script>
 
 <template>
@@ -174,22 +197,23 @@ const tone = computed(() => {
       </button>
     </div>
     <p
-      v-if="store.sourceTitle"
+      v-if="sourceTitle"
       data-testid="screen-source"
       class="mt-0.5 truncate text-xs text-fg-muted"
     >
-      {{ store.sourceTitle }}
+      {{ sourceTitle }}
     </p>
     <!-- Spec 14: a vanished source or device warns and the capture finalizes
          cleanly. The store withholds the toast while a capture is live
          because this line exists; without it a warning raised MID-capture has
-         nowhere to go (a terminal one still rides Rust's stop toast). -->
+         nowhere to go (a terminal one still rides Rust's stop toast).
+         `warning` is the LIVE-only view of it — see the computed. -->
     <p
-      v-if="store.warning"
+      v-if="warning"
       data-testid="screen-warning"
       class="mt-1 text-xs text-amber-200"
     >
-      {{ store.warning }}
+      {{ warning }}
     </p>
   </div>
 </template>

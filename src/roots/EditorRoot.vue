@@ -24,15 +24,15 @@ import CapturePreview from "../components/editor/CapturePreview.vue";
 import TimelineStrip from "../components/editor/TimelineStrip.vue";
 import AppButton from "../components/ui/AppButton.vue";
 import Banner from "../components/ui/Banner.vue";
+import { useEditorSelection } from "../composables/useEditorSelection";
 import { useEditorTimeline } from "../composables/useEditorTimeline";
 import { logWarning } from "../logging";
 import type { StagedCaptureDetail, TimelineDto } from "../types";
+import { wholeTimeline } from "../utils/timelineGeometry";
 
 const detail = ref<StagedCaptureDetail | null>(null);
 const error = ref<string | null>(null);
 const noCapture = ref(false);
-const selected = ref<number | null>(null);
-const playheadMs = ref(0);
 
 /** A shallowRef, not a plain `let`.
  *
@@ -47,6 +47,12 @@ const editor = shallowRef<ReturnType<typeof useEditorTimeline> | null>(null);
 /** Read THROUGH the composable rather than mirroring it. A local copy kept
  * in step by hand is one missed call away from a stale render. */
 const timeline = computed<TimelineDto>(() => editor.value?.timeline.value ?? { segments: [] });
+/** The highlighted block and the playhead — window state, not timeline
+ * state, and the seam every operation re-indexes underneath. `EditorRoot` is
+ * the only place that knows both the operation and the selection, so the
+ * remap rule is installed here and applied around each verb below. */
+const { selected, playheadMs, editKeepingSelection, clearSelection, resetSelection } =
+  useEditorSelection(timeline);
 // `.value` is not optional here: the composable returns a PLAIN object whose
 // fields happen to be refs, and a template reading `editor?.canUndo` would
 // get the ref OBJECT — always truthy, so Undo would never disable.
@@ -73,17 +79,25 @@ const src = computed(() =>
 const saveFailed = computed(() => editor.value?.saveFailed.value ?? false);
 
 async function load(base: string) {
+  // Let the capture we are LEAVING finish writing before we read anything.
+  // `load` replaces the composable outright, abandoning its save chain — and
+  // that chain targets a sidecar `load_staged_capture` is about to read. Close
+  // and immediately reopen the same capture inside the write window (temp +
+  // fsync + replacing rename) and the editor would seed from the PRE-write
+  // content and then write an edit derived from it: one operation silently
+  // lost (the phase review's m-8). The chain always settles — every error is
+  // caught inside it — so this cannot hang the open.
+  await editor.value?.flushPending();
   try {
     const loaded = await invoke<StagedCaptureDetail>("load_staged_capture", { base });
     // An untouched capture opens as ONE segment spanning the whole
-    // recording: the timeline the sidecar does not carry yet.
-    const seed: TimelineDto = loaded.timeline ?? {
-      segments: [{ sourceStartMs: 0, sourceEndMs: loaded.durationMs }],
-    };
+    // recording: the timeline the sidecar does not carry yet. `wholeTimeline`
+    // is the mirror of `core::timeline::Timeline::whole`, carrying its
+    // zero-duration guard, rather than a fourth hand-written copy here.
+    const seed: TimelineDto = loaded.timeline ?? wholeTimeline(loaded.durationMs);
     editor.value = useEditorTimeline(loaded.base, seed);
     detail.value = loaded;
-    selected.value = null;
-    playheadMs.value = 0;
+    resetSelection();
     noCapture.value = false;
     error.value = null;
   } catch (e) {
@@ -111,12 +125,12 @@ async function openRequested() {
 }
 
 function onSplit() {
-  editor.value?.splitAt(playheadMs.value);
+  editKeepingSelection(() => editor.value?.splitAt(playheadMs.value));
 }
 function onDelete() {
   if (selected.value === null) return;
   editor.value?.deleteSegment(selected.value);
-  selected.value = null;
+  clearSelection();
 }
 /**
  * `slot` is an INSERTION slot in `[0, n]`, which is not what
@@ -127,14 +141,13 @@ function onDelete() {
  * already rejected the two slots that mean "did not move".
  */
 function onReorder(from: number, slot: number) {
-  editor.value?.reorder(from, slot > from ? slot - 1 : slot);
-  selected.value = null;
+  editKeepingSelection(() => editor.value?.reorder(from, slot > from ? slot - 1 : slot));
 }
 function onUndo() {
-  editor.value?.undo();
+  editKeepingSelection(() => editor.value?.undo());
 }
 function onRedo() {
-  editor.value?.redo();
+  editKeepingSelection(() => editor.value?.redo());
 }
 
 /** Spec 8.2's shortcuts.
@@ -146,10 +159,20 @@ function onRedo() {
  * interactive surfaces in it.
  *
  * The modifier gate is not ceremony: an ungated `z` would rewrite the edit
- * from any keystroke, including one typed into a field a later phase adds
- * (spec 10's Save dialog is exactly that). */
+ * from any keystroke.
+ *
+ * `altKey` is excluded because Windows reports AltGr as Ctrl+Alt, and on
+ * several Central-European layouts AltGr+Z or AltGr+Y is how a character is
+ * typed (Polish `ż`) — without the clause that keystroke both rewrites the
+ * edit and is `preventDefault`ed, so the character never arrives either.
+ *
+ * What this gate does NOT do is protect a text field: `preventDefault` here
+ * is unconditional, so the first `<input>` this window grows (spec 10's Save
+ * dialog) loses its native text undo to the timeline. That needs a target
+ * check (`closest("input, textarea")`), which is deliberately not written
+ * ahead of the field it would guard. */
 function onKeydown(e: KeyboardEvent) {
-  if (!e.ctrlKey && !e.metaKey) return;
+  if ((!e.ctrlKey && !e.metaKey) || e.altKey) return;
   const key = e.key.toLowerCase();
   if (key === "z" && !e.shiftKey) {
     e.preventDefault();
@@ -182,6 +205,10 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="flex h-screen w-screen flex-col gap-3 bg-slate-900 p-4 text-fg">
+    <!-- A load failure REPLACES the editor rather than sitting beside it:
+         there is no capture behind it to edit. The save-failure banner
+         further down is the opposite case and renders INSIDE the editor,
+         because there the edit is on screen and still usable. -->
     <Banner
       v-if="error"
       data-testid="editor-error"
@@ -189,6 +216,8 @@ onBeforeUnmount(() => {
     >
       {{ error }}
     </Banner>
+    <!-- Not an error: the window is hidden and reused, so the user can
+         alt-tab back to an editor whose stash is empty. -->
     <p
       v-else-if="noCapture"
       class="m-auto text-sm text-fg-muted"
@@ -218,6 +247,10 @@ onBeforeUnmount(() => {
         :output-ms="playheadMs"
         @update:output-ms="playheadMs = $event"
       />
+      <!-- The strip emits a SELECT index and an insertion SLOT; `onReorder`
+           converts the slot, and `selected` is remapped around every
+           operation by `useEditorSelection` (a bare index would otherwise go
+           on pointing at whatever footage took its number). -->
       <TimelineStrip
         :timeline="timeline"
         :selected="selected"
@@ -233,6 +266,9 @@ onBeforeUnmount(() => {
         >
           Split
         </AppButton>
+        <!-- Delete is the only verb that needs a selection, which is why it
+             is the only one disabled without one; Split acts on the playhead
+             and is a no-op on a boundary by spec 8.1. -->
         <AppButton
           data-testid="editor-delete"
           variant="secondary"
@@ -258,6 +294,10 @@ onBeforeUnmount(() => {
           Redo
         </AppButton>
       </div>
+      <!-- Phase 4 writes NOTHING into a vault: an edit lives in the staging
+           sidecar until phase 5 builds the export. Saying so here is the same
+           honesty posture as the stop toast's "Screen capture ready", which
+           deliberately does not claim a save either. -->
       <p class="text-micro text-fg-subtle">
         Saving into a vault arrives in a later update.
       </p>

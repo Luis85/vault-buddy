@@ -277,12 +277,19 @@ watch(
       @pause="capture.pause()"
       @resume="capture.resume()"
     />
-    <!-- The screen domain's own bar, beside the audio one. The two capture
-         kinds cannot run at once (the shared CaptureKind guard), so this is a
-         sibling, never a stack. Without it ScreenSourcePicker's start
-         navigates to a view that shows nothing about the capture it just
-         began (docs/Gaps.md GAP-118) — and, since phase 4, the finished
-         capture's Edit action would have nowhere to render either. -->
+    <!-- The screen domain's own bar, beside the audio one. Two LIVE captures
+         cannot coexist (the shared CaptureGuard), but that is all the guard
+         says: since phase 4 this bar also covers a FINISHED capture, and
+         `showScreenBar` stays true while it does — so recording audio after a
+         screen capture renders both, stacked. That is accepted rather than
+         tolerated: the staged row is the only handle anything has on that
+         footage until phase 5's browser, so hiding it under a live recording
+         would put the editor out of reach for as long as the recording runs
+         (the task-7 review's I-1; `action-panel.test.ts` pins the pairing so
+         nobody "fixes" it back). Without this bar at all,
+         ScreenSourcePicker's start navigates to a view that says nothing
+         about the capture it just began (docs/Gaps.md GAP-118), and the Edit
+         action would have nowhere to render. -->
     <ScreenCaptureBar
       v-if="view === 'list' && showScreenBar"
       class="mb-2"

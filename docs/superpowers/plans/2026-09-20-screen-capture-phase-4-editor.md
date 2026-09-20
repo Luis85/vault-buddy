@@ -4,7 +4,7 @@
 
 **Goal:** A staged screen capture can be opened in a real editor window, previewed, cut into segments, reordered, undone and redone — with every edit persisted to the staging sidecar so a crash loses at most the last operation. No export, no vault write.
 
-**Architecture:** A fourth OS window (`editor`), deliberately unlike the three companion surfaces: decorated, resizable, alt-tabbable, not always-on-top, and **exempt from hide-to-tray**. It renders `EditorRoot`, which plays the staged `.mp4` through Tauri's asset protocol (scoped to the staging directory only) and drives `core::timeline` — a pure module Phase 1 already built and unit-tested, which this phase gives its first production caller. Every timeline operation returns a new `Timeline`, so undo/redo is a stack of snapshots rather than an inverse-operation log.
+**Architecture:** A fourth OS window (`editor`), deliberately unlike the three companion surfaces: decorated, resizable, alt-tabbable, not always-on-top, and **exempt from hide-to-tray**. It renders `EditorRoot`, which plays the staged `.mp4` through Tauri's asset protocol (scoped to the staging directory only) and drives the segment algebra Phase 1 built and unit-tested as `core::timeline`. **As SHIPPED that algebra runs in TypeScript, not in Rust** (`src/utils/timelineGeometry.ts` + `src/composables/useEditorTimeline.ts`): the preview has to map the playhead inside the webview, so this phase did NOT give `core::timeline` its first production caller, as the exit criteria below now record. The two implementations are held to one behaviour by a shared fixture table instead (docs/Gaps.md GAP-136). Every timeline operation returns a new timeline on both sides, so undo/redo is a stack of snapshots rather than an inverse-operation log.
 
 **Tech Stack:** Tauri v2 (window lifecycle, asset protocol, CSP), Rust shell commands, Vue 3 + Pinia + Tailwind 4, `core::timeline` (pure Rust), `screen::staging` (sidecar I/O), Vitest + happy-dom.
 
@@ -2329,7 +2329,10 @@ not that browser — do not build it here.
    > | `editor_commands.rs` | `open_capture_editor` *(sync — window show/focus; it STASHES the base rather than loading it, because a sync command must not touch disk)*, `take_editor_request` *(sync — one-shot drain)*, `load_staged_capture` *(async)*, `save_capture_timeline` *(async — an fsync'd sidecar rewrite per edit)* |
 4. **"Screen capture (phases 2–3)"** — retitle to **"phases 2–4"** and add
    the editor's own paragraph: the asset protocol's staging-only scope as a
-   security boundary; `core::timeline` finally having a production caller;
+   security boundary (and pinned by `tray.rs`'s
+   `the_asset_protocol_scope_is_pinned_to_the_staging_directory_alone`);
+   `core::timeline` still having NO production caller, with the shared fixture
+   table holding the two implementations together instead;
    preview-not-authoritative; and that Phase 4 still writes nothing into a
    vault.
 5. **"Frontend state"** — `rootFor()` gains `editor → EditorRoot`, and note
@@ -2442,7 +2445,7 @@ Verified by running the command, not by reading a report:
 - [ ] `cargo llvm-cov … --fail-under-lines 94` passes.
 - [ ] `rm -rf coverage && npm run lint && npm run check:loc && npm run check:quality && npm run test:coverage && npm run build` passes in that order, with exactly one pre-existing lint warning in `src/main.ts`.
 - [ ] Baselines unchanged, or a moved one tightened with a written justification.
-- [ ] `core::timeline` — Phase 1's orphan — has a production caller.
+- [x] ~~`core::timeline` — Phase 1's orphan — has a production caller.~~ **STRUCK, not met.** Phase 4 implemented the segment algebra in TypeScript (`src/utils/timelineGeometry.ts` + `src/composables/useEditorTimeline.ts`), because the editor runs in a webview and the preview has to map the playhead there. `core::timeline` therefore still has no production caller — `grep` finds only `pub mod timeline;` and `select.rs`, itself uncalled. That is the honest consequence of where the editor lives, not an oversight to tick: the criterion was written before the implementation language was decided. Phase 5's export is what will call it. What phase 4 owes instead — holding the two implementations to one behaviour — is the shared fixture table above (docs/Gaps.md GAP-136).
 - [ ] The editor is in `EXCLUDED_LABELS`, in `ALL_WINDOW_LABELS`, and **not** in `COMPANION_LABELS`, each pinned by a test.
 - [ ] The asset-protocol scope is exactly `["$APPLOCALDATA/screen-captures/*"]`.
 - [ ] Phase 4 writes nothing into any vault — verify structurally, not from comments.
@@ -2450,8 +2453,8 @@ Verified by running the command, not by reading a report:
 
 ## What Phase 5 needs from this phase
 
-- **`save_capture_timeline` stores `null` for an untouched capture**, not a one-segment timeline. `is_untouched` is what the fast-path remux keys on, and a capture reverted to whole must take that path.
-- **`toSourceMs` (TS) and `core::timeline::to_source_ms` (Rust) are two implementations of one mapping.** Export plans on the Rust one while the user watched the TS one. If they disagree, the exported file does not match the preview — check them against a shared fixture table before building export.
+- **`save_capture_timeline` ALWAYS stores the timeline, and NEVER `null` — key the export fast path on `Timeline::is_untouched(source_duration_ms)`, not on `Option::is_none()`.** (This bullet said the opposite until the phase-4 final fix wave, and following it would have resurrected cut footage in the export with every test green.) The editor writes on every edit, so after the first one the sidecar always carries a timeline. It USED to clear the field whenever the timeline matched the one the editor opened with, under "absent means untouched" — true only for a capture opened unedited, and on spec §10's Resume it told the exporter that a previously-edited recording had never been touched. Commit `6944ac0` removed that, four tests now forbid it, and AGENTS.md's editor section records the rule. A whole-capture timeline answers `is_untouched` exactly as an absent one does, so the fast path loses nothing.
+- **`toSourceMs` (TS) and `core::timeline::to_source_ms` (Rust) are two implementations of one mapping.** Export plans on the Rust one while the user watched the TS one. If they disagree, the exported file does not match the preview. The shared fixture table this bullet asked for now EXISTS — `tests/fixtures/timeline-cases.json`, read by `tests/timelineFixtures.test.ts` and by `core/src/timeline.rs`'s `shared_fixture_table_*` tests — and building it found two real disagreements (a backwards segment, and `whole(0)`), both since fixed on the TS side. Extend that table wherever export exercises the mapping; do not write a Rust-only fixture for it (docs/Gaps.md GAP-136).
 - **The editor window is exempt from `hide_buddy` but not from `finish_quit`.** Export must not assume the editor is gone when the app is hiding.
 - **`EditorRoot` installs no store.** If Phase 5 adds `screen:exportProgress`, that is the editor's first Rust event stream, and the per-window `init()` rule (AGENTS.md, "Frontend state") starts applying to it.
 - **The staged capture is deleted only after the vault write lands** (spec §8.3) — the never-lose invariant. Phase 4 deletes nothing; do not let export delete early.

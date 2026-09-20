@@ -2613,7 +2613,11 @@ been skipped by the dispatcher (Task 8 → 9 → 11) and is filled in here, whic
 is why it sits out of order in the history. `src/components/
 ScreenCaptureBar.vue` reads the store and renders on the list view beside
 `RecordingBar` (`ActionPanel.vue`, gated `view === 'list' &&
-screenCapture.status !== 'idle'`), so `ScreenSourcePicker.vue`'s
+showScreenBar` — the gate read `screenCapture.status !== 'idle'` when this
+entry was written, and phase 4 widened it to
+`status !== 'idle' || lastStaged !== null` so the finished capture's Edit
+action has somewhere to render; the narrow form is exactly the shape this
+entry exists to warn against), so `ScreenSourcePicker.vue`'s
 `store.showList()` now lands on the surface its comment always claimed:
 elapsed via `store.elapsedMs(now)` (paused time excluded — the Rust clock
 excludes it by construction, and the bar delegates rather than re-deriving
@@ -3013,7 +3017,14 @@ boundary — parse the field into `core::timeline::Timeline` in
 not fit, which also gets phase 5's parse done in the one place that already
 reads the file. Deliberately NOT done in the P4 fix wave: it changes the wire
 contract's meaning for a case no shipped code can produce, and phase 5 has to
-parse that field into a `Timeline` regardless.
+parse that field into a `Timeline` regardless. **One thing to know while it
+stands open:** `src/types.ts` declares
+`StagedCaptureDetail.timeline: TimelineDto | null`, which asserts a guarantee
+nothing provides — `editor_commands.rs` returns `Option<serde_json::Value>`
+and `load_from_staging_dir` never inspects its shape. The annotation is what
+let `snapshot()` be written without a shape check; read it as "whatever the
+sidecar held", not as a contract (the phase-4 review's m-5; `types.ts` now
+says so at the field).
 
 ### GAP-135 · Medium · `core::timeline` has no serde derives, so the editor's on-disk timeline shape is an unenforced convention
 `src-tauri/core/src/timeline.rs` (`Segment`, `Timeline` — `#[derive(Debug,
@@ -3044,59 +3055,119 @@ and add a test that round-trips a literal JSON string spelled the way
 fails if the names change on either side. GAP-134's fix (parse the field in
 `load_from_staging_dir`) needs this first and should carry it.
 
-### GAP-136 · Medium · The output-to-source mapping exists twice, in two languages, and nothing checks that the two agree
+### GAP-136 · Low · The output-to-source mapping exists twice, in two languages — now held apart by a shared fixture table, but only for the rows in it
 `src-tauri/core/src/timeline.rs`'s `Timeline::to_source_ms` and
 `src/utils/timelineGeometry.ts`'s `toSourceMs` (plus their siblings —
-`output_duration_ms`/`outputDurationMs`, and `split_at`/`reorder`/`delete`,
-which live in `useEditorTimeline.ts` on the TypeScript side). Both implement
-spec §8.1's segment algebra; each has its own unit tests; no fixture is
-shared and no test runs both. The TypeScript side also has `toOutputMs`, the
-inverse the preview needs, which the Rust side does not have at all.
+`output_duration_ms`/`outputDurationMs`, `whole`/`wholeTimeline`, and
+`split_at`/`delete`/`reorder`, which live in `useEditorTimeline.ts` on the
+TypeScript side). Both implement spec §8.1's segment algebra. The TypeScript
+side also has `toOutputMs`, the inverse the preview needs, which the Rust side
+does not have at all.
 
 They coexist for a real reason — the preview has to map the playhead in the
 webview, and the export has to map it in Rust — so this is not a delete-one
-gap. The risk is that they DRIFT, and the drift is invisible: phase 5's
-export plans on the Rust one while the user watches the TypeScript one, so a
-disagreement about a boundary (the half-open `[start, end)` convention, or
-which segment owns the instant a cut lands on) means the exported file does
-not match the preview the user approved. Two concrete places they could
-already differ: `useEditorTimeline.splitAt` rounds its input with
-`Math.round` before choosing a segment, which `Timeline::split_at` has no
-equivalent of (its input is already `u64`); and `segmentAtOutputMs`'s strict
-`<` is load-bearing on the TS side in a way `to_source_ms`'s early return
-mirrors only by construction. **Failure scenario:** a user cuts a moment out,
-the preview skips it, the exported file still contains it — or the export
-lands one frame off at every cut — with every test in the repo green.
-**Fix shape:** one shared fixture table (a JSON file of
-`{timeline, outputMs, expectedSourceMs}` rows) read by a Rust test and a
-Vitest test alike, added when phase 5 gives the Rust side a production caller
-— that is the moment the disagreement becomes reachable, and the moment the
-fixture has two real implementations to hold apart.
+gap. The risk is that they DRIFT, and phase 5's export plans on the Rust one
+while the user watched the TypeScript one, so a disagreement means the
+exported file does not match the preview the user approved.
 
-### GAP-137 · Medium · The asset protocol's staging-only scope is a security boundary pinned by no test
+**They already HAD drifted, measurably.** The phase-4 review built one fixture
+table and ran it through both languages. Well-formed cases agreed exactly; two
+did not, and neither is the pair this entry used to name as candidates
+(`splitAt`'s `Math.round`, and `segmentAtOutputMs`'s strict `<` — both were
+checked and neither diverges):
+
+- **a backwards segment** (`[0,2000] [4000,3000] [4000,6000]`, reachable from
+  a hand-edited or sync-conflicted sidecar, which nothing validates —
+  GAP-134). `Segment::duration_ms` is a `saturating_sub`, so the middle
+  segment contributed NOTHING in Rust; TypeScript subtracted raw, so it
+  contributed a NEGATIVE length that walked the accumulator backwards. Rust:
+  duration 4000, `to_source(2000) = 4000`. TypeScript: duration 3000,
+  `toSourceMs(2000) = 5000`.
+- **`whole(0)`**. Rust returns an EMPTY timeline and carries a named
+  regression test against minting a zero-length segment ("reaches the exporter
+  as an unplayable frame plan"); `EditorRoot`'s inline re-implementation of
+  the same function seeded `[{0, 0}]` with no such guard.
+
+**FIXED 2026-09-20 (the phase-4 final fix wave), on both halves.**
+`timelineGeometry.ts` gained a private `durationOf` (`Math.max(0, end -
+start)`) used by every function that measures a segment, and an exported
+`wholeTimeline(durationMs)` carrying Rust's zero guard, which `EditorRoot`'s
+`load` now calls instead of building the seed inline. And the shared fixture
+table the plan's hand-off asked for now exists:
+`tests/fixtures/timeline-cases.json`, read by `tests/timelineFixtures.test.ts`
+and by `core/src/timeline.rs`'s two `shared_fixture_table_*` tests via
+`include_str!` (so moving the file breaks the Rust build rather than silently
+testing nothing). Both sides assert the row COUNTS as well as the rows, so a
+table quietly shrinking to one case fails too.
+
+**What remains, and why this is now Low rather than Medium:** the table holds
+six mapping cases, two `whole` rows and four operation rows. Nothing forces a
+NEW divergence into it — a function added to one side (`toOutputMs` is already
+TypeScript-only) or a behaviour changed outside a covered row still drifts
+unobserved. The residual fix, when phase 5 gives the Rust side a production
+caller, is to extend the table wherever the export's own mapping is exercised
+rather than writing a Rust-only fixture for it.
+
+### GAP-137 · CLOSED · The asset protocol's staging-only scope
 `src-tauri/tauri.conf.json` — `app.security.assetProtocol = { "enable": true,
 "scope": ["$APPLOCALDATA/screen-captures/*"] }` — against
-`src/roots/EditorRoot.vue`'s `convertFileSrc(detail.assetPath, "asset")`.
+`src/roots/EditorRoot.vue`'s `convertFileSrc(detail.assetPath, "asset")`. That
+one scope line is what keeps the editor webview from reading arbitrary files
+through `asset.localhost`.
 
-That one scope line is what keeps the editor webview from reading arbitrary
-files through `asset.localhost`. It is enforced by Tauri on every request, so
-nothing on the frontend side can widen it — which is exactly why widening it
-is a one-line config edit with no failing test to stop it. The codebase pins
-its other config-derived invariants (`ALL_WINDOW_LABELS`, `COMPANION_LABELS`,
-`POSITION_DENYLIST` and `EXCLUDED_LABELS` all have tests that read
-`tauri.conf.json` and fail on drift); this one does not, and it is the only
-one whose loosening is an information-disclosure escalation rather than a
-cosmetic bug.
+**This entry was FALSE when it was written, and that is the part worth
+keeping.** It claimed the scope was "pinned by no test" and asked a future
+agent to write one. The test already existed:
+`src-tauri/src/tray.rs`'s
+`the_asset_protocol_scope_is_pinned_to_the_staging_directory_alone`, landed in
+`69ba75f` — the FIRST commit of phase 4, three commits before this entry — and
+it asserts the scope array EXACTLY (an equality, so an added entry fails too),
+that `enable` is `true`, and that the CSP still carries `media-src 'self'
+asset: http://asset.localhost`. Widening the scope to `$APPLOCALDATA/*` turns
+`cargo test -p vault-buddy --lib` red. AGENTS.md repeated the same falsehood in
+the one paragraph it devotes to this security boundary; both were corrected in
+the phase-4 final fix wave (2026-09-20).
 
-**Failure scenario:** a later phase needs to preview something outside
-staging — an exported file in a vault, a thumbnail cache — and widens the
-scope to `$APPLOCALDATA/*` or adds a vault path. Every test stays green, and
-from that moment any script running in the editor webview (or any future
-window, since the scope is app-wide, not per-window) can read every file
-under that root and exfiltrate it: the user's notes, in the vault case.
-**Fix shape:** a Rust unit test in `src-tauri/src/` that parses
-`tauri.conf.json` and asserts `assetProtocol.scope` is EXACTLY
-`["$APPLOCALDATA/screen-captures/*"]` — an equality assertion, not a
-`contains`, so an added entry fails too. The existing config-derived
-window-label tests in `tray.rs` are the shape to copy, including the message
-that tells the next reader what the assertion is protecting.
+**Residual, deliberately not tracked as an open gap:** the scope is
+app-WIDE, not per-window, so any future webview inherits the same read access
+to the staging directory. That is a property of Tauri's asset protocol rather
+than of this config, there is nothing to tighten today, and the test above
+makes any change to the line visible. Nothing else here is open.
+
+### GAP-138 · Low · The staged-capture row on the panel's list view never expires or dismisses
+`src/stores/screenCapture.ts` (`lastStaged`, cleared only by a SUCCESSFUL
+`start()`) and `src/components/ActionPanel.vue`'s `showScreenBar`. After one
+screen capture the list view carries a "Recorded <base> · Edit" row for the
+rest of the process, with no dismiss and no expiry.
+
+The audio domain's sibling affordance is explicitly time-boxed: `RenamePrompt`
+is gated `view === 'list' && capture.lastSaved` and swept by
+`dismissRenameIfStale` after `RENAME_PROMPT_MS = 30_000`, because a permanent
+row on the main list was considered wrong there.
+
+There is a real argument for permanence here — until phase 5's staged-capture
+browser exists, that row is the ONLY handle anything has on the footage, and
+the same reasoning is why it is allowed to stack above a live `RecordingBar`
+(the phase-4 review's T7-I1). This entry exists because the trade-off was
+recorded nowhere, not because it is settled. **Fix shape:** when phase 5's
+browser lands, the row stops being the only handle and should either expire
+like `RenamePrompt` or gain a dismiss; until then, leaving it is the safer of
+the two, and it should be a conscious decision in that phase's plan.
+
+### GAP-139 · Low · Three of `useEditorTimeline`'s exports have no production consumer
+`src/composables/useEditorTimeline.ts` — `revert`, `isDirty` and `outputMs`
+are returned and read only by tests (`grep` over `src/`). `flushPending` was
+the fourth until the phase-4 final fix wave gave it one: `EditorRoot.load`
+awaits it before reading the next capture's sidecar, which also closed the
+reopen-during-a-write race (the phase-4 review's m-8). Its own comment used to
+say "the window-close path will", which was never reachable as written —
+`window_close.rs` answers the editor's X wholly in Rust with
+`prevent_close()` + `hide()`, so the webview receives no close event at all.
+
+All three remaining are plausible phase-5 hand-offs: `isDirty`/`revert` are
+spec §8.2's Discard, and `outputMs` is what a Save dialog would show. They are
+unit-tested and not dead code in fallow's sense (object properties, not
+exports), so nothing flags them. **Fix shape:** phase 5 either wires them to
+the Discard/Save surfaces the spec names, or deletes them in the same commit
+that decides not to — a returned function nobody calls is a claim about a
+surface that does not exist.

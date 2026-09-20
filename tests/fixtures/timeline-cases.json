@@ -1,0 +1,279 @@
+{
+  "$comment": [
+    "The SHARED fixture table for the editor's segment algebra (spec 8.1).",
+    "Read by tests/timelineFixtures.test.ts and by the shared_fixture_table_*",
+    "tests in src-tauri/core/src/timeline.rs -- both by this exact path, so",
+    "moving this file breaks a Rust build (include_str!) and a Vitest run.",
+    "Why it exists, and what each row pins, is documented in those two files.",
+    "toSourceMs rows are [outputMs, expectedSourceMs]; null means past the end."
+  ],
+  "whole": [
+    {
+      "durationMs": 6000,
+      "segments": [
+        {
+          "sourceStartMs": 0,
+          "sourceEndMs": 6000
+        }
+      ]
+    },
+    {
+      "durationMs": 0,
+      "segments": []
+    }
+  ],
+  "cases": [
+    {
+      "name": "one whole segment",
+      "segments": [
+        {
+          "sourceStartMs": 0,
+          "sourceEndMs": 6000
+        }
+      ],
+      "outputDurationMs": 6000,
+      "toSourceMs": [
+        [
+          0,
+          0
+        ],
+        [
+          2999,
+          2999
+        ],
+        [
+          5999,
+          5999
+        ],
+        [
+          6000,
+          null
+        ]
+      ],
+      "splitAt": {
+        "outputMs": 2000,
+        "segments": [
+          {
+            "sourceStartMs": 0,
+            "sourceEndMs": 2000
+          },
+          {
+            "sourceStartMs": 2000,
+            "sourceEndMs": 6000
+          }
+        ]
+      }
+    },
+    {
+      "name": "three contiguous cuts",
+      "segments": [
+        {
+          "sourceStartMs": 0,
+          "sourceEndMs": 2000
+        },
+        {
+          "sourceStartMs": 2000,
+          "sourceEndMs": 4000
+        },
+        {
+          "sourceStartMs": 4000,
+          "sourceEndMs": 6000
+        }
+      ],
+      "outputDurationMs": 6000,
+      "toSourceMs": [
+        [
+          0,
+          0
+        ],
+        [
+          2000,
+          2000
+        ],
+        [
+          4000,
+          4000
+        ],
+        [
+          5999,
+          5999
+        ],
+        [
+          6000,
+          null
+        ]
+      ],
+      "splitAt": {
+        "outputMs": 3000,
+        "segments": [
+          {
+            "sourceStartMs": 0,
+            "sourceEndMs": 2000
+          },
+          {
+            "sourceStartMs": 2000,
+            "sourceEndMs": 3000
+          },
+          {
+            "sourceStartMs": 3000,
+            "sourceEndMs": 4000
+          },
+          {
+            "sourceStartMs": 4000,
+            "sourceEndMs": 6000
+          }
+        ]
+      },
+      "delete": {
+        "index": 1,
+        "segments": [
+          {
+            "sourceStartMs": 0,
+            "sourceEndMs": 2000
+          },
+          {
+            "sourceStartMs": 4000,
+            "sourceEndMs": 6000
+          }
+        ]
+      },
+      "reorder": {
+        "from": 0,
+        "to": 2,
+        "segments": [
+          {
+            "sourceStartMs": 2000,
+            "sourceEndMs": 4000
+          },
+          {
+            "sourceStartMs": 4000,
+            "sourceEndMs": 6000
+          },
+          {
+            "sourceStartMs": 0,
+            "sourceEndMs": 2000
+          }
+        ]
+      }
+    },
+    {
+      "name": "reordered out of source order",
+      "segments": [
+        {
+          "sourceStartMs": 2000,
+          "sourceEndMs": 4000
+        },
+        {
+          "sourceStartMs": 4000,
+          "sourceEndMs": 6000
+        },
+        {
+          "sourceStartMs": 0,
+          "sourceEndMs": 2000
+        }
+      ],
+      "outputDurationMs": 6000,
+      "toSourceMs": [
+        [
+          0,
+          2000
+        ],
+        [
+          2000,
+          4000
+        ],
+        [
+          4000,
+          0
+        ],
+        [
+          5999,
+          1999
+        ],
+        [
+          6000,
+          null
+        ]
+      ]
+    },
+    {
+      "name": "a gap cut out of the middle",
+      "segments": [
+        {
+          "sourceStartMs": 0,
+          "sourceEndMs": 1000
+        },
+        {
+          "sourceStartMs": 5000,
+          "sourceEndMs": 6000
+        }
+      ],
+      "outputDurationMs": 2000,
+      "toSourceMs": [
+        [
+          999,
+          999
+        ],
+        [
+          1000,
+          5000
+        ],
+        [
+          1999,
+          5999
+        ],
+        [
+          2000,
+          null
+        ]
+      ]
+    },
+    {
+      "name": "a backwards segment (hand-edited sidecar)",
+      "segments": [
+        {
+          "sourceStartMs": 0,
+          "sourceEndMs": 2000
+        },
+        {
+          "sourceStartMs": 4000,
+          "sourceEndMs": 3000
+        },
+        {
+          "sourceStartMs": 4000,
+          "sourceEndMs": 6000
+        }
+      ],
+      "outputDurationMs": 4000,
+      "toSourceMs": [
+        [
+          1999,
+          1999
+        ],
+        [
+          2000,
+          4000
+        ],
+        [
+          3999,
+          5999
+        ],
+        [
+          4000,
+          null
+        ]
+      ]
+    },
+    {
+      "name": "an empty timeline",
+      "segments": [],
+      "outputDurationMs": 0,
+      "toSourceMs": [
+        [
+          0,
+          null
+        ]
+      ]
+    }
+  ]
+}

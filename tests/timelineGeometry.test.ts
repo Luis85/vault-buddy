@@ -7,6 +7,7 @@ import {
   segmentWidths,
   toOutputMs,
   toSourceMs,
+  wholeTimeline,
 } from "../src/utils/timelineGeometry";
 
 const T = {
@@ -104,5 +105,53 @@ describe("timeline geometry", () => {
     expect(dropIndex(w, 0.6)).toBe(1); // before block 1's midpoint (62.5%)
     expect(dropIndex(w, 0.9)).toBe(2); // past it — dropped at the end
     expect(dropIndex([], 0.5)).toBe(0);
+  });
+
+  // The TypeScript mirror of `core::timeline::Timeline::whole`, including the
+  // guard the Rust side carries a named regression test for
+  // (`whole_of_zero_duration_is_an_empty_timeline`: "a zero-duration source
+  // must not mint a zero-length segment ... reaches the exporter as an
+  // unplayable frame plan"). The re-implementation in `EditorRoot`'s `load`
+  // had dropped it and seeded `[{0, 0}]` — one of the two measured
+  // divergences between the two implementations (docs/Gaps.md GAP-136).
+  it("seeds the whole capture, and nothing at all for a zero-duration one", () => {
+    expect(wholeTimeline(6000)).toEqual({
+      segments: [{ sourceStartMs: 0, sourceEndMs: 6000 }],
+    });
+    expect(wholeTimeline(0)).toEqual({ segments: [] });
+    // A negative duration cannot arrive from a `u64` on the Rust side, but
+    // the field is JSON by the time it gets here and the answer must not be
+    // a backwards segment.
+    expect(wholeTimeline(-1)).toEqual({ segments: [] });
+  });
+
+  // The OTHER measured divergence (GAP-136). `Segment::duration_ms` is a
+  // `saturating_sub` in Rust, so a segment whose end precedes its start
+  // contributes NOTHING; a raw subtraction here contributed a NEGATIVE length
+  // that walked the accumulator backwards, and the two languages then
+  // disagreed about the output duration AND about where an output moment
+  // lands in the source. No operation on either side mints one — a
+  // hand-edited or sync-conflicted sidecar does, and nothing validates it
+  // (GAP-134).
+  //
+  // The numbers are the ones `core::timeline` answers for this fixture, and
+  // the cases are chosen so a raw subtraction cannot pass: it gives duration
+  // 3000 (not 4000) and `toSourceMs(2000) === 5000` (not 4000).
+  it("treats a backwards segment as empty, the way the Rust twin does", () => {
+    const inverted = {
+      segments: [
+        { sourceStartMs: 0, sourceEndMs: 2000 },
+        { sourceStartMs: 4000, sourceEndMs: 3000 },
+        { sourceStartMs: 4000, sourceEndMs: 6000 },
+      ],
+    };
+    expect(outputDurationMs(inverted)).toBe(4000);
+    expect(toSourceMs(inverted, 2000)).toBe(4000);
+    expect(toSourceMs(inverted, 3999)).toBe(5999);
+    expect(toSourceMs(inverted, 4000)).toBeNull();
+    // It occupies no width and owns no output moment either.
+    expect(segmentWidths(inverted)).toEqual([50, 0, 50]);
+    expect(segmentAtOutputMs(inverted, 2000)).toBe(2);
+    expect(toOutputMs(inverted, 4500)).toBe(2500);
   });
 });

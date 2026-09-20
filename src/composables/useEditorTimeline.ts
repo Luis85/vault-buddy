@@ -288,7 +288,14 @@ export function useEditorTimeline(base: string, initial: TimelineDto) {
     undo,
     redo,
     revert,
-    /** Await every queued save. Tests use it; the window-close path will. */
+    /** Await every queued save.
+     *
+     * `EditorRoot.load` awaits this before reading the next capture's
+     * sidecar: `load` replaces the composable outright, abandoning this
+     * chain, and the chain writes the very file the next load reads. It is
+     * NOT awaited on window close — `window_close.rs` answers the editor's X
+     * wholly in Rust with `prevent_close()` + `hide()`, so this webview never
+     * sees a close event at all (an earlier comment here claimed otherwise). */
     flushPending: () => pending,
   };
 }

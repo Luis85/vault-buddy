@@ -133,11 +133,35 @@ describe("TimelineStrip", () => {
     expect(w.emitted("reorder")).toBeUndefined();
   });
 
-  it("renders nothing but an empty state when every segment is gone", () => {
+  // The copy named a delete that cannot have happened — `deleteSegment`
+  // refuses to remove the last segment, so this state is reachable only from
+  // a zero-duration capture or a hand-edited sidecar — and a "revert the
+  // edit" verb the editor does not offer at all (the phase review's m-1).
+  it("renders nothing but an empty state when there are no segments", () => {
     const w = mount(TimelineStrip, {
       props: { timeline: { segments: [] }, selected: null, playheadMs: 0 },
     });
     expect(w.findAll('[data-testid^="segment-"]')).toHaveLength(0);
-    expect(w.text()).toContain("Nothing left to save");
+    const empty = w.get('[data-testid="strip-empty"]').text();
+    expect(empty).toContain("no footage to show");
+    expect(empty).not.toMatch(/revert|undo/i);
+  });
+
+  // m-4. `segmentWidths` returns percentages of the WHOLE strip, the playhead
+  // is `left: X%` of the same box, and `onUp` turns a pointer position into a
+  // fraction of it — so all three are only true while the blocks tile that
+  // box exactly. Padding inset them (the playhead never lined up with the
+  // boundary it marks) and a gap shrank each block below its nominal width,
+  // so the rendered geometry drifted from the geometry `dropIndex` computes
+  // against, by more with every split. happy-dom lays nothing out, so this is
+  // asserted structurally: it is the only place the contract can be pinned
+  // without a real browser, and the manual checklist (row 27) carries the
+  // visual half.
+  it("lets the blocks tile the strip exactly, with no padding or gap", () => {
+    const w = mount(TimelineStrip, { props: { timeline: T, selected: null, playheadMs: 0 } });
+    const strip = w.get('[data-testid="timeline-strip"]');
+    expect(strip.classes().filter((c) => /^p-|^px-|^pl-|^pr-/.test(c))).toEqual([]);
+    const row = strip.element.querySelector("div.flex") as HTMLElement;
+    expect([...row.classList].filter((c) => c.startsWith("gap-"))).toEqual([]);
   });
 });

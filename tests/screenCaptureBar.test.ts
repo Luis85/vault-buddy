@@ -291,4 +291,62 @@ describe("ScreenCaptureBar", () => {
     await w.get('[data-testid="screen-stop"]').trigger("click");
     expect(stops).toBe(1);
   });
+
+  // M-4. `applyStopped` calls `reset()`, which nulls the store's
+  // `sourceTitle` — but the staged payload carries the very title the live
+  // row rendered a second earlier, so the finished row identified the
+  // capture by its base name alone.
+  it("keeps naming the source once the capture is staged", () => {
+    // The store's own `sourceTitle` is set to a DIFFERENT value rather than
+    // to null, although `reset()` really does null it: with both null and
+    // "Screen 1" the two operands are interchangeable, and the assertion
+    // would pass just as happily with the fallback written the other way
+    // round. The staged capture's own copy has to win.
+    useScreenCaptureStore().$patch({
+      status: "idle",
+      sourceTitle: "a previous capture",
+      lastStaged: STAGED,
+    });
+    const w = mount(ScreenCaptureBar);
+    expect(w.get('[data-testid="screen-source"]').text()).toBe("Screen 1");
+  });
+
+  // M-3. The store toasts a `screen:warning` that arrives while idle
+  // *because* this bar shows it inline while capturing — and since phase 4
+  // the bar outlives the capture, so an ungated line rendered the same
+  // warning twice: a toast AND a sticky line nothing clears until the next
+  // capture starts. The live row is asserted in the same test so this cannot
+  // be "fixed" by deleting the line outright.
+  it("shows a warning inline only while a capture is live", () => {
+    const store = useScreenCaptureStore();
+    store.$patch({ status: "idle", lastStaged: STAGED, warning: "The audio device vanished." });
+    const staged = mount(ScreenCaptureBar);
+    expect(staged.find('[data-testid="screen-warning"]').exists()).toBe(false);
+
+    store.$patch({ status: "capturing", lastStaged: null, startedAtMs: Date.now() });
+    const live = mount(ScreenCaptureBar);
+    expect(live.get('[data-testid="screen-warning"]').text()).toContain("vanished");
+  });
+
+  // M-2. The bar now stays mounted for the rest of the process once any
+  // capture has finished, and the panel window is hidden rather than
+  // unmounted — so an ungated `useNowTicker` ran a 1 Hz interval forever to
+  // update a value the finished row renders nowhere. The live case is
+  // asserted alongside it: a ticker that never runs would break the elapsed
+  // reading instead.
+  it("runs no clock for a finished capture, and one for a live capture", async () => {
+    vi.useFakeTimers();
+    mockIPC(() => undefined);
+    const store = useScreenCaptureStore();
+    store.$patch({ status: "idle", lastStaged: STAGED });
+    mount(ScreenCaptureBar);
+    // A delta, not an absolute count: mounting anything under happy-dom can
+    // register timers of its own, and the claim here is about this bar's
+    // ticker alone.
+    const idle = vi.getTimerCount();
+
+    store.$patch({ status: "capturing", lastStaged: null, startedAtMs: Date.now() });
+    await flushPromises();
+    expect(vi.getTimerCount()).toBe(idle + 1);
+  });
 });

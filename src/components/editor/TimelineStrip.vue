@@ -73,8 +73,8 @@ function onUp(e: PointerEvent) {
  * `@pointerup` on the strip answers the ordinary release, over the strip.
  * It cannot see a release ANYWHERE ELSE — drag a block off the window and
  * let go, and `dragFrom` would stay set; the next pointerup over the
- * strip's own padding (a release with no pointerdown on a block) would then
- * reorder a block the user stopped dragging a minute ago. `pointercancel`
+ * strip (a release with no pointerdown on a block) would then reorder a
+ * block the user stopped dragging a minute ago. `pointercancel`
  * does not cover it: nothing cancelled, the pointer simply went somewhere
  * else. `onUp` clears `dragFrom` before doing anything, so the two paths
  * can both fire for one release without emitting twice.
@@ -84,22 +84,40 @@ onBeforeUnmount(() => window.removeEventListener("pointerup", onUp));
 </script>
 
 <template>
+  <!-- NO padding on the strip and NO gap between the blocks, and both are
+       load-bearing rather than taste. `segmentWidths` returns percentages of
+       the WHOLE strip and the playhead is positioned `left: X%` of the same
+       box, while `onUp` turns a pointer position into a fraction of that box
+       before handing it to `dropIndex`. Padding inset the blocks from the box
+       all three measure against, so the playhead never lined up with the
+       boundaries it marks (4 px out at either end), and a gap shrank every
+       block below its nominal width, so the rendered geometry stopped being
+       the geometry `dropIndex` computes against — drift that grows with every
+       split (the phase review's m-4). The blocks already carry their own
+       border, which is what separates them now. -->
   <div
     ref="strip"
     data-testid="timeline-strip"
-    class="relative h-16 w-full rounded-control bg-white/5 p-1"
+    class="relative h-16 w-full overflow-hidden rounded-control bg-white/5"
     @pointerup="onUp"
     @pointercancel="dragFrom = null"
   >
+    <!-- Reachable only from a capture with no duration or a hand-edited
+         sidecar: `deleteSegment` refuses to remove the last segment, so the
+         user cannot empty a timeline from this surface. The copy used to say
+         "undo a delete or revert the edit", which named a delete that cannot
+         have happened and a Revert verb this window does not offer at all
+         (the phase review's m-1). -->
     <p
       v-if="widths.length === 0"
+      data-testid="strip-empty"
       class="flex h-full items-center justify-center text-xs text-fg-muted"
     >
-      Nothing left to save — undo a delete or revert the edit.
+      This capture has no footage to show.
     </p>
     <div
       v-else
-      class="flex h-full gap-1"
+      class="flex h-full"
     >
       <button
         v-for="(w, i) in widths"

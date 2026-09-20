@@ -445,5 +445,11 @@ export interface StagedCaptureDetail {
   width: number;
   height: number;
   recordedAt: string;
+  /** Whatever the sidecar held — NOT a guarantee. `editor_commands.rs`
+   * returns `Option<serde_json::Value>` and never inspects its shape, and the
+   * sidecar is hand-editable, so this annotation is a description of the
+   * happy path rather than a contract (docs/Gaps.md GAP-134, which also
+   * carries the fix: parse it into `core::timeline::Timeline` on the Rust
+   * side, where the untrusted value already crosses a typed boundary). */
   timeline: TimelineDto | null;
 }

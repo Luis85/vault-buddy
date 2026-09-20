@@ -828,4 +828,33 @@ describe("ActionPanel save indicator", () => {
     await flushPromises();
     expect(wrapper.find('[data-testid="screen-edit"]').exists()).toBe(false);
   });
+
+  // T7-I1 (the task-7 review). The comment beside these two bars used to say "a sibling, never a
+  // stack", justified by the CaptureGuard. The guard excludes two LIVE
+  // captures and says nothing about a FINISHED one, and since phase 4 the
+  // screen bar outlives its capture to carry the Edit action — so recording
+  // audio after a screen capture renders both, stacked.
+  //
+  // That is the accepted behaviour, not a tolerated bug, and this test is
+  // what pins the decision: the staged row is the only handle anything has on
+  // that footage until phase 5's browser, so hiding it under a live recording
+  // would make the editor unreachable for as long as the recording runs.
+  it("stacks a finished screen capture's row above a live recording bar", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    useScreenCaptureStore().applyStopped({
+      base: "cap one",
+      path: "C:/staging/cap one.mp4",
+      durationMs: 30_000,
+      sourceTitle: "Screen 1",
+      width: 1920,
+      height: 1080,
+    });
+    useCaptureStore().$patch({ status: "recording", startedAtMs: Date.now() });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="screen-edit"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="level-meter"]').exists()).toBe(true);
+  });
 });

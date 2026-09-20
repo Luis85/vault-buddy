@@ -306,4 +306,125 @@ mod tests {
             }
         }
     }
+
+    // ---- the SHARED fixture table -------------------------------------
+    //
+    // This algebra exists twice, in two languages: here, and in
+    // `src/utils/timelineGeometry.ts` + `src/composables/useEditorTimeline.ts`
+    // -- the one phase 5's export plans on, and the one the user actually
+    // watches. Each had its own tests and no fixture in common, so a
+    // disagreement between them was invisible: the exported file would not
+    // match the preview the user approved, with every test in the repo green
+    // (docs/Gaps.md GAP-136). Running one table through both found two real
+    // disagreements, a backwards segment and `whole(0)`; both are rows below.
+    //
+    // `tests/timelineFixtures.test.ts` reads this exact file and asserts the
+    // same expectations. `include_str!` is what makes the sharing real: move
+    // or delete the fixture and this crate stops compiling, rather than
+    // quietly testing nothing.
+    const SHARED_FIXTURES: &str = include_str!("../../../tests/fixtures/timeline-cases.json");
+
+    fn fixtures() -> serde_json::Value {
+        serde_json::from_str(SHARED_FIXTURES).expect("the shared timeline fixture table is JSON")
+    }
+
+    // Segment keys are read by the names the editor WRITES onto disk
+    // (camelCase). `Segment` has no serde derives (GAP-135), so this is a
+    // hand mapping on purpose -- and it is the only place in Rust that spells
+    // the on-disk names at all.
+    fn segments_of(v: &serde_json::Value) -> Vec<Segment> {
+        v.as_array()
+            .expect("segments array")
+            .iter()
+            .map(|s| Segment {
+                source_start_ms: s["sourceStartMs"].as_u64().expect("sourceStartMs"),
+                source_end_ms: s["sourceEndMs"].as_u64().expect("sourceEndMs"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn shared_fixture_table_maps_output_time_to_source_time() {
+        let table = fixtures();
+        let cases = table["cases"].as_array().expect("cases");
+        // A table nothing iterates proves nothing, and one that silently
+        // shrinks to a single row proves almost nothing. The TypeScript half
+        // asserts the same count against the same file.
+        assert_eq!(cases.len(), 6, "the shared table lost or gained a case");
+        for case in cases {
+            let name = case["name"].as_str().expect("name");
+            let t = Timeline {
+                segments: segments_of(&case["segments"]),
+            };
+            assert_eq!(
+                t.output_duration_ms(),
+                case["outputDurationMs"].as_u64().expect("outputDurationMs"),
+                "output duration disagrees for {name}"
+            );
+            for row in case["toSourceMs"].as_array().expect("toSourceMs") {
+                let output_ms = row[0].as_u64().expect("outputMs");
+                let expected = row[1].as_u64();
+                assert_eq!(
+                    t.to_source_ms(output_ms),
+                    expected,
+                    "to_source_ms({output_ms}) disagrees for {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shared_fixture_table_agrees_on_whole_and_on_the_operations() {
+        let table = fixtures();
+        let whole = table["whole"].as_array().expect("whole");
+        assert_eq!(whole.len(), 2, "the shared table lost a `whole` row");
+        for row in whole {
+            let duration = row["durationMs"].as_u64().expect("durationMs");
+            assert_eq!(
+                Timeline::whole(duration).segments,
+                segments_of(&row["segments"]),
+                "whole({duration}) disagrees"
+            );
+        }
+        // Every operation row that the table carries, which is how a new row
+        // becomes live on both sides at once rather than in one language.
+        let mut applied = 0;
+        for case in table["cases"].as_array().expect("cases") {
+            let name = case["name"].as_str().expect("name");
+            let t = Timeline {
+                segments: segments_of(&case["segments"]),
+            };
+            if let Some(op) = case.get("splitAt") {
+                applied += 1;
+                let at = op["outputMs"].as_u64().expect("outputMs");
+                assert_eq!(
+                    t.split_at(at).segments,
+                    segments_of(&op["segments"]),
+                    "split_at({at}) disagrees for {name}"
+                );
+            }
+            if let Some(op) = case.get("delete") {
+                applied += 1;
+                let index = op["index"].as_u64().expect("index") as usize;
+                assert_eq!(
+                    t.delete(index).segments,
+                    segments_of(&op["segments"]),
+                    "delete({index}) disagrees for {name}"
+                );
+            }
+            if let Some(op) = case.get("reorder") {
+                applied += 1;
+                let from = op["from"].as_u64().expect("from") as usize;
+                let to = op["to"].as_u64().expect("to") as usize;
+                assert_eq!(
+                    t.reorder(from, to).segments,
+                    segments_of(&op["segments"]),
+                    "reorder({from}, {to}) disagrees for {name}"
+                );
+            }
+        }
+        // Without this, a table whose operation rows were all renamed or
+        // dropped would pass by asserting nothing at all.
+        assert_eq!(applied, 4, "the shared table lost an operation row");
+    }
 }
