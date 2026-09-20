@@ -64,6 +64,30 @@ jobs:
         working-directory: src-tauri
       - name: Install ALSA headers (cpal build dependency on Linux)
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      # The export shells out to a USER-INSTALLED ffmpeg, so this job is the
+      # only place in the whole repository where the screen-capture feature's
+      # end-to-end claim executes: `screen::export`'s round-trip tests
+      # synthesize a clip, apply a real Timeline, and read the OUTPUT back,
+      # checking both the length AND that each block still carries its own
+      # colour and its own tone. Everything before phase 5 rested on a manual
+      # Windows checklist nobody has run (GAP-117).
+      #
+      # Installed EXPLICITLY rather than relying on the runner image happening
+      # to carry it: those tests skip when ffmpeg is absent, so an image that
+      # quietly dropped it would turn the feature's only executable proof into
+      # a silent no-op with the job still green. The skip line names the test
+      # in the log, which is the alarm if this step is ever removed.
+      #
+      # Self-contained (its own apt-get update) rather than leaning on the
+      # step above having just run one: a reorder would otherwise leave this
+      # installing against a stale index, and the failure mode of that is the
+      # silent skip this step exists to prevent. The version is echoed
+      # unpiped -- piping it through `head` would report the PIPE's exit code
+      # instead of ffmpeg's.
+      - name: Install ffmpeg (the export's end-to-end round-trip tests)
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          ffmpeg -version
       # mcp is listed explicitly like the others: the tauri-build jobs compile
       # it (the shell depends on it) but never run its TESTS — including the
       # real-socket round-trip suite that proves the guarded endpoint and the

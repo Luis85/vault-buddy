@@ -1479,7 +1479,16 @@ pub struct ExportRequest<'a> {
     pub settings: EncodeSettings,
 }
 pub struct ExportOutcome { pub output_duration_ms: u64, pub remuxed: bool }
-pub fn export_refusal(timeline: &Timeline, settings: &EncodeSettings) -> Option<String>;
+pub fn export_refusal(timeline: &Timeline, source_duration_ms: u64, settings: &EncodeSettings) -> Option<String>;
+// ^ THE DURATION IS REQUIRED. An earlier draft omitted it, and without it the
+//   only available rule is "one segment starting at zero" -- which a TRIMMED
+//   TAIL satisfies while `is_untouched` correctly rejects it. Under that
+//   approximation a trimmed-tail export on an encoder-less build is waved
+//   through as needing no encoder, `export` then takes the re-encode path,
+//   and ffmpeg dies on a message naming none of it: exactly the failure
+//   decision 5 exists to prevent. It also put the refusal rule and the
+//   fast-path rule in two places that disagree. Both now key on
+//   `Timeline::is_untouched(source_duration_ms)`. TASK 7: three parameters.
 pub fn export(req: ExportRequest<'_>, cancel: &AtomicBool, on_progress: &mut dyn FnMut(u64)) -> Result<ExportOutcome, ScreenError>;
 ```
 
@@ -1491,7 +1500,11 @@ pub fn export(req: ExportRequest<'_>, cancel: &AtomicBool, on_progress: &mut dyn
 
 3. **The runner streams `-progress pipe:1` rather than using `run_capturing`.** `run_capturing` is for bounded probes; an export can legitimately run for many minutes and must report as it goes. Read stdout line by line, feed each to `parse_progress_line`, convert `OutTimeUs` to a percent against the planned output duration, and gate emits through `core::throttle::EmitThrottle::new(2)`.
 
-4. **There is no export timeout.** A two-hour 4K recording legitimately takes a long time, and killing a child that is still writing into a temp would look identical to a crash. The user's Cancel is the bound. Say so in a comment so nobody adds one.
+4. **The ffmpeg child MUST be spawned with `CREATE_NO_WINDOW` on Windows.** The plan omitted this and it is not optional: this app is `windows_subsystem = "windows"` in release, so it owns no console, and a child spawned with default flags allocates a NEW console window that flashes AND takes foreground focus. AGENTS.md documents that exact failure for Pandoc, where it shipped as "opening Buddy settings flashes a terminal and closes the panel". A Pandoc probe flashes for a moment; **an export runs for minutes**, so the console would sit on top of the editor for the duration. The `screen` crate cannot reach the shell's `external_tool::tool_command`, so mirror its idiom: a `const fn creation_flags_for(windows: bool) -> u32` with BOTH arms asserted from Linux (the shell's own copy of this constant was once hard-wired to `0` with the whole suite green), applied under `#[cfg(windows)]`. `std` only, no dependency.
+
+5. **Read stdout AND stderr on their own threads.** "Read stdout line by line" deadlocks the moment stderr fills its OS pipe. Give each its own named thread and use `recv_timeout` in the main loop, which also bounds cancellation on an export that emits no progress at all.
+
+6. **There is no export timeout.** A two-hour 4K recording legitimately takes a long time, and killing a child that is still writing into a temp would look identical to a crash. The user's Cancel is the bound. Say so in a comment so nobody adds one.
 
 5. **A refusal is a refusal, not a failed run.** `export_refusal` covers both the empty timeline (Task 5's rule, measured against the plan) **and** an edited export on a build with no H.264 encoder. The second is why `EncodeSettings::h264_encoder` is checked here rather than at spawn time: the message names the missing capability instead of surfacing ffmpeg's own error.
 
@@ -1546,6 +1559,22 @@ Plus the **real end-to-end tests**, gated so they skip cleanly where ffmpeg is a
     // anywhere in this feature that an edit lands where the editor said it
     // would. Every prior phase's equivalent claim rested on a manual
     // checklist row nobody has run.
+    //
+    // *** DURATION ALONE PROVES ALMOST NOTHING. *** Deleting the LAST 2 s of
+    // a 6 s source yields exactly the same 4 s as deleting the first 2 s, and
+    // a scrambled reorder has the identical length to a correct one. Worse,
+    // a rotation of the audio pads against the video pads -- [v0][a1][v1][a2]
+    // -- is ACCEPTED by ffmpeg (it type-checks pad types, not pairing) and
+    // produces a perfectly playable file with the wrong sound over the wrong
+    // picture. Measured: that mutation left all 201 lib tests green,
+    // including every filter-graph test.
+    // So every round trip must read BOTH STREAMS at several positions and
+    // require them to name the same block: a distinguishable colour AND a
+    // distinguishable tone per segment. And prove the fast path by PACKET
+    // MD5 (a remux reproduces the source bitstream byte for byte; a
+    // re-encode cannot), never by a stopwatch -- measured, the timing
+    // assertion stays GREEN under a mutation that makes both paths
+    // re-encode.
     #[test]
     fn an_edited_export_produces_a_file_of_the_planned_length() {
         let Some(ffmpeg) = ffmpeg_on_path() else { return };

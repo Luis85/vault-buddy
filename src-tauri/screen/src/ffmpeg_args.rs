@@ -16,6 +16,18 @@
 //!    then sits there for the rest of the export — which looks like a hang on
 //!    exactly the long exports progress exists for. `parse_progress_line`
 //!    reads `out_time_us` ONLY and a test forbids `out_time_ms`.
+//!
+//!    MEASURED, not assumed (this module was written with no ffmpeg
+//!    available). Against ffmpeg 6.1.1 the `-progress` stream carries
+//!    `bitrate drop_frames dup_frames fps frame out_time out_time_ms
+//!    out_time_us progress speed stream_0_0_q total_size` — so `out_time_us`
+//!    really is emitted and reading it alone loses nothing — and one tick
+//!    read `out_time_us=5990748`, `out_time_ms=5990748`,
+//!    `out_time=00:00:05.990748`: the two numeric fields are byte-identical
+//!    and both are microseconds. If a build is ever found that emits
+//!    `out_time_ms` but NOT `out_time_us`, the fix is to read `out_time_ms`
+//!    AS MICROSECONDS — a deliberate design decision, not a relaxation of
+//!    `out_time_ms_is_refused_because_its_name_lies_about_its_units`.
 //! 2. **Times are formatted with integer arithmetic, never from a float.**
 //!    `4500 ms / 1000.0` can render as `4.4999999999999996`, and `trim=` takes
 //!    the string literally, so a cut would land a millisecond off the one the
@@ -84,9 +96,28 @@ const PRESET_ENCODERS: [&str; 2] = ["libx264", "libx265"];
 /// resolved by probing the user's own ffmpeg (Task 4), so the edited export
 /// can legitimately be handed `h264_mf`, `h264_nvenc`, `h264_qsv` or
 /// `h264_amf` on a build with no libx264 — which is the whole point of not
-/// bundling one. Those read a different preset vocabulary entirely, so
-/// naming x264's fails the export on an unknown or wrongly-valued option,
-/// at the payoff, after the user has already recorded and edited.
+/// bundling one. Those read a different preset vocabulary, and naming x264's
+/// risks failing the export at the payoff, after the user has already
+/// recorded and edited.
+///
+/// MEASURED against ffmpeg 6.1.1, because this module was written with no
+/// ffmpeg available and the paragraph above previously stated the failure
+/// more strongly than the tool actually behaves:
+/// - `libx264 -preset medium` is accepted (exit 0), and `libx264 -preset
+///   bogus_value` is a HARD failure (exit 234, "invalid preset"). So an
+///   encoder that HAS `-preset` and rejects the VALUE really does kill the
+///   export.
+/// - An encoder with NO `-preset` option at all (`mpeg4`, and on this build
+///   `h264_vaapi` / `h264_v4l2m2m`) does NOT fail: ffmpeg warns "Codec
+///   AVOption preset ... has not been used for any stream" and encodes
+///   anyway, exit 0.
+/// - `h264_qsv` and `h264_nvenc` both happen to accept the literal `medium`
+///   here, so for those two the x264 preset would have worked by luck.
+///
+/// None of that changes the rule. Sending a preset an encoder never asked
+/// for buys nothing on the builds where it is harmless, and on the ones
+/// where the value is out of vocabulary it loses the whole export. Omitting
+/// it takes the encoder's own default, which is always valid.
 ///
 /// An unknown or empty encoder fails SAFE rather than loud: no preset means
 /// the encoder's own default, which is always valid. Refusing a missing or

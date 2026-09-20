@@ -18,6 +18,11 @@ pub mod disk;
 // the shell cannot be cross-compiled to Windows on Linux, so an FFI call
 // written there would be type-checked by nothing until CI.
 pub mod exclusion;
+// Running the export: spawning ffmpeg, streaming its progress, cancelling it
+// by killing the child -- and the round-trip tests that are the first
+// executable proof anywhere in this feature that a cut lands where the editor
+// said it would. Its ffmpeg-backed tests skip VISIBLY where no ffmpeg exists.
+pub mod export;
 // The export's ffmpeg argument vectors and its -progress parsing. PURE, and
 // deliberately so: the route change from Media Foundation to a user-installed
 // ffmpeg moved the export's correctness out of untestable COM calls and into
@@ -72,6 +77,26 @@ pub enum ScreenError {
     /// error vocabulary still matches the spec and a future in-crate refusal
     /// has a variant to use; constructed today only by its own Display test.
     AlreadyCapturing,
+    /// The user cancelled an export. A refusal by request, not a failure:
+    /// the child was killed and the partial output deleted, and no error
+    /// should be reported to the user for something they asked for.
+    Cancelled,
+    /// ffmpeg could not be started at all -- the configured path is gone, or
+    /// nothing named ffmpeg is on PATH.
+    ///
+    /// Deliberately carries NO path. The caller knows which path it passed,
+    /// and a fixed message keeps this in the "constant text" half of this
+    /// enum's split (see the Display tests): the remedy is the same whatever
+    /// the path was.
+    ToolMissing,
+    /// The export cannot run, decided BEFORE any child exists -- an empty
+    /// edit plan, or an edited export on a build with no H.264 encoder.
+    ///
+    /// Carries app-authored prose naming the remedy, which is the point: it
+    /// exists so a refusal reads as a refusal rather than being dressed up
+    /// as an I/O or sink failure, and so the user is never shown ffmpeg's
+    /// own error text for a condition the app detected itself.
+    Refused(String),
     /// `ScreenSession::stop` failed (finalize, or the publish rename) AFTER
     /// real footage had already been written to the `.part` file at `path`
     /// — and that file was deliberately left where it is rather than
@@ -102,6 +127,12 @@ impl std::fmt::Display for ScreenError {
             ScreenError::Io(e) => write!(f, "screen capture I/O error: {e}"),
             ScreenError::Sink(e) => write!(f, "screen capture could not be written: {e}"),
             ScreenError::AlreadyCapturing => write!(f, "a capture is already running"),
+            ScreenError::Cancelled => write!(f, "the export was cancelled"),
+            ScreenError::ToolMissing => write!(
+                f,
+                "ffmpeg could not be started -- check that it is installed"
+            ),
+            ScreenError::Refused(message) => write!(f, "{message}"),
             ScreenError::Retained {
                 path,
                 holds_footage: true,
@@ -161,6 +192,14 @@ mod tests {
             ScreenError::AlreadyCapturing.to_string(),
             "a capture is already running"
         );
+        assert_eq!(
+            ScreenError::Cancelled.to_string(),
+            "the export was cancelled"
+        );
+        assert_eq!(
+            ScreenError::ToolMissing.to_string(),
+            "ffmpeg could not be started -- check that it is installed"
+        );
     }
 
     // `Io`, unlike the fixed variants above, deliberately DOES carry and
@@ -185,6 +224,19 @@ mod tests {
         assert!(ScreenError::Sink("MF_E_TOPO_CODEC_NOT_FOUND".into())
             .to_string()
             .contains("MF_E_TOPO_CODEC_NOT_FOUND"));
+    }
+
+    // `Refused` is the third interpolating variant, and it is the only one
+    // whose text is written by US rather than by the OS: it renders the
+    // message VERBATIM, with no prefix, because `export_refusal` already
+    // writes a whole user-facing sentence naming the remedy. A prefix here
+    // would produce "screen capture could not be written: There is nothing
+    // to export...", which is the dressed-up-as-a-failure reading the
+    // variant exists to avoid.
+    #[test]
+    fn refused_renders_its_message_verbatim_with_no_failure_prefix() {
+        let rendered = ScreenError::Refused("There is nothing to export.".into()).to_string();
+        assert_eq!(rendered, "There is nothing to export.");
     }
 
     // `Retained` exists so a caller can offer the user the `.part` file a
