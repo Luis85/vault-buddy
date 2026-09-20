@@ -48,6 +48,11 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"]
 # so Recheck sees a just-installed Pandoc without an app restart.
 winreg = "0.52"
 
+[dev-dependencies]
+# editor_commands.rs's staging-directory tests need real files on disk
+# (the screen crate's own staging.rs tests already use this).
+tempfile = "3"
+
 [workspace]
 resolver = "2"
 members = ["core", "capture", "transcribe", "mcp", "screen"]

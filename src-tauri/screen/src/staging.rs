@@ -134,6 +134,48 @@ pub fn sidecar_file_name(base: &str) -> String {
     format!("{base}.json")
 }
 
+/// Is `name`'s STEM (the text before the first `.`) one of Windows' reserved
+/// device names, case-insensitively?
+///
+/// Windows resolves a path component whose stem matches one of these to the
+/// PHYSICAL device it names, regardless of the surrounding directory or any
+/// extension — `dir.join("COM1.json")` opens the COM1 serial port, not a
+/// file called that (GAP-108). Public so every caller that turns untrusted
+/// text into a path component can share one list instead of drifting apart:
+/// `editor_commands::is_safe_base` (phase 4) is the first. `sanitize_title`
+/// does not consume this yet — closing GAP-108 there means deciding how a
+/// title that collapses onto a reserved name should be renamed rather than
+/// merely refused, which belongs with the capture-session write-site
+/// hardening GAP-108 is filed against, not here.
+pub fn is_reserved_device_stem(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name);
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
 /// Find a free base in `dir`, suffixing ` (N)` on collision.
 ///
 /// A base is free only when ALL THREE names it owns are free — the staged
@@ -306,6 +348,25 @@ mod tests {
             sidecar_file_name(base),
             "2026-09-18 1432 Figma walkthrough.json"
         );
+    }
+
+    #[test]
+    fn is_reserved_device_stem_matches_case_insensitively_and_with_any_extension() {
+        assert!(is_reserved_device_stem("CON"));
+        assert!(is_reserved_device_stem("con"));
+        assert!(is_reserved_device_stem("NUL"));
+        assert!(is_reserved_device_stem("COM1"));
+        assert!(is_reserved_device_stem("com1.foo"));
+        assert!(is_reserved_device_stem("LPT1"));
+        assert!(
+            !is_reserved_device_stem("COM10"),
+            "only COM1-COM9 are reserved"
+        );
+        assert!(
+            !is_reserved_device_stem("console"),
+            "a longer name sharing a prefix is not reserved"
+        );
+        assert!(!is_reserved_device_stem("cap"));
     }
 
     #[test]
