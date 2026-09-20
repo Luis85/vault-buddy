@@ -42,10 +42,22 @@ pub(super) enum Entry {
 /// export-temp shape is checked BEFORE the plain part shape because
 /// `base_from_part(".Demo.export.mp4.part")` answers `Some("Demo.export")` — a
 /// perfectly safe base — so a plain-part-first order would classify every
-/// export temp as a promotable capture. The cost: a capture whose base
-/// genuinely ends in `.export` has its orphaned `.part` deleted as an export
-/// temp instead of promoted. The two are indistinguishable by name, and the
-/// other order would promote half-written transcodes for everyone.
+/// export temp as a promotable capture.
+///
+/// That ordering used to COST footage: a capture whose base genuinely ended in
+/// `.export` had its orphaned `.part` deleted as an export temp rather than
+/// promoted, skipping `part_holds_footage` entirely — so a crash while
+/// recording a window titled e.g. "Build.export" destroyed exactly what this
+/// sweep exists to rescue. **The two are no longer indistinguishable by name.**
+/// They only ever were because `staging::sanitize_title` permitted a title to
+/// END in the marker; it now disambiguates that one ending, and a capture base
+/// is that sanitized title behind a `YYYY-MM-DD HHmm ` prefix, so this app
+/// cannot mint a base ending in `EXPORT_PART_INFIX` at all. The fix is at the
+/// source, where identity is decided, instead of arbitrated here.
+///
+/// It is not retroactive: a capture staged under such a base BEFORE that fix
+/// keeps it, and its orphaned `.part` is still swept as an export temp. Only
+/// new captures are covered.
 pub(super) fn classify(file_name: &str) -> Entry {
     if let Some(base) = staging::base_from_part(file_name) {
         if let Some(stem) = base.strip_suffix(EXPORT_PART_INFIX) {
@@ -241,6 +253,37 @@ mod tests {
                 "{unsafe_shaped:?} was claimed"
             );
         }
+    }
+
+    // REGRESSION (silent footage loss): `classify` must check the export
+    // shape first, and that used to mean an orphaned `.part` from a capture
+    // of a window titled "Build.export" was DELETED as an abandoned
+    // transcode -- skipping `part_holds_footage`, the one check standing
+    // between the sweep and real footage.
+    //
+    // The guarantee now lives in `staging::sanitize_title`, one crate away,
+    // so pin the two halves together here: nothing else spans them, and a
+    // "simplification" of that disambiguation would otherwise redden
+    // nothing on this side.
+    #[test]
+    fn a_window_title_ending_in_the_export_marker_still_stages_as_a_capture() {
+        let base = format!(
+            "2026-09-20 1432 {}",
+            staging::sanitize_title("Build.export")
+        );
+        assert_eq!(
+            classify(&staging::part_file_name(&base)),
+            Entry::Part(base.clone()),
+            "an orphaned capture part was resolved as an export temp and would \
+             have been deleted without ever being checked for footage"
+        );
+        // ...and that capture's OWN export temp is still recognised as one,
+        // so the disambiguation buys the capture nothing at the transcode's
+        // expense.
+        assert_eq!(
+            classify(&staging::export_part_file_name(&base)),
+            Entry::ExportTemp(base)
+        );
     }
 
     #[test]

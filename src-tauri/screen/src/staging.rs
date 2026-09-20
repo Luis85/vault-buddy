@@ -92,12 +92,48 @@ pub fn sanitize_title(raw: &str) -> String {
     let trimmed = trimmed
         .trim_matches(|c: char| c.is_whitespace() || c == '.' || c == '-')
         .to_string();
+    let trimmed = disambiguate_export_marker(trimmed);
 
     if trimmed.is_empty() {
         FALLBACK_TITLE.to_string()
     } else {
         trimmed
     }
+}
+
+/// Keep a sanitized title from ENDING in exactly `EXPORT_PART_INFIX`.
+///
+/// A capture's base is `capture_paths::base_name(..., sanitize_title(title))`,
+/// so the title's tail is the base's tail — and a base ending in `.export`
+/// mints a `.<base>.mp4.part` byte-identical to the export temp
+/// `export_part_file_name` mints for the base WITHOUT it.
+/// `screen_recovery::classify` must check the export shape first (or every
+/// abandoned transcode would be promoted as footage), so it read that capture
+/// part as an ExportTemp and DELETED it, skipping `part_holds_footage`
+/// entirely: a crash while recording a window titled "Build.export" destroyed
+/// exactly what the sweep exists to rescue. The two shapes were only
+/// "indistinguishable by name" because this function permitted the ending.
+///
+/// **This prevents NEW collisions only** — a capture already staged under such
+/// a base keeps it, and its orphaned `.part` is still swept as an export temp.
+///
+/// Runs AFTER the truncation and both trims, because either can CREATE the
+/// ending: `.take(MAX_TITLE_CHARS)` can cut a longer title off right at the
+/// marker, and the trailing-separator trim turns `"Build.export..."` into it.
+fn disambiguate_export_marker(title: String) -> String {
+    if !title.ends_with(EXPORT_PART_INFIX) {
+        return title;
+    }
+    let mut out = title;
+    if out.chars().count() >= MAX_TITLE_CHARS {
+        // Room for the `_` comes out of the title's own tail, so this can
+        // never breach the length budget. The character dropped is the
+        // marker's last, leaving a letter — never a dot or space Windows
+        // would strip.
+        out = out.chars().take(MAX_TITLE_CHARS - 1).collect();
+    }
+    out.push('_');
+    out
 }
 
 fn push_separator(out: &mut String, has_dash: bool, has_space: bool) {
@@ -402,6 +438,104 @@ mod tests {
         // fails with a bewildering OS error at capture start.
         let long = "x".repeat(300);
         assert_eq!(sanitize_title(&long).chars().count(), MAX_TITLE_CHARS);
+    }
+
+    // REGRESSION: the SECOND trim -- the one after `.take(64)` -- exists
+    // solely for a truncation landing on a `.`, `-` or space, and no fixture
+    // reached it (the length test uses "x".repeat(300), which truncates onto
+    // an 'x'), so weakening it to whitespace-only left the module green.
+    // It is load-bearing because `capture_paths::base_name` puts the label
+    // LAST: a trailing dot in the title is a trailing dot in the BASE, and
+    // `editor_commands::is_safe_base` refuses `base.ends_with('.')`. Every
+    // base-taking command gates on it, and `screen_recovery`'s `owned` runs
+    // it too -- so such a capture is staged on disk yet cannot be edited,
+    // saved or discarded, and is never swept. Silently.
+    //
+    // The fixture returns FEWER than MAX_TITLE_CHARS characters, which is
+    // exactly why the length test could not double as this one.
+    #[test]
+    fn a_title_truncated_onto_a_separator_is_trimmed_again() {
+        let raw = format!("{}.b", "a".repeat(MAX_TITLE_CHARS - 1));
+        let title = sanitize_title(&raw);
+
+        assert_eq!(
+            title,
+            "a".repeat(MAX_TITLE_CHARS - 1),
+            "the 64-character cut lands on the '.', which must then be trimmed"
+        );
+        assert!(
+            !title.ends_with('.') && !title.ends_with('-') && !title.ends_with(' '),
+            "Windows silently strips a trailing dot or space, so the name on \
+             disk would stop matching the name we reserved: {title:?}"
+        );
+
+        // And the base it becomes has to survive the gate every base-taking
+        // command runs. `base_name`'s output is spelled out rather than
+        // called, because this crate deliberately carries no chrono
+        // dependency (see Cargo.toml); `is_safe_base` lives in the shell
+        // crate, so assert the property it keys on plus the round trip.
+        let base = format!("2026-09-20 1432 {title}");
+        assert!(vault_buddy_core::capture_paths::is_capture_base(&base));
+        assert!(!base.ends_with('.') && !base.ends_with(' '));
+        assert_eq!(
+            base_from_part(&part_file_name(&base)).as_deref(),
+            Some(&*base)
+        );
+    }
+
+    // REGRESSION (silent footage loss): `screen_recovery::classify` must
+    // check the export shape BEFORE the plain part shape, or every abandoned
+    // transcode is promoted as a capture. The cost used to be paid by the
+    // user: a window titled "Build.export" produced a base ending in the
+    // marker, so its orphaned `.part` classified as an ExportTemp and was
+    // DELETED outright, skipping `part_holds_footage` entirely. Refusing
+    // that one ending here -- where identity is decided -- is what makes the
+    // collision unconstructible.
+    #[test]
+    fn sanitize_never_returns_a_title_ending_in_the_export_marker() {
+        assert_eq!(sanitize_title("Build.export"), "Build.export_");
+        // The trailing-separator trim can CREATE the ending, so the check
+        // has to run after it.
+        assert_eq!(sanitize_title("Build.export. "), "Build.export_");
+        // ...and so can the 64-character truncation, which is why it cannot
+        // run before that either.
+        let truncating = format!("{}.exportable notes", "a".repeat(MAX_TITLE_CHARS - 7));
+        let title = sanitize_title(&truncating);
+        assert!(
+            !title.ends_with(EXPORT_PART_INFIX),
+            "the cut landed exactly on the marker: {title:?}"
+        );
+        assert!(
+            title.chars().count() <= MAX_TITLE_CHARS,
+            "disambiguating must not breach the length budget: {title:?}"
+        );
+    }
+
+    // The other half: the disambiguation must touch ONLY a title ending in
+    // exactly the marker. `sanitize_title` decides base IDENTITY --
+    // `is_capture_base`, the sidecar's own `base` round trip and
+    // `screen_recovery::classify` all key on it -- so mangling anything else
+    // renames people's captures for nothing.
+    #[test]
+    fn a_title_merely_containing_the_export_marker_is_untouched() {
+        for unchanged in [
+            "Build.exporter",
+            "Build.export.log",
+            "My.export.notes and more",
+            "export",
+            "Figma \u{2014} Design System",
+            "report.json",
+            "a.exports",
+        ] {
+            assert_eq!(
+                sanitize_title(unchanged),
+                unchanged,
+                "{unchanged:?} was rewritten"
+            );
+        }
+        // A LEADING marker is already handled by the edge trim, which strips
+        // the dot -- and must keep behaving exactly as it did.
+        assert_eq!(sanitize_title(".export"), "export");
     }
 
     #[test]
