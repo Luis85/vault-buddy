@@ -7,21 +7,30 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 use crate::capture_guard::{CaptureGuard, CaptureKind};
 
-/// Every window label in `tauri.conf.json`, in the order the hide and quit
-/// paths walk them — the buddy (`main`) LAST, so the accessory windows never
-/// outlive the thing they hang off. Both walks below mean "every window",
-/// and a window added to the config but not to a walk reappears as the two
-/// bugs those walks exist to prevent (an overlay that survives hide-to-tray;
-/// a webview left alive at exit that fails WebView2's class unregister), so
-/// a test below derives this list from the config instead of trusting it.
-pub const ALL_WINDOW_LABELS: [&str; 4] = ["panel", "bubble", "overlay", "main"];
+/// Every window the app owns, in destroy order — the buddy LAST, because the
+/// quit path saves its position and destroying it first would race that save.
+///
+/// This is the QUIT walk. It must cover every configured window including the
+/// editor: all of them share WebView2's `Chrome_WidgetWin_0` class, and
+/// leaving even one alive fails the unregister with
+/// `ERROR_CLASS_HAS_WINDOWS (1412)`.
+pub const ALL_WINDOW_LABELS: [&str; 5] = ["panel", "bubble", "overlay", "editor", "main"];
 
-/// Windows the window-state plugin must NOT persist a position for: every
-/// one except the buddy. The panel, bubble and overlay are all positioned
-/// fresh — while hidden — every time they are shown, so a restored position
-/// is junk that only buys a startup restore and a `Moved` handler holding the
-/// plugin's cache lock.
-pub const POSITION_DENYLIST: [&str; 3] = ["panel", "bubble", "overlay"];
+/// The companion surfaces — every window hide-to-tray takes down.
+///
+/// Deliberately NOT `ALL_WINDOW_LABELS`: the editor is a real application
+/// window that can hold unsaved edits, and hiding it would strand that work
+/// off-screen with no way back (spec 5.1, the same class as GAP-82's
+/// panel-hide problem). Hide-to-tray is a companion gesture; the editor is
+/// closed by the user, by a successful save, or by an explicit discard.
+pub const COMPANION_LABELS: [&str; 4] = ["panel", "bubble", "overlay", "main"];
+
+/// Windows whose position the window-state plugin must NOT persist: every
+/// window except the buddy. The panel, bubble and overlay are all positioned
+/// fresh — while hidden — every time they are shown, and the editor opens at
+/// its configured default, so a restored position is junk that only buys a
+/// startup restore and a `Moved` handler holding the plugin's cache lock.
+pub const POSITION_DENYLIST: [&str; 4] = ["panel", "bubble", "overlay", "editor"];
 
 /// Hide the companion (and its panel/bubble); the tray "Show / Hide" brings
 /// the buddy back.
@@ -31,6 +40,8 @@ pub const POSITION_DENYLIST: [&str; 3] = ["panel", "bubble", "overlay"];
 /// requirement — so this is the only place allowed to call window.hide()
 /// on the buddy, and any future hide path must route through here to
 /// inherit the guard.
+///
+/// The editor is deliberately absent: see `COMPANION_LABELS`.
 pub fn hide_buddy(app: &AppHandle) {
     if crate::capture_commands::recording_blocks_shutdown(app)
         || crate::screen_commands::capture_blocks_shutdown(app)
@@ -38,7 +49,7 @@ pub fn hide_buddy(app: &AppHandle) {
         log::info!("hide ignored: a capture is in progress");
         return;
     }
-    for label in ALL_WINDOW_LABELS {
+    for label in COMPANION_LABELS {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.hide();
         }
@@ -316,27 +327,104 @@ mod tests {
             .collect()
     }
 
+    // The DESTROY walk must cover every configured window, editor included:
+    // all of them share WebView2's Chrome_WidgetWin_0 class, and leaving one
+    // alive fails the unregister with ERROR_CLASS_HAS_WINDOWS (1412).
     #[test]
-    fn the_hide_and_quit_walk_covers_every_configured_window() {
-        // The bug this pins, twice over. `hide_buddy` is THE hide chokepoint:
-        // a window missing from it survives hide-to-tray, so tray -> Hide
-        // would leave a full-monitor, always-on-top, undecorated overlay up
-        // with the buddy gone. And `finish_quit` must DESTROY every webview
-        // or WebView2 cannot unregister the shared `Chrome_WidgetWin_0`
-        // class -- ERROR_CLASS_HAS_WINDOWS (1412) on every single quit.
-        // Derived from the config rather than restated, so window number
-        // five fails here instead of shipping both bugs again.
-        let mut configured = configured_labels();
+    fn the_quit_walk_destroys_every_configured_window() {
+        let configured = configured_labels();
         let mut walked: Vec<String> = ALL_WINDOW_LABELS.iter().map(|s| s.to_string()).collect();
-        configured.sort();
+        let mut expected = configured.clone();
         walked.sort();
+        expected.sort();
         assert_eq!(
-            walked, configured,
-            "every window in tauri.conf.json must be hidden and destroyed"
+            walked, expected,
+            "every window in tauri.conf.json must be destroyed on quit"
         );
-        // The buddy goes last: it is the visible anchor, and the accessory
-        // windows should never outlive it on screen.
+        // The buddy is destroyed last: it is the window whose position the
+        // quit path saves, and destroying it first would race that save.
         assert_eq!(ALL_WINDOW_LABELS.last(), Some(&"main"));
+    }
+
+    // The HIDE walk must cover every configured window EXCEPT the editor.
+    // Hide-to-tray is a companion-surface gesture; the editor is a real
+    // application window that can hold unsaved edits, and hiding it would
+    // strand that work off-screen with no way back (spec 5.1, the GAP-82
+    // class). Asserted as a derived set, not a literal, so a window added to
+    // the config lands in exactly one of the two lists on purpose.
+    #[test]
+    fn the_hide_walk_covers_every_companion_window_and_not_the_editor() {
+        let mut companions: Vec<String> = COMPANION_LABELS.iter().map(|s| s.to_string()).collect();
+        let mut expected: Vec<String> = configured_labels()
+            .into_iter()
+            .filter(|l| l != "editor")
+            .collect();
+        companions.sort();
+        expected.sort();
+        assert_eq!(
+            companions, expected,
+            "the hide walk must cover every companion window and never the editor"
+        );
+        assert!(
+            !COMPANION_LABELS.contains(&"editor"),
+            "hiding the editor would strand unsaved edits off-screen"
+        );
+    }
+
+    // The editor is a real application window: it is NOT transparent, IS
+    // decorated and resizable, and is NOT always-on-top. Those four are what
+    // make it unlike the three companion surfaces, and a later edit that
+    // quietly makes it another always-on-top transparent panel would change
+    // what the window IS without changing its name.
+    #[test]
+    fn the_editor_window_is_a_real_application_window() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        let editor = conf["app"]["windows"]
+            .as_array()
+            .expect("app.windows")
+            .iter()
+            .find(|w| w["label"] == "editor")
+            .expect("an editor window must be declared");
+        assert_eq!(editor["transparent"], false);
+        assert_eq!(editor["decorations"], true);
+        assert_eq!(editor["resizable"], true);
+        assert_eq!(editor["alwaysOnTop"], false);
+        assert_eq!(editor["skipTaskbar"], false, "it is alt-tabbable by design");
+        assert_eq!(
+            editor["visible"], false,
+            "created hidden, like panel and bubble"
+        );
+    }
+
+    // The editor webview reads its staged capture through the asset
+    // protocol, and this scope IS the security boundary: `$APPLOCALDATA`
+    // resolves to the app's own local-data dir, so this grants the webview
+    // read access to the staging directory and nothing else. Widening it to
+    // `$APPLOCALDATA/*` (or adding a vault root) would let the editor
+    // webview read arbitrary files via the asset handler -- a change this
+    // test exists to make loud rather than a silent config edit.
+    #[test]
+    fn the_asset_protocol_scope_is_pinned_to_the_staging_directory_alone() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        let scope = conf["app"]["security"]["assetProtocol"]["scope"]
+            .as_array()
+            .expect("assetProtocol.scope must be an array");
+        let scope: Vec<&str> = scope
+            .iter()
+            .map(|v| v.as_str().expect("scope entry"))
+            .collect();
+        assert_eq!(
+            scope,
+            vec!["$APPLOCALDATA/screen-captures/*"],
+            "the asset protocol scope must name the staging directory exactly -- never a \
+             vault path or a wider glob like $APPLOCALDATA/*"
+        );
+        assert_eq!(
+            conf["app"]["security"]["assetProtocol"]["enable"], true,
+            "the asset protocol must be enabled for the editor to read its staged capture"
+        );
     }
 
     #[test]
@@ -392,17 +480,23 @@ mod tests {
         // constant.
         let src = include_str!("tray.rs");
         let production = src.split("#[cfg(test)]").next().unwrap_or(src);
-        let walks = production.matches("in ALL_WINDOW_LABELS").count();
+        let destroy_walks = production.matches("in ALL_WINDOW_LABELS").count();
+        let hide_walks = production.matches("in COMPANION_LABELS").count();
         assert_eq!(
-            walks, 2,
-            "expected the hide and quit walks to iterate ALL_WINDOW_LABELS; found {walks}"
+            destroy_walks, 1,
+            "expected exactly one quit-time destroy walk over ALL_WINDOW_LABELS; found {destroy_walks}"
         );
-        // The two constants are the only places a label may be spelled out.
+        assert_eq!(
+            hide_walks, 1,
+            "expected exactly one hide walk over COMPANION_LABELS; found {hide_walks}"
+        );
+        // The three constants are the only places a label may be spelled out.
         let spellings = production.matches("\"bubble\"").count();
         assert_eq!(
-            spellings, 2,
-            "window labels belong in ALL_WINDOW_LABELS / POSITION_DENYLIST and \
-             nowhere else in tray.rs; found {spellings} spellings of \"bubble\""
+            spellings, 3,
+            "window labels belong in ALL_WINDOW_LABELS / COMPANION_LABELS / \
+             POSITION_DENYLIST and nowhere else in tray.rs; found {spellings} \
+             spellings of \"bubble\""
         );
     }
 

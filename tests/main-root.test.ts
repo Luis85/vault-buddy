@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { rootFor } from "../src/roots";
 import BubbleRoot from "../src/roots/BubbleRoot.vue";
 import BuddyRoot from "../src/roots/BuddyRoot.vue";
+import EditorRoot from "../src/roots/EditorRoot.vue";
 import PanelRoot from "../src/roots/PanelRoot.vue";
 import RegionRoot from "../src/roots/RegionRoot.vue";
 
@@ -12,6 +13,9 @@ describe("rootFor", () => {
     expect(rootFor("panel")).toBe(PanelRoot);
     expect(rootFor("bubble")).toBe(BubbleRoot);
     expect(rootFor("overlay")).toBe(RegionRoot);
+  });
+  it("mounts the editor root for the editor window", () => {
+    expect(rootFor("editor")).toBe(EditorRoot);
   });
   it("defaults an unknown label to the buddy", () => {
     expect(rootFor("whatever")).toBe(BuddyRoot);

@@ -37,7 +37,7 @@ use tauri::{AppHandle, Manager};
 /// Every window the app owns. Kept in step with `tauri.conf.json` by a test
 /// that reads the config -- phase 4's `editor` window will fail that test
 /// until it is added here, which is the point.
-pub(crate) const EXCLUDED_LABELS: &[&str] = &["main", "panel", "bubble", "overlay"];
+pub(crate) const EXCLUDED_LABELS: &[&str] = &["main", "panel", "bubble", "overlay", "editor"];
 
 /// The two affinity intents, named so that the DIRECTION is a value a test
 /// can read rather than a bare `true` / `false` at the call site. The

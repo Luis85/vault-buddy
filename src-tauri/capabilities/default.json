@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Buddy, panel, and bubble windows: the frontend drives everything through app commands (toggle_panel, close_panel, start_buddy_drag, …); window geometry and visibility are managed Rust-side, so no core:window IPC grants are needed. Region selection runs in the overlay window, which likewise drives everything through app commands.",
-  "windows": ["main", "panel", "bubble", "overlay"],
+  "windows": ["main", "panel", "bubble", "overlay", "editor"],
   "permissions": [
     "core:default",
     "log:default",
