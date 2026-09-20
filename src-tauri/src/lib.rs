@@ -481,6 +481,7 @@ pub fn run() {
             editor_commands::open_capture_editor,
             editor_commands::take_editor_request,
             editor_commands::load_staged_capture,
+            editor_commands::save_capture_timeline,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to

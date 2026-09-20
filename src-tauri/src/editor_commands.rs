@@ -233,6 +233,49 @@ pub async fn load_staged_capture(
         .map_err(|e| format!("Loading the capture failed: {e}"))?
 }
 
+/// Return the sidecar with only its timeline replaced.
+///
+/// Read-modify-write, never rebuild. Everything else in the sidecar is the
+/// capture's own recorded truth — its duration, its inputs, the vault it was
+/// recorded for — and the editor does not know all of it. A save that
+/// reconstructed the struct from what the editor carries would silently drop
+/// whatever it does not.
+fn with_timeline(
+    mut sidecar: staging::StagedSidecar,
+    timeline: Option<serde_json::Value>,
+) -> staging::StagedSidecar {
+    sidecar.timeline = timeline;
+    sidecar
+}
+
+/// ASYNC: an fsync'd sidecar rewrite on every editor operation must not sit
+/// on the main thread.
+#[tauri::command]
+pub async fn save_capture_timeline(
+    app: AppHandle,
+    base: String,
+    timeline: Option<serde_json::Value>,
+) -> Result<(), String> {
+    if !is_safe_base(&base) {
+        return Err("That capture name is not one of ours.".to_string());
+    }
+    let dir = staging::staging_dir(
+        &app.path()
+            .app_local_data_dir()
+            .map_err(|e| format!("Could not resolve the staging directory: {e}"))?,
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let sidecar_path = dir.join(staging::sidecar_file_name(&base));
+        let existing = staging::read_sidecar(&sidecar_path)
+            .ok_or_else(|| "That capture's details could not be read.".to_string())?;
+        staging::write_sidecar(&dir, &with_timeline(existing, timeline))
+            .map_err(|e| format!("Could not save the edit: {e}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Saving the edit failed: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,5 +495,39 @@ mod tests {
             production[load_fn..].contains(guard),
             "load_staged_capture must refuse an unsafe base before it becomes a path"
         );
+    }
+
+    // The sidecar is read-modify-written, never rebuilt: everything except
+    // the timeline is the capture's own recorded truth (duration, inputs,
+    // the vault it belongs to), and a save that reconstructed those fields
+    // from what the editor happens to know would quietly lose whatever the
+    // editor does not carry.
+    #[test]
+    fn saving_a_timeline_preserves_every_other_sidecar_field() {
+        let mut s = sidecar("cap");
+        s.inputs = vec!["Mic".into(), "Speakers".into()];
+        s.paused_ms = 7_000;
+        let updated = with_timeline(
+            s.clone(),
+            Some(serde_json::json!({"segments": [{"sourceStartMs": 5, "sourceEndMs": 9}]})),
+        );
+        assert_eq!(updated.inputs, s.inputs);
+        assert_eq!(updated.paused_ms, 7_000);
+        assert_eq!(updated.duration_ms, s.duration_ms);
+        assert_eq!(updated.vault_id, s.vault_id);
+        assert_eq!(updated.recorded_at, s.recorded_at);
+        assert_eq!(updated.timeline.unwrap()["segments"][0]["sourceStartMs"], 5);
+    }
+
+    // Clearing is how "revert to the whole capture" is expressed, and it
+    // must remove the field rather than store an empty timeline — an empty
+    // segment list is a capture Save refuses (spec 8.1), which is not the
+    // same thing as an untouched one.
+    #[test]
+    fn clearing_a_timeline_removes_it_rather_than_storing_an_empty_one() {
+        let mut s = sidecar("cap");
+        s.timeline = Some(serde_json::json!({"segments": []}));
+        let updated = with_timeline(s, None);
+        assert!(updated.timeline.is_none());
     }
 }
