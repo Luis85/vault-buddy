@@ -46,10 +46,7 @@ pub(crate) fn handle_close_requested(window: &Window, api: &CloseRequestApi) {
 
 fn handle_main_close(window: &Window, api: &CloseRequestApi) {
     let app = window.app_handle();
-    if crate::capture_commands::recording_blocks_shutdown(app)
-        || crate::screen_commands::capture_blocks_shutdown(app)
-        || crate::export_shutdown::export_blocks_shutdown(app)
-    {
+    if crate::shutdown_gate::shutdown_is_blocked(app) {
         // Alt+F4 / session shutdown bypass tray::quit — the recording must
         // still finalize, but that wait is unbounded and this callback runs
         // on the event loop: blocking would freeze the UI for the whole
@@ -59,7 +56,9 @@ fn handle_main_close(window: &Window, api: &CloseRequestApi) {
         // The export is the third term for the same reason it is one in
         // `tray::quit`: it is the only one of the three mid-write into a
         // vault, and its ffmpeg CHILD is a separate process nothing else on
-        // the way out would stop (GAP-155).
+        // the way out would stop (GAP-155). All three now come from one
+        // place, `shutdown_gate::shutdown_is_blocked` — the updater's door
+        // spelled none of them and nobody noticed (GAP-160).
         api.prevent_close();
         let app = app.clone();
         let spawned = std::thread::Builder::new()

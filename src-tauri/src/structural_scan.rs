@@ -216,3 +216,31 @@ pub(crate) fn assert_every_exit_is_paired(region: &str, release: &str, what: &st
     }
     scan
 }
+
+/// The production code of ONE shell source file, by file name — via
+/// `shell_sources`, so comments, doc comments and string literals are gone
+/// before anything is matched. This crate documents its invariants by
+/// quoting them, and prose naming a predicate must never satisfy an
+/// assertion that it is CALLED.
+///
+/// Promoted out of `export_shutdown`'s test module when `shutdown_gate`
+/// needed the same two helpers: a scan helper that exists twice is the
+/// exact drift this module was created to stop.
+pub(crate) fn shell_file(name: &str) -> String {
+    shell_sources()
+        .into_iter()
+        .find(|(p, _)| p.file_name().and_then(|n| n.to_str()) == Some(name))
+        .unwrap_or_else(|| panic!("{name} must exist in the shell"))
+        .1
+}
+
+/// The body of the function introduced by `sig`, up to its closing brace at
+/// column 0.
+pub(crate) fn fn_body<'a>(code: &'a str, sig: &str) -> &'a str {
+    let start = offset_of(code, sig);
+    let end = code[start..]
+        .find("\n}")
+        .map(|i| start + i)
+        .unwrap_or_else(|| panic!("{sig} must have a closing brace at column 0"));
+    &code[start..end]
+}

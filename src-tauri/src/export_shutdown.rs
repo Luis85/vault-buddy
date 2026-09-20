@@ -1,5 +1,7 @@
-//! Shutdown's view of the export: the predicate both quit paths consult, and
-//! the bounded cancel-and-wait they run before the process can end.
+//! Shutdown's view of the export: the predicate every exit path consults —
+//! since GAP-160 through the one composition in `shutdown_gate`, not by
+//! spelling it per door — and the bounded cancel-and-wait the two quit
+//! paths run before the process can end.
 //!
 //! **Why this is not in `export_commands`.** The sibling domains keep their
 //! shutdown helpers inside their own modules —
@@ -8,8 +10,9 @@
 //! but `export_commands` came to 792 nonblank lines against the 800 Rust cap
 //! with it. That is the same seam `staged_commands` was split along, and the
 //! same remedy: the file that owns the export LIFECYCLE keeps the lifecycle,
-//! and shutdown's small, self-contained view of it moves here. Nothing else
-//! calls into this module.
+//! and shutdown's small, self-contained view of it moves here. Its only
+//! callers are `shutdown_gate` (the predicate) and the two quit workers
+//! (`cancel_if_exporting`).
 //!
 //! GAP-155 is what it closes. Before it, both quit gates read the two CAPTURE
 //! predicates alone, so quitting during a ten-minute export ran `finish_quit`
@@ -84,9 +87,11 @@ pub(crate) fn wait_until_cleared(
 /// An export is in flight, so a quit must deal with it first.
 ///
 /// The sibling of `capture_commands::recording_blocks_shutdown` and
-/// `screen_commands::capture_blocks_shutdown`, and the third term of both
-/// quit gates — but deliberately NOT of `tray::hide_buddy`'s, which shares
-/// their exact shape. See `cancel_if_exporting` for why.
+/// `screen_commands::capture_blocks_shutdown`, and the third term of
+/// `shutdown_gate::shutdown_blocker` — the one composition every exit path
+/// reads, including the updater's, which used to read nothing (GAP-160).
+/// Deliberately NOT a term of `tray::hide_buddy`'s gate, which shares the
+/// same shape. See `cancel_if_exporting` for why.
 pub fn export_blocks_shutdown(app: &AppHandle) -> bool {
     lock_ignoring_poison(&app.state::<ExportState>().0).is_some()
 }
@@ -144,30 +149,10 @@ mod tests {
 
     // ---- GAP-155: the export is the third thing a quit must not abandon ----
 
-    /// The production code of one shell source file, by file name — via the
-    /// shared walk, so comments, doc comments and string literals are gone
-    /// before anything is matched. This crate documents its invariants by
-    /// quoting them, and prose naming a predicate must never satisfy an
-    /// assertion that it is CALLED.
-    fn shell_file(name: &str) -> String {
-        let files = crate::structural_scan::shell_sources();
-        files
-            .into_iter()
-            .find(|(p, _)| p.file_name().and_then(|n| n.to_str()) == Some(name))
-            .unwrap_or_else(|| panic!("{name} must exist in the shell"))
-            .1
-    }
-
-    /// The body of the function introduced by `sig`, up to its closing brace
-    /// at column 0.
-    fn fn_body<'a>(code: &'a str, sig: &str) -> &'a str {
-        let start = crate::structural_scan::offset_of(code, sig);
-        let end = code[start..]
-            .find("\n}")
-            .map(|i| start + i)
-            .unwrap_or_else(|| panic!("{sig} must have a closing brace at column 0"));
-        &code[start..end]
-    }
+    // `shell_file` and `fn_body` were born here and now live in
+    // `structural_scan` — `shutdown_gate` needed the same two, and a scan
+    // helper that exists twice is the drift that module exists to stop.
+    use crate::structural_scan::{fn_body, shell_file};
 
     // GAP-155. Both quit paths gated on the two CAPTURE domains alone, so a
     // user who started a ten-minute export and quit hit `finish_quit`
@@ -177,28 +162,43 @@ mod tests {
     // `Prepared::created_dirs` never reaching `rollback_export_dir` — and the
     // ffmpeg CHILD, a separate process, kept writing into staging afterwards.
     //
-    // The third assertion is the point of the test rather than a footnote:
-    // `hide_buddy` shares this gate's exact two-predicate shape and must NOT
-    // grow the third term. It is the HIDE chokepoint, not a quit — the buddy
-    // is the RECORDING indicator, an export needs no indicator, and blocking
-    // hide-to-tray for the minutes an export runs would pin the app on screen
-    // during exactly the operation a user wants to walk away from. This pins
-    // the asymmetry so a later "unify the three call sites" cleanup reddens.
+    // RE-POINTED by GAP-160, not weakened. The quit doors no longer spell
+    // the three predicates themselves — they read one composition,
+    // `shutdown_gate::shutdown_is_blocked`, because the updater's door
+    // spelled none of them and nobody noticed. So the export term is
+    // asserted where it now lives (inside the gate) and the doors are
+    // asserted to consult the gate, which is the same claim in two hops.
+    //
+    // The hide assertion is the point of the test rather than a footnote and
+    // survives verbatim, now closed against BOTH spellings: `hide_buddy`
+    // shares the quit gate's shape and must grow NEITHER the export
+    // predicate nor the composition that contains it. It is the HIDE
+    // chokepoint, not a quit — the buddy is the RECORDING indicator, an
+    // export needs no indicator, and blocking hide-to-tray for the minutes
+    // an export runs would pin the app on screen during exactly the
+    // operation a user wants to walk away from. This pins the asymmetry so a
+    // later "unify the three call sites" cleanup reddens.
     #[test]
     fn both_quit_gates_consult_the_export_predicate_and_the_hide_chokepoint_does_not() {
         let tray = shell_file("tray.rs");
         let close = shell_file("window_close.rs");
         let needle = "export_blocks_shutdown";
+        let gate = "shutdown_is_blocked(";
         assert!(
-            fn_body(&tray, "pub fn quit(").contains(needle),
+            fn_body(&shell_file("shutdown_gate.rs"), "pub fn shutdown_blocker(").contains(needle),
+            "the shared shutdown gate must consult the export predicate"
+        );
+        assert!(
+            fn_body(&tray, "pub fn quit(").contains(gate),
             "tray::quit must not exit while an export is mid-commit into a vault"
         );
         assert!(
-            fn_body(&close, "fn handle_main_close(").contains(needle),
+            fn_body(&close, "fn handle_main_close(").contains(gate),
             "Alt+F4 must not exit while an export is mid-commit into a vault"
         );
+        let hide = fn_body(&tray, "pub fn hide_buddy(");
         assert!(
-            !fn_body(&tray, "pub fn hide_buddy(").contains(needle),
+            !hide.contains(needle) && !hide.contains(gate),
             "hide_buddy is the HIDE chokepoint, not a quit: an export needs no \
              on-screen indicator, and gating hide-to-tray on one would trap the \
              app on screen for the whole export"

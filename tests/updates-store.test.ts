@@ -167,6 +167,41 @@ describe("updates store", () => {
     expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 
+  it("aborts the install when Rust refuses it (GAP-160)", async () => {
+    // prepare_update_install refuses while a recording, a screen capture or
+    // an export is in flight: installing would strand a `.part`, or kill the
+    // vault write an export is mid-way through and orphan its ffmpeg child.
+    // The refusal used to be swallowed by a `.catch(() => {})`, so the Rust
+    // half alone fixed nothing — install() ran regardless.
+    const refusal =
+      "A recording is in progress. Stop the recording, then install the update.";
+    const download = vi.fn().mockResolvedValue(undefined);
+    const install = vi.fn().mockResolvedValue(undefined);
+    mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
+    mocks.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "prepare_update_install") throw refusal;
+      return undefined;
+    });
+    const vaults = useVaultsStore();
+    vaults.view = "list";
+    const store = useUpdatesStore();
+    await store.checkForUpdates();
+    await store.installUpdate();
+
+    expect(install).not.toHaveBeenCalled();
+    expect(mocks.relaunch).not.toHaveBeenCalled();
+    // the user has to be able to read what is running and act on it
+    expect(store.phase).toBe("error");
+    expect(store.error).toContain("Stop the recording");
+    expect(store.available).not.toBeNull(); // retry after they stop it
+    // close_panel already hid the panel, so the message needs it re-shown —
+    // on the update view, where the error and the retry button live
+    expect(mocks.invoke).toHaveBeenCalledWith("toggle_panel");
+    expect(vaults.view).toBe("update");
+    // nothing was latched: the refusal returns before mark_clean_shutdown
+    expect(mocks.invoke).not.toHaveBeenCalledWith("rearm_crash_detection");
+  });
+
   it("a failing install logs a warning through the log bridge", async () => {
     const download = vi.fn().mockResolvedValue(undefined);
     const install = vi.fn().mockRejectedValue("install broke");

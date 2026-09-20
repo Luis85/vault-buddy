@@ -82,10 +82,11 @@ pub fn quit(app: &AppHandle) {
     // calling exit(0) while the `screen-export` thread was committing video →
     // note → staged-removal, and leaving the ffmpeg CHILD — a separate
     // process — writing into staging after the app was gone (GAP-155).
-    if crate::capture_commands::recording_blocks_shutdown(app)
-        || crate::screen_commands::capture_blocks_shutdown(app)
-        || crate::export_shutdown::export_blocks_shutdown(app)
-    {
+    //
+    // All three terms live in one place, `shutdown_gate::shutdown_is_blocked`
+    // — the updater's own door spelled none of them and nobody noticed
+    // (GAP-160), so the disjunction is no longer written out per door.
+    if crate::shutdown_gate::shutdown_is_blocked(app) {
         let app = app.clone();
         let spawned = std::thread::Builder::new()
             .name("shutdown-finalize".into())

@@ -128,9 +128,28 @@ pub(crate) fn emit_buddy_facing(app: &tauri::AppHandle) {
 /// main-thread Moved listener. Marking it `async` would move it to the
 /// runtime thread pool and re-open the off-main cache-lock-vs-Moved deadlock
 /// this codebase fixed — see `window_upkeep_tick`.
+///
+/// Which is exactly why it REFUSES rather than waiting when a recording, a
+/// screen capture or an export is in flight (GAP-160). The two quit doors
+/// park a worker that finalizes and cancels; a synchronous main-thread
+/// command cannot sleep at all, let alone on the event loop the wait would
+/// depend on. Refusing is also the better answer here: unlike a tray quit,
+/// the user is present — they just clicked Install & restart — so naming
+/// what is running and letting them stop it keeps them in control, and the
+/// update is still there to install a minute later.
 #[tauri::command]
-pub fn prepare_update_install(app: tauri::AppHandle) {
+pub fn prepare_update_install(app: tauri::AppHandle) -> Result<(), String> {
     use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+    // FIRST, before any of this step's side effects. Before
+    // `mark_clean_shutdown`, because a refused install must not latch crash
+    // detection off for the rest of the session; and before `close_panel`,
+    // because the panel is where the frontend renders the refusal the user
+    // has to read.
+    if let Some(blocker) = crate::shutdown_gate::shutdown_blocker(&app) {
+        let refusal = blocker.install_refusal();
+        log::info!("update install refused: {refusal}");
+        return Err(refusal);
+    }
     // The buddy window never shifts, so there is no home position to restore —
     // just make sure the panel is closed and persist the buddy position.
     close_panel(app.clone());
@@ -139,6 +158,7 @@ pub fn prepare_update_install(app: tauri::AppHandle) {
     }
     log::info!("clean shutdown (update install)");
     crate::diagnostics::mark_clean_shutdown();
+    Ok(())
 }
 
 /// Enters the OS window-move loop for the buddy. A Rust-side chokepoint
