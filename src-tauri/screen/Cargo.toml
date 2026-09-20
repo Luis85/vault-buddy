@@ -42,6 +42,11 @@ windows = { version = "0.62", features = [
     # invisible resize border. See source.rs's window_capture_dims.
     "Win32_Graphics_Dwm",
     "Win32_Media_MediaFoundation",
+    # GetDiskFreeSpaceExW: the free-space probe the ninth vault write runs
+    # before an export, so a save is refused with a clear message instead of
+    # filling the user's disk. See disk.rs -- the probe returns Option, not
+    # Result, so an unmeasurable volume never reads as a full one.
+    "Win32_Storage_FileSystem",
     "Win32_System_Com",
     # SetWindowDisplayAffinity + WDA_EXCLUDEFROMCAPTURE (spec 5.3): keeping
     # our own windows out of a screen recording. The shell cannot host this

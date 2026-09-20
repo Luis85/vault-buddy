@@ -903,7 +903,18 @@ pub fn free_bytes(path: &Path) -> Option<u64> {
     let wide = HSTRING::from(path.as_os_str().to_string_lossy().as_ref());
     let mut available: u64 = 0;
     // SAFETY: `wide` outlives the call; the out-params are plain u64s.
-    let ok = unsafe { GetDiskFreeSpaceExW(&wide, Some(&mut available), None, None) };
+    // CORRECTED against windows 0.62.2 during implementation. The real
+    // signature takes RAW POINTERS, not references:
+    //   pub unsafe fn GetDiskFreeSpaceExW<P0>(
+    //       lpdirectoryname: P0,
+    //       lpfreebytesavailabletocaller: Option<*mut u64>,
+    //       lptotalnumberofbytes: Option<*mut u64>,
+    //       lptotalnumberoffreebytes: Option<*mut u64>,
+    //   ) -> windows_core::Result<()>
+    //   where P0: windows_core::Param<windows_core::PCWSTR>
+    // so `Some(&mut available)` does NOT coerce and the cast is required.
+    // `&HSTRING` does satisfy P0, and the return really is Result<()>.
+    let ok = unsafe { GetDiskFreeSpaceExW(&wide, Some(&mut available as *mut u64), None, None) };
     match ok {
         Ok(()) => Some(available),
         Err(e) => {
@@ -925,6 +936,14 @@ pub fn free_bytes(_path: &Path) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    // CORRECTED during implementation: this import must carry the SAME
+    // cfg as the only test below it. Left unconditional, a Windows target
+    // compiles an empty test module with a live import and
+    // `-D warnings` turns `unused_imports` into
+    // `error: could not compile vault_buddy_screen (lib test)` -- i.e. the
+    // plan's own named gate, "the ONLY check anywhere that free_bytes's
+    // Windows arm even compiles", failing on the plan's own test module.
+    #[cfg(not(windows))]
     use super::*;
 
     // Off Windows this must be None, and `export_space_shortfall(_, None)`

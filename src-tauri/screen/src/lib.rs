@@ -10,6 +10,10 @@
 pub mod clock;
 pub mod convert;
 pub mod diagnose;
+// Free space on the volume a path lives on. Its API shape is the point:
+// Option, never Result, so an unmeasurable disk reads as "unknown" and lets
+// a save proceed rather than as "full" and refusing one.
+pub mod disk;
 // Spec 5.3's WDA_EXCLUDEFROMCAPTURE. Here rather than in the shell because
 // the shell cannot be cross-compiled to Windows on Linux, so an FFI call
 // written there would be type-checked by nothing until CI.

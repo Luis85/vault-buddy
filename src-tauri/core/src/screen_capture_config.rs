@@ -72,6 +72,54 @@ pub fn normalize_fps(fps: u32) -> u32 {
     }
 }
 
+/// Container and index overhead we reserve regardless of length, so a very
+/// short export never estimates zero and passes the check on a full disk.
+const EXPORT_OVERHEAD_BYTES: u64 = 1_048_576;
+
+/// Headroom multiplier, as a percentage of the encoded estimate. The encoder
+/// tracks its target bitrate loosely and the exported temp coexists with the
+/// staged capture until the vault write lands, so "just enough" is not enough.
+const EXPORT_HEADROOM_PERCENT: u64 = 150;
+
+/// Roughly how many bytes an export of this length at this size and preset
+/// will occupy, including headroom. Deliberately generous — refusing a save
+/// that would have fitted is a smaller harm than filling the user's disk.
+pub fn export_size_estimate_bytes(
+    duration_ms: u64,
+    width: u32,
+    height: u32,
+    fps: u32,
+    quality: ScreenQuality,
+) -> u64 {
+    let video_bps = u64::from(bitrate_bps(quality, width, height, fps));
+    // Audio is at most AAC stereo at the sink's ceiling (24 kB/s per the
+    // AAC encoder's legal table); folding a fixed allowance in beats
+    // threading the real device list down here for a number this rough.
+    let audio_bps = 192_000u64;
+    let bits = (video_bps + audio_bps).saturating_mul(duration_ms) / 1_000;
+    let bytes = bits / 8;
+    bytes
+        .saturating_mul(EXPORT_HEADROOM_PERCENT)
+        .saturating_div(100)
+        .saturating_add(EXPORT_OVERHEAD_BYTES)
+}
+
+/// How many bytes short the destination is, or `None` when there is enough
+/// room — or when free space could not be measured at all.
+///
+/// `None` for an UNKNOWN reading is the whole reason this takes an `Option`
+/// rather than a `Result`: a probe that failed must never be read as "no
+/// space left" and refuse a save the user cannot otherwise complete. The
+/// recording is the irreplaceable artifact; a full disk surfaces as the
+/// write's own error, which the export already handles.
+pub fn export_space_shortfall(needed: u64, free: Option<u64>) -> Option<u64> {
+    let free = free?;
+    if free >= needed {
+        return None;
+    }
+    Some(needed - free)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,5 +197,61 @@ mod tests {
             "a hand-edited config defaults, never errors"
         );
         assert_eq!(normalize_fps(144), 30);
+    }
+
+    #[test]
+    fn the_export_estimate_scales_with_duration_and_with_pixels() {
+        let short = export_size_estimate_bytes(10_000, 1920, 1080, 30, ScreenQuality::Balanced);
+        let long = export_size_estimate_bytes(20_000, 1920, 1080, 30, ScreenQuality::Balanced);
+        let big = export_size_estimate_bytes(10_000, 3840, 2160, 30, ScreenQuality::Balanced);
+        assert!(
+            long > short,
+            "doubling the duration must raise the estimate"
+        );
+        assert!(
+            big > short,
+            "quadrupling the pixels must raise the estimate"
+        );
+    }
+
+    #[test]
+    fn a_higher_quality_preset_estimates_a_bigger_file() {
+        let low = export_size_estimate_bytes(10_000, 1280, 720, 30, ScreenQuality::Low);
+        let high = export_size_estimate_bytes(10_000, 1280, 720, 30, ScreenQuality::High);
+        assert!(high > low);
+    }
+
+    // A ten-second 1080p balanced capture is a couple of megabytes, not two
+    // kilobytes and not two gigabytes. A unit slip (bits vs bytes, ms vs s)
+    // is the whole risk in this function and only an absolute range catches it.
+    #[test]
+    fn the_estimate_is_in_a_plausible_absolute_range() {
+        let bytes = export_size_estimate_bytes(10_000, 1920, 1080, 30, ScreenQuality::Balanced);
+        assert!(
+            (1_000_000..40_000_000).contains(&bytes),
+            "10 s of 1080p estimated at {bytes} bytes"
+        );
+    }
+
+    #[test]
+    fn a_zero_length_export_still_reserves_the_headroom() {
+        // Never zero: a container has overhead, and a 0 estimate would make
+        // the shortfall check pass on a completely full disk.
+        assert!(export_size_estimate_bytes(0, 1920, 1080, 30, ScreenQuality::Balanced) > 0);
+    }
+
+    #[test]
+    fn a_shortfall_is_reported_only_when_free_space_is_known_and_insufficient() {
+        assert_eq!(export_space_shortfall(100, Some(300)), None);
+        assert_eq!(export_space_shortfall(100, Some(100)), None);
+        assert_eq!(export_space_shortfall(300, Some(100)), Some(200));
+    }
+
+    // THE most important row here. An unmeasurable disk must never block a
+    // save: the user would have no way to proceed, and the recording is the
+    // irreplaceable artifact.
+    #[test]
+    fn an_unknown_free_space_never_refuses_the_save() {
+        assert_eq!(export_space_shortfall(u64::MAX, None), None);
     }
 }
