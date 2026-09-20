@@ -121,6 +121,8 @@ vault-buddy/
 │   │                           #   screen_commands.rs, screen_capture_worker.rs,
 │   │                           #   region_commands.rs (the overlay's selection lifecycle),
 │   │                           #   editor_commands.rs (the editor's open/load/save surface),
+│   │                           #   export_shutdown.rs (the export's quit predicate + the
+│   │                           #     bounded cancel both quit workers run first) +
 │   │                           #   export_commands.rs (the export LIFECYCLE + all 5 events) +
 │   │                           #     export_worker/ (the screen-export thread: ffmpeg,
 │   │                           #     the NINTH vault write, the note) +
@@ -265,6 +267,8 @@ Five OS windows, one frontend bundle, one Rust process:
    │  region_commands.rs ── overlay show / answer / cleanup for region selection          │
    │  editor_commands.rs ── editor show + base stash; staged load / timeline save         │
    │  export_commands.rs ── export lifecycle + ExportState + all 5 screen:export* emits   │
+   │  export_shutdown.rs ── the export's view of SHUTDOWN: the quit predicate +           │
+   │                    the bounded cancel both quit workers run first                    │
    │  export_worker/ ── screen-export thread: ffmpeg → NINTH vault write → note (its      │
    │                    vault_dir.rs owns create-contained / measure / roll back)          │
    │  staged_commands.rs ── a staged capture as an object: list / discard / open          │
@@ -681,9 +685,20 @@ Invariants:
   unregister every time, and hide-to-tray would have stranded a
   full-monitor always-on-top window with the buddy gone.
 
-  The quit path carries the same pair: its `shutdown-finalize` worker
-  finalizes the audio recording AND the screen capture before `finish_quit`,
-  so neither can be stranded by an exit.
+  The quit path carries the same pair — and, since the export landed, a
+  THIRD member that is handled differently: its `shutdown-finalize` worker
+  first CANCELS an in-flight export (`export_shutdown::cancel_if_exporting`,
+  bounded at 5 s), then finalizes the audio recording and the screen capture,
+  then `finish_quit`. Cancel rather than finalize because an export is
+  repeatable and its staged capture is kept, where a recording is not; first
+  because a cancel kills a child process in seconds while the two finalizes
+  are unbounded, and an export left behind them would keep writing into the
+  user's vault for as long as they take. `tray::hide_buddy` deliberately does
+  NOT gate on the export — the buddy is the RECORDING indicator, and blocking
+  hide-to-tray for the minutes an export runs would pin the app on screen
+  during exactly the operation a user walks away from. A structural test
+  asserts both quit gates consult the predicate and that the hide chokepoint
+  does not.
 
 ## The vault domain (core crate + `vaults` store)
 

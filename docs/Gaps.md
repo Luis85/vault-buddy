@@ -3779,7 +3779,30 @@ Fix shape: route this arm through `tray::finish_quit`, or at minimum the
 `linux-app` only compiles the shell, and manual Windows verification is deferred
 by standing decision. Land it with a Windows check, not inside an unrelated PR.
 
-### GAP-155 · Medium · No shutdown path consults `ExportState`, so quitting mid-export abandons the one write that touches a vault
+### GAP-155 · ~~Medium~~ PARTLY FIXED 2026-09-20 · No shutdown path consults `ExportState`, so quitting mid-export abandons the one write that touches a vault
+
+> **Closed for the two quit paths.** `tray::quit` and
+> `window_close::handle_main_close` now carry a third gate term, and both
+> workers run `export_shutdown::cancel_if_exporting` FIRST — which sets the
+> flag the export loop already polls, so ffmpeg's child really is killed
+> rather than orphaned — bounded at 5 s, warning and proceeding on expiry so a
+> wedged export cannot make the app unquittable. `hide_buddy` is deliberately
+> excluded and a structural test forbids adding it.
+>
+> **Still open, and WIDER than this entry described:** the updater route.
+> `commands::prepare_update_install` is a *sync* command — it must stay on the
+> main thread for `save_window_state`, so it cannot sleep-wait for a cancel —
+> and today it gates on **nothing at all**: not the export, and not either
+> capture domain. So the updater can `std::process::exit` through a live
+> recording, a live screen capture, or a live export. That is pre-existing for
+> all three domains, not an export-specific residual, and closing it means
+> making the prepare step async or arming a worker. See GAP-160.
+>
+> **Second residual, narrower:** an export already past ffmpeg and inside
+> `commit_into_vault` ignores the cancel flag. The 5 s wait usually covers it
+> (a same-volume `rename_noreplace` plus a small note write), but on expiry the
+> video-then-note window is still theoretically reachable. The `log::warn!` is
+> the evidence trail and `screen_recovery` clears the export temp next launch.
 
 `src-tauri/src/tray.rs` (`quit`) and `src-tauri/src/window_close.rs`
 (`handle_main_close`) both gate solely on
@@ -3879,3 +3902,31 @@ Both current call sites are otherwise STRICTER than the language elsewhere (an
 exit inside a closure ahead of the release also trips them), which is the safe
 direction — it produces false alarms, not false confidence. Recorded so the
 next author does not discover the gap by shipping through it.
+
+
+### GAP-160 · Medium · The updater exits the process through a live recording, screen capture or export, gating on nothing at all
+
+`src-tauri/src/commands.rs`, `prepare_update_install`. The updater flow is
+check → download → `close_panel` → `prepare_update_install` → `install()` →
+`relaunch()`, and the prepare step calls `save_window_state` and
+`mark_clean_shutdown` and returns. It consults **no** shutdown predicate:
+not `capture_commands::recording_blocks_shutdown`, not
+`screen_commands::capture_blocks_shutdown`, and not
+`export_shutdown::export_blocks_shutdown`.
+
+So installing an update mid-capture strands a `.part`, and mid-export kills the
+one operation that writes into a vault — the failure GAP-155 closed for the
+tray and Alt+F4 paths, reachable here by a different door. Found while closing
+that entry.
+
+It cannot simply inherit the same fix: `prepare_update_install` is a **sync**
+command, and deliberately so — it must run on the main thread for
+`save_window_state`, whose off-main variant caused the original drag deadlock.
+A sleep-wait there would freeze the very event loop the wait depends on.
+
+Fix shape: make the prepare step async (it touches a window API, so the
+window-thread invariant has to be honoured — marshal the save back via
+`run_on_main_thread` the way `finish_quit` already does), or arm a worker that
+finalizes/cancels and then drives the install. Either way the three predicates
+belong in one helper so a fourth exit path cannot miss one, the way this one
+did.
