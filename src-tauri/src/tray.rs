@@ -395,6 +395,34 @@ mod tests {
             editor["visible"], false,
             "created hidden, like panel and bubble"
         );
+        // Spec 5.1's geometry block, unpinned before this: a shrink to
+        // e.g. 100x100 passed every other assertion here.
+        assert_eq!(editor["width"], 960);
+        assert_eq!(editor["height"], 640);
+        assert_eq!(editor["minWidth"], 720);
+        assert_eq!(editor["minHeight"], 480);
+    }
+
+    // Without "editor" in this capability's `windows` array, the editor
+    // webview gets no permissions at all and every `invoke` from it fails
+    // (the brief's own stated consequence) -- silently, since nothing on
+    // Linux can construct and drive the real webview to observe it.
+    #[test]
+    fn the_editor_window_is_granted_the_default_capability() {
+        let cap: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json"))
+                .expect("capabilities/default.json");
+        let windows = cap["windows"]
+            .as_array()
+            .expect("capabilities/default.json must declare a windows array")
+            .iter()
+            .map(|w| w.as_str().expect("window label"))
+            .collect::<Vec<_>>();
+        assert!(
+            windows.contains(&"editor"),
+            "the editor window must be granted the default capability, or every invoke() \
+             from it fails; windows was: {windows:?}"
+        );
     }
 
     // The editor webview reads its staged capture through the asset
@@ -424,6 +452,19 @@ mod tests {
         assert_eq!(
             conf["app"]["security"]["assetProtocol"]["enable"], true,
             "the asset protocol must be enabled for the editor to read its staged capture"
+        );
+        // Spec 5.1 names this CSP clause mandatory for preview playback: without
+        // it, a later edit or merge can silently drop the editor's <video>
+        // element's ability to load the staged capture through the asset
+        // handler, and every gate here stays green -- the failure surfaces
+        // only on a real Windows run of the editor.
+        let csp = conf["app"]["security"]["csp"]
+            .as_str()
+            .expect("app.security.csp must be a string");
+        assert!(
+            csp.contains("media-src 'self' asset: http://asset.localhost"),
+            "the CSP must allow media-src from the asset protocol, or the \
+             editor's <video> preview is blocked; csp was: {csp}"
         );
     }
 
@@ -497,6 +538,25 @@ mod tests {
             "window labels belong in ALL_WINDOW_LABELS / COMPANION_LABELS / \
              POSITION_DENYLIST and nowhere else in tray.rs; found {spellings} \
              spellings of \"bubble\""
+        );
+        // "bubble" is in all three constants, so it can't by itself catch a
+        // walk that adds a THIRD, editor-specific list back in (e.g. a
+        // second, inline `get_webview_window("editor")` hide appended
+        // inside `hide_buddy`, alongside — not instead of — the
+        // COMPANION_LABELS walk: that still satisfies every assertion above,
+        // since `hide_walks` counts occurrences of "in COMPANION_LABELS" and
+        // an inline single-window hide has no such text). "editor" appears
+        // in exactly two places today — ALL_WINDOW_LABELS and
+        // POSITION_DENYLIST, deliberately never COMPANION_LABELS — so a
+        // third occurrence anywhere in production code is exactly that
+        // shape of regression.
+        let editor_spellings = production.matches("\"editor\"").count();
+        assert_eq!(
+            editor_spellings, 2,
+            "\"editor\" belongs only in ALL_WINDOW_LABELS and \
+             POSITION_DENYLIST, never COMPANION_LABELS and never a bespoke \
+             inline hide/destroy inside a function body; found \
+             {editor_spellings} spellings"
         );
     }
 

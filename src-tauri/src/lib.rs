@@ -21,6 +21,12 @@ mod task_commands;
 mod task_config_commands;
 mod transcription;
 mod tray;
+mod window_close;
+// Test-only structural pin (Phase 4 Task 1 fix wave, review I-1/I-2): no
+// production code depends on it, so it's excluded from non-test builds
+// entirely, same as `config_lock_guard` above.
+#[cfg(test)]
+mod window_close_guard;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -369,46 +375,13 @@ pub fn run() {
                     commands::reposition_bubble_if_visible(window.app_handle());
                 }
             }
+            // Routing lives in `window_close.rs` (review findings I-1/I-2,
+            // see that module's doc): only "main" finalizes a capture and
+            // marks a clean shutdown, and the editor's own close hides it
+            // instead of destroying it. Split out to keep this closure —
+            // and this file — under the LOC cap.
             tauri::WindowEvent::CloseRequested { api, .. } => {
-                let app = window.app_handle();
-                if capture_commands::recording_blocks_shutdown(app)
-                    || screen_commands::capture_blocks_shutdown(app)
-                {
-                    // Alt+F4 / session shutdown bypass tray::quit — the
-                    // recording must still finalize, but that wait is
-                    // unbounded and this callback runs on the event loop:
-                    // blocking would freeze the UI for the whole encode.
-                    // Hold this close, finalize on a worker thread, then
-                    // re-trigger it via the app handle.
-                    api.prevent_close();
-                    let app = app.clone();
-                    let spawned = std::thread::Builder::new()
-                        .name("close-finalize".into())
-                        .spawn(move || {
-                            capture_commands::finalize_if_recording(&app);
-                            screen_commands::finalize_if_capturing(&app);
-                            // Both domains are finalized, so
-                            // recording_blocks_shutdown/capture_blocks_shutdown
-                            // are now false and the re-triggered
-                            // CloseRequested takes the else branch below
-                            // (pass through to destruction) — no loop.
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.close();
-                            }
-                        });
-                    if let Err(e) = spawned {
-                        // Never panic in a window-event handler (aborts across
-                        // the WebView2 FFI boundary, no crash record). The
-                        // close stays prevented: better an app that ignores
-                        // one Alt+F4 than one that exits stranding a .part.
-                        log::error!("could not spawn close-finalize thread: {e}");
-                    }
-                } else {
-                    // Alt+F4 / session end: the window is about to be
-                    // destroyed and the process exits with it.
-                    log::info!("clean shutdown (window close)");
-                    diagnostics::mark_clean_shutdown();
-                }
+                window_close::handle_close_requested(window, api)
             }
             // Only the panel's OWN blur can mean "clicked away from the
             // panel". Scheduling on every window's blur spawned a worker
