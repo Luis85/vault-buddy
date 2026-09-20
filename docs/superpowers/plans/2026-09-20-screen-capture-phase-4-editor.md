@@ -1935,7 +1935,7 @@ composable, the selected segment, the playhead, and the error banner.
  * for the capture stores) does not apply here.
  */
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 
 import CapturePreview from "../components/editor/CapturePreview.vue";
 import TimelineStrip from "../components/editor/TimelineStrip.vue";
@@ -1951,8 +1951,20 @@ const noCapture = ref(false);
 const selected = ref<number | null>(null);
 const playheadMs = ref(0);
 
-let editor: ReturnType<typeof useEditorTimeline> | null = null;
-const timeline = ref<TimelineDto>({ segments: [] });
+/** A shallowRef, not a plain `let`.
+ *
+ * The template reads `editor.canUndo` during render. A non-reactive binding
+ * is `null` on the first render, so the optional chain short-circuits, the
+ * computed is never touched, and Vue never registers the dependency — Undo
+ * would stay disabled after a real edit until some unrelated ref forced a
+ * re-render. `shallowRef` is the right depth: the composable's own refs are
+ * already reactive, and `ref` would deep-wrap them for nothing. */
+const editor = shallowRef<ReturnType<typeof useEditorTimeline> | null>(null);
+/** Read THROUGH the composable rather than mirroring it. A local copy kept
+ * in step by hand is one missed call away from a stale render. */
+const timeline = computed<TimelineDto>(
+  () => editor.value?.timeline.value ?? { segments: [] },
+);
 
 const src = computed(() =>
   detail.value === null ? "" : convertFileSrc(detail.value.assetPath, "asset"),
@@ -1977,38 +1989,29 @@ onMounted(async () => {
     const seed: TimelineDto = loaded.timeline ?? {
       segments: [{ sourceStartMs: 0, sourceEndMs: loaded.durationMs }],
     };
-    editor = useEditorTimeline(loaded.base, seed);
-    timeline.value = editor.timeline.value;
+    editor.value = useEditorTimeline(loaded.base, seed);
   } catch (e) {
     error.value = String(e);
   }
 });
 
-function sync() {
-  if (editor !== null) timeline.value = { ...editor.timeline.value };
-}
 function onSplit() {
-  editor?.splitAt(playheadMs.value);
-  sync();
+  editor.value?.splitAt(playheadMs.value);
 }
 function onDelete() {
   if (selected.value === null) return;
-  editor?.deleteSegment(selected.value);
+  editor.value?.deleteSegment(selected.value);
   selected.value = null;
-  sync();
 }
 function onReorder(from: number, to: number) {
-  editor?.reorder(from, to);
+  editor.value?.reorder(from, to);
   selected.value = null;
-  sync();
 }
 function onUndo() {
-  editor?.undo();
-  sync();
+  editor.value?.undo();
 }
 function onRedo() {
-  editor?.redo();
-  sync();
+  editor.value?.redo();
 }
 </script>
 
@@ -2048,14 +2051,14 @@ function onRedo() {
         <AppButton
           data-testid="editor-undo"
           variant="ghost"
-          :disabled="!editor?.canUndo.value"
+          :disabled="!editor?.canUndo"
           @click="onUndo"
           >Undo</AppButton
         >
         <AppButton
           data-testid="editor-redo"
           variant="ghost"
-          :disabled="!editor?.canRedo.value"
+          :disabled="!editor?.canRedo"
           @click="onRedo"
           >Redo</AppButton
         >
@@ -2090,6 +2093,7 @@ sequence in `onMounted` moving to `src/composables/useStagedCapture.ts`.
 | `EditorRoot` seeds `{segments: []}` when `timeline` is null | `seeds a whole-capture timeline when the sidecar has none` |
 | `EditorRoot` always reseeds, ignoring `loaded.timeline` | `resumes a saved timeline instead of reseeding it` |
 | `EditorRoot` treats a `null` request as an error | `says so plainly when no capture was requested` |
+| `editor` declared as a plain `let` instead of a `shallowRef` | `splits at the playhead and undoes` — Undo's disabled state never updates |
 
 Restore byte-identically; `md5sum`.
 
@@ -2342,11 +2346,6 @@ not that browser — do not build it here.
   agree. They are two implementations of one mapping, in two languages, and
   Phase 5's export plans on the Rust one while the user watches the TS one.
   Fix shape: a shared fixture table, or a Phase 5 test that runs both.
-- **`EditorRoot` keeps a `timeline` ref in step with the composable by hand**
-  (`sync()` after every operation), because the composable returns a plain
-  `ref` the template does not track through the nullable `editor` handle. A
-  missed `sync()` is a silent stale render. Fix shape: make `editor` a
-  `shallowRef` set once and read `editor.value.timeline` directly.
 
 `docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md` —
 add a **"Covered by Phase 4"** table, same shape, **empty Result column**,
