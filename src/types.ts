@@ -413,3 +413,36 @@ export interface StagedCapture {
   width: number;
   height: number;
 }
+
+/** One cut of the source, in SOURCE milliseconds. Mirrors
+ * `core::timeline::Segment`. */
+export interface SegmentDto {
+  sourceStartMs: number;
+  sourceEndMs: number;
+}
+
+/** The editor's in-progress edit. Mirrors `core::timeline::Timeline`, and is
+ * what the staging sidecar's `timeline` field holds. */
+export interface TimelineDto {
+  segments: SegmentDto[];
+}
+
+/** What `load_staged_capture` returns. `assetPath` is the file name RELATIVE
+ * to the staging directory — the editor joins it onto the asset origin
+ * itself, because the asset protocol's staging-only scope is the only thing
+ * that lets the webview read it.
+ *
+ * @expected-unused Phase 4 Task 2 (the commands) lands ahead of Task 6 (the
+ * editor UI that consumes this DTO) — the wire contract is defined here so
+ * Tasks 3-7 can build against a fixed shape. Remove this tag when Task 6
+ * wires up a real consumer. */
+export interface StagedCaptureDetail {
+  base: string;
+  assetPath: string;
+  durationMs: number;
+  sourceTitle: string;
+  width: number;
+  height: number;
+  recordedAt: string;
+  timeline: TimelineDto | null;
+}
