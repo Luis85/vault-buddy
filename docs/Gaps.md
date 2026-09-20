@@ -2962,3 +2962,26 @@ enshrine backwards — and the region row's own detail separator was reviewed FO
 parity against that same Rust line, so the two now disagree inside one file.
 **Fix:** change the fixture to `"2560x1440 - Primary"`; no assertion in the
 suite depends on the dot.
+
+### GAP-134 · Low · The editor accepts a hand-edited sidecar timeline without validating its shape
+`src/composables/useEditorTimeline.ts` (`snapshot`, at construction) and
+`src/roots/EditorRoot.vue`'s `load`. The sidecar's `timeline` field is an
+unvalidated `serde_json::Value` from Rust all the way to the webview, and
+`editor_commands.rs`'s own doc says the sidecar "may be hand-edited". A
+sidecar carrying `"timeline": {}` reaches `snapshot(initial)`, which does
+`t.segments.map(...)` and throws `TypeError: Cannot read properties of
+undefined (reading 'map')` at construction. `EditorRoot`'s `catch` turns that
+into the raw error string in the load banner, so nothing is lost or corrupted
+— but the message names a JavaScript internal rather than the file. Segment
+shapes are unchecked too: a hand-edited `sourceEndMs < sourceStartMs` is
+carried through the editor and written back. **Failure scenario:** a user who
+hand-edits or sync-conflicts a staging sidecar gets `TypeError: Cannot read
+properties of undefined` where the app could have said "that capture's saved
+edit could not be read; starting from the whole recording". **Fix shape:**
+validate on the Rust side, where the untrusted value already crosses a typed
+boundary — parse the field into `core::timeline::Timeline` in
+`load_from_staging_dir` and answer `None` (i.e. "no saved edit") when it does
+not fit, which also gets phase 5's parse done in the one place that already
+reads the file. Deliberately NOT done in the P4 fix wave: it changes the wire
+contract's meaning for a case no shipped code can produce, and phase 5 has to
+parse that field into a `Timeline` regardless.

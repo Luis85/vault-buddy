@@ -53,9 +53,24 @@ const timeline = computed<TimelineDto>(() => editor.value?.timeline.value ?? { s
 const canUndo = computed(() => editor.value?.canUndo.value ?? false);
 const canRedo = computed(() => editor.value?.canRedo.value ?? false);
 
+/** `assetPath` is the staged file's own absolute path, and `convertFileSrc`
+ * percent-encodes it onto the asset origin. It JOINS NOTHING — which is why
+ * the DTO cannot hand us a bare file name (P-5): that produced a URL naming
+ * no file on disk and matching no entry in the asset protocol's
+ * `$APPLOCALDATA/screen-captures/*` scope, so the preview stayed blank with
+ * no error anywhere. The scope is still the boundary; it lives in
+ * `tauri.conf.json` and nothing on this side can widen it. */
 const src = computed(() =>
   detail.value === null ? "" : convertFileSrc(detail.value.assetPath, "asset"),
 );
+
+/** Spec 10 promises "saved on each edit, so a crash loses at most the last
+ * one". A failed sidecar write takes that promise away, and only the user
+ * can act on it (a full disk is spec 10's own case). A log line alone left
+ * it invisible; this is the surface AGENTS.md's diagnostics invariant asks
+ * for. It renders INSIDE the editor branch rather than beside the load-error
+ * banner, because the editor stays perfectly usable. */
+const saveFailed = computed(() => editor.value?.saveFailed.value ?? false);
 
 async function load(base: string) {
   try {
@@ -157,6 +172,14 @@ onBeforeUnmount(() => unlistenOpen?.());
           {{ detail.width }}x{{ detail.height }}
         </p>
       </header>
+      <Banner
+        v-if="saveFailed"
+        data-testid="editor-save-failed"
+        tone="warning"
+      >
+        The last edit could not be saved to this capture's staging file. Your
+        edits are still on screen, but a crash would lose them.
+      </Banner>
       <CapturePreview
         :src="src"
         :timeline="timeline"

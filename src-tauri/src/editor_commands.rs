@@ -49,11 +49,21 @@ const EDITOR_OPEN_EVENT: &str = "editor:open";
 #[derive(Default)]
 pub struct EditorRequest(pub Mutex<Option<String>>);
 
-/// What the editor renders. `asset_path` is the file name RELATIVE to the
-/// staging directory — the webview joins it onto the asset origin itself.
-/// Deliberately not an absolute disk path: the asset protocol's scope is the
-/// only thing that lets the webview read the file, and handing it a raw path
-/// would invite a future caller to widen that scope.
+/// What the editor renders. `asset_path` is the staged `.mp4`'s own ABSOLUTE
+/// path, which the webview hands to `convertFileSrc` to get a URL the asset
+/// protocol can serve.
+///
+/// It carried the bare file name until P-5: `convertFileSrc` does no joining
+/// — it percent-encodes its argument onto the asset origin — so a bare name
+/// produced a URL that resolved to no file on disk, matched no scope entry,
+/// and left the preview permanently blank. The opacity of the string was
+/// never the security boundary; the `assetProtocol.scope` in
+/// `tauri.conf.json` (`$APPLOCALDATA/screen-captures/*`) is, and it is
+/// enforced by Tauri on every request regardless of what this field says.
+/// Widening it is a `tauri.conf.json` edit, which no caller of this DTO can
+/// make. The path itself is not attacker-chosen either: it is
+/// `staging_dir(app_local_data_dir)` joined with an `is_safe_base`-validated
+/// base, and `load_from_staging_dir` has already confirmed the file is there.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StagedCaptureDetail {
@@ -117,10 +127,14 @@ fn is_safe_base(base: &str) -> bool {
         && base.chars().all(|c| !c.is_control())
 }
 
-fn detail_from_sidecar(s: &staging::StagedSidecar, asset_path: &str) -> StagedCaptureDetail {
+fn detail_from_sidecar(s: &staging::StagedSidecar, asset_path: &Path) -> StagedCaptureDetail {
     StagedCaptureDetail {
         base: s.base.clone(),
-        asset_path: asset_path.to_string(),
+        // Lossy because JSON carries UTF-8 and a Windows path is UTF-16: a
+        // path that does not round-trip would be unopenable, but it is also
+        // one this app could never have written — `sanitize_title` produces
+        // the base and `app_local_data_dir` produces the root.
+        asset_path: asset_path.to_string_lossy().into_owned(),
         duration_ms: s.duration_ms,
         source_title: s.source_title.clone(),
         width: s.width,
@@ -133,10 +147,11 @@ fn detail_from_sidecar(s: &staging::StagedSidecar, asset_path: &str) -> StagedCa
 /// The disk read behind `load_staged_capture`, pulled out of its
 /// `spawn_blocking` closure so it takes a plain `&Path` rather than deriving
 /// one from `AppHandle` — which makes it unit-testable without a running
-/// Tauri app, and pins the "`asset_path` is a bare NAME" guarantee at the
-/// one call site that could actually break it (T-4): `detail_from_sidecar`
-/// takes `asset_path` as a separate argument precisely so nothing upstream
-/// of it can slip in an absolute disk path instead.
+/// Tauri app, and pins the "`asset_path` names a file INSIDE this staging
+/// directory" guarantee at the one call site that could actually break it
+/// (T-4): `detail_from_sidecar` takes `asset_path` as a separate argument
+/// precisely so nothing upstream of it can slip in a path from somewhere
+/// else.
 fn load_from_staging_dir(dir: &Path, requested_base: &str) -> Result<StagedCaptureDetail, String> {
     let sidecar_path = dir.join(staging::sidecar_file_name(requested_base));
     let sidecar = staging::read_sidecar(&sidecar_path)
@@ -156,8 +171,8 @@ fn load_from_staging_dir(dir: &Path, requested_base: &str) -> Result<StagedCaptu
         );
         return Err("That capture's details do not match its file name.".to_string());
     }
-    let mp4 = staging::mp4_file_name(requested_base);
-    if !dir.join(&mp4).is_file() {
+    let mp4 = dir.join(staging::mp4_file_name(requested_base));
+    if !mp4.is_file() {
         return Err("That capture's video file is missing.".to_string());
     }
     Ok(detail_from_sidecar(&sidecar, &mp4))
@@ -410,14 +425,15 @@ mod tests {
         assert!(!is_safe_base("\u{0}"));
     }
 
-    // The detail the editor renders is derived, not echoed: the webview gets
-    // an ASSET url it can actually load, never a raw disk path, because the
-    // asset protocol is the only way it can read the file at all.
+    // The detail the editor renders is derived, not echoed: every field the
+    // wire contract names is mapped from the sidecar, and `asset_path` is
+    // the file's own path — what `convertFileSrc` needs to build a URL the
+    // asset protocol can serve.
     #[test]
-    fn the_detail_carries_an_asset_url_not_a_disk_path() {
-        let d = detail_from_sidecar(&sidecar("cap one"), "cap one.mp4");
+    fn the_detail_maps_every_sidecar_field_and_carries_the_staged_path() {
+        let d = detail_from_sidecar(&sidecar("cap one"), Path::new("/staging/cap one.mp4"));
         assert_eq!(d.base, "cap one");
-        assert_eq!(d.asset_path, "cap one.mp4");
+        assert_eq!(d.asset_path, "/staging/cap one.mp4");
         assert_eq!(d.duration_ms, 42_000);
         assert_eq!(d.width, 1920);
         assert_eq!(d.height, 1080);
@@ -440,30 +456,48 @@ mod tests {
         s.timeline = Some(serde_json::json!({
             "segments": [{"sourceStartMs": 0, "sourceEndMs": 1000}]
         }));
-        let d = detail_from_sidecar(&s, "cap.mp4");
+        let d = detail_from_sidecar(&s, Path::new("/staging/cap.mp4"));
         let t = d
             .timeline
             .expect("a saved timeline must survive the round trip");
         assert_eq!(t["segments"][0]["sourceEndMs"], 1000);
     }
 
-    // T-4: the "assetPath is a NAME, not a disk path" guarantee is pinned
-    // above only INSIDE `detail_from_sidecar`; this pins it at the CALL SITE
-    // where it could actually break -- a mutation swapping the call site's
-    // argument for `dir.join(&mp4).to_string_lossy()` compiled and left
-    // every other test in this module green.
+    // P-5: `assetPath` must be a path `convertFileSrc` can turn into a URL
+    // the asset protocol resolves -- i.e. THE STAGED FILE'S OWN path. It
+    // carried the bare file name, which `convertFileSrc` percent-encodes
+    // onto the asset origin without joining anything, so the URL named no
+    // file on disk, matched no scope entry, and the preview stayed blank.
+    // Pinned at the CALL SITE, which is the only place it can break:
+    // `detail_from_sidecar` takes the path as a separate argument.
+    //
+    // The two halves are asserted separately on purpose. `parent == dir`
+    // alone would also hold for a `dir`-relative name on some platforms, and
+    // `is_absolute` alone would hold for any absolute path anywhere on the
+    // disk -- it is the pair that says "this exact file, inside staging".
     #[test]
-    fn load_from_staging_dir_returns_a_relative_asset_name_not_a_disk_path() {
+    fn load_from_staging_dir_returns_the_staged_mp4s_own_absolute_path() {
         let dir = tempfile::tempdir().expect("tempdir");
         let base = "cap one";
         staging::write_sidecar(dir.path(), base, &sidecar(base)).expect("write sidecar");
         std::fs::write(dir.path().join(staging::mp4_file_name(base)), b"x").expect("write mp4");
 
         let detail = load_from_staging_dir(dir.path(), base).expect("load");
-        assert_eq!(detail.asset_path, "cap one.mp4");
+        let asset = Path::new(&detail.asset_path);
         assert!(
-            !Path::new(&detail.asset_path).is_absolute(),
-            "assetPath must be a bare name the webview joins onto the asset origin itself"
+            asset.is_absolute(),
+            "assetPath must be absolute: convertFileSrc joins nothing, so a bare name \
+             resolves to no file and matches no scope entry"
+        );
+        assert_eq!(
+            asset.parent(),
+            Some(dir.path()),
+            "assetPath must name a file inside the staging directory"
+        );
+        assert_eq!(
+            asset.file_name(),
+            Some(std::ffi::OsStr::new("cap one.mp4")),
+            "assetPath must name THIS capture's mp4"
         );
     }
 

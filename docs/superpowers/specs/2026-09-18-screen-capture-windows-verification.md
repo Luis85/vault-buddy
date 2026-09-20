@@ -92,6 +92,31 @@ exists to find.
 | 18 | **Resolution changed between selecting and starting** | Select a region near the right or bottom edge, then change the display resolution to something smaller **before** pressing Start. **Record the message.** Expected: a refusal naming the source as gone, not a started capture. | |
 
 
+## Covered by Phase 4
+
+Phase 4 builds the editor window. These rows are **written now and runnable
+only once Phase 4's entry point lands** (the Record Screen surface that calls
+`open_capture_editor` — plan Task 7): until then nothing in the app opens the
+editor, so there is no way to reach them by hand. They are recorded here
+rather than in *NOT reachable yet* because the code they test exists and is
+what a reviewer would otherwise assume the automated gates cover.
+
+Row 19 is the one that cannot be reached any other way. Every other thing
+the editor does is arithmetic a Vitest fixture can drive against a fake
+capture; **loading the video is not** — it needs a real staged file, a real
+asset-protocol request and a real scope check, which exist on Windows and
+nowhere else. It is also the row that would have caught P-5, where
+`assetPath` carried a bare file name and `convertFileSrc` — which joins
+nothing — turned it into `http://asset.localhost/cap%20one.mp4`: a URL
+naming no file, matching no entry in `$APPLOCALDATA/screen-captures/*`, and
+failing with no error anywhere in the app.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| 19 | **The preview actually loads its video** (spec §8.2, the asset protocol) | Stage a capture (any row 1–3 recording will do), open it in the editor, and **look at the video frame before touching anything**. Expected: the first frame of the recording is visible and **Play** plays it with audio. **Record: whether a frame appeared at all**, and — in the editor window's DevTools (`F12`) — the `<video>` element's resolved `src` plus any failed request on the Network tab. A blank black frame with a `net::ERR_*` or a 403 on an `asset.localhost` request is the failure this row exists to find; so is a `src` that is a bare file name rather than a full `…\screen-captures\<base>.mp4` path. | |
+| 20 | **An edit survives closing and reopening the editor** (spec §10 Resume, C-1) | Open a staged capture, scrub to ~4 s, **Split**, select the FIRST block, **Delete** — the first 4 s are now cut. Close the editor window. Open the SAME capture again: it must come back showing the trimmed timeline, not the whole recording. Now make any edit and press **Undo**. **Record: what `<base>.json`'s `timeline` field holds afterwards** (open it in a text editor — it is beside the `.mp4` in the staging dir). Expected: the trim, i.e. one segment starting at ~4000. A `timeline` that is absent or `null` there is the C-1 erasure: the edit is still on screen, but the file says the capture was never touched, and Phase 5's fast path would export the whole recording. | |
+| 21 | **A failed save is visible** (spec §10 disk pressure, I-7) | Hard to stage honestly; run it only if it is cheap on the machine at hand — make the staging directory unwritable (deny your own user Write on `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures`), then make an edit in an already-open editor. Expected: an amber banner above the preview saying the edit could not be saved, the edit still on screen, and the editor still usable. **Record whether the banner appeared**, and restore the permission afterwards. | |
+
 ## Known absences (do not file these as failures)
 
 - **No live `fps` readout.** `ScreenCaptureBar.vue` (plan Task 10) landed —
@@ -145,7 +170,7 @@ only into a phase's own table above, never into a tick here.
 
 | Item | Arrives in |
 | --- | --- |
-| The editor window: preview, timeline edits, undo/redo, sidecar persistence | Phase 4 |
+| The Record Screen entry point that opens the editor, and with it rows 19–21 above | Phase 4, plan Task 7 |
 | Export exactness (cut boundaries, reordered segments) | Phase 5 |
 | The untouched-timeline fast path (remux rather than re-encode) | Phase 5 |
 | The vault write, the companion note, and playback of the saved note inside Obsidian | Phase 5 |

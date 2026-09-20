@@ -32,9 +32,18 @@ import EditorRoot from "../src/roots/EditorRoot.vue";
 // listeners) must not outlive their test.
 enableAutoUnmount(afterEach);
 
+/** `assetPath` is the staged file's OWN absolute path, the way
+ * `load_staged_capture` hands it over. It was a bare file name until P-5;
+ * `convertFileSrc` joins nothing, so that produced a URL naming no file on
+ * disk and matching no entry in the asset protocol's scope. A Windows path
+ * on purpose: it is the only platform this ships on, and it is the one whose
+ * separators and drive letter have to survive percent-encoding. */
+const STAGED_MP4 =
+  "C:\\Users\\me\\AppData\\Local\\com.vaultbuddy.desktop\\screen-captures\\cap one.mp4";
+
 const DETAIL = {
   base: "cap one",
-  assetPath: "cap one.mp4",
+  assetPath: STAGED_MP4,
   durationMs: 10_000,
   sourceTitle: "Screen 1",
   width: 1920,
@@ -354,8 +363,43 @@ describe("EditorRoot", () => {
     expect(toggle.text()).toBe("Play");
   });
 
-  it("reads the staged file through the asset protocol, never a raw path", async () => {
+  // P-5. `convertFileSrc` percent-encodes its argument onto the asset origin
+  // and JOINS NOTHING, so the URL has to carry the staged file's whole path:
+  // a bare `cap one.mp4` produced `http://asset.localhost/cap%20one.mp4`,
+  // which resolves to no file and matches no entry in the
+  // `$APPLOCALDATA/screen-captures/*` scope — a preview that silently never
+  // loads. Asserting the origin ALONE could not see that, which is how it
+  // shipped.
+  it("points the preview at the staged file through the asset protocol", async () => {
     const w = await open();
-    expect(video(w).getAttribute("src")).toContain("asset.localhost");
+    const src = video(w).getAttribute("src");
+    expect(src).toContain("asset.localhost");
+    expect(src).toBe(`http://asset.localhost/${encodeURIComponent(STAGED_MP4)}`);
+  });
+
+  // I-7. Spec 10 promises "saved on each edit, so a crash loses at most the
+  // last one". When the sidecar write fails that promise is off and only the
+  // user can act on it, so it cannot stay a log line — but it also must not
+  // take the editor away: the edit is on screen and undo still works.
+  it("says so when an edit could not be saved, and keeps the editor usable", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "take_editor_request") return "cap one";
+      if (cmd === "load_staged_capture") return DETAIL;
+      if (cmd === "save_capture_timeline") throw new Error("no space left on device");
+      return undefined;
+    });
+    const w = mount(EditorRoot);
+    await flushPromises();
+    expect(w.find('[data-testid="editor-save-failed"]').exists()).toBe(false);
+
+    await w.get('[data-testid="preview-scrub"]').setValue("4000");
+    await w.get('[data-testid="editor-split"]').trigger("click");
+    await flushPromises();
+
+    expect(w.get('[data-testid="editor-save-failed"]').text()).toContain("could not be saved");
+    // The edit itself landed, and the load-error banner (which REPLACES the
+    // editor) is not what was rendered.
+    expect(segments(w)).toHaveLength(2);
+    expect(w.find('[data-testid="editor-error"]').exists()).toBe(false);
   });
 });

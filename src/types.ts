@@ -427,10 +427,16 @@ export interface TimelineDto {
   segments: SegmentDto[];
 }
 
-/** What `load_staged_capture` returns. `assetPath` is the file name RELATIVE
- * to the staging directory — the editor joins it onto the asset origin
- * itself, because the asset protocol's staging-only scope is the only thing
- * that lets the webview read it. */
+/** What `load_staged_capture` returns. `assetPath` is the staged `.mp4`'s own
+ * ABSOLUTE path; the editor hands it to `convertFileSrc(path, "asset")`.
+ *
+ * It was a bare file name until P-5. `convertFileSrc` JOINS NOTHING — it
+ * percent-encodes its argument onto the asset origin — so a bare name became
+ * a URL naming no file on disk, matching no entry in the asset protocol's
+ * `$APPLOCALDATA/screen-captures/*` scope, and the preview never loaded. The
+ * scope, not the opacity of this string, is what confines the webview: it
+ * lives in `tauri.conf.json` and is enforced by Tauri on every request, and
+ * nothing on this side of the wire can widen it. */
 export interface StagedCaptureDetail {
   base: string;
   assetPath: string;
