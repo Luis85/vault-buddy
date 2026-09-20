@@ -469,6 +469,45 @@ mod tests {
     }
 
     #[test]
+    fn only_the_pause_edge_flushes_and_audio_captured_during_a_pause_is_discarded() {
+        // REGRESSION (silent A/V desync): the pause branch ran
+        // `pause_flush_frames` on EVERY iteration it observed the pause, not
+        // just the first. The cpal streams deliberately stay open while
+        // paused (spec 6.3), so the buffers refilled with audio captured
+        // DURING the pause and that audio was mixed, stamped and sent to the
+        // mux — the audio track kept advancing while the video track wrote
+        // nothing, so A/V drifted apart by the whole paused duration, the
+        // reported `paused_ms` disagreed with the file, and the mixer thread
+        // busy-spun (it only sleeps when it drained nothing).
+        //
+        // The EDGE still flushes: audio captured BEFORE the pause already
+        // happened and must be written (see `pause_flush_frames`).
+        assert_eq!(pause_flush_take(true, false, &[4096, 100]), 4096);
+        // ...and every later paused iteration flushes NOTHING. This is the
+        // assertion the bug failed.
+        assert_eq!(pause_flush_take(true, true, &[4096]), 0);
+        assert_eq!(pause_flush_take(true, true, &[4096, 100]), 0);
+    }
+
+    #[test]
+    fn a_running_capture_never_goes_through_the_pause_flush() {
+        // Resume is the ordinary batching path (`take_frames`), which is
+        // min_chunk-gated; routing it through the ungated pause flush would
+        // emit a runt chunk per iteration.
+        assert_eq!(pause_flush_take(false, true, &[4096]), 0);
+        assert_eq!(pause_flush_take(false, false, &[4096]), 0);
+        assert_eq!(pause_flush_take(false, false, &[]), 0);
+    }
+
+    #[test]
+    fn a_pause_edge_with_nothing_buffered_is_a_no_op() {
+        // Nothing to flush means the mixer thread has no reason to skip its
+        // sleep, which is what turned a pause into a busy-spin.
+        assert_eq!(pause_flush_take(true, false, &[]), 0);
+        assert_eq!(pause_flush_take(true, false, &[0, 0]), 0);
+    }
+
+    #[test]
     fn flushing_a_partial_buffer_on_pause_advances_emitted_like_any_other_chunk() {
         // Pinning that the pause flush rides the SAME `AudioPacer::take` as
         // the ordinary batching path, so `emitted` — and every timestamp

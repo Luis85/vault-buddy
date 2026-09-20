@@ -47,6 +47,10 @@ pub(super) fn run_audio(
     let mut buffers: Vec<Vec<f32>> = vec![Vec::new(); sources.len()];
     let mut alive: Vec<bool> = vec![true; sources.len()];
     let mut pacer = pacing::AudioPacer::new(AUDIO_RATE);
+    // The pause EDGE latch. Without it every paused iteration flushed, so
+    // audio captured DURING the pause was written and the pause did not
+    // pause the audio track — see `pacing::pause_flush_take`.
+    let mut was_paused = false;
 
     while !stopping.load(Ordering::Relaxed) {
         let mut got_anything = false;
@@ -88,10 +92,21 @@ pub(super) fn run_audio(
         // through the SAME `AudioPacer::take` as the ordinary batching
         // path below, so `emitted` — and every timestamp after it —
         // stays consistent with what was actually written.
+        //
+        // That flush is EDGE-TRIGGERED (`pause_flush_take`, which owns the
+        // latch and its own regression note): flushing on every paused
+        // iteration wrote the paused audio it exists to discard.
         let paused = output_ts(&clock).is_none();
+        let mut idle_paused = false;
         if paused {
             let lens: Vec<usize> = buffers.iter().map(|b| b.len()).collect();
-            let take = pacing::pause_flush_frames(&lens);
+            // The EDGE only. A later paused iteration takes 0 — its buffers
+            // hold audio captured DURING the pause, which is discarded.
+            let take = pacing::pause_flush_take(paused, was_paused, &lens);
+            // Nothing to write and nothing to wait for: without this the
+            // drain kept reporting work, `got_anything` stayed true, and the
+            // thread busy-spun for the whole pause instead of sleeping.
+            idle_paused = take == 0;
             if take > 0 {
                 let slices: Vec<&[f32]> = buffers.iter().map(|b| &b[..take.min(b.len())]).collect();
                 let stereo = mixer::mix_n_to_stereo_i16(&slices);
@@ -139,7 +154,9 @@ pub(super) fn run_audio(
             }
         }
 
-        if !got_anything {
+        was_paused = paused;
+
+        if !got_anything || idle_paused {
             std::thread::sleep(Duration::from_millis(10));
         }
     }

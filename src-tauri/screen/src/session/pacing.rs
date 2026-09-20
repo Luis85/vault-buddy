@@ -153,6 +153,37 @@ pub fn pause_flush_frames(lens: &[usize]) -> usize {
     lens.iter().copied().max().unwrap_or(0)
 }
 
+/// Frames to flush on THIS mixing iteration, given whether the capture is
+/// paused now and whether it was already paused on the previous one.
+///
+/// ONLY the first iteration that observes the pause — the pause EDGE —
+/// flushes anything. That one flush writes out the PRE-pause audio still
+/// sitting in the buffers (see [`pause_flush_frames`]); every later paused
+/// iteration flushes nothing, which is what spec 6.3's "drain and discard"
+/// means.
+///
+/// REGRESSION this exists to prevent: the pause branch called
+/// `pause_flush_frames` unconditionally, every iteration, for as long as the
+/// pause lasted. The cpal streams are deliberately left OPEN while paused, so
+/// the buffers refilled with audio captured DURING the pause and every bit of
+/// it was mixed, timestamped and sent to the mux. Silently:
+///   - the pause did not pause the audio track at all;
+///   - the video track writes nothing while paused, so A/V drifted apart by
+///     roughly the whole paused duration, and the drift accumulated per pause;
+///   - the outcome's `paused_ms` disagreed with the file it describes;
+///   - and because the drain kept finding samples, the mixer thread skipped
+///     its 10 ms sleep and busy-spun for the length of the pause.
+///
+/// This function is the latch, kept pure because the loop that calls it is
+/// `cfg(windows)` and executes in no test anywhere (docs/Gaps.md GAP-117).
+pub fn pause_flush_take(paused: bool, was_paused: bool, lens: &[usize]) -> usize {
+    if paused && !was_paused {
+        pause_flush_frames(lens)
+    } else {
+        0
+    }
+}
+
 /// Advisory frame rate for the `screen:frames` stat (spec 11), lossy by
 /// design. Zero rather than an infinity when no time has passed.
 pub fn observed_fps(frames: u64, elapsed: Duration) -> f32 {
