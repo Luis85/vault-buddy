@@ -45,9 +45,13 @@ use vault_buddy_core::screen_capture_config::{bitrate_bps, ScreenQuality};
 const AUDIO_BITRATE: &str = "192k";
 
 /// What an edited export needs to know about the file it is producing.
+///
+/// `Debug` so a failed export can name the settings it ran with in one log
+/// line; `Clone` because it costs nothing and the worker hands it around.
 /// `h264_encoder` is resolved by probing the installed ffmpeg (Task 4), never
 /// hardcoded — a build without `libx264` still has `libopenh264` or a
 /// hardware encoder, and naming one that is absent fails the whole export.
+#[derive(Debug, Clone)]
 pub struct EncodeSettings {
     pub width: u32,
     pub height: u32,
@@ -65,6 +69,34 @@ pub enum ProgressTick {
     OutTimeUs(u64),
     /// `progress=end` — ffmpeg has written its last packet.
     Done,
+}
+
+/// Encoders that read x264's `-preset` vocabulary.
+///
+/// EXACT names, never a prefix match: `libx264rgb` is a different encoder
+/// that merely shares the prefix, and the same substring trap was already
+/// caught once in Task 4's encoder picker.
+const PRESET_ENCODERS: [&str; 2] = ["libx264", "libx265"];
+
+/// The `-preset` pair for an encoder, or nothing.
+///
+/// `-preset` is a libx264/libx265 PRIVATE option while `h264_encoder` is
+/// resolved by probing the user's own ffmpeg (Task 4), so the edited export
+/// can legitimately be handed `h264_mf`, `h264_nvenc`, `h264_qsv` or
+/// `h264_amf` on a build with no libx264 — which is the whole point of not
+/// bundling one. Those read a different preset vocabulary entirely, so
+/// naming x264's fails the export on an unknown or wrongly-valued option,
+/// at the payoff, after the user has already recorded and edited.
+///
+/// An unknown or empty encoder fails SAFE rather than loud: no preset means
+/// the encoder's own default, which is always valid. Refusing a missing or
+/// unusable encoder is `export_refusal`'s decision (Task 6) and duplicating
+/// it here would put one rule in two places that can disagree.
+pub fn preset_args(encoder: &str) -> Vec<String> {
+    if PRESET_ENCODERS.contains(&encoder) {
+        return vec!["-preset".into(), "medium".into()];
+    }
+    Vec::new()
 }
 
 /// Milliseconds as the exact decimal seconds `trim=`/`atrim=` take.
@@ -189,11 +221,9 @@ pub fn reencode_args(
         settings.height,
         settings.fps,
     );
+    args.extend(["-c:v".into(), settings.h264_encoder.clone()]);
+    args.extend(preset_args(&settings.h264_encoder));
     args.extend([
-        "-c:v".into(),
-        settings.h264_encoder.clone(),
-        "-preset".into(),
-        "medium".into(),
         "-b:v".into(),
         bitrate.to_string(),
         // Windows' own players and Obsidian's <video> both refuse 4:4:4 H.264.
@@ -439,6 +469,69 @@ mod tests {
         assert_eq!(parse_progress_line("out_time_us=N/A"), None);
         assert_eq!(parse_progress_line("out_time_us=-1"), None);
         assert_eq!(parse_progress_line("out_time_us="), None);
+    }
+
+    // -preset is a libx264/libx265 PRIVATE option, and h264_encoder is
+    // probe-resolved (Task 4), so the edited export can be handed
+    // h264_mf/nvenc/qsv/amf on a build without libx264 -- which is the whole
+    // point of "user-installed". Those read a different preset vocabulary
+    // entirely, so naming x264's makes ffmpeg fail on an unknown or
+    // wrongly-valued option and the export dies at the payoff.
+    #[test]
+    fn the_x264_family_gets_a_preset_and_the_hardware_encoders_get_none() {
+        let medium = vec!["-preset".to_string(), "medium".to_string()];
+        assert_eq!(preset_args("libx264"), medium);
+        assert_eq!(preset_args("libx265"), medium);
+        for hw in ["h264_mf", "h264_nvenc", "h264_qsv", "h264_amf"] {
+            assert!(
+                preset_args(hw).is_empty(),
+                "{hw} reads a different preset vocabulary"
+            );
+        }
+    }
+
+    // Fail SAFE, not loud: refusing a missing or unusable encoder is
+    // export_refusal's decision (Task 6), and duplicating it here would put
+    // the rule in two places that can disagree. No preset means the
+    // encoder's own default, which is always valid.
+    #[test]
+    fn an_unknown_or_empty_encoder_gets_no_preset_rather_than_a_refusal() {
+        assert!(preset_args("").is_empty());
+        assert!(preset_args("h264_videotoolbox").is_empty());
+    }
+
+    // libx264rgb is a DIFFERENT encoder that merely shares a prefix. The
+    // same substring trap was caught once already in Task 4's encoder
+    // picker; matching the family by prefix reintroduces it here.
+    #[test]
+    fn libx264rgb_is_not_the_x264_family_a_prefix_match_would_claim() {
+        assert!(
+            preset_args("libx264rgb").is_empty(),
+            "a prefix match claimed libx264rgb for the x264 family"
+        );
+    }
+
+    // The helper being right does not prove reencode_args consults it.
+    #[test]
+    fn the_encoders_preset_rule_reaches_the_argument_vector() {
+        let spans = plan(&Timeline::whole(5_000));
+        let args = reencode_args(
+            Path::new("in.mp4"),
+            Path::new("out.mp4"),
+            &spans,
+            &settings(false),
+        );
+        assert!(
+            args.join(" ").contains("-c:v libx264 -preset medium"),
+            "{args:?}"
+        );
+
+        let mut hw = settings(false);
+        hw.h264_encoder = "h264_nvenc".into();
+        let args = reencode_args(Path::new("in.mp4"), Path::new("out.mp4"), &spans, &hw);
+        let joined = args.join(" ");
+        assert!(joined.contains("-c:v h264_nvenc"), "{joined}");
+        assert!(!joined.contains("-preset"), "{joined}");
     }
 
     // select::plan already drops zero-length spans, but it lives in another
