@@ -10,9 +10,10 @@ use tauri::{AppHandle, Manager};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::{capture_config, capture_paths, discovery, document_import};
 
+use crate::external_tool::{run_capturing, tool_command, Capture};
 use crate::pandoc::{
-    pandoc_args, pandoc_command, resolve_working_pandoc, run_capturing, sandbox_supported, Capture,
-    CONVERT_TIMEOUT, STRIP_IMAGES_FILTER, STRIP_IMAGES_LUA,
+    pandoc_args, resolve_working_pandoc, sandbox_supported, CONVERT_TIMEOUT, STRIP_IMAGES_FILTER,
+    STRIP_IMAGES_LUA,
 };
 
 #[derive(Clone, serde::Serialize)]
@@ -206,7 +207,7 @@ fn convert_blocking(
         &plan.note_name,
         extract_images,
     );
-    let mut cmd = pandoc_command(&program);
+    let mut cmd = tool_command(&program);
     cmd.current_dir(&plan.work_dir)
         .arg(src) // absolute source
         .args(&args);
@@ -401,6 +402,12 @@ pub async fn set_documents_config(
 /// `config_write_lock()` can now be held across a full task-vault scan, so
 /// this fsync'd write must run off the main thread. No `.await` follows the
 /// lock, so its scope is unchanged.
+///
+/// READ-MODIFY-WRITE since the documentImport section gained a second tool
+/// override (`ffmpeg_path`): `update_document_import_config` replaces the
+/// WHOLE section, so building one from this field alone would silently delete
+/// the ffmpeg override. The read happens under the lock so a concurrent ffmpeg
+/// save cannot be lost between them. `set_ffmpeg_path` is the mirror image.
 #[tauri::command]
 pub async fn set_pandoc_path(pandoc_path: Option<String>) -> Result<(), String> {
     let path = pandoc_path
@@ -409,9 +416,9 @@ pub async fn set_pandoc_path(pandoc_path: Option<String>) -> Result<(), String> 
         .filter(|p| !p.is_empty())
         .map(str::to_string);
     let _guard = capture_config::config_write_lock();
-    capture_config::update_document_import_config(capture_config::DocumentImportConfig {
-        pandoc_path: path,
-    })
+    let mut di = capture_config::load_config().document_import;
+    di.pandoc_path = path;
+    capture_config::update_document_import_config(di)
 }
 
 /// Pending buddy-drop import paths (a FIFO queue), consumed by the panel's

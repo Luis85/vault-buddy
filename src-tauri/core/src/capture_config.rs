@@ -140,6 +140,9 @@ pub fn serialize_config(cfg: &AppConfig) -> String {
         if let Some(p) = &cfg.document_import.pandoc_path {
             di.insert("pandocPath".to_string(), json!(p));
         }
+        if let Some(p) = &cfg.document_import.ffmpeg_path {
+            di.insert("ffmpegPath".to_string(), json!(p));
+        }
         root.insert("documentImport".to_string(), Value::Object(di));
     }
     if let Some(transcription) = serialize_transcription_section(&cfg.transcription) {
@@ -334,6 +337,7 @@ mod tests {
         std::fs::create_dir(&path).unwrap();
         let di = DocumentImportConfig {
             pandoc_path: Some("C:/pandoc.exe".into()),
+            ..Default::default()
         };
         assert!(update_document_import_config_at(&path, di).is_err());
         // Nothing was written over the directory.
@@ -346,6 +350,7 @@ mod tests {
         let path = dir.path().join("config.json"); // does not exist yet
         let di = DocumentImportConfig {
             pandoc_path: Some("C:/pandoc.exe".into()),
+            ..Default::default()
         };
         update_document_import_config_at(&path, di).unwrap();
         let cfg = parse_config(&std::fs::read_to_string(&path).unwrap());

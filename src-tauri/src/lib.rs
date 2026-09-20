@@ -11,6 +11,8 @@ mod config_lock_guard;
 mod diagnostics;
 mod document_commands;
 mod editor_commands;
+mod external_tool;
+mod ffmpeg;
 mod mcp_commands;
 mod model_commands;
 mod pandoc;
@@ -464,6 +466,8 @@ pub fn run() {
             document_commands::get_documents_config,
             document_commands::set_documents_config,
             document_commands::set_pandoc_path,
+            ffmpeg::detect_ffmpeg,
+            ffmpeg::set_ffmpeg_path,
             document_commands::begin_document_import,
             document_commands::take_pending_import,
             document_commands::take_add_document_request,
