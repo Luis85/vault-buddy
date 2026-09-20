@@ -509,6 +509,44 @@ mod tests {
         ));
     }
 
+    // The EXACT boundary of both guards, at a NON-ZERO origin -- the one
+    // arithmetic every region capture's memory safety rests on, and the
+    // one case the crop tests around it do not reach (they are all
+    // strictly over or strictly under). A `>=` in place of `>` on the row
+    // guard, or a `<=` in place of `<` on the length guard, refuses a
+    // frame that fits exactly and drops EVERY frame of a region flush
+    // against its monitor's right or bottom edge -- with nothing but a
+    // rising drop counter to say why.
+    #[test]
+    fn a_crop_that_exactly_fills_the_row_and_the_buffer_is_accepted() {
+        // 6 px per row (stride 24), 5 rows -> 120 bytes.
+        let src = vec![0u8; 120];
+        let mut out = Vec::new();
+        // x=2 + width=4 -> right edge at byte 24 == stride, exactly.
+        // y=3 + height=2 -> 5 rows needed == 120 bytes == the buffer.
+        assert!(bgra_crop_to_nv12(&src, 24, 2, 3, 4, 2, &mut out).is_ok());
+        assert_eq!(out.len(), nv12_len(4, 2));
+    }
+
+    #[test]
+    fn a_crop_one_byte_past_the_row_or_the_buffer_is_refused() {
+        // The other side of the same boundary, at the same origin and one
+        // single byte over on each guard in turn.
+        let src = vec![0u8; 120];
+        let short = vec![0u8; 119];
+        let mut out = Vec::new();
+        // Right edge at byte 24, stride 23.
+        assert!(matches!(
+            bgra_crop_to_nv12(&src, 23, 2, 3, 4, 2, &mut out),
+            Err(ConvertError::ShortInput { .. })
+        ));
+        // 120 bytes needed, 119 present.
+        assert!(matches!(
+            bgra_crop_to_nv12(&short, 24, 2, 3, 4, 2, &mut out),
+            Err(ConvertError::ShortInput { .. })
+        ));
+    }
+
     // Odd DIMENSIONS stay refused whatever the origin: NV12 has no way to
     // express a half chroma sample.
     #[test]

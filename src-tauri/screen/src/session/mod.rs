@@ -560,6 +560,28 @@ mod tests {
         );
     }
 
+    // The SAME far edge, as a pair of numbers a diagnostic can print. It
+    // exists because the drop message must name the size the frame had to
+    // reach, and composing `crop + size` at the call site would put that
+    // arithmetic inside the `cfg(windows)` frame callback, where a
+    // `crop_x + height` transposition executes in no test anywhere
+    // (docs/Gaps.md GAP-117).
+    #[test]
+    fn the_required_frame_size_is_the_crops_far_edge_on_each_axis() {
+        // Four distinct numbers: a symmetric case cannot tell an axis
+        // transposition from a correct sum.
+        assert_eq!(required_dims(1280, 600, 640, 480), (1920, 1080));
+    }
+
+    #[test]
+    fn an_overflowing_requirement_saturates_rather_than_wrapping() {
+        // Same untrusted-id arithmetic as `usable_frame`. Wrapping would
+        // report a requirement SMALLER than the frame that was rejected --
+        // the message would then contradict the decision it explains.
+        assert_eq!(required_dims(u32::MAX, 0, 2, 2), (u32::MAX, 2));
+        assert_eq!(required_dims(0, u32::MAX, 2, 2), (2, u32::MAX));
+    }
+
     // The offsets arrive from a parsed id. Adding them in u32 would wrap
     // and turn an impossible region into a usable one.
     #[test]

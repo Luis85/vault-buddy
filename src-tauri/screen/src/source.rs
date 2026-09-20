@@ -127,6 +127,29 @@ pub fn uncropped_dims(width: u32, height: u32) -> (u32, u32, u32, u32) {
     (0, 0, width, height)
 }
 
+/// The `(crop_x, crop_y, width, height)` a REGION contributes, or `None`
+/// when the rectangle no longer intersects the monitor -- which is
+/// `SourceGone`: the thing the user picked is not there any more.
+///
+/// The clamp runs HERE, at capture start and not only when the user drew
+/// the rectangle, because the monitor's resolution can change in between
+/// (spec 5.2); an unclamped stale rectangle indexes outside the frame
+/// buffer.
+///
+/// PURE, and returning `uncropped_dims`' shape so the two arms of the same
+/// decision read identically at their call sites, for the reason that
+/// function's doc gives: the `cfg(windows)` arm that calls it executes in
+/// no automated test anywhere (docs/Gaps.md GAP-117). An axis or a
+/// dimension transposed in there captures the wrong rectangle in silence.
+pub fn region_dims(
+    rect: vault_buddy_core::screen_geometry::PhysicalRect,
+    mon_w: u32,
+    mon_h: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    let r = vault_buddy_core::screen_geometry::clamp_to_frame(rect, mon_w, mon_h)?;
+    Some((r.x, r.y, r.width, r.height))
+}
+
 /// A source re-checked at START time and ready to capture.
 pub struct ResolvedSource {
     pub handle: SourceHandle,
@@ -406,12 +429,13 @@ mod imp {
             // above — scanning for the monitor whose `.index()` matches,
             // never `Monitor::from_index`, which is POSITIONAL and
             // silently resolves to a different live screen (the phase-2
-            // wrong-screen bug) — and then one clamp.
+            // wrong-screen bug) — and then `region_dims`.
             //
-            // `clamp_to_frame` runs HERE, at start, and not only when the
-            // user drew the rectangle, because the monitor's resolution
-            // can change in between (spec 5.2). An unclamped stale
-            // rectangle indexes outside the frame buffer. `None` means the
+            // The re-clamp and the origin/size assignment live in
+            // `region_dims` so Linux can prove them. They were inlined
+            // right here, and three separate transpositions of them
+            // survived the whole gate set: nothing in this arm executes in
+            // any automated test (docs/Gaps.md GAP-117). `None` means the
             // region no longer intersects the monitor at all, which is
             // exactly `SourceGone`: the thing the user picked is not there
             // any more.
@@ -419,7 +443,7 @@ mod imp {
             // Nothing else happens in this arm on purpose — the id parse,
             // the clamp, the even-rounding and the crop are each tested in
             // a pure module, and logic added here would be logic nothing
-            // can reach (docs/Gaps.md GAP-117).
+            // can reach.
             SourceId::Region(region) => {
                 let monitors = Monitor::enumerate().map_err(|e| {
                     log::warn!("screen source: monitor enumeration failed: {e}");
@@ -438,8 +462,7 @@ mod imp {
                 let (Ok(mon_w), Ok(mon_h)) = (monitor.width(), monitor.height()) else {
                     return Err(ScreenError::SourceGone);
                 };
-                let Some(rect) =
-                    vault_buddy_core::screen_geometry::clamp_to_frame(region.rect, mon_w, mon_h)
+                let Some((crop_x, crop_y, width, height)) = region_dims(region.rect, mon_w, mon_h)
                 else {
                     log::warn!(
                         "screen source: the selected region no longer fits monitor {} ({mon_w}x{mon_h})",
@@ -452,10 +475,10 @@ mod imp {
                     .unwrap_or_else(|_| format!("Screen {}", region.monitor));
                 Ok(ResolvedSource {
                     handle: SourceHandle::Screen(monitor),
-                    width: rect.width,
-                    height: rect.height,
-                    crop_x: rect.x,
-                    crop_y: rect.y,
+                    width,
+                    height,
+                    crop_x,
+                    crop_y,
                     // Must read the same as the picker's own row, which
                     // `src/utils/regionLabel.ts` composes (Task 7). Two
                     // spellings of the same source is a support problem,
@@ -472,6 +495,7 @@ pub use imp::{list_sources, resolve, SourceHandle};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vault_buddy_core::screen_geometry::PhysicalRect;
 
     #[test]
     fn a_window_rect_becomes_its_capture_size() {
@@ -681,6 +705,58 @@ mod tests {
     fn a_whole_source_crops_at_the_origin() {
         let whole = uncropped_dims(1920, 1080);
         assert_eq!(whole, (0, 0, 1920, 1080));
+    }
+
+    // The REGION case, and the one the `cfg(windows)` arm cannot prove.
+    // Every number here is DISTINCT on purpose: a symmetric rectangle (or
+    // equal offsets) cannot tell an x/y or a width/height transposition
+    // from a correct assignment, which is exactly how the ledger's T2/M2
+    // test passed while an axis swap survived.
+    #[test]
+    fn a_region_keeps_its_own_origin_and_size_untransposed() {
+        let rect = rect(1280, 600, 640, 480);
+        assert_eq!(region_dims(rect, 1920, 1080), Some((1280, 600, 640, 480)));
+    }
+
+    #[test]
+    fn a_region_is_reclamped_against_the_monitor_it_is_starting_on() {
+        // Spec 5.2: the clamp runs at START, not only when the rectangle
+        // was drawn, because the resolution can change in between. Without
+        // it a stale rectangle indexes outside the frame buffer, and the
+        // only thing left standing between it and an out-of-bounds read is
+        // `convert`'s own guard -- i.e. every frame dropped, with nothing
+        // saying why.
+        let rect = rect(1280, 600, 640, 480);
+        assert_eq!(region_dims(rect, 1600, 900), Some((1280, 600, 320, 300)));
+    }
+
+    #[test]
+    fn a_region_that_no_longer_touches_its_monitor_resolves_to_nothing() {
+        // `None` is what the arm turns into `SourceGone`: the thing the
+        // user picked is not there any more. Returning a clamped-to-zero
+        // rectangle instead would open a sink that can never be fed.
+        let rect = rect(1280, 600, 640, 480);
+        assert_eq!(region_dims(rect, 1000, 1000), None);
+    }
+
+    #[test]
+    fn a_regions_size_is_rounded_to_even_but_its_origin_is_not() {
+        // NV12 has no way to express an odd dimension, so the SIZE rounds
+        // down; the ORIGIN must not, because rounding it would silently
+        // move the rectangle the user drew (`convert`'s own doc).
+        assert_eq!(
+            region_dims(rect(3, 5, 7, 9), 1920, 1080),
+            Some((3, 5, 6, 8))
+        );
+    }
+
+    fn rect(x: u32, y: u32, width: u32, height: u32) -> PhysicalRect {
+        PhysicalRect {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     #[cfg(windows)]

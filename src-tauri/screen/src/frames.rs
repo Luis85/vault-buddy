@@ -99,6 +99,17 @@ impl GraphicsCaptureApiHandler for FrameHandler {
             self.flags.width,
             self.flags.height,
         ) {
+            // The same four numbers in the same order as the check above,
+            // deliberately: what the frame failed to reach is the crop's
+            // FAR EDGE, not the output size. They were the same number
+            // until regions existed, and a region reporting the output
+            // size says "1919x1080 is smaller than 640x480".
+            let (need_w, need_h) = pacing::required_dims(
+                self.flags.crop_x,
+                self.flags.crop_y,
+                self.flags.width,
+                self.flags.height,
+            );
             // RECORDED, not just logged: if every frame lands here the file
             // ends up with no video at all, and `mux` needs the observed
             // size to tell the user WHY rather than surfacing a bare
@@ -109,13 +120,13 @@ impl GraphicsCaptureApiHandler for FrameHandler {
                 Ordering::Relaxed,
             );
             // Both sizes in the line, never just "the source shrank": a
-            // wrongly DECLARED size and a user resizing the window produce
+            // wrongly declared size and a user resizing the window produce
             // the same drop, and only the numbers tell them apart.
             self.drop_frame(&diagnose::undersized_drop_reason(
                 frame.width(),
                 frame.height(),
-                self.flags.width,
-                self.flags.height,
+                need_w,
+                need_h,
             ));
             return Ok(());
         }

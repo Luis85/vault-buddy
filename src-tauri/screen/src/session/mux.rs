@@ -75,6 +75,12 @@ pub(super) fn run_mux(
     counters: Arc<Counters>,
     stats_tx: Option<Sender<FrameStats>>,
     warnings: Arc<Warnings>,
+    // The frame size this capture REQUIRED — the crop's far edge
+    // (`pacing::required_dims`), which for a region is bigger than the
+    // size the sink is opened at. Passed in rather than read off `sink`
+    // because the sink knows the output size and not the crop, and the
+    // output size is the number that made this diagnosis false.
+    needed: (u32, u32),
 ) -> Result<Duration, ScreenError> {
     // The sink is CREATED HERE, on the thread that owns it for its whole
     // life, because `IMFSinkWriter` is a COM interface pointer and is
@@ -82,10 +88,6 @@ pub(super) fn run_mux(
     // keeps `MFStartup`/`MFShutdown` paired on one thread. `start` waits
     // on `ready_tx` for this result, so a creation failure is still
     // reported synchronously from `ScreenSession::start`.
-    //
-    // `declared` is read BEFORE `sink` is consumed: the size the file was
-    // opened at is half of what a zero-video capture has to tell the user.
-    let declared = (sink.video.width, sink.video.height);
     let mut sink = match FragmentedSink::create(&sink.part, sink.video, sink.audio) {
         Ok(s) => {
             if ready_tx.send(Ok(())).is_err() {
@@ -221,12 +223,12 @@ pub(super) fn run_mux(
     // by whatever HRESULT finalize happens to raise — Media Foundation's
     // own answer is `MF_E_SINK_NO_SAMPLES_PROCESSED`, which reaches the
     // user as a raw, untranslatable OS string. The real cause is knowable
-    // here: the frames were the wrong size for the file, and both sizes
-    // are in hand. Replacing the HRESULT is deliberate, not hiding it —
-    // the raw text goes to the log for a bug report.
+    // here: the frames never reached the size this capture needed, and
+    // both sizes are in hand. Replacing the HRESULT is deliberate, not
+    // hiding it — the raw text goes to the log for a bug report.
     if let Some(msg) = diagnose::zero_video_diagnosis(
         counters.video_written.load(Ordering::Relaxed),
-        declared,
+        needed,
         diagnose::unpack_dims(counters.undersized.load(Ordering::Relaxed)),
     ) {
         match &finalized {

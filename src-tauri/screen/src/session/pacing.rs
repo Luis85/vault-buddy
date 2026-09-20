@@ -210,6 +210,23 @@ pub fn usable_frame(
         && u64::from(got_h) >= u64::from(crop_y) + u64::from(want_h)
 }
 
+/// The frame size a crop REQUIRES: its far edge on each axis, as a pair a
+/// diagnostic can print.
+///
+/// The same arithmetic [`usable_frame`] decides with, kept here for the
+/// same reason the decision is: composing `crop + size` at the call site
+/// would put it inside the `cfg(windows)` frame callback, where a
+/// `crop_x + height` transposition executes in no automated test anywhere
+/// (docs/Gaps.md GAP-117).
+///
+/// SATURATING, not wrapping: these offsets come from a parsed source id,
+/// and a wrapped sum would report a requirement SMALLER than the frame
+/// that was just rejected -- a message contradicting the decision it
+/// exists to explain.
+pub fn required_dims(crop_x: u32, crop_y: u32, width: u32, height: u32) -> (u32, u32) {
+    (crop_x.saturating_add(width), crop_y.saturating_add(height))
+}
+
 /// Log the first dropped frame of a run, then one in every 300.
 ///
 /// A persistently failing conversion at 60 fps would otherwise write a

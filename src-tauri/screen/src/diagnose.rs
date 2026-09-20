@@ -21,37 +21,50 @@ pub fn unpack_dims(packed: u64) -> Option<(u32, u32)> {
     Some(((packed >> 32) as u32, packed as u32))
 }
 
-/// Why a delivered frame was dropped for being smaller than the size the
-/// sink was opened with.
-pub fn undersized_drop_reason(got_w: u32, got_h: u32, want_w: u32, want_h: u32) -> String {
+/// Why a delivered frame was dropped for being too small to produce the
+/// output this capture writes.
+///
+/// `need_w`/`need_h` are the crop's FAR EDGE (`pacing::required_dims`), not
+/// the output size. Those were the same number until regions existed --
+/// every other capture crops at `(0, 0)` -- and a 640x480 region at
+/// (1280, 600) rejecting a 1919x1080 frame then read "it arrived smaller
+/// than ... 640x480", which is arithmetically false. This message exists
+/// because phase 2 surfaced a zero-frame file as a bare untranslatable
+/// HRESULT; a confidently wrong replacement is worse than the HRESULT.
+pub fn undersized_drop_reason(got_w: u32, got_h: u32, need_w: u32, need_h: u32) -> String {
     format!(
-        "it arrived smaller than the recorded size (got {got_w}x{got_h}, \
-         declared {want_w}x{want_h})"
+        "it arrived smaller than this recording needs (got {got_w}x{got_h}, \
+         needed at least {need_w}x{need_h})"
     )
 }
 
 /// The failure to report for a capture that finalized having written no
 /// video sample at all, or `None` when video really was written.
+///
+/// `needed` is the crop's far edge, the same pair
+/// [`undersized_drop_reason`] names — NOT the size the sink was opened at.
+/// For a region those differ, and reporting the output size here produced
+/// the same falsehood the drop line did.
 pub fn zero_video_diagnosis(
     video_written: u64,
-    declared: (u32, u32),
+    needed: (u32, u32),
     undersized: Option<(u32, u32)>,
 ) -> Option<String> {
     if video_written > 0 {
         return None;
     }
-    let (want_w, want_h) = declared;
+    let (need_w, need_h) = needed;
     Some(match undersized {
         // `undersized` is stored ONLY by the size-mismatch drop, so a value
         // here means every frame really did arrive too small — which is the
         // whole diagnosis, and the two numbers are what makes it actionable.
         Some((got_w, got_h)) => format!(
             "the capture recorded no video: every frame arrived at {got_w}x{got_h}, smaller \
-             than the {want_w}x{want_h} the recording was opened at, so none could be used"
+             than the {need_w}x{need_h} this recording needed, so none could be used"
         ),
         None => format!(
             "the capture recorded no video: no usable frame ever reached the recorder \
-             (the recording was opened at {want_w}x{want_h})"
+             (it needed at least {need_w}x{need_h})"
         ),
     })
 }
@@ -59,6 +72,7 @@ pub fn zero_video_diagnosis(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::pacing;
 
     #[test]
     fn a_frame_size_round_trips_through_one_atomic_word() {
@@ -99,6 +113,52 @@ mod tests {
         let reason = undersized_drop_reason(1520, 842, 1534, 856);
         assert!(reason.contains("1520x842"), "got {reason}");
         assert!(reason.contains("1534x856"), "got {reason}");
+    }
+
+    // A 640x480 region at (1280, 600) needs a WHOLE 1920x1080 frame: its
+    // far edge is the monitor's. When the monitor drops to 1919 wide
+    // mid-capture (the case `a_region_is_judged_by_its_far_edge_not_its_size`
+    // is written for) every frame is dropped and these two lines are all
+    // the user gets. Composed against the OUTPUT size they read "got
+    // 1919x1080, declared 640x480" and "smaller than the 640x480 the
+    // recording was opened at" -- 1919x1080 is not smaller than 640x480.
+    #[test]
+    fn a_regions_drop_names_the_size_the_frame_had_to_reach() {
+        let (need_w, need_h) = pacing::required_dims(1280, 600, 640, 480);
+        let reason = undersized_drop_reason(1919, 1080, need_w, need_h);
+        assert!(
+            reason.contains("1920x1080"),
+            "the line must name the size the frame had to reach: {reason}"
+        );
+        assert!(
+            reason.contains("1919x1080"),
+            "and the size it got: {reason}"
+        );
+        assert!(
+            !reason.contains("640x480"),
+            "the output size is not what the frame failed to reach: {reason}"
+        );
+        // The claim itself, not just its numbers: whatever the line says
+        // the frame was too small for must really be bigger than it.
+        assert!(
+            need_w > 1919 || need_h > 1080,
+            "a drop line that names a requirement the frame already met is false"
+        );
+    }
+
+    #[test]
+    fn a_region_that_recorded_nothing_is_not_told_a_falsehood_either() {
+        // Same numbers one layer up: `run_mux` replaces the finalize
+        // HRESULT with this, so it is the whole of what the user sees.
+        let (need_w, need_h) = pacing::required_dims(1280, 600, 640, 480);
+        let msg = zero_video_diagnosis(0, (need_w, need_h), Some((1919, 1080)))
+            .expect("a capture that wrote no video must explain itself");
+        assert!(msg.contains("1919x1080"), "got {msg}");
+        assert!(msg.contains("1920x1080"), "got {msg}");
+        assert!(
+            !msg.contains("640x480"),
+            "the output size is not what the frames failed to reach: {msg}"
+        );
     }
 
     #[test]

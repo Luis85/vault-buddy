@@ -81,6 +81,12 @@ impl ScreenSession {
         // is a no-op for regions and only ever trims a whole screen or
         // window (whose origin is 0 either way).
         let (crop_x, crop_y) = (source.crop_x, source.crop_y);
+        // What a delivered frame has to REACH, which for a region is its
+        // far edge inside the monitor, not the size of the file. The
+        // zero-video diagnosis is composed from this — reporting the
+        // output size there told a region's user that 1919x1080 was
+        // smaller than 640x480.
+        let needed = pacing::required_dims(crop_x, crop_y, width, height);
 
         let video = VideoFormat {
             width,
@@ -131,6 +137,7 @@ impl ScreenSession {
                 move || {
                     run_mux(
                         plan, ready_tx, rx, clock, stopping, fps, counters, stats_tx, warnings,
+                        needed,
                     )
                 }
             })
