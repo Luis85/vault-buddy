@@ -2508,6 +2508,35 @@ Message body: closes GAP-115; the ownership filter and the no-follow rule; named
 
 ### Task 10: The editor grows Save, Discard and a progress bar
 
+> **Six defects were found in this section while executing it, and the text below
+> still contains four of them.** Read this box before the section. Two were
+> corrected in place (the `canSave` predicate and the Open button's target);
+> these four were not, because the section is now built and rewriting it would
+> falsify the record of what it actually said:
+>
+> - **The M7/M7b test snippet calls `mockEditor` with the wrong signature and the
+>   wrong return value.** The real helper is `mockEditor(detail, requests, details)`
+>   and it RETURNS `seen`; it mounts nothing. The working form is
+>   `const seen = mockEditor(THREE); const w = mount(EditorRoot); await flushPromises();`.
+>   Ironic, since the comment on the following line correctly warns against a
+>   `countSaves()` helper that does not exist -- it got the missing helper right
+>   and the existing one wrong.
+> - **The literal target guard throws at runtime.** `const target = e.target as
+>   HTMLElement | null; if (target?.closest(...))` -- the optional chain guards
+>   against null, not against a target that is not an Element, and `window` is a
+>   legal `e.target`. Verified: it raises `TypeError: target?.closest is not a
+>   function` and reddens three EXISTING tests. The correct form is
+>   `target instanceof Element && target.closest(...)`.
+> - **"the bar shows 'Saved to \<vault\>'" is not derivable from the data.**
+>   `screen:exported` carries `vaultId`, Obsidian's opaque hex registry key, not a
+>   name; `export_worker::Prepared` resolves a `vault_name` but `ExportSummary`
+>   drops it and `emit_exported` emits only the id. The editor root installs no
+>   store and has no vault list. Shipped as an honest `Saved {base} into your
+>   vault.` See Task 12 for the one-line Rust fix.
+> - **`screen:exportCancelled`'s payload is `{ base }` alone** -- no `fraction`,
+>   no `message`. The Interfaces block lists no cancel type, and reusing
+>   `ExportProgress`/`ExportFailure` annotates a field that never arrives.
+
 **Files:**
 - Create: `src/components/editor/ExportBar.vue`
 - Create: `tests/exportBar.test.ts`
@@ -2926,7 +2955,8 @@ A docs task's failure mode is a **confident false statement** in the one file th
 10. **`core::screen_capture_paths` in the repository map**, and the note that the one collision-suffix scheme lives in `capture_paths::candidate` and is `pub(crate)`, which is why the screen reservation lives in `core`.
 11. **Where state lives on disk** — the staging directory now has a recovery sweep and an export temp shape (`.<base>.export.mp4.part`).
 12. **The repository map and the IPC table must show TWO modules, not one.** Task 8 split the surface: `export_commands.rs` (the export lifecycle -- `ExportState`, the cancel flag, all five `screen:*` emitters, `export_and_save_capture`, `cancel_export`) and `staged_commands.rs` (a staged capture as an object -- `discard_staged_capture`, `list_staged_captures`, `open_screen_capture`). The seam is worth one sentence: lifecycle versus object.
-13. **Record the URI rule, because it differs from both siblings.** `open_screen_capture` does NOT use `uri::vault_relative_no_ext` the way `open_recording` and `open_task` do. Those two target a `.md` and strip the extension unconditionally; a saved capture may be opened as its `.mp4`, so `staged_commands::capture_file_param` strips only for exactly-`.md` -- `core::search`'s rule. AGENTS.md currently describes the no-ext form as though it were universal across the `open_*` family; it no longer is.
+13. **Carry the vault NAME on `screen:exported`, or delete the claim that it is there.** The editor's success line wants "Saved to <vault>"; the event carries `vaultId`, an opaque hex registry key. `export_worker::Prepared` already resolves `vault_name` -- `ExportSummary` drops it. The fix is three lines (a field on `ExportSummary`, populate it, `"vaultName": summary.vault_name` in `emit_exported`) plus one on the frontend. Do it, or record in AGENTS.md's Events table that the payload is id-only so the next reader does not assume a name is available.
+14. **Record the URI rule, because it differs from both siblings.** `open_screen_capture` does NOT use `uri::vault_relative_no_ext` the way `open_recording` and `open_task` do. Those two target a `.md` and strip the extension unconditionally; a saved capture may be opened as its `.mp4`, so `staged_commands::capture_file_param` strips only for exactly-`.md` -- `core::search`'s rule. AGENTS.md currently describes the no-ext form as though it were universal across the `open_*` family; it no longer is.
 
 - [ ] **Step 2: docs/Gaps.md**
 

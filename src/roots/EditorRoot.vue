@@ -21,13 +21,20 @@ import { listen } from "@tauri-apps/api/event";
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 
 import CapturePreview from "../components/editor/CapturePreview.vue";
+import ExportBar from "../components/editor/ExportBar.vue";
 import TimelineStrip from "../components/editor/TimelineStrip.vue";
 import AppButton from "../components/ui/AppButton.vue";
 import Banner from "../components/ui/Banner.vue";
 import { useEditorSelection } from "../composables/useEditorSelection";
 import { useEditorTimeline } from "../composables/useEditorTimeline";
 import { logWarning } from "../logging";
-import type { StagedCaptureDetail, TimelineDto } from "../types";
+import type {
+  ExportFailure,
+  ExportProgress,
+  ExportResult,
+  StagedCaptureDetail,
+  TimelineDto,
+} from "../types";
 import { wholeTimeline } from "../utils/timelineGeometry";
 
 const detail = ref<StagedCaptureDetail | null>(null);
@@ -78,6 +85,148 @@ const src = computed(() =>
  * banner, because the editor stays perfectly usable. */
 const saveFailed = computed(() => editor.value?.saveFailed.value ?? false);
 
+/** Spec 8.3's export, as this window sees it. EVERY one of these is reset by
+ * `load()` (`resetExport`): the editor window is HIDDEN and REUSED, so a ref
+ * that survives a capture is a chance to show the previous one's state under
+ * the new one's title — and a stale `done` is the sharpest of them, because
+ * `done` is the one state with no Save button in it at all. */
+const exportPhase = ref<"idle" | "exporting" | "done" | "failed">("idle");
+const exportFraction = ref(0);
+const exportMessage = ref<string | null>(null);
+/** What Open launches: the NOTE when the vault writes one, the video
+ * otherwise. The note is the richer destination — it embeds the video, the
+ * way the audio domain's note embeds its audio — and with notes turned off
+ * there is none, so the video is the only answer.
+ * `staged_commands::capture_file_param` takes either: it drops the extension
+ * for exactly-`.md` and keeps it otherwise. */
+const savedPath = ref<string | null>(null);
+const savedVaultId = ref<string | null>(null);
+const discardBusy = ref(false);
+
+/** Is there any footage left to export? A UI HINT, not the rule:
+ * `export::export_refusal` is the authority and refuses an empty timeline
+ * server-side, and this exists only so Save reads as disabled rather than
+ * failing on click — the task-hierarchy picker's posture exactly.
+ *
+ * It reads the composable's own `outputMs` deliberately. Spelling the
+ * predicate out (`segments.some((s) => s.sourceEndMs > s.sourceStartMs)`)
+ * would agree, but it would be a THIRD implementation of this feature's
+ * segment arithmetic; `outputDurationMs` is the TypeScript half of the pair
+ * `tests/fixtures/timeline-cases.json` holds against `core::timeline`, and a
+ * hand-rolled predicate is held against nothing (docs/Gaps.md GAP-136). */
+const canSave = computed(() => (editor.value?.outputMs.value ?? 0) > 0);
+
+/** Every `screen:export*` event is emitted APP-WIDE and carries the base it
+ * is about. This window edits exactly one capture and is reused, so an editor
+ * reopened on B while A is still exporting would otherwise render A's
+ * progress — and, worse, A's "Saved" under B's title. */
+function addressesOpenCapture(base: string): boolean {
+  return detail.value !== null && detail.value.base === base;
+}
+
+function onExportProgress(p: ExportProgress) {
+  if (!addressesOpenCapture(p.base)) return;
+  // A progress tick IS an export running, so it drives the phase as well as
+  // the number: the bar cannot show a fraction it is not rendering a bar for.
+  exportPhase.value = "exporting";
+  exportFraction.value = p.fraction;
+}
+
+function onExported(p: ExportResult) {
+  if (!addressesOpenCapture(p.base)) return;
+  exportPhase.value = "done";
+  exportFraction.value = 1;
+  savedPath.value = p.notePath ?? p.videoPath;
+  savedVaultId.value = p.vaultId;
+  // A warning means the video landed and its note did not: a degraded
+  // SUCCESS. Dropping it would leave the user believing in a note that is
+  // not there.
+  exportMessage.value = p.warning ?? `Saved ${p.base} into your vault.`;
+}
+
+/** Spec 14: a cancel keeps the staged capture AND its timeline. There is
+ * nothing to apologise for, so no message and no banner — the bar returns to
+ * exactly the state Save was pressed from. */
+function onExportCancelled(p: { base: string }) {
+  if (!addressesOpenCapture(p.base)) return;
+  resetExport();
+}
+
+function onExportFailed(p: ExportFailure) {
+  if (!addressesOpenCapture(p.base)) return;
+  exportPhase.value = "failed";
+  exportFraction.value = 0;
+  exportMessage.value = p.message;
+}
+
+function resetExport() {
+  exportPhase.value = "idle";
+  exportFraction.value = 0;
+  exportMessage.value = null;
+  savedPath.value = null;
+  savedVaultId.value = null;
+}
+
+async function onSave() {
+  const base = detail.value?.base;
+  if (base === undefined) return;
+  exportPhase.value = "exporting";
+  exportFraction.value = 0;
+  exportMessage.value = null;
+  try {
+    await invoke("export_and_save_capture", { base });
+  } catch (e) {
+    // The command REJECTS for anything it decides before a worker starts — no
+    // ffmpeg, a refused base, no disk space. No `screen:exportFailed` follows
+    // one of those, so a root that only listened would sit at "exporting"
+    // forever.
+    exportPhase.value = "failed";
+    exportMessage.value = String(e);
+  }
+}
+
+async function onCancelExport() {
+  try {
+    await invoke("cancel_export");
+  } catch (e) {
+    // The terminal state still arrives as `screen:exportCancelled` or, if
+    // the export had already finished, as `screen:exported`.
+    logWarning(`cancel_export failed: ${String(e)}`);
+  }
+}
+
+/** The bar confirms first; this is the second click. The staged capture is
+ * gone afterwards, so the window stops offering it rather than leaving Save
+ * pointed at a sidecar that no longer exists. */
+async function onDiscard() {
+  const base = detail.value?.base;
+  if (base === undefined) return;
+  discardBusy.value = true;
+  try {
+    await invoke("discard_staged_capture", { base });
+    detail.value = null;
+    noCapture.value = true;
+    resetExport();
+  } catch (e) {
+    exportPhase.value = "failed";
+    exportMessage.value = String(e);
+  } finally {
+    discardBusy.value = false;
+  }
+}
+
+async function onOpenSaved() {
+  const path = savedPath.value;
+  const id = savedVaultId.value;
+  if (path === null || id === null) return;
+  try {
+    await invoke("open_screen_capture", { id, path });
+  } catch (e) {
+    exportPhase.value = "failed";
+    exportMessage.value = String(e);
+  }
+}
+
 async function load(base: string) {
   // Let the capture we are LEAVING finish writing before we read anything.
   // `load` replaces the composable outright, abandoning its save chain — and
@@ -98,6 +247,7 @@ async function load(base: string) {
     editor.value = useEditorTimeline(loaded.base, seed);
     detail.value = loaded;
     resetSelection();
+    resetExport();
     noCapture.value = false;
     error.value = null;
   } catch (e) {
@@ -166,13 +316,29 @@ function onRedo() {
  * typed (Polish `ż`) — without the clause that keystroke both rewrites the
  * edit and is `preventDefault`ed, so the character never arrives either.
  *
- * What this gate does NOT do is protect a text field: `preventDefault` here
- * is unconditional, so the first `<input>` this window grows (spec 10's Save
- * dialog) loses its native text undo to the timeline. That needs a target
- * check (`closest("input, textarea")`), which is deliberately not written
- * ahead of the field it would guard. */
+ * The target check is the other half, and it is what the export bar's
+ * controls finally make reachable: bound on `window`, this gate is in scope
+ * for every control in the editor, so Ctrl+Z inside a text field would
+ * rewrite the TIMELINE instead of the text — silently, since the typing is
+ * untouched either way. The phase that adds the first field is the one it
+ * guards; it is tested now, in BOTH directions, so the next author can
+ * neither delete it as unreachable nor widen it into a gate that swallows
+ * the shortcut everywhere.
+ *
+ * Both halves live in `isEditorShortcut` rather than inline: together they
+ * put `onKeydown` over the complexity ratchet's threshold, and "is this
+ * keystroke ours?" is one question with one answer. */
+function isEditorShortcut(e: KeyboardEvent): boolean {
+  if ((!e.ctrlKey && !e.metaKey) || e.altKey) return false;
+  // `e.target` is not always an element: a keystroke dispatched at `window`
+  // itself has a target with no `closest` at all, so a cast to `HTMLElement`
+  // would throw right through the shortcut rather than guarding it.
+  const target = e.target;
+  return !(target instanceof Element && target.closest("input, textarea, [contenteditable='true']"));
+}
+
 function onKeydown(e: KeyboardEvent) {
-  if ((!e.ctrlKey && !e.metaKey) || e.altKey) return;
+  if (!isEditorShortcut(e)) return;
   const key = e.key.toLowerCase();
   if (key === "z" && !e.shiftKey) {
     e.preventDefault();
@@ -183,19 +349,28 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-let unlistenOpen: (() => void) | undefined;
+const unlisteners: (() => void)[] = [];
 
 onMounted(async () => {
   // Registered synchronously, ahead of the awaits below: a `listen` that
   // never resolves must not cost the user their keyboard.
   window.addEventListener("keydown", onKeydown);
   // Subscribed BEFORE the first drain, so a request arriving while that
-  // drain is in flight is not lost.
-  unlistenOpen = await listen("editor:open", () => void openRequested());
+  // drain is in flight is not lost. The export subscriptions ride the same
+  // rule: `export_and_save_capture` can only be pressed from a loaded
+  // capture, but an export left running when this window was last hidden is
+  // still emitting, and the bar has to be able to see it finish.
+  unlisteners.push(
+    await listen("editor:open", () => void openRequested()),
+    await listen<ExportProgress>("screen:exportProgress", (e) => onExportProgress(e.payload)),
+    await listen<ExportResult>("screen:exported", (e) => onExported(e.payload)),
+    await listen<{ base: string }>("screen:exportCancelled", (e) => onExportCancelled(e.payload)),
+    await listen<ExportFailure>("screen:exportFailed", (e) => onExportFailed(e.payload)),
+  );
   await openRequested();
 });
 onBeforeUnmount(() => {
-  unlistenOpen?.();
+  for (const off of unlisteners) off();
   // The listener is on `window`, which outlives this component. Leaving it
   // behind would keep an unmounted editor editing — and PERSISTING, through
   // the composable this closure still holds — a timeline nobody can see.
@@ -294,13 +469,21 @@ onBeforeUnmount(() => {
           Redo
         </AppButton>
       </div>
-      <!-- Phase 4 writes NOTHING into a vault: an edit lives in the staging
-           sidecar until phase 5 builds the export. Saying so here is the same
-           honesty posture as the stop toast's "Screen capture ready", which
-           deliberately does not claim a save either. -->
-      <p class="text-micro text-fg-subtle">
-        Saving into a vault arrives in a later update.
-      </p>
+      <!-- Keyed on the capture: the bar owns one piece of state of its own
+           (the discard confirm), and the editor window is reused, so an
+           armed confirm must not survive into the next capture. -->
+      <ExportBar
+        :key="detail.base"
+        :phase="exportPhase"
+        :fraction="exportFraction"
+        :message="exportMessage"
+        :can-save="canSave"
+        :busy="discardBusy"
+        @save="onSave"
+        @discard="onDiscard"
+        @cancel="onCancelExport"
+        @open="onOpenSaved"
+      />
     </template>
     <p
       v-else

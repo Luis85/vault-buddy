@@ -453,3 +453,34 @@ export interface StagedCaptureDetail {
    * side, where the untrusted value already crosses a typed boundary). */
   timeline: TimelineDto | null;
 }
+
+/** The `screen:exportProgress` payload.
+ *
+ * `fraction` is 0..1, NEVER 0..100. Rust derives it from the same whole
+ * percent its emit throttle gates on (`progress_payload_fraction`), so the
+ * number that passed the gate and the number rendered here are one number;
+ * a 0..100 payload would render a bar that is full from the first tick. */
+export interface ExportProgress {
+  base: string;
+  fraction: number;
+}
+
+/** The `screen:exported` payload — the ninth sanctioned vault write landing.
+ *
+ * `notePath` is null exactly when the vault has companion notes turned off.
+ * `warning` is set when the video landed but its note did not: a degraded
+ * SUCCESS, never a failure. */
+export interface ExportResult {
+  base: string;
+  videoPath: string;
+  notePath: string | null;
+  vaultId: string;
+  warning: string | null;
+}
+
+/** The `screen:exportFailed` payload. A cancel is not a failure and carries
+ * no message at all (`screen:exportCancelled`, spec §14). */
+export interface ExportFailure {
+  base: string;
+  message: string;
+}

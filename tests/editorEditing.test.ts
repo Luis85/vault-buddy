@@ -303,6 +303,58 @@ describe("EditorRoot editing", () => {
     expect(altGrZ.defaultPrevented).toBe(false);
   });
 
+  // Spec 10's export bar puts the first focusable controls in this window,
+  // and the field that follows them is what the source comment at
+  // `onKeydown` has been waiting for. Ctrl+Z inside a text field is the
+  // field's own undo; without a target check it silently rewrites the
+  // TIMELINE instead, and the user's typing is untouched either way, so
+  // nothing on screen says what happened.
+  //
+  // The observable is the sidecar write, not the strip: `mockEditor` records
+  // every `invoke`, and every timeline mutation persists, so a
+  // `save_capture_timeline` call IS an undo having run.
+  it("lets a text field keep its own undo", async () => {
+    const seen = mockEditor(THREE);
+    const w = mount(EditorRoot);
+    await flushPromises();
+    // Put something on the undo stack, or "nothing happened" would be the
+    // right answer for the wrong reason.
+    await w.get('[data-testid="preview-scrub"]').setValue("1000");
+    await w.get('[data-testid="editor-split"]').trigger("click");
+    await flushPromises();
+    const saves = () => seen.filter((c) => c.cmd === "save_capture_timeline").length;
+    const before = saves();
+    expect(before).toBeGreaterThan(0);
+
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }));
+    await flushPromises();
+
+    expect(saves()).toBe(before);
+    input.remove();
+  });
+
+  // The PAIR of the test above, and the reason it is a pair: a guard that
+  // swallows Ctrl+Z everywhere passes that one, so on its own it proves only
+  // that undo is dead. This one proves the shortcut still works where it
+  // should, which is the half a one-sided fixture cannot see.
+  it("still undoes when the keystroke did not come from a text field", async () => {
+    const seen = mockEditor(THREE);
+    const w = mount(EditorRoot);
+    await flushPromises();
+    await w.get('[data-testid="preview-scrub"]').setValue("1000");
+    await w.get('[data-testid="editor-split"]').trigger("click");
+    await flushPromises();
+    const saves = () => seen.filter((c) => c.cmd === "save_capture_timeline").length;
+    const before = saves();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }));
+    await flushPromises();
+    expect(saves()).toBeGreaterThan(before);
+  });
+
   // The listener is on `window`, so an unmounted editor that kept listening
   // would go on editing a timeline nobody can see — and, worse, go on
   // WRITING it to the sidecar. That write is the observable: after the

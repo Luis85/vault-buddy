@@ -19,9 +19,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // the show. The editor window is hidden and reused, never destroyed, so its
 // webview mounts exactly ONCE per process and the event is the only thing
 // that makes an already-mounted editor re-read the stash.
-const listeners: Record<string, () => void> = {};
+const listeners: Record<string, (e?: { payload: unknown }) => void> = {};
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: (event: string, cb: () => void) => {
+  listen: (event: string, cb: (e?: { payload: unknown }) => void) => {
     listeners[event] = cb;
     return Promise.resolve(() => {
       delete listeners[event];
@@ -39,7 +39,16 @@ vi.mock("../src/logging", () => ({
 
 import { logWarning } from "../src/logging";
 import EditorRoot from "../src/roots/EditorRoot.vue";
-import { type Call, DETAIL, mockEditor, open, segments, STAGED_MP4, video } from "./helpers/editorMount";
+import {
+  type Call,
+  DETAIL,
+  mockEditor,
+  open,
+  segments,
+  STAGED_MP4,
+  THREE,
+  video,
+} from "./helpers/editorMount";
 
 // The strip's window-level pointerup listener (and the editor's own future
 // listeners) must not outlive their test.
@@ -53,6 +62,17 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+/** Deliver a Rust-side event the way `app.emit` does. Deliberately NOT
+ * optional-chained: a typo in the event name, or a listener the root stopped
+ * registering, must fail the test rather than quietly deliver nothing. */
+function emit(event: string, payload: unknown) {
+  listeners[event]({ payload });
+}
+
+function valueNow(w: ReturnType<typeof mount>) {
+  return w.find('[data-testid="export-progress"]').attributes("aria-valuenow");
+}
 
 describe("EditorRoot", () => {
   it("drains the request and loads that capture", async () => {
@@ -314,4 +334,306 @@ describe("EditorRoot", () => {
   });
 
 
+  // ---- Export: Save, Discard, progress (spec 8.3, 10) --------------------
+
+  // The stash is drained per open, so the base the editor SHOWS is the only
+  // right argument. A base captured once at mount would export capture A
+  // while the user is looking at capture B — and the editor window is
+  // reused, so that is the ordinary case, not a corner.
+  it("sends the open base to export_and_save_capture, not a stale one", async () => {
+    const w = await open(undefined, ["cap one", "cap two"], {
+      "cap one": DETAIL,
+      "cap two": { ...DETAIL, base: "cap two", sourceTitle: "Firefox" },
+    });
+    const seen: Call[] = [];
+    mockIPC((cmd, args) => {
+      seen.push({ cmd, ...(args as object) });
+      if (cmd === "take_editor_request") return "cap two";
+      if (cmd === "load_staged_capture")
+        return { ...DETAIL, base: "cap two", sourceTitle: "Firefox" };
+      return undefined;
+    });
+    listeners["editor:open"]();
+    await flushPromises();
+    expect(w.text()).toContain("Firefox");
+
+    await w.get('[data-testid="export-save"]').trigger("click");
+    await flushPromises();
+    const exports = seen
+      .filter((c) => c.cmd === "export_and_save_capture")
+      .map((c) => c.base as string);
+    expect(exports).toEqual(["cap two"]);
+  });
+
+  // The Rust side emits a fraction in 0..1 and the bar renders a percent.
+  // Emitting 0..100 by mistake renders 4000% with nothing to catch it on the
+  // Rust side, which has no frontend to assert against.
+  it("reads screen:exportProgress as a fraction between zero and one", async () => {
+    const w = await open();
+    emit("screen:exportProgress", { base: "cap one", fraction: 0.4 });
+    await flushPromises();
+    expect(valueNow(w)).toBe("40");
+  });
+
+  // A progress event for a DIFFERENT capture must not drive this window's
+  // bar: the events are app-wide, and an editor reopened on capture B while
+  // A is still exporting would otherwise show A's progress.
+  it("ignores an export event addressed to another capture", async () => {
+    const w = await open();
+    emit("screen:exportProgress", { base: "cap one", fraction: 0.2 });
+    await flushPromises();
+    expect(valueNow(w)).toBe("20");
+    // Now a tick for somebody else. The bar must not move, and it must not
+    // be torn down either.
+    emit("screen:exportProgress", { base: "some other capture", fraction: 0.9 });
+    await flushPromises();
+    expect(valueNow(w)).toBe("20");
+    // The terminal events are addressed the same way and must be ignored
+    // just as hard: a foreign `exported` would claim this capture was saved.
+    emit("screen:exported", {
+      base: "some other capture",
+      videoPath: "C:\\vault\\Other.mp4",
+      notePath: null,
+      vaultId: "v1",
+      warning: null,
+    });
+    await flushPromises();
+    expect(valueNow(w)).toBe("20");
+    expect(w.find('[data-testid="export-open"]').exists()).toBe(false);
+  });
+
+  // Spec 14: a cancel keeps the staged capture and its timeline. It is not a
+  // failure, so there is nothing to apologise for and Save must come back.
+  it("returns to idle without an error banner when an export is cancelled", async () => {
+    const w = await open();
+    await w.get('[data-testid="export-save"]').trigger("click");
+    await flushPromises();
+    emit("screen:exportProgress", { base: "cap one", fraction: 0.5 });
+    await flushPromises();
+    expect(w.find('[data-testid="export-cancel"]').exists()).toBe(true);
+
+    emit("screen:exportCancelled", { base: "cap one" });
+    await flushPromises();
+    expect(w.find('[data-testid="export-message"]').exists()).toBe(false);
+    expect(w.find('[data-testid="export-progress"]').exists()).toBe(false);
+    expect(w.get('[data-testid="export-save"]').attributes("disabled")).toBeUndefined();
+  });
+
+  it("shows the failure message and keeps the edit on screen when an export fails", async () => {
+    const w = await open(undefined, ["cap one"], { "cap one": { ...DETAIL, ...THREE } });
+    await w.get('[data-testid="export-save"]').trigger("click");
+    await flushPromises();
+    emit("screen:exportFailed", { base: "cap one", message: "ffmpeg was not found." });
+    await flushPromises();
+    expect(w.get('[data-testid="export-message"]').text()).toContain("ffmpeg was not found.");
+    // The edit is still there and still saveable: a failure is recoverable.
+    expect(segments(w)).toHaveLength(3);
+    expect(w.find('[data-testid="export-save"]').exists()).toBe(true);
+  });
+
+  // The saved video's note is the richer destination -- it embeds the video,
+  // the way the audio domain's note embeds the audio. With notes turned off
+  // there is no note, and the video is the only answer.
+  it("opens the note when there is one and the video when there is not", async () => {
+    const w = await open();
+    const seen: Call[] = [];
+    mockIPC((cmd, args) => {
+      seen.push({ cmd, ...(args as object) });
+      return undefined;
+    });
+    emit("screen:exported", {
+      base: "cap one",
+      videoPath: "C:\\vault\\Screen Captures\\cap one.mp4",
+      notePath: "C:\\vault\\Screen Captures\\cap one.md",
+      vaultId: "vault-7",
+      warning: null,
+    });
+    await flushPromises();
+    await w.get('[data-testid="export-open"]').trigger("click");
+    await flushPromises();
+    expect(seen.filter((c) => c.cmd === "open_screen_capture")).toEqual([
+      {
+        cmd: "open_screen_capture",
+        id: "vault-7",
+        path: "C:\\vault\\Screen Captures\\cap one.md",
+      },
+    ]);
+
+    emit("screen:exported", {
+      base: "cap one",
+      videoPath: "C:\\vault\\Screen Captures\\cap one.mp4",
+      notePath: null,
+      vaultId: "vault-7",
+      warning: null,
+    });
+    await flushPromises();
+    await w.get('[data-testid="export-open"]').trigger("click");
+    await flushPromises();
+    expect(seen.filter((c) => c.cmd === "open_screen_capture").pop()).toMatchObject({
+      path: "C:\\vault\\Screen Captures\\cap one.mp4",
+    });
+  });
+
+  // The video landed but its note did not: the export SUCCEEDED, so this is
+  // a warning on the success line, never a failure. Dropping it would leave
+  // the user believing a note exists that does not.
+  it("surfaces an exported capture's warning beside the success line", async () => {
+    const w = await open();
+    emit("screen:exported", {
+      base: "cap one",
+      videoPath: "C:\\vault\\cap one.mp4",
+      notePath: null,
+      vaultId: "vault-7",
+      warning: "The companion note could not be written.",
+    });
+    await flushPromises();
+    expect(w.get('[data-testid="export-message"]').text()).toContain(
+      "The companion note could not be written.",
+    );
+    expect(w.find('[data-testid="export-open"]').exists()).toBe(true);
+  });
+
+  // M9. The editor window is hidden and REUSED, so every ref that outlives a
+  // capture is a chance to show the previous one's state. A stale `done`
+  // leaves capture B with no Save button at all — the phase-4 "the editor
+  // comes back showing capture A" bug, in a new field.
+  it("opens the next capture with a fresh export bar, not the last one's success", async () => {
+    const w = await open(undefined, ["cap one", "cap two"], {
+      "cap one": DETAIL,
+      "cap two": { ...DETAIL, base: "cap two", sourceTitle: "Firefox" },
+    });
+    emit("screen:exported", {
+      base: "cap one",
+      videoPath: "C:\\vault\\cap one.mp4",
+      notePath: null,
+      vaultId: "vault-7",
+      warning: null,
+    });
+    await flushPromises();
+    expect(w.find('[data-testid="export-open"]').exists()).toBe(true);
+    expect(w.find('[data-testid="export-save"]').exists()).toBe(false);
+
+    listeners["editor:open"]();
+    await flushPromises();
+    expect(w.text()).toContain("Firefox");
+    expect(w.find('[data-testid="export-open"]').exists()).toBe(false);
+    expect(w.find('[data-testid="export-message"]').exists()).toBe(false);
+    expect(w.get('[data-testid="export-save"]').attributes("disabled")).toBeUndefined();
+  });
+
+  // Discard destroys the only copy of a recording, so the confirm is the
+  // bar's; what this half owns is that the SECOND click really deletes, and
+  // that the editor stops offering a capture that is no longer on disk.
+  it("discards the open capture and stops showing it", async () => {
+    const w = await open();
+    const seen: Call[] = [];
+    mockIPC((cmd, args) => {
+      seen.push({ cmd, ...(args as object) });
+      return undefined;
+    });
+    await w.get('[data-testid="export-discard"]').trigger("click");
+    await flushPromises();
+    expect(seen.filter((c) => c.cmd === "discard_staged_capture")).toHaveLength(0);
+
+    await w.get('[data-testid="export-discard"]').trigger("click");
+    await flushPromises();
+    expect(seen.filter((c) => c.cmd === "discard_staged_capture")).toEqual([
+      { cmd: "discard_staged_capture", base: "cap one" },
+    ]);
+    expect(w.text()).toContain("No capture open");
+  });
+
+  // A refused discard must leave the capture exactly where it was: the file
+  // is still on disk, so a window that blanked itself would strand it.
+  it("keeps the capture when a discard is refused", async () => {
+    const w = await open();
+    mockIPC((cmd) => {
+      if (cmd === "discard_staged_capture") throw new Error("That capture is in use.");
+      return undefined;
+    });
+    await w.get('[data-testid="export-discard"]').trigger("click");
+    await w.get('[data-testid="export-discard"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="export-message"]').text()).toContain("That capture is in use.");
+    expect(w.text()).toContain("Screen 1");
+  });
+
+  it("asks Rust to cancel a running export", async () => {
+    const w = await open();
+    const seen: Call[] = [];
+    mockIPC((cmd, args) => {
+      seen.push({ cmd, ...(args as object) });
+      return undefined;
+    });
+    emit("screen:exportProgress", { base: "cap one", fraction: 0.3 });
+    await flushPromises();
+    await w.get('[data-testid="export-cancel"]').trigger("click");
+    await flushPromises();
+    expect(seen.filter((c) => c.cmd === "cancel_export")).toHaveLength(1);
+  });
+
+  // `export_and_save_capture` rejects when ffmpeg is missing or the base is
+  // refused. That reply never becomes a `screen:exportFailed` event, so a
+  // root that only listened would sit at "exporting" forever.
+  it("surfaces a refused export from the command's own reply", async () => {
+    const w = await open();
+    mockIPC((cmd) => {
+      if (cmd === "export_and_save_capture") throw new Error("ffmpeg was not found.");
+      return undefined;
+    });
+    await w.get('[data-testid="export-save"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="export-message"]').text()).toContain("ffmpeg was not found.");
+    expect(w.find('[data-testid="export-cancel"]').exists()).toBe(false);
+  });
+
+  // A refused cancel is not a user-facing failure: the export is still
+  // running and its own terminal event still arrives, so the remedy is a log
+  // line rather than a banner claiming something went wrong.
+  it("logs rather than banners when a cancel is refused", async () => {
+    const w = await open();
+    mockIPC((cmd) => {
+      if (cmd === "cancel_export") throw new Error("no export is running");
+      return undefined;
+    });
+    emit("screen:exportProgress", { base: "cap one", fraction: 0.3 });
+    await flushPromises();
+    await w.get('[data-testid="export-cancel"]').trigger("click");
+    await flushPromises();
+    expect(vi.mocked(logWarning)).toHaveBeenCalledWith(
+      expect.stringContaining("cancel_export failed"),
+    );
+    expect(w.find('[data-testid="export-message"]').exists()).toBe(false);
+  });
+
+  // Open CAN fail -- the saved file was moved or renamed in Obsidian between
+  // the save and the click -- and a click that does nothing visible is what
+  // the diagnostics invariant forbids.
+  it("surfaces a refused open instead of doing nothing", async () => {
+    const w = await open();
+    emit("screen:exported", {
+      base: "cap one",
+      videoPath: "C:\\vault\\cap one.mp4",
+      notePath: null,
+      vaultId: "vault-7",
+      warning: null,
+    });
+    await flushPromises();
+    mockIPC((cmd) => {
+      if (cmd === "open_screen_capture") throw new Error("That capture is outside its vault.");
+      return undefined;
+    });
+    await w.get('[data-testid="export-open"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="export-message"]').text()).toContain("outside its vault");
+  });
+
+  // Spec 8.1 lets the last segment be deleted only through undo; an EMPTY
+  // timeline still reaches this window through a hand-edited sidecar, and
+  // `export::export_refusal` refuses it server-side. Save reads as disabled
+  // rather than failing on click.
+  it("disables Save when the timeline holds no footage", async () => {
+    const w = await open({ ...DETAIL, timeline: { segments: [] } });
+    expect(w.get('[data-testid="export-save"]').attributes("disabled")).toBeDefined();
+  });
 });
