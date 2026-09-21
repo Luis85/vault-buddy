@@ -13,6 +13,7 @@
 //! this file.
 
 pub mod error;
+pub mod fingerprint;
 pub mod ids;
 pub mod migrate;
 pub mod model;
@@ -25,6 +26,7 @@ mod validate_media;
 pub mod workspace;
 
 pub use error::{EditorError, EditorErrorCode};
+pub use fingerprint::{assets_referenced, canonical_json, edit_fingerprint, new_product};
 pub use ids::{is_valid_id, new_entity_id, new_project_id};
 pub use model::*;
 pub use model_cues::*;
