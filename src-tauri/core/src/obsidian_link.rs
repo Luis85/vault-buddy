@@ -1,15 +1,16 @@
 //! The one place that knows which characters a wikilink cannot carry, and
 //! how to escape a markdown label.
 //!
-//! Two callers had the same problem for the same reason: a name that this
-//! app does not choose — a List FOLDER the user created (`tasks::parent_link`)
-//! and a file named from a scraped WINDOW TITLE (`screen_note`) — ends up
+//! Three callers have the same problem for the same reason: a name that this
+//! app does not choose — a List FOLDER the user created (`tasks::parent_link`),
+//! a file named from a scraped WINDOW TITLE (`screen_note`), and a recording
+//! whose base the user TYPED at `rename_capture` (`capture_embed`) — ends up
 //! inside `[[...]]`, where `#`, `|`, `[`, `]` and `^` all change the link's
 //! meaning and a wikilink offers no escape for any of them. The answer in
-//! both cases is the same: fall back to a percent-encoded markdown link
+//! all three cases is the same: fall back to a percent-encoded markdown link
 //! whose label is backslash-escaped.
 //!
-//! It lives here rather than in either caller because the CHARACTER SET is
+//! It lives here rather than in any caller because the CHARACTER SET is
 //! the part that must not drift: a set that gained a character in one file
 //! and not the other would make one surface silently start emitting dead
 //! links again, which is exactly the failure this module exists to prevent.

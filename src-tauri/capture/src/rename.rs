@@ -182,6 +182,97 @@ mod tests {
         assert!(is_capture_base(&stem));
     }
 
+    /// Decode `%XX` the way a markdown link destination is read. Hand-rolled
+    /// rather than pulled in as a dependency: the test needs only this.
+    fn percent_decode(dest: &str) -> String {
+        let bytes = dest.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap();
+                out.push(u8::from_str_radix(hex, 16).expect("valid percent escape"));
+                i += 3;
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+        String::from_utf8(out).expect("valid utf-8 destination")
+    }
+
+    /// The file an Obsidian READER would open for each embed line in `note`:
+    /// a wikilink target ends at the first `]]` and is then cut at the first
+    /// `#`/`^`/`|`; a markdown embed resolves to its percent-decoded
+    /// destination. Deliberately a reader, not a call back into the writer.
+    fn embedded_files(note: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for line in note.lines() {
+            if let Some(target) = line
+                .strip_prefix("![[")
+                .and_then(|r| r.split_once("]]"))
+                .map(|(t, _)| t.split(['#', '^', '|']).next().unwrap_or(t))
+            {
+                out.push(if target.ends_with(".transcript") {
+                    format!("{target}.md")
+                } else {
+                    target.to_string()
+                });
+            } else if line.starts_with("![") && line.ends_with(')') {
+                let dest = line.rsplit_once("](").unwrap().1.trim_end_matches(')');
+                out.push(percent_decode(dest));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn two_metacharacter_renames_keep_both_embeds_on_the_landed_files() {
+        // REGRESSION (docs/Gaps.md GAP-153), end to end through the real
+        // rename: `sanitize_title` lets `#`, `^`, `[` and `]` into a base, so
+        // the note falls back to a markdown embed — and the SECOND rename has
+        // to recognise that shape or the embed silently stops following the
+        // file, which is worse than the dead `![[..#..]]` it replaced.
+        let dir = tempfile::tempdir().unwrap();
+        let (mp3, _note) = seed(dir.path());
+        std::fs::write(
+            dir.path().join("2026-07-04 1405 Meeting.transcript.md"),
+            "transcript",
+        )
+        .unwrap();
+
+        let plan = rename_plan(&mp3, "Sprint #4 retro").unwrap();
+        let first = execute(&plan).unwrap();
+        assert!(first.transcript_moved, "sidecar follows the audio");
+        let text = std::fs::read_to_string(first.note.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            embedded_files(&text),
+            vec![
+                "2026-07-04 1405 Sprint #4 retro.mp3".to_string(),
+                "2026-07-04 1405 Sprint #4 retro.transcript.md".to_string(),
+            ],
+            "after the first rename: {text}"
+        );
+
+        let plan = rename_plan(&first.mp3, "Q3 [final] ^2").unwrap();
+        let second = execute(&plan).unwrap();
+        assert!(second.transcript_moved, "sidecar follows again");
+        let text = std::fs::read_to_string(second.note.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            embedded_files(&text),
+            vec![
+                "2026-07-04 1405 Q3 [final] ^2.mp3".to_string(),
+                "2026-07-04 1405 Q3 [final] ^2.transcript.md".to_string(),
+            ],
+            "after the second rename: {text}"
+        );
+        // Both embeds name files that really landed on disk.
+        for name in embedded_files(&text) {
+            assert!(dir.path().join(&name).exists(), "{name} is not on disk");
+        }
+        assert!(!text.contains("Sprint"), "no stale name left: {text}");
+    }
+
     #[test]
     fn collision_on_the_new_name_advances_the_suffix() {
         let dir = tempfile::tempdir().unwrap();
