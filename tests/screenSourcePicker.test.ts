@@ -909,3 +909,93 @@ describe("ScreenSourcePicker", () => {
     expect(w.find(`[data-testid="staged-keep-${base}"]`).exists()).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// GAP-144: the export's hard dependency, surfaced BEFORE the recording.
+//
+// ffmpeg is needed only by the final Save into a vault. Recording and editing
+// work perfectly without it, so this pre-flight WARNS and must never block:
+// disabling Start (the Pandoc-import precedent) would take away working
+// functionality and be a worse bug than the late discovery it replaces.
+// ---------------------------------------------------------------------------
+describe("ScreenSourcePicker — the ffmpeg pre-flight", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+  afterEach(() => clearMocks());
+
+  const FFMPEG_FOUND = {
+    installed: true,
+    version: "ffmpeg version 6.1.1-3ubuntu5 Copyright (c)",
+    path: "/usr/bin/ffmpeg",
+    ffprobePath: "/usr/bin/ffprobe",
+    h264Encoder: "libx264",
+    configuredPath: null,
+  };
+  const FFMPEG_MISSING = {
+    installed: false,
+    version: null,
+    path: null,
+    ffprobePath: null,
+    h264Encoder: null,
+    configuredPath: null,
+  };
+
+  function mockWithFfmpeg(ffmpeg: unknown) {
+    mockIPC((cmd) => {
+      if (cmd === "list_capture_sources") return SOURCES;
+      if (cmd === "list_audio_devices") return NO_DEVICES;
+      if (cmd === "list_staged_captures") return [];
+      if (cmd === "detect_ffmpeg") return ffmpeg;
+      return undefined;
+    });
+  }
+
+  it("says nothing when ffmpeg is installed", async () => {
+    mockWithFfmpeg(FFMPEG_FOUND);
+    const w = await mountPicker();
+    expect(w.find('[data-testid="ffmpeg-preflight"]').exists()).toBe(false);
+  });
+
+  it("warns when ffmpeg is absent, naming both what works and what will not", async () => {
+    mockWithFfmpeg(FFMPEG_MISSING);
+    const w = await mountPicker();
+    const notice = w.get('[data-testid="ffmpeg-preflight"]').text();
+    // Both halves have to be true, or the notice is either a false alarm
+    // ("you cannot record") or a useless one ("something is missing").
+    expect(notice).toContain("record and edit");
+    expect(notice).toContain("saving it into a vault");
+    expect(notice).toContain("ffmpeg");
+  });
+
+  // REGRESSION (the design decision this whole pre-flight turns on): ffmpeg
+  // is needed only by the export. A picker that disabled Start — or hid it
+  // behind a setup route, the way a blocked document Import does — would take
+  // away a recording the user can perfectly well make and edit, which is a
+  // worse bug than discovering the dependency at Save.
+  it("leaves Start enabled whether or not ffmpeg is installed", async () => {
+    mockWithFfmpeg(FFMPEG_MISSING);
+    const w = await mountPicker();
+    await w.get('[data-testid="source-screen:1"]').trigger("click");
+    expect(w.find('[data-testid="ffmpeg-preflight"]').exists()).toBe(true);
+    expect(w.get('[data-testid="screen-start"]').attributes("disabled")).toBeUndefined();
+
+    // And the found case is not accidentally the only enabled one.
+    clearMocks();
+    setActivePinia(createPinia());
+    mockWithFfmpeg(FFMPEG_FOUND);
+    const w2 = await mountPicker();
+    await w2.get('[data-testid="source-screen:1"]').trigger("click");
+    expect(w2.get('[data-testid="screen-start"]').attributes("disabled")).toBeUndefined();
+  });
+
+  it("routes to the ffmpeg settings card, so the export's own refusal names a real screen", async () => {
+    mockWithFfmpeg(FFMPEG_MISSING);
+    const w = await mountPicker();
+    await w.get('[data-testid="ffmpeg-preflight-settings"]').trigger("click");
+    const store = useVaultsStore();
+    expect(store.view).toBe("settings");
+    // …and on the tab the card actually lives on. Landing on the Buddy tab is
+    // exactly GAP-144's failure scenario: the user follows a message into
+    // Buddy settings, finds nothing, and concludes the app is broken.
+    expect(store.settingsTab).toBe("integrations");
+  });
+});

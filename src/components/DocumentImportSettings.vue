@@ -1,143 +1,31 @@
 <script setup lang="ts">
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
-import { computed, onMounted, ref } from "vue";
+import { computed } from "vue";
 
-import { logWarning } from "../logging";
+import { useExternalTool } from "../composables/useExternalTool";
 import { usePandocStore } from "../stores/pandoc";
 import type { PandocStatus } from "../types";
-import { withDialogSuppressed } from "../utils/nativeDialog";
 import Field from "./ui/Field.vue";
 
-const status = ref<PandocStatus | null>(null);
-const pathOverride = ref("");
-// Set once the user has touched the override field. The input is enabled while
-// the initial detect() is still in flight, so a user who types during a slow
-// probe must not have their edit clobbered by the on-mount seed below.
-const dirtied = ref(false);
-const error = ref<string | null>(null);
-// Single in-flight guard shared by recheck() and savePath() — mirrors
-// McpSettings' one `saving` flag serializing save()/regenerate(): two
-// concurrent detect/save calls could otherwise land out of order and leave
-// a stale status showing.
-const saving = ref(false);
-const pandocStore = usePandocStore();
-
-// Monotonic ticket so out-of-order detect responses can't regress the status:
-// a slow initial probe must not overwrite the fresher result of a save/browse
-// re-detect that resolved first (same idiom as Search's request ticket).
-let detectTicket = 0;
-
-async function detect() {
-  const ticket = ++detectTicket;
-  // Claim the store's probe token at the START (not at resolution): if the user
-  // leaves settings and an intake ensureDetected runs a newer probe, this one's
-  // token goes stale and markDetected below drops the write-through instead of
-  // clobbering the fresher intake result (Codex P2). The local detectTicket
-  // still orders this card's own out-of-order responses.
-  const token = pandocStore.beginProbe();
-  try {
-    const s = await invoke<PandocStatus>("detect_pandoc");
-    if (ticket === detectTicket) {
-      status.value = s;
-      // Keep the shared intake-menu cache fresh after a settings-side probe
-      // (Recheck / path-override re-detect), so the record chooser sees the fix
-      // — but only while this probe is still the newest across the store.
-      pandocStore.markDetected(s, token);
-    }
-  } catch (e) {
-    // Not running under Tauri (unit tests) or IPC failure — leave the card
-    // empty, same degraded-but-continuing pattern as McpSettings/CaptureSettings.
-    if (ticket === detectTicket) error.value = String(e);
-    logWarning(`document import settings: detect_pandoc failed: ${String(e)}`);
-  }
-}
-
-onMounted(async () => {
-  await detect();
-  // Seed the override field from the resolved status, not a second command —
-  // but never over a value the user already typed while detect was in flight.
-  if (!dirtied.value) {
-    pathOverride.value = status.value?.configuredPath ?? "";
-  }
-});
-
-async function recheck() {
-  if (saving.value) return;
-  saving.value = true;
-  error.value = null;
-  try {
-    await detect();
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function savePath() {
-  if (saving.value) return;
-  saving.value = true;
-  error.value = null;
-  try {
-    const trimmed = pathOverride.value.trim();
-    await invoke("set_pandoc_path", { pandocPath: trimmed || null });
-    // Re-detect so the new (or cleared) override resolves immediately —
-    // the card must not keep showing the pre-save status.
-    await detect();
-  } catch (e) {
-    error.value = String(e);
-    logWarning(`document import settings: set_pandoc_path failed: ${String(e)}`);
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function browse() {
-  if (saving.value) return;
-  saving.value = true;
-  error.value = null;
-  try {
-    const selected = await withDialogSuppressed(() =>
-      open({
-        multiple: false,
-        filters: [{ name: "Pandoc", extensions: ["exe", ""] }],
-      }),
-    );
-    if (typeof selected === "string") {
-      // Browse assigns programmatically (no @input fires), so mark the field
-      // dirty explicitly — otherwise a still-pending initial detect could
-      // reseed pathOverride from the old configuredPath and savePath would
-      // persist the stale value instead of the picked executable.
-      dirtied.value = true;
-      pathOverride.value = selected;
-      // savePath() self-guards on `saving`; release it first so its own
-      // set_pandoc_path + re-detect run, then finally restores the guard.
-      saving.value = false;
-      await savePath();
-    }
-  } catch (e) {
-    // Not running under Tauri (unit tests) or a picker failure — same
-    // warn-and-continue pattern as every other guarded action here.
-    error.value = String(e);
-    logWarning(`document import settings: browse failed: ${String(e)}`);
-  } finally {
-    saving.value = false;
-  }
-}
+// The document-import toolchain card. The probe / Recheck / override / Browse
+// machinery — the monotonic detect ticket, the shared in-flight guard, the
+// probe token claimed at START so a stale settings probe can't clobber a
+// newer intake result (Codex P2), the dirtied-field rule Browse depends on —
+// all live in `useExternalTool`, which the ffmpeg card consumes too. It was
+// extracted when that second card appeared, not before: one implementation of
+// a thing is not a pattern.
 
 const INSTALL_URL = "https://pandoc.org/installing.html";
 
-// Open the install page in the OS browser via Rust — a raw `target="_blank"`
-// in a Tauri v2 webview either no-ops or replaces the app UI, so we intercept
-// the click and route through the logged `open_external_url` command. The
-// `href` stays for accessibility / right-click-copy; a plain-tap failure just
-// warns (the URL is visible to copy).
-async function openInstall() {
-  try {
-    await invoke("open_external_url", { url: INSTALL_URL });
-  } catch (e) {
-    logWarning(`document import settings: open_external_url failed: ${String(e)}`);
-  }
-}
+const tool = useExternalTool<PandocStatus>({
+  detectCommand: "detect_pandoc",
+  setPathCommand: "set_pandoc_path",
+  setPathArg: "pandocPath",
+  filterName: "Pandoc",
+  installUrl: INSTALL_URL,
+  label: "document import settings",
+  store: usePandocStore(),
+});
+const { status, pathOverride, error, saving } = tool;
 
 const statusLabel = computed(() => {
   const s = status.value;
@@ -173,7 +61,7 @@ const statusLabel = computed(() => {
           data-testid="pandoc-recheck"
           class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary hover:bg-white/10 disabled:cursor-default disabled:opacity-50"
           :disabled="saving"
-          @click="recheck"
+          @click="tool.recheck"
         >
           Recheck
         </button>
@@ -183,7 +71,7 @@ const statusLabel = computed(() => {
         rel="noopener noreferrer"
         data-testid="pandoc-install-link"
         class="text-xs text-violet-300 hover:text-accent-fg"
-        @click.prevent="openInstall"
+        @click.prevent="tool.openInstall"
       >
         Install Pandoc
       </a>
@@ -204,15 +92,15 @@ const statusLabel = computed(() => {
             placeholder="pandoc"
             class="disabled:cursor-default disabled:opacity-50"
             :disabled="saving"
-            @input="dirtied = true"
-            @change="savePath"
+            @input="tool.markDirty"
+            @change="tool.savePath"
           />
           <button
             type="button"
             data-testid="pandoc-browse"
             class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary hover:bg-white/10 disabled:cursor-default disabled:opacity-50"
             :disabled="saving"
-            @click="browse"
+            @click="tool.browse"
           >
             Browse…
           </button>

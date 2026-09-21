@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { computed, onMounted, ref } from "vue";
 
 import { logWarning } from "../logging";
+import { useFfmpegStore } from "../stores/ffmpeg";
 import { useScreenCaptureStore } from "../stores/screenCapture";
 import { useVaultsStore } from "../stores/vaults";
 import type { CaptureSourceInfo, RegionSelection, StagedCaptureSummary } from "../types";
@@ -31,6 +32,26 @@ const LIST_TABS = TABS.filter((t) => t.id !== "region");
 const props = defineProps<{ vaultId: string }>();
 const store = useVaultsStore();
 const screenCapture = useScreenCaptureStore();
+const ffmpeg = useFfmpegStore();
+
+/**
+ * The export's toolchain, checked BEFORE the recording rather than at the
+ * payoff (docs/Gaps.md GAP-144). It WARNS and deliberately does not gate
+ * `canStart`: ffmpeg is needed only by the final Save into a vault, so
+ * recording and editing are fully available without it. Disabling Start — the
+ * shape a blocked document Import takes, because a Pandoc-less import cannot
+ * proceed at all — would take away working functionality, which is a worse
+ * bug than the late discovery it would be replacing.
+ *
+ * Held back while the probe is in flight, so the picker can't flash "ffmpeg
+ * is missing" at every open. A FAILED probe leaves the status null and the
+ * notice shows: it blocks nothing, so warning on an unknown answer costs a
+ * line of text, while staying silent costs the user a forty-minute recording
+ * they cannot save.
+ */
+const ffmpegMissing = computed(
+  () => !ffmpeg.checking && !ffmpeg.status?.installed,
+);
 
 const sources = ref<CaptureSourceInfo[]>([]);
 const selectedId = ref<string | null>(null);
@@ -221,6 +242,9 @@ async function onDiscardStaged(base: string) {
 onMounted(() => {
   void loadSources();
   void loadStaged();
+  // Cached across opens by the store — a found ffmpeg is not re-probed, a
+  // missing one is, so an install made in answer to the notice is picked up.
+  void ffmpeg.ensureDetected();
 });
 
 async function onStart() {
@@ -316,6 +340,27 @@ async function onStart() {
         v-model:outputs="outputs"
       />
     </div>
+    <!-- Sits directly above Start because it qualifies exactly that button:
+         pressing it works, and the Save that follows will not. NOT above the
+         staged list, which spec 10 requires to come first. -->
+    <Banner
+      v-if="ffmpegMissing"
+      data-testid="ffmpeg-preflight"
+      tone="warning"
+    >
+      <span class="block">
+        You can record and edit this capture now, but saving it into a vault
+        needs ffmpeg, which isn't installed.
+      </span>
+      <button
+        type="button"
+        data-testid="ffmpeg-preflight-settings"
+        class="mt-1 cursor-pointer underline underline-offset-2 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        @click="store.openSettings('integrations')"
+      >
+        Set up ffmpeg
+      </button>
+    </Banner>
     <AppButton
       data-testid="screen-start"
       :disabled="!canStart"

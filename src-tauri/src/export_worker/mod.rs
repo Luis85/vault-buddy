@@ -210,7 +210,7 @@ fn prepare(app: &AppHandle, base: &str) -> Result<Prepared, String> {
 
     let tools = crate::ffmpeg::resolve_working_ffmpeg().ok_or_else(|| {
         "Saving a screen capture needs ffmpeg, which is not installed. Install it, then set \
-         its location in Buddy settings if it is not on your PATH."
+         its location in Buddy settings \u{2192} Integrations if it is not on your PATH."
             .to_string()
     })?;
     // The FILE's own pixels and its real audio track, not the sidecar's

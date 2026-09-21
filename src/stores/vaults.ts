@@ -37,6 +37,11 @@ export const useVaultsStore = defineStore("vaults", {
       | "update"
       | "taskDetail"
       | "screenCapture",
+    // Which tab the Buddy-settings view opens on, when a route cares. null =
+    // the view's own default (Buddy). A deep link that only reached the view
+    // would land the user on the Buddy tab with the card they were sent to
+    // fetch two clicks away — GAP-144's failure scenario exactly.
+    settingsTab: null as string | null,
     // Which vault the captureSettings view edits.
     captureSettingsVaultId: null as string | null,
     // Which vault the recordings view lists.
@@ -203,6 +208,10 @@ export const useVaultsStore = defineStore("vaults", {
       this.pendingCaptureVaultId = captureVaultId;
       this.view = view;
       this.captureSettingsVaultId = captureVaultId;
+      // A requestView never means a particular tab (it is the failed-install
+      // reopen and the panel-resize re-show), so it clears one an earlier
+      // deep link left behind.
+      this.settingsTab = null;
     },
     // The gentle variant: arm the NEXT open only, without flipping the live
     // view — the startup update check must not yank an already-open panel to
@@ -251,8 +260,13 @@ export const useVaultsStore = defineStore("vaults", {
       // Invalidate any in-flight conversion's claim on the queue (see importEpoch).
       this.importEpoch++;
     },
-    openSettings() {
+    // `tab` deep-links to a Buddy-settings tab (currently only
+    // "integrations", where the external-tool cards live). Omitted means the
+    // view's own default — and RESETS any tab a previous route asked for, so a
+    // stale deep link can't redirect an ordinary Settings click later.
+    openSettings(tab: string | null = null) {
       this.view = "settings";
+      this.settingsTab = tab;
     },
     openUpdate() {
       this.view = "update";
