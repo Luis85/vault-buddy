@@ -4397,24 +4397,45 @@ indicator at all"), and `focus: false` so it cannot blur the panel and trip
   itself carries once implemented, or a plan reference). Filing it here
   rather than as its own entry, because the cost so far is one spec.
 
-### GAP-166 · High · Other applications' toolbars stop accepting clicks after a region capture — UNLOCALISED
-Reported by the 2026-09-21 manual pass, and refined twice since. First as
-*"in windows explorer the top tool bar is not clickable anymore when the
-recording editor window is active or the vault buddy is active"*, then:
-**it happens only after a region capture**, it affects **Notepad as well as
+### GAP-166 · High · Other applications' toolbars stop accepting clicks after a screen capture — UNLOCALISED
+Reported by the 2026-09-21 manual pass, and refined three times since. First
+as *"in windows explorer the top tool bar is not clickable anymore when the
+recording editor window is active or the vault buddy is active"*, then as
+region-only, then — once a whole-screen capture was made to succeed on the
+machine — as **any screen capture**: it affects **Notepad as well as
 Explorer**, **minimize / maximize / close still work** on the affected
 windows, and **closing the editor does not fix it** — only quitting Vault
 Buddy does.
 
-**This entry still proposes no cause.** Four hypotheses have now been formed
-and all four were killed — two by the reporter's answers and two by reading
-the code. A fifth would be guessing, which is what the systematic-debugging
-skill exists to stop. What follows is only what is established, and the whole
-region-exclusive code path has now been read end to end without finding it.
+**This entry still proposes no cause.** Five hypotheses have now been formed
+and all five were killed — three by the reporter's answers and two by reading
+the code — and a sixth is weakened but not dead (below). Every one of the
+kills came from a cheap observation at the machine, not from reading code;
+this entry's own history is the argument for asking before reasoning. What
+follows is only what is established.
 
-**Established from the reporter:**
+**Established from the reporter** (second sitting, 2026-09-21):
 
 - It is OUR app: it does not persist after tray → Quit.
+- **It is triggered by STARTING a capture, and it is not region-specific.**
+  A whole-screen capture at 30 fps, with the editor never opened,
+  reproduces it. "Only region" was the confound this entry predicted: the
+  machine's whole-screen capture had been REFUSED at 3840x2400 @ 60 fps
+  (`MF_E_INVALIDMEDIATYPE`, checklist row 10), so regions were simply the
+  only display captures that had ever run.
+- **Cancelling a region selection without recording does NOT reproduce
+  it.** The overlay and the selection are fully out; the cause is in the
+  capture.
+- **Windows' own yellow capture border does NOT persist** after the capture
+  stops. Whatever survives, it is not a live `GraphicsCaptureSession`.
+- **`vault-buddy.log` carries no `capture exclusion:` line at all**, in
+  either direction. `capture_exclusion::set_affinity` iterates all five
+  labels, hidden ones included, and warns on any failure — so every
+  `SetWindowDisplayAffinity` call that RAN returned `Ok`. The exclusion can
+  only still be set if `clear` never ran, not because it failed.
+- A Snipping Tool capture taken while broken shows **the editor window
+  rendering normally** (so its affinity, at least, was cleared). The buddy
+  was left out of that snip and is unconfirmed.
 - It is **not the buddy window covering it**. The buddy is 88x88 and parked
   bottom-right; the affected toolbar is at the top of the screen, full width.
 - It is **not a window of ours covering the area at all.** The affected
@@ -4460,35 +4481,37 @@ region-exclusive code path has now been read end to end without finding it.
   so a tray-hide hides it a second time. Between them, "an overlay left
   covering the screen" is ruled out.
 
-**The confound in "only region", which must be resolved before anything
-else.** It is NOT established that the symptom is region-*exclusive*. The
-same machine's whole-screen capture was REFUSED — 3840x2400 @ 60 fps raised
-`MF_E_INVALIDMEDIATYPE` (checklist row 10) — so **no successful whole-screen
-capture has ever run on it.** Since a region *is* a display capture, "only
-region" may simply mean "only the display captures that actually ran". The
-controlled comparison has never been made, and every conclusion above that
-leans on region-exclusivity is provisional until it is.
+**Weakened but not dead: `WDA_EXCLUDEFROMCAPTURE`**
+(`src-tauri/src/capture_exclusion.rs`). It fits the timing exactly — it runs
+on every capture start, never on a cancelled selection, it is per-HWND so it
+survives a hide and dies only with the handle, i.e. at quit. Against it: the
+log shows no failure in either direction, the editor renders normally in a
+capture taken while broken, and — the real objection — display affinity is
+documented to affect *capture*, not *input*, and **no mechanism has been
+established** by which it would block another process's clicks. It is
+unproven on both sides; the snip of the buddy (below) is the cheap test.
 
-**Not established — the discriminators, in the order they should be run:**
+**Not established — the observations still to run, in priority order.**
+Each is a hardware observation; none can be made from this tree.
 
-1. **Cancel a region selection without recording** (Escape, or a click with
-   no drag). Reproduces → it is the overlay/selection and the capture is
-   irrelevant. Does not → it is the capture, and the overlay is fully out.
-2. **A whole-screen capture that succeeds** (Vault settings → Screen → Frame
-   rate 30 fps, which is what the refusal message itself recommends).
-   Reproduces → not region-specific at all; the cause is capturing a display
-   via WGC, and the region framing dissolves.
-3. **A window capture** (`SourceHandle::Window`, not a display). Reproduces
-   or not.
-4. **Does Windows' yellow capture border persist after the capture stops?**
-   That border is the system's own WGC indicator; if it outlives the capture,
-   our `GraphicsCaptureSession` is not being released — which would also
-   explain why only ending the process clears the symptom.
-5. **How dead is dead** — in an affected window: does the client area away
+1. **How dead is dead** — in an affected window: does the client area away
    from the toolbar still take clicks; does the address bar still take
    typing; does hovering a toolbar button still highlight it; does Alt+F
-   still open the menu by keyboard? Hover-but-no-click, or
-   keyboard-but-no-mouse, each point somewhere different.
+   still open the menu by keyboard; and does a Notepad launched AFTER the
+   capture, while broken, have a dead toolbar too. Hover-but-no-click,
+   keyboard-but-no-mouse, and fresh-window-vs-existing-window each point
+   somewhere different. Note Explorer's command bar and Windows 11 Notepad's
+   toolbar are both WinUI/XAML surfaces while the working caption buttons
+   are classic non-client — worth testing, not worth assuming.
+2. **A capture that is REFUSED** (60 fps, whole screen, so the sink refuses
+   at configuration). That runs `capture_exclusion::apply`,
+   `source::resolve` and the cpal endpoint open, then tears down — with no
+   working WGC session and no frame. Breaks → the cause is in the
+   pre-session half. Doesn't → it needs a capture that actually ran.
+3. **A capture with NO audio devices selected** — isolates cpal/WASAPI.
+4. **A window capture** (`SourceHandle::Window`, not a display).
+5. **Snip the buddy specifically** while broken. Missing or black → the
+   exclusion is still set on it.
 
 **Why this is High rather than Medium.** It degrades an application the user
 did not launch us to affect, it is invisible from inside our app, and the
