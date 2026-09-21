@@ -34,8 +34,11 @@ export function logWarning(message: string): void {
   emit(pluginWarn, message);
 }
 
-/** Error-level marker for faults the app caught but could not handle. */
-export function logError(message: string): void {
+/**
+ * Error-level marker for faults the app caught but could not handle. Module-
+ * private: its one caller is logVueError, the uncaught-Vue-error sink.
+ */
+function logError(message: string): void {
   emit(pluginError, message);
 }
 

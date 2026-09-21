@@ -8,7 +8,7 @@ import { markRaw } from "vue";
 import { logWarning } from "../logging";
 import { useVaultsStore } from "./vaults";
 
-export type UpdatePhase =
+type UpdatePhase =
   | "idle"
   | "checking"
   | "upToDate"

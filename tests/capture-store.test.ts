@@ -22,7 +22,11 @@ vi.mock("../src/logging", () => ({
 }));
 
 import { logWarning } from "../src/logging";
-import { MAX_FINISHED, useCaptureStore } from "../src/stores/capture";
+import {
+  MAX_FINISHED,
+  RENAME_PROMPT_MS,
+  useCaptureStore,
+} from "../src/stores/capture";
 import { useNotificationsStore } from "../src/stores/notifications";
 
 describe("capture store", () => {
@@ -861,10 +865,10 @@ describe("capture store", () => {
     // the shownNonce watcher used to dismiss it before it ever rendered.
     const store = useCaptureStore();
     store.lastSaved = { mp3: "/v/2026-07-10 1200 Meeting.mp3", note: null };
-    store.lastSavedAtMs = Date.now() - 5_000; // 5 s old — fresh
+    store.lastSavedAtMs = Date.now() - RENAME_PROMPT_MS / 6; // fresh
     store.dismissRenameIfStale();
     expect(store.lastSaved).not.toBeNull();
-    store.lastSavedAtMs = Date.now() - 31_000; // past RENAME_PROMPT_MS — stale
+    store.lastSavedAtMs = Date.now() - (RENAME_PROMPT_MS + 1_000); // stale
     store.dismissRenameIfStale();
     expect(store.lastSaved).toBeNull();
   });

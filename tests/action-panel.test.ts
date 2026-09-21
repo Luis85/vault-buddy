@@ -9,7 +9,7 @@ import ScreenSourcePicker from "../src/components/ScreenSourcePicker.vue";
 import TaskDetail from "../src/components/TaskDetail.vue";
 import Tasks from "../src/components/Tasks.vue";
 import UpdateView from "../src/components/UpdateView.vue";
-import { useCaptureStore } from "../src/stores/capture";
+import { RENAME_PROMPT_MS, useCaptureStore } from "../src/stores/capture";
 import { useDocumentImportsStore } from "../src/stores/documentImports";
 import { useNotificationsStore } from "../src/stores/notifications";
 import { useScreenCaptureStore } from "../src/stores/screenCapture";
@@ -548,7 +548,7 @@ describe("ActionPanel", () => {
     const wrapper = mount(ActionPanel);
     const capture = useCaptureStore();
     capture.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
-    capture.lastSavedAtMs = Date.now() - 31_000; // past RENAME_PROMPT_MS
+    capture.lastSavedAtMs = Date.now() - (RENAME_PROMPT_MS + 1_000); // stale
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).toContain("name this recording");
 
@@ -566,7 +566,7 @@ describe("ActionPanel", () => {
     const wrapper = mount(ActionPanel);
     const capture = useCaptureStore();
     capture.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
-    capture.lastSavedAtMs = Date.now() - 5_000; // well within RENAME_PROMPT_MS
+    capture.lastSavedAtMs = Date.now() - RENAME_PROMPT_MS / 6; // well within it
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).toContain("name this recording");
 
