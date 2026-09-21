@@ -32,9 +32,11 @@ const tsGuardrails = {
 // Src-only safety gate, shared between src/**/*.ts and src/**/*.vue.
 const srcSafetyRules = {
   // Frontend diagnostics must funnel through src/logging.ts so they land in
-  // vault-buddy.log (AGENTS.md § Diagnostics invariants). Staged at `warn`:
-  // one offender, main.ts's last-resort Vue errorHandler console.error.
-  "no-console": "warn",
+  // vault-buddy.log (AGENTS.md § Diagnostics invariants). Promoted from `warn`
+  // to `error` at zero offenders: the one former offender (main.ts's Vue
+  // errorHandler) now routes through logging.ts's logVueError, whose single
+  // line-level disable is the chokepoint's one sanctioned console sink.
+  "no-console": "error",
   "no-new-func": "error",
   // Raw HTML injection is the XSS vector for a webview rendering strings
   // derived from vault contents (search results, note titles — see
