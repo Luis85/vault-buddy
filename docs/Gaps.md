@@ -4709,7 +4709,7 @@ future fix does not trade this for a worse regression):
   any platform can observe (GAP-117/GAP-163), so it needs a checklist row of
   its own and a hardware re-run, not a green CI badge.
 
-### GAP-167 · Low · The Windows release build fetches three third-party artifacts from github.com at bundle time, so a transient 5xx reddens the release gate on any commit — including a docs-only one
+### GAP-167 · Low · The Windows build fetches three third-party artifacts from github.com at bundle time, so a transient 5xx reddens the release gate on any commit — including a docs-only one (BOUNDED 2026-09-21 by a signature-gated retry in ci.yml; release.yml still exposed, and the durable `useLocalToolsDir` fix needs a Windows runner to verify)
 Observed 2026-09-21 on head `aa4685e`, a **documentation-only** commit:
 
 ```
@@ -4748,15 +4748,82 @@ by URL, with a hash check but no retry and no local cache.
 
 **Constraints a fix must respect:**
 
-- **The downloads are the bundler's, not ours.** There is no supported flag to
-  point `tauri build` at pre-fetched copies of all three; a fix is a cache of
-  the directory the bundler extracts into (`%LOCALAPPDATA%\tauri`), which
-  means keying that cache on the Tauri CLI version and accepting that a stale
-  key silently re-downloads — i.e. it reduces the exposure, never removes it.
-- **A blanket step-level retry is the wrong shape.** `tauri build` is a ~4 min
-  release compile before it reaches the bundler, so retrying the step retries
-  the compile too. Any retry belongs around the bundling, which is not
-  separately invocable from the current single `npx tauri build` invocation.
+- **CORRECTED 2026-09-21: there IS a supported flag, and this bullet had it
+  wrong.** The claim here was "There is no supported flag to point
+  `tauri build` at pre-fetched copies of all three". The pinned CLI's own
+  configuration schema documents `bundle.useLocalToolsDir` (boolean, default
+  `false`): *"Whether to use the project's `target` directory, for caching
+  build tools (e.g., Wix and NSIS)… If true, tools will be cached in
+  `target/.tauri/`. If false, tools will be cached in the current user's
+  platform-specific cache directory."* Read out of
+  `@tauri-apps/cli` 2.11.4 — the version `package-lock.json` pins — so it is
+  the flag THIS tree's bundler honours, not a newer one's.
+
+  That matters more than a correction, because both Windows jobs already set
+  `CARGO_TARGET_DIR: C:\vbt` **and** already hand `C:\vbt` to
+  `Swatinem/rust-cache` via `cache-directories`. If the tools land under the
+  cargo target dir they are cached by machinery that is already there, keyed
+  by the existing `shared-key: windows-app` that ci.yml and release.yml
+  share — no second cache, no key to keep in step with the CLI version.
+
+  **It was NOT taken, and the reason is the honest one: it cannot be verified
+  from a Linux container.** Two unknowns decide it, and both need a Windows
+  runner. (1) Whether `target/.tauri` follows `CARGO_TARGET_DIR` — this
+  repo's own evidence says the Tauri tooling resolves the target dir through
+  cargo (ci.yml's rust-cache comment says exactly that), but "says" is not
+  "measured". (2) Whether rust-cache's target-directory pruning preserves a
+  `.tauri` subdirectory it does not recognise; `C:\vbt` is simultaneously the
+  target dir it cleans and a `cache-directories` entry it archives wholesale,
+  and which behaviour wins there is undocumented. A wrong answer to either is
+  a **silent** no-op — the exact failure this repo has already shipped twice
+  with cache paths (see the two rust-cache comments in ci.yml and
+  release.yml, both recording a cache that was silently caching nothing).
+  There is also a certain cost against an uncertain benefit: contributors
+  lose the per-user tools cache, so `cargo clean` re-downloads ~50 MB.
+
+  **For whoever picks this up at a Windows machine**, the three artifacts and
+  the bundler's own integrity checks, read out of the pinned
+  `cli.win32-x64-msvc` 2.11.4 binary so they need not be re-derived:
+
+  | Artifact | URL | Check | Extracted to |
+  | --- | --- | --- | --- |
+  | WiX 3.14 | `github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip` | SHA-256 `6ac824e1…f43d31` | `WixTools314/` |
+  | NSIS 3.11 | `github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip` | SHA-1 `EF7FF767…BB10D` | `nsis-3.11/` |
+  | nsis_tauri_utils 0.5.3 | `github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll` | SHA-1 `75197FEE…9B860` | `nsis-3.11/` |
+
+  Note the first is **wixtoolset/wix3**, not `tauri-apps` — the heading's
+  "three third-party artifacts" is right, but they do not share an owner, so
+  one owner having an outage does not explain all three. The bundler
+  re-verifies on every run and logs *"NSIS directory contains mis-hashed
+  files. Redownloading them."* / *"NSIS directory is missing some files.
+  Recreating it."*, which is why caching the directory is safe: a corrupt or
+  partial cache self-heals rather than poisoning a build.
+- **A blanket step-level retry is the wrong shape — but a signature-gated one
+  is not, and that is what landed.** The original objection stands only for
+  attempt 1: `tauri build` is a ~4 min release compile before it reaches the
+  bundler. Cargo is incremental, so a *second* invocation over an unchanged
+  tree recompiles nothing and returns to the bundler almost at once — the
+  retry re-pays the bundling, not the build. What a blanket retry would
+  really cost is three attempts at a genuine compile error, so ci.yml's
+  `windows-app` build step now retries **only** when the build failed AND the
+  log carries the bundler's own transport failure (`failed to bundle project`
+  together with a 408/429/5xx, a reset/refused connection, or a timeout).
+  A compile error, a failed assertion or a signing problem exits on attempt 1
+  exactly as before. Verified behaviourally on Linux by driving the real loop
+  with a stubbed build across four scenarios — persistent 504 (three attempts,
+  still red), compile error (no retry, exit code preserved), transient 504
+  then success (recovers), and a non-transient bundler failure such as a hash
+  mismatch (no retry).
+- **STATUS (2026-09-21): bounded, not closed.** Three 5xx in a row still
+  reddens the job, and **release.yml's `windows-installer` is untouched** —
+  it bundles through `tauri-apps/tauri-action`, not a shell command, so there
+  is no invocation to wrap. The durable fix for both is `useLocalToolsDir`
+  above, once someone can measure it on Windows. `actions/cache` on the tools
+  directory — this entry's original prescription — remains viable but could
+  not be added from the session that wrote this: every action in this repo is
+  SHA-pinned, and that session's GitHub access was scoped to this repository
+  alone, so `actions/cache`'s tag SHA could not be resolved and inventing one
+  was not an option.
 - **Do not "fix" this by relaxing what the job proves.** Dropping NSIS from the
   bundle targets would make the failure go away and take the release artifact
   with it.

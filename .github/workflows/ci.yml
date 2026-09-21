@@ -214,12 +214,66 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "no signing key available — building without updater artifacts"
-            npx tauri build --features gpu --config '{"bundle":{"createUpdaterArtifacts":false}}'
-          else
-            npx tauri build --features gpu
-          fi
+          # GAP-167: the bundler fetches three artifacts from github.com at
+          # bundle time that we do not pin and do not cache —
+          # wix314-binaries.zip (wixtoolset/wix3), nsis-3.11.zip and
+          # nsis_tauri_utils.dll (tauri-apps) — with a hash check but no
+          # retry. A transient 504 on any of them reddens this job on a diff
+          # that cannot have caused it; it was first seen on a docs-only
+          # commit, after the release compile had already succeeded and the
+          # MSI had been written. This job is the release + desktop-behaviour
+          # gate, so an unexplained red here trains the next reader to re-run
+          # rather than read, and that eroded signal is the real cost.
+          #
+          # The retry is SIGNATURE-GATED, deliberately not blanket. GAP-167
+          # rejected a step-level retry on the grounds that `tauri build` is
+          # a ~4 min release compile before it ever reaches the bundler —
+          # true of the wall clock on attempt 1, but cargo is incremental, so
+          # a second invocation over an unchanged tree recompiles nothing and
+          # returns to the bundler almost immediately. What a BLANKET retry
+          # would genuinely cost is three attempts at a real compile error,
+          # so the loop re-runs only when the build failed AND the log
+          # carries the bundler's own transport failure. A compile error, a
+          # failed assertion or a signing problem still exits on attempt 1,
+          # exactly as today.
+          #
+          # This does not remove the exposure, it bounds it: three 5xx in a
+          # row still fails, and release.yml's tauri-action step is untouched
+          # because it is not a shell invocation we can wrap. The durable fix
+          # is `bundle.useLocalToolsDir` — see GAP-167.
+          build_once() {
+            if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+              echo "no signing key available — building without updater artifacts"
+              npx tauri build --features gpu --config '{"bundle":{"createUpdaterArtifacts":false}}'
+            else
+              npx tauri build --features gpu
+            fi
+          }
+          log=tauri-build.log
+          for attempt in 1 2 3; do
+            # `shell: bash` runs with -eo pipefail, so a failing build_once
+            # would abort the step before its status could be read; the
+            # status is taken from PIPESTATUS because the pipe ends in tee.
+            set +e
+            build_once 2>&1 | tee "$log"
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::tauri build failed after 3 attempts"
+              exit "$status"
+            fi
+            if grep -qE 'failed to bundle project' "$log" &&
+               grep -qiE 'http status: (408|429|5[0-9][0-9])|error sending request|connection (reset|closed|refused)|timed out' "$log"; then
+              delay=$((attempt * 10))
+              echo "::warning::bundler artifact download failed transiently (GAP-167); retrying in ${delay}s"
+              sleep "$delay"
+              continue
+            fi
+            exit "$status"
+          done
       # The most platform-sensitive code (process detection, GetKeyState,
       # WASAPI loopback gates, MoveFileExW's non-replacing fallback, whisper
       # on MSVC) is Windows-only, yet this job was build-only — the
