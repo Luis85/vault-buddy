@@ -2619,7 +2619,8 @@ title — collect our windows' handles on the main thread and drop enumerated
 windows by handle, so a user window sharing a title is never hidden and a
 `skipTaskbar: false` window of ours is never offered. (The PIXEL half is
 done: `SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)` over
-`capture_exclusion::EXCLUDED_LABELS`. It fails on Windows builds older than
+`capture_exclusion::EXCLUDED_LABELS` — `["main"]` alone since GAP-166, the
+other four windows having proved hazardous under affinity. It fails on Windows builds older than
 2004; that degrade path logs a warning and records with the buddy in frame,
 by design.)
 
@@ -2891,7 +2892,7 @@ match a busy one. That is the price of a timeline whose durations are true,
 and the alternative — variable durations with a frame of lookahead — trades
 it for VFR MP4s that players handle unevenly.
 
-### GAP-124 · Low · The capture exclusion is applied fire-and-forget, so the first frames of a capture can still contain Vault Buddy's own windows
+### GAP-124 · Low · The capture exclusion is applied fire-and-forget, so the first frames of a capture can still contain the buddy
 `src-tauri/src/capture_exclusion.rs` (`set_affinity` posts to
 `run_on_main_thread` and returns immediately) and
 `src-tauri/src/screen_capture_worker.rs` (the apply site, inside
@@ -2901,7 +2902,8 @@ main-thread closure, and the start path carries on without acknowledging it.
 Both call sites carry a comment pointing here, which is what this entry
 answers. **Failure scenario:** on a busy event loop the session can deliver
 its first frame or two before the affinity lands, so a recording opens with
-the buddy (and whatever the panel was showing) visible for ~30 ms. Cosmetic
+the buddy visible for ~30 ms (the panel is in frame regardless since GAP-166
+narrowed the set to `main`). Cosmetic
 in the ordinary case, but it is the one window where spec §5.3's promise is
 not kept. **Why not fixed:** waiting for the closure means a worker thread
 blocking on the event loop, which is exactly the deadlock shape this
@@ -4359,11 +4361,21 @@ happening, replacing a misleading indicator with no indicator.
 **The approved answer is an indicator of our own**, enabled by
 `WDA_EXCLUDEFROMCAPTURE` (§5.3): a window in `EXCLUDED_LABELS` is invisible
 to screen capture while fully visible to the user, so a border we draw over
-the recorded area is seen and does not appear in the recording. The spec's
-own trap list is worth carrying forward — the window must be DECLARED in
-`tauri.conf.json` rather than built at runtime (the config-derived label
-tests and `capture_exclusion`'s one-shot apply both go blind to a
-runtime-built window), it needs `set_ignore_cursor_events(true)` before it is
+the recorded area is seen and does not appear in the recording. **GAP-166
+put a condition on that premise, and it is the first thing the
+implementation has to settle.** The exclusion set is now `["main"]` alone,
+because the affinity round-trip on the OTHER four WebView2-hosting windows
+blanked the editor and killed pointer input in other applications; a sixth
+window is NOT excluded by declaring it (the config-pin test is inverted —
+`main` in, everything else out), it is excluded by being ADDED to
+`EXCLUDED_LABELS`, and that addition is a hardware decision: a sixth
+WebView2 window under affinity is exactly the hazard just found. So the
+design's own trap list gains a first entry — prove on hardware that THIS
+window can carry the affinity without reproducing GAP-166 (rows 16, 17, 43)
+before anything else — and keeps the rest: the window must be DECLARED in
+`tauri.conf.json` rather than built at runtime (`capture_exclusion`'s
+one-shot apply goes blind to a runtime-built window), it needs
+`set_ignore_cursor_events(true)` before it is
 first shown (without it the indicator is a full-region transparent window
 swallowing every click for the whole capture, "strictly worse than no
 indicator at all"), and `focus: false` so it cannot blur the panel and trip
@@ -4397,7 +4409,7 @@ indicator at all"), and `focus: false` so it cannot blur the panel and trip
   itself carries once implemented, or a plan reference). Filing it here
   rather than as its own entry, because the cost so far is one spec.
 
-### GAP-166 · High · Other applications' toolbars stop accepting clicks after a screen capture — ROOT CAUSE CONFIRMED: the `SetWindowDisplayAffinity` round-trip on our WebView2 windows
+### GAP-166 · ~~High~~ FIXED 2026-09-21 · Other applications' toolbars stopped accepting clicks after a screen capture — the `SetWindowDisplayAffinity` round-trip on our WebView2 windows
 Reported by the 2026-09-21 manual pass, and refined three times since. First
 as *"in windows explorer the top tool bar is not clickable anymore when the
 recording editor window is active or the vault buddy is active"*, then as
@@ -4406,6 +4418,36 @@ machine — as **any screen capture**: it affects **Notepad as well as
 Explorer**, **minimize / maximize / close still work** on the affected
 windows, and **closing the editor does not fix it** — only quitting Vault
 Buddy does.
+
+**FIXED, and verified on hardware before it was committed.**
+`capture_exclusion::EXCLUDED_LABELS` is `["main"]` — the buddy, and only the
+buddy. The config-pin test that used to require EVERY declared window in the
+set now requires the inverse (`only_the_buddy_is_excluded_from_capture`:
+`main` in, every other declared window OUT, each named in the failure), and
+it was written first, watched fail naming `"panel"`, and mutation-checked by
+putting `"editor"` back (red, naming `"editor"`). The shape was decided by
+the reporter's THIRD rebuild, not by reasoning: excluding `main` alone left
+Explorer's toolbar alive after stop, with the buddy absent from a
+Win+Shift+S snip during the capture AND from the played-back file — both
+controls held, so the feature's whole value survives for the one window that
+is the recording indicator.
+
+**What the fix does NOT do, so nobody re-adds the four.** The panel, bubble,
+overlay and editor now appear in a screen recording when on screen, by
+design; spec §5.3 carries a dated amendment saying so. Which property of
+those four made them hazardous — hidden-and-layered, decorated, something
+about a second WebView2 under affinity — is NOT established: the split was
+{all five} → broken, {main} → clean, and the reporter had already rebuilt
+three times. `main` is the empirically clean set, not a theory, and any
+future addition to the set is a decision that needs its own hardware run
+(rows 16, 17, 43). GAP-165's indicator window inherits exactly that
+condition. Residual, Low: the four-way split, if anyone ever wants a second
+window excluded.
+
+**Verification status.** Checklist row 43 records the fix rebuild as
+verified; row 16 passes for the buddy on it. Both are re-run on the next
+installer build to close, since a hand-edited dev build is not the
+artifact users install.
 
 **ROOT CAUSE CONFIRMED (fifth sitting, 2026-09-21) by a one-variable
 rebuild.** With `set_affinity` in `src-tauri/src/capture_exclusion.rs` made

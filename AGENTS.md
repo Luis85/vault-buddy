@@ -696,16 +696,23 @@ Invariants:
     hide-to-tray walk.
   - `tray::POSITION_DENYLIST` — `ALL_WINDOW_LABELS` minus `main`; the windows
     whose position the window-state plugin must not persist.
-  - `capture_exclusion::EXCLUDED_LABELS` — every declared window, kept out of
-    a recording's pixels by `WDA_EXCLUDEFROMCAPTURE`. It coincides with
-    `ALL_WINDOW_LABELS` today and is still its own set: a later window could
-    legitimately need destroying on quit without needing to be hidden from a
-    recording, or the reverse.
+  - `capture_exclusion::EXCLUDED_LABELS` — **`["main"]`, the buddy and ONLY
+    the buddy**, kept out of a recording's pixels by `WDA_EXCLUDEFROMCAPTURE`.
+    Through phases 3–5 this was every declared window and its test failed
+    until a new window was added. **GAP-166 inverted it on hardware**:
+    `SetWindowDisplayAffinity` on a WebView2-hosting window stopped the
+    editor painting AND stopped other applications' toolbars taking pointer
+    input until the process exited, and `main` alone was clean. So the
+    panel, bubble, overlay and editor are IN a recording now, by design, and
+    a window declared in the config is NOT excluded until a hardware run says
+    it can be. Which property of the other four made them hazardous is not
+    established; `main` is the empirically clean set, not a theory.
 
   None of these may drift, and none of them is maintained by memory: unit
   tests derive each from `tauri.conf.json` — `ALL_WINDOW_LABELS` and
   `COMPANION_LABELS` directly, `POSITION_DENYLIST` transitively through
-  `ALL_WINDOW_LABELS`, `EXCLUDED_LABELS` in BOTH directions — with an
+  `ALL_WINDOW_LABELS`, `EXCLUDED_LABELS` the INVERSE way (`main` in, every
+  other declared window OUT, each named in the failure) — with an
   explicit assertion that `COMPANION_LABELS` does NOT contain `editor`, and
   another that `lib.rs` feeds the window-state plugin the constant rather
   than a literal list that drifted from it once already.
@@ -1244,11 +1251,16 @@ write here, it belongs in `export_worker/` or it is a design change.
   the user actually sees is true too. That message is the one that REPLACES
   an unactionable `HRESULT`; regions made it arithmetically false until it
   was threaded through.
-- **`WDA_EXCLUDEFROMCAPTURE` keeps our own windows out of the FOOTAGE (spec
-  §5.3).** `capture_exclusion::apply` sets the affinity on every label in
-  `EXCLUDED_LABELS` (a hardcoded const PINNED to `tauri.conf.json` by tests in
-  both directions — adding a window to the config does not add it here, the
-  test just starts failing until you do; see the window-system section) from ONE
+- **`WDA_EXCLUDEFROMCAPTURE` keeps the BUDDY out of the FOOTAGE (spec §5.3,
+  amended 2026-09-21) — and since GAP-166, ONLY the buddy.** Through phases
+  3–5 `EXCLUDED_LABELS` was every declared window; a one-variable rebuild on
+  the reporter's machine showed the affinity round-trip on WebView2-hosting
+  windows blanking the editor AND killing pointer input to Explorer's and
+  Notepad's toolbars until the process exited, and `main` alone clean. The
+  const is `["main"]` and its config-pin test is INVERTED: `main` in, every
+  other declared window OUT, so a new window is not excluded until a hardware
+  run says it can be (see the window-system section).
+  `capture_exclusion::apply` sets the affinity on that one label from ONE
   place, `screen_capture_worker`'s `start_screen_capture_blocking`, before the
   session opens; `capture_exclusion::clear` lifts it from ONE place,
   `screen_commands::clear_active_screen` — the chokepoint every teardown
@@ -1269,7 +1281,7 @@ write here, it belongs in `export_worker/` or it is a design change.
   report. It is bounded only by the fact that `WDA_*` is per-HWND and dies
   with the window, so a restart always clears it. The apply is
   fire-and-forget on the main thread (a worker must not block the event
-  loop), so the first frame or two of a capture can still contain our UI —
+  loop), so the first frame or two of a capture can still contain the buddy —
   docs/Gaps.md GAP-124. Windows 10 before 2004 has no
   `WDA_EXCLUDEFROMCAPTURE`: the call logs a warning and the capture proceeds
   with the buddy in frame, by design.

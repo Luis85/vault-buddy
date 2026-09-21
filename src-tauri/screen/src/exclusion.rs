@@ -16,6 +16,17 @@
 //! **A failure is never an error.** On a pre-2004 build the call fails, the
 //! capture proceeds with the buddy in frame, and that is the documented
 //! degraded behaviour (spec 5.3), not a reason to refuse a start.
+//!
+//! **Do not widen the set of windows this is called on without a hardware
+//! run.** Through phases 3-5 the shell called it on all five windows;
+//! GAP-166 found, by a one-variable rebuild on real hardware, that the
+//! EXCLUDE -> NONE round-trip on a WebView2-hosting window stopped that
+//! window painting AND stopped OTHER applications' toolbars taking pointer
+//! input until the process exited -- with the call itself correct in every
+//! particular. Calling it on the buddy alone was clean. Which property of
+//! the other windows made them hazardous is not established, so the shell's
+//! `EXCLUDED_LABELS` is the empirically clean set, and the test that pins
+//! it names any window added without that evidence.
 
 use crate::ScreenError;
 

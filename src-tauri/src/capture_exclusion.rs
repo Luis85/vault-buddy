@@ -34,10 +34,16 @@
 
 use tauri::{AppHandle, Manager};
 
-/// Every window the app owns. Kept in step with `tauri.conf.json` by a test
-/// that reads the config -- phase 4's `editor` window will fail that test
-/// until it is added here, which is the point.
-pub(crate) const EXCLUDED_LABELS: &[&str] = &["main", "panel", "bubble", "overlay", "editor"];
+/// The buddy, and ONLY the buddy. Through phases 3-5 this was every window
+/// the app owns, pinned to `tauri.conf.json` by a test that failed until a
+/// new window was added here. GAP-166 inverted that on hardware:
+/// `SetWindowDisplayAffinity` on a WebView2-hosting window stopped the
+/// editor painting and stopped OTHER applications' toolbars taking pointer
+/// input until the process exited, and `main` alone was clean. The test now
+/// pins the inverse -- a new window is NOT excluded until a hardware run
+/// says it can be. Which property of the other four made them hazardous is
+/// not established; `main` is the empirically clean set, not a theory.
+pub(crate) const EXCLUDED_LABELS: &[&str] = &["main"];
 
 /// The two affinity intents, named so that the DIRECTION is a value a test
 /// can read rather than a bare `true` / `false` at the call site. The
@@ -133,22 +139,36 @@ mod tests {
     }
 
     // THE point of this test, and why it reads the config rather than
-    // repeating a list: phase 4 adds the `editor` window and phase 5 may
-    // add more. A window that exists but is not excluded appears in every
-    // screen recording the user makes, which is a bug nobody will
-    // attribute to the window having been added.
+    // repeating a list -- and why it is the INVERSE of the test that stood
+    // here through phases 3-5. That one asserted every declared window was
+    // excluded, on the theory that a window left out appears in every
+    // recording. GAP-166 found the cost of the other direction, on
+    // hardware: SetWindowDisplayAffinity on a window hosting WebView2
+    // stopped the editor painting AND stopped other applications' toolbars
+    // taking pointer input, until the process exited. Excluding `main`
+    // alone was clean on the same machine -- the buddy out of the snip and
+    // the recording, the toolbars alive. So the rule is now: the buddy, and
+    // ONLY the buddy. A new window declared in `tauri.conf.json` is NOT
+    // excluded by default, which is now the safe direction; adding one here
+    // is a decision that needs its own hardware run (checklist rows 16, 17
+    // and 43).
     #[test]
-    fn every_declared_window_is_excluded_from_capture() {
+    fn only_the_buddy_is_excluded_from_capture() {
         let declared = declared_window_labels();
         assert!(
-            declared.len() >= 4,
-            "expected at least main/panel/bubble/overlay, found {declared:?}"
+            declared.iter().any(|d| d == "main"),
+            "tauri.conf.json no longer declares the buddy window `main`"
         );
-        for label in &declared {
+        assert!(
+            EXCLUDED_LABELS.contains(&"main"),
+            "the buddy is the recording indicator and must be excluded from capture"
+        );
+        for label in declared.iter().filter(|d| d.as_str() != "main") {
             assert!(
-                EXCLUDED_LABELS.contains(&label.as_str()),
-                "window {label:?} is declared in tauri.conf.json but is not in \
-                 EXCLUDED_LABELS, so it will appear in every screen recording"
+                !EXCLUDED_LABELS.contains(&label.as_str()),
+                "window {label:?} is in EXCLUDED_LABELS. Setting display affinity on a \
+                 WebView2 window breaks its painting and other applications' input until \
+                 the process exits (GAP-166); only `main` has been shown clean on hardware"
             );
         }
     }

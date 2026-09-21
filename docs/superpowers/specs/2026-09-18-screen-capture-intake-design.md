@@ -283,6 +283,16 @@ keep being the recording indicator without appearing in every screen
 recording. On an older build where the call fails it is logged and ignored;
 the capture proceeds with the buddy visible in frame.
 
+> **Amended 2026-09-21 (GAP-166).** Applied to `main` alone. The first
+> hardware pass found that the affinity round-trip on the other four
+> windows — all of which host WebView2 — stopped the editor painting and
+> stopped other applications' toolbars (Explorer, Notepad) taking pointer
+> input until Vault Buddy exited; excluding the buddy alone was clean on the
+> same machine, with the buddy absent from both a snip and the recording. So
+> the panel, bubble, overlay and editor now appear in a recording when they
+> are on screen, by design, and the exclusion set is pinned the inverse way:
+> a new window is not excluded until a hardware run shows it can be.
+
 ## 6. The capture pipeline
 
 ### 6.1 Threads
