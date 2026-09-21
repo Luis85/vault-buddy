@@ -134,6 +134,10 @@ useful than approximating it from outside.
 
 ## Lifecycle
 
+**Amended 2026-09-21 (A7): the show is SPLIT across two threads, and the
+naive reading of the paragraph below deadlocks.** Monitor enumeration happens
+on the calling worker thread; only the window calls are marshalled.
+
 **Show** hooks into `screen_capture_worker::start_screen_capture_blocking`,
 immediately beside `capture_exclusion::apply(app)`. That function has already
 parsed the source id (`let parsed = source::SourceId::parse(...)` at its top),
@@ -357,3 +361,47 @@ only because of GAP-166:
 | **Other applications survive a region capture** | Record a region, stop it, and — with Vault Buddy still running — click Explorer's toolbar and Notepad's menu bar. **Record whether each responds.** This is GAP-166's exact symptom against the sixth excluded window. A failure here means the indicator must lose its exclusion, and the feature with it. |
 | **The panel is not hidden when the indicator appears** | With the panel open, start a region capture and do not touch anything. **Record whether the panel is still open afterwards.** `show()` on an always-on-top window may activate it despite `focus: false`; if it does, the activation blurs the panel and `schedule_focus_out_check` hides it mid-capture. This cannot be determined off Windows. |
 | **Rows 16, 17 and 43 re-run** | A sixth excluded window changes exactly what those rows verify, so their earlier passes do not carry over to this build. |
+
+### A7 — Monitor enumeration must NOT happen on the main thread
+
+*Supersedes* **Lifecycle**'s "both are fire-and-forget on the main thread".
+
+The exclusion apply really is fire-and-forget on the main thread: it reads
+window handles and makes a Win32 call. The indicator show cannot be, because
+it needs the target monitor's origin first, and `AppHandle::available_monitors`
+**marshals to the event loop and blocks on the reply with no timeout** —
+`region_commands::select_region_inner` documents this at its own call site and
+warns "Safe only because this command is async; do not make it sync."
+
+Calling it from inside a `run_on_main_thread` closure is therefore a deadlock:
+the main thread posts a request to itself and blocks waiting for a reply only
+it can produce, while executing the closure that is blocking it. The symptom
+would be a HANG on every region capture start — no crash, no log line, no
+crash record, and `start_screen_capture_blocking` never returning.
+
+The show is split, which is what `select_region_inner` already does for the
+overlay and for the same reason:
+
+1. **On the calling thread** — `start_screen_capture_blocking` runs under
+   `tauri::async_runtime::spawn_blocking` (`screen_commands.rs:309`), so it is
+   a worker thread and the event loop is free to answer. Enumerate monitors,
+   match the GDI display number, read `monitor.position()`, and compute the
+   bounds with the pure `indicator_bounds` (A3).
+2. **On the main thread** — a `run_on_main_thread` closure carrying the four
+   numbers it needs, doing only window calls: `set_ignore_cursor_events`,
+   `set_size`, `set_position`, `show()`. No enumeration, no blocking round
+   trip, nothing that can reach back into the event loop.
+
+The GDI display-number join reuses `region_commands::matches_display` rather
+than repeating it. That function's own doc calls itself "the ONE place the two
+monitor numbering schemes are joined" and records that "phase 2 shipped a
+wrong-screen bug by crossing exactly these" — a second copy would make that
+sentence false and re-open the bug it was written about. It becomes
+`pub(crate)`.
+
+**Ordering inside the main-thread closure is a rule, not a preference:** click-
+through first, then size, then position, then show, with every failure
+returning early. A window that could not be made click-through is never shown
+at all — an unshown border returns the user to today's behaviour, while a shown
+one that swallows clicks is what this design calls "strictly worse than no
+indicator at all".
