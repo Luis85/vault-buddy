@@ -12,10 +12,22 @@ Windows (GAP-102), but the `cfg(windows)` arms of `sink.rs`, `source.rs`,
 `capture_exclusion.rs` are exercised by nothing automated anywhere
 (docs/Gaps.md GAP-117) — they are exercised **here**.
 
-**Manual Windows re-testing is currently DEFERRED by the user until after
-the final phase.** Rows are written as they are earned; nobody is being asked
-to run them yet. A row whose *Result* is empty has not been run, which is not
-the same as a row that failed.
+**The deferral is LIFTED.** The user began running this checklist on
+2026-09-21, batch by batch, and 23 of its 55 rows now carry a result. A row
+whose *Result* is empty has not been run, which is **not** the same as a row
+that failed — never convert one to the other. Rows 11 and 12 read DEFERRED by
+the author's decision, which is also not a pass.
+
+**All six phases are implemented**, so every row here is reachable against a
+build of this branch. What is outstanding for this feature is this file (31
+unrun rows) plus docs/Gaps.md, not further implementation.
+
+Re-measure the counts rather than incrementing them; both have been wrong
+before from incrementing:
+
+```bash
+grep -cE '^\| ([0-9]+|27a|27b) \|' docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md
+```
 
 Spec: [2026-09-18-screen-capture-intake-design.md](2026-09-18-screen-capture-intake-design.md)
 (§5.2 the region overlay, §5.3 excluding our own windows, §6 the pipeline,
@@ -122,10 +134,10 @@ carry over. Row 44 is the new window's own version of the same question.
 Phase 4 builds the editor window. **The entry point has now landed** (Task 7):
 after a screen capture stops, the capture bar on the panel's list view shows
 the finished capture with an **Edit** button, and that is what calls
-`open_capture_editor`. Every row below is therefore reachable by hand. (There
-is still no staged-capture browser — only the capture that finished most
-recently in this app run is offered. That is Phase 5. To reach an older
-staged file, record a short new one.)
+`open_capture_editor`. Every row below is therefore reachable by hand. (Phase
+5 added the SECOND door, `StagedCaptureList` at the top of the Record Screen
+picker, which reaches every staged capture rather than only the most recent —
+so an older staged file no longer needs a fresh recording to get at.)
 
 Rows 22–28 were added with the entry point. They cover what no automated
 gate on any platform can: the editor is the first window of ours that is
@@ -249,30 +261,35 @@ work fine without ffmpeg, and only the save needs it.
   is applied fire-and-forget, so the first frame or two of a capture may
   still contain our windows (docs/Gaps.md GAP-124); that is known, and is not
   what row 16 is asking about.
-- **No staging recovery, and nothing collects finished captures either.** A
-  capture killed at item 8 leaves its `.part` behind permanently, and every
-  capture that stops CLEANLY leaves a `<base>.mp4` + `<base>.json` in the
-  same directory with no in-app way to see, open or delete them. Nothing
-  sweeps either until Phase 5's `run_screen_recovery` / Phase 6's "Clear
-  staged captures" (docs/Gaps.md GAP-115). Clean the staging directory by
-  hand between verification runs, and expect it to grow fast at 4K.
+- ~~**No staging recovery, and nothing collects finished captures
+  either.**~~ **RETIRED — both landed.** `run_screen_recovery` sweeps the
+  staging directory at startup (promoting an orphaned `.part` that holds real
+  footage, deleting an abandoned export temp, never touching anything
+  Foreign), `StagedCaptureList` shows every staged capture with Resume and
+  Discard, and Buddy settings → System has a size readout with **Clear staged
+  captures**. What is still true: nothing EXPIRES a completed staged capture,
+  deliberately (docs/Gaps.md GAP-115), so expect the directory to grow fast
+  at 4K and clear it between runs — now from inside the app.
 - **There is no keyboard-only way to draw a region** (docs/Gaps.md GAP-127).
   The overlay reads pointer events only; Escape cancels, but nothing selects.
   Row 14 is a pointer test by necessity, not by preference.
-- **The editor writes nothing into a vault either, and there is no Save.**
-  Phase 4 edits the staged capture in place, in
-  `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures`. Export, the vault
-  write and the companion note are all Phase 5; the editor says so in its own
-  footer. Do not file "I edited it and nothing appeared in Obsidian".
-- **Only the most recently finished capture can be opened.** The Edit action
-  reads the store's `lastStaged`, which a restart clears and a new capture
-  replaces. Spec §10's staged-capture browser is Phase 5 (docs/Gaps.md
-  GAP-115).
+- ~~**The editor writes nothing into a vault either, and there is no
+  Save.**~~ **RETIRED — Phase 5 shipped the export.** The editor's footer now
+  offers Save, which runs ffmpeg and commits the `.mp4` plus its companion
+  note into the vault (the ninth sanctioned vault write). Rows 29–36 cover
+  it. ffmpeg must be installed first, or Save is refused — see the note
+  above.
+- ~~**Only the most recently finished capture can be opened.**~~ **RETIRED.**
+  The capture bar's **Edit** still reads `lastStaged` (cleared by a restart,
+  replaced by a new capture), but `StagedCaptureList` in the Record Screen
+  picker reaches every staged capture. Both go through the same
+  `open_capture_editor`.
 - **The stop notification says "Screen capture ready", not "saved", on
-  purpose.** Phases 2–4 write nothing into any vault. If you go looking in
-  Obsidian for a captured file you will not find one — the file is in
-  `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures`. That is the
-  documented state, not a failure.
+  purpose.** A stop STAGES the capture; the vault write happens later, when
+  you press Save in the editor. So a just-stopped capture is in
+  `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures` and not yet in any
+  vault. That is the documented state, not a failure, and the wording is
+  pinned by a test precisely so it never claims a save that has not happened.
 
 ## NOT reachable yet
 
@@ -283,12 +300,15 @@ only into a phase's own table above, never into a tick here.
 Phase 5 emptied five rows out of this table and into the Phase 5 section
 above (rows 29–36): opening a staged capture that is not the most recent one,
 export exactness, the untouched fast path, the vault write and its note, and
-`run_screen_recovery`. What is left:
+`run_screen_recovery`. Phase 6 emptied the rest of its own: the settings tab
+(GAP-103) and the staging size readout + bulk clear (GAP-115) both landed, so
+**nothing below is waiting on a phase of this feature** — every remaining row
+is either already shipped and needing verification, or explicitly
+out-of-scope work with no phase attached. What is left:
 
 | Item | Arrives in |
 | --- | --- |
 | ~~The screen-capture settings tab~~ — **LANDED 2026-09-21** (GAP-103): Vault settings → **Screen**, all seven `screen_*` fields settable. Verify it rather than expecting a hand-edit | — |
-| The staging directory's total size and a "Clear staged captures" action (docs/Gaps.md GAP-115's remaining half) | Phase 6 |
 | An ffmpeg **pre-flight in the EDITOR** — the status card and Browse LANDED (Buddy settings → Integrations) and the picker shows a notice, but a capture resumed from the staged list still meets the dependency at Save (docs/Gaps.md GAP-144's remaining residual) | unscheduled |
 | Renaming a saved capture, or re-exporting one (docs/Gaps.md GAP-142) | unscheduled |
 | Saved screen captures in the Recordings browser, and transcribing them (docs/Gaps.md GAP-143) | unscheduled |

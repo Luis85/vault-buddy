@@ -2518,7 +2518,7 @@ what checklist item 10 produces. The running total is visible in the UI as of
 2026-09-19 (`ScreenCaptureBar.vue`'s dropped chip, GAP-118); the per-drop
 log lines and the teardown total remain the fuller record.
 
-### GAP-115 · ~~Medium~~ Low (NARROWED 2026-09-20, phase 5; size readout + bulk clear LANDED 2026-09-21, unverified on Windows) · The staging directory is swept, surfaced, measured and clearable now — what is left is the size bound and the browser
+### GAP-115 · ~~Medium~~ Low (NARROWED 2026-09-20, phase 5; size readout + bulk clear LANDED 2026-09-21, unverified on Windows) · The staging directory is swept, surfaced, measured and clearable now — what is left is the size bound, which is deliberate
 
 **What phase 5 closed, verified at source rather than assumed:**
 - **The sweep exists.** `src-tauri/src/screen_recovery.rs`'s
@@ -2576,15 +2576,29 @@ captures' action"* — and both now exist:
   capture actually removed, or `lastStaged` would keep offering **Edit** for
   a base no longer on disk.
 
-**What remains open is the SIZE BOUND and the staged-capture browser.**
-Nothing expires a completed staged capture, and that is deliberate, not an
-omission: the 60 s staleness rule applies to orphans and temps only, because
-deleting a recording the user has not decided about is the loss this whole
-design exists to prevent. A bound would have to answer "delete which one",
-and there is no answer to that which is not somebody's footage — so the
-honest shape is what landed (show the number, let the user act) plus, in
-Phase 6, the browser that makes a per-capture decision easy. Severity stays
-Low.
+**What remains open is the SIZE BOUND alone, and it is deliberate.**
+Nothing expires a completed staged capture: the 60 s staleness rule applies
+to orphans and temps only, because deleting a recording the user has not
+decided about is the loss this whole design exists to prevent. A bound would
+have to answer "delete which one", and there is no answer to that which is
+not somebody's footage — so the honest shape is what landed: show the
+number, let the user act, per capture in `StagedCaptureList` or in bulk from
+the settings card. Severity stays Low.
+
+**CORRECTION 2026-09-21: there is no "staged-capture browser" outstanding,
+and earlier text here said there was.** This entry and AGENTS.md both
+carried that phrase, which propagated from this gap's own close-out into
+four places in AGENTS.md and three in the verification checklist. It is not
+in the spec. `grep -i browser` over
+`docs/superpowers/specs/2026-09-18-screen-capture-intake-design.md` returns
+exactly two hits and BOTH are in the explicitly-out-of-scope list (screen
+captures in the RECORDINGS browser, and rename-after-save — GAP-143 and
+GAP-142). Spec §13's Phase 6 row reads *"`ScreenCaptureConfigTab`, staging
+size + clear action, AGENTS.md / CONTEXT.md / README / Gaps.md updates"* —
+all landed. Spec §10's resume-or-discard offer is `StagedCaptureList`,
+shipped in Phase 5. **The feature is spec-complete across all six phases;
+what remains is verification debt plus this backlog.** Do not re-file the
+browser.
 
 **Not verified on Windows.** The card, the measurement and the clear were
 built and tested on Linux; no row of the manual checklist covers them, and
