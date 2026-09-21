@@ -13,13 +13,13 @@ Windows (GAP-102), but the `cfg(windows)` arms of `sink.rs`, `source.rs`,
 (docs/Gaps.md GAP-117) — they are exercised **here**.
 
 **The deferral is LIFTED.** The user began running this checklist on
-2026-09-21, batch by batch, and 23 of its 55 rows now carry a result. A row
+2026-09-21, batch by batch, and 23 of its 57 rows (1–55 plus 27a and 27b) now carry a result. A row
 whose *Result* is empty has not been run, which is **not** the same as a row
 that failed — never convert one to the other. Rows 11 and 12 read DEFERRED by
 the author's decision, which is also not a pass.
 
 **All six phases are implemented**, so every row here is reachable against a
-build of this branch. What is outstanding for this feature is this file (31
+build of this branch. What is outstanding for this feature is this file (34
 unrun rows) plus docs/Gaps.md, not further implementation.
 
 Re-measure the counts rather than incrementing them; both have been wrong

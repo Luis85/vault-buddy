@@ -57,7 +57,7 @@ the app has grown six vertical domains:
   the staging size readout and bulk clear (GAP-115), and the doc
   reconciliation — and all three have landed. What remains is not
   implementation but **verification debt** (the manual Windows checklist,
-  31 of its 55 rows unrun) plus the ordinary gap backlog. There is no
+  34 of its 57 rows unrun) plus the ordinary gap backlog. There is no
   "staged-capture browser" outstanding: that phrase was never in the spec,
   which mentions a browser only twice and both times in its
   explicitly-out-of-scope list (screen captures in the RECORDINGS browser,
@@ -473,7 +473,7 @@ subscribe.
 | Per-vault capture/tasks/`documents_folder` settings (including six additive per-vault template fields — `note_extra_frontmatter`/`note_body_template` capture-owned via `set_capture_config`, `task_extra_frontmatter`/`task_body_template` owned by `set_task_template_config`, `document_extra_frontmatter`/`document_body_template` documents-owned via `set_documents_config`; each save preserves the other two pairs untouched — `config_merge.rs`'s `merge_capture_owned`/`merge_documents_owned` for the capture/documents surfaces, a direct read-modify-write for the task-template surface) + app-global `mcp`, `document_import` (the user-set `pandoc_path` override **and, since phase 5, `ffmpeg_path`** — both tool overrides live in that section; the name is where the first one landed, not a claim about document import), and `panel` (the S/M/L preset size, `core::panel_config`) sections | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse; `serialize_config` round-trips every section) |
 | Whisper models | `%APPDATA%\vault-buddy\models\ggml-<tier>.bin` + `ggml-silero-v5.1.2.bin` (pinned Hugging Face URLs + SHA-256) |
 | Buddy window position | tauri-plugin-window-state file in `%APPDATA%\com.vaultbuddy.desktop` (POSITION only; panel/bubble/overlay **and editor** denylisted — `tray::POSITION_DENYLIST` is `ALL_WINDOW_LABELS` minus `main`, so every window but the buddy is excluded) |
-| Staged screen captures | `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures` — `<base>.mp4` + `<base>.json` (the sidecar, which carries the editor's `timeline`), a hidden `.<base>.mp4.part` while recording, and a hidden `.<base>.export.mp4.part` while exporting (`staging::EXPORT_PART_INFIX`). **OUTSIDE every vault, deliberately:** an unedited, unapproved capture is not knowledge, so discarding one must not leave litter in the user's notes. Phase 5 gave the directory a startup sweep, `screen_recovery::run_screen_recovery`, wired into `setup` after `run_import_recovery`: it promotes an orphaned `.part` that holds real footage, deletes an abandoned export temp outright, classifies anything that does not round-trip through `capture_paths::is_capture_base` as **Foreign** and never touches it, never follows a symlink, and postpones while EITHER capture domain holds `CaptureGuard` **or an export holds the `ExportState` reservation** — the third source, added in the 2026-09-20 fix wave (see the screen-capture section). Its staleness window, `STALE_AFTER`, is the audio sweep's 60 s — named rather than inlined so the next reader can see it is shared on purpose. A completed staged capture is still never size-BOUNDED — nothing expires one, deliberately, since deleting a recording the user has not decided about is the loss this design exists to prevent — but the directory is now measured and clearable: `staging_commands::{staging_usage, clear_staged_captures}` back the **Staged screen captures** card in Buddy settings → System (docs/Gaps.md GAP-115). Phase 6 is complete; what GAP-115 still names is the absence of a SIZE BOUND, which is deliberate — nothing expires a completed staged capture, because deleting a recording the user has not decided about is the loss this design exists to prevent |
+| Staged screen captures | `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures` — `<base>.mp4` + `<base>.json` (the sidecar, which carries the editor's `timeline`), a hidden `.<base>.mp4.part` while recording, and a hidden `.<base>.export.mp4.part` while exporting (`staging::EXPORT_PART_INFIX`). **OUTSIDE every vault, deliberately:** an unedited, unapproved capture is not knowledge, so discarding one must not leave litter in the user's notes. Phase 5 gave the directory a startup sweep, `screen_recovery::run_screen_recovery`, wired into `setup` after `run_import_recovery`: it promotes an orphaned `.part` that holds real footage, deletes an abandoned export temp outright, classifies anything that does not round-trip through `capture_paths::is_capture_base` as **Foreign** and never touches it, never follows a symlink, and postpones while EITHER capture domain holds `CaptureGuard` **or an export holds the `ExportState` reservation** — the third source, added in the 2026-09-20 fix wave (see the screen-capture section). Its staleness window, `STALE_AFTER`, is the audio sweep's 60 s — named rather than inlined so the next reader can see it is shared on purpose. A completed staged capture is still never size-BOUNDED — nothing expires one, deliberately, since deleting a recording the user has not decided about is the loss this design exists to prevent — but the directory is now measured and clearable: `staging_commands::{staging_usage, clear_staged_captures}` back the **Staged screen captures** card in Buddy settings → System (docs/Gaps.md GAP-115). Phase 6 is complete; the missing size bound GAP-115 still records is a deliberate non-goal, not outstanding work |
 | Logs / crash records / run marker | `%LOCALAPPDATA%\com.vaultbuddy.desktop\logs` — `vault-buddy.log` (5 MB rotate), `crash.log`, `.vault-buddy.run` |
 | Frontend settings | localStorage `vault-buddy.animations/.character/.dragging/.messages/.messageDuration/.checkUpdatesOnStart` |
 | Recent searches | localStorage `vault-buddy:recent-searches` (cap 5) |
@@ -1155,9 +1155,11 @@ write here, it belongs in `export_worker/` or it is a design change.
   `run_import_recovery`), which retires "Phase 2 has no staging recovery":
   a stale orphaned `.part` whose prefix really holds footage is PROMOTED to
   a staged capture rather than deleted, an abandoned `.export.mp4.part` is
-  deleted outright, and anything that is not ours is left alone. What GAP-115
-  still names is the staged-capture BROWSER. Its other half — the size
-  readout and the bulk clear — landed: `screen::staging_files` measures what
+  deleted outright, and anything that is not ours is left alone. There is no
+  staged-capture browser outstanding — spec §10's resume-or-discard surface
+  is `StagedCaptureList`, shipped in Phase 5, and the spec names a browser
+  only in its out-of-scope list (GAP-143). The size readout and the bulk
+  clear landed too: `screen::staging_files` measures what
   a capture owns (no-follow, so a symlink wearing one of our names is neither
   counted nor deleted) and `staging_commands` turns that into the two
   commands behind the Buddy settings card.
@@ -1240,9 +1242,11 @@ write here, it belongs in `export_worker/` or it is a design change.
   bar to save it into a vault." A staged capture is also no longer
   undiscoverable: `ScreenCaptureBar`'s finished row offers **Edit** for the
   most recent one, and `StagedCaptureList` in the Record Screen picker lists
-  every one of them with Resume and Discard. What is still absent is a size
-  bound (GAP-115, Phase 6; the bulk clear now lives in Buddy settings →
-  System, and nothing expires a staged capture on its own).
+  every one of them with Resume and Discard. There is no size bound, and
+  that is a deliberate non-goal rather than outstanding phase work (GAP-115):
+  nothing expires a completed staged capture, because deleting a recording
+  the user has not decided about is the loss the design exists to prevent.
+  The bulk clear lives in Buddy settings → System.
 - **The start tail must not announce a capture that already ended.**
   `start_screen_capture`'s async tail runs after the blocking start returns,
   and the `screen-capture-monitor` thread is live before then — so spec §14's
