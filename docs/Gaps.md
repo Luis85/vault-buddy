@@ -4473,6 +4473,17 @@ follows is only what is established.
 - Closing the editor afterwards still did not restore the toolbars; only
   quitting did — consistent with every earlier sitting.
 
+**Established from the reporter** (fourth sitting, 2026-09-21) — **the
+trigger is the STOP, not the start.** With the editor open and showing a
+capture, a new screen recording ran: **during recording everything was
+fine** — Explorer's toolbar worked, the editor showed its content. **At
+stop**, in the same instant, the editor went white and the toolbar died
+(min/max/close still working; the marked strip is Explorer's title bar and
+toolbar, and the white editor sits at bottom-left overlapping Explorer's
+lower half, nowhere near it). That exonerates the entire start path in one
+move — `capture_exclusion::apply`, the WGC start, the sink creation, the
+audio endpoint open — and moves the whole question onto the stop path.
+
 **Established from the code** (each read on this tree, not recalled):
 
 - **The editor is exonerated.** `window_close.rs:37-40` answers its ✕ with
@@ -4504,6 +4515,18 @@ follows is only what is established.
   to `editor:open` and the four `screen:export*` events — nothing on
   `screen:stopped`. So the editor observed blank at stop was not shown by
   the stop; it was already visible and had stopped painting.
+- **The stop path, step by step, and which experiments run which step.**
+  `emit_screen_stopped` (`screen_commands.rs:200-204`) emits
+  `screen:stopped` then calls the shared `toast()` helper
+  (`capture_commands.rs:68`); `clear_active_screen` (`:212`) lifts the
+  affinity; the session's own `stop()` stops the WGC session and drops the
+  `MfRuntime` (`MFShutdown`). The AUDIO save path posts a toast too
+  (`capture_commands.rs:120`) but never touches affinity, MF or WGC. The
+  screen FAILED path (`emit_screen_failed`, `:155-165`) ALSO posts a toast
+  and runs `clear_active_screen`, but never starts a WGC session and emits
+  `screen:failed`, not `screen:stopped`. So: an audio stop runs {toast,
+  tray}; a refused capture runs {affinity clear, toast, MF, tray}; a real
+  screen stop runs all of those plus {WGC stop, `screen:stopped`}.
 - **The overlay's lifecycle is airtight.** `select_capture_region` calls
   `select_region_inner(...)` and then `finish_region_selection(&app)`
   **unconditionally** (`region_commands.rs:246`) — on success, cancel, the
@@ -4523,33 +4546,26 @@ documented to affect *capture*, not *input*, and **no mechanism has been
 established** by which it would block another process's clicks. It is
 unproven on both sides; the snip of the buddy (below) is the cheap test.
 
-**Not established — the three observations that now decide it.** Each is
-a hardware observation; none can be made from this tree. They are
-independent of one another and can be run in any order.
+**Not established — the three observations that now decide it.** All are
+hardware observations, independent of one another, any order.
 
-1. **Start or stop?** With Explorer visible and the editor open *with
-   content showing*, start a screen capture and, **while it is still
-   recording**, try Explorer's toolbar and look at the editor's content;
-   then stop. Both break *during* recording → both are effects of capture
-   **start** (`capture_exclusion::apply` at `screen_capture_worker.rs:148`
-   and everything after it). Fine during, broken after → the trigger is on
-   the **stop** path (`clear`, finalize, the toast).
-2. **An audio recording** (Meeting or Voice Note). Audio never calls
-   `capture_exclusion::apply` — the one apply site in the whole shell is
-   in the screen worker, pinned by a structural test. Breaks → the
-   exclusion is exonerated outright. Doesn't → a strong vote for it.
-3. **A capture that is REFUSED** (60 fps, whole screen, so the sink
-   refuses `MF_E_INVALIDMEDIATYPE`). That runs `apply` → `source::resolve`
-   → the cpal endpoint open → the sink refusal → `clear_active_screen`,
-   with no WGC frame ever captured. Breaks → it is in the apply/clear pair.
-   Doesn't → it needs a capture that actually ran.
+1. **An audio recording** (Meeting / Voice Note), stopped. Runs the toast
+   and the tray change and nothing screen-specific. Breaks → toast or
+   tray; the exclusion and every screen-only step are out. Clean → toast
+   and tray are out.
+2. **A refused screen capture** (60 fps, whole screen; the sink refuses).
+   Runs the affinity clear, the toast, MF start/shutdown and the tray
+   change — with no WGC session ever started and `screen:failed` instead
+   of `screen:stopped`. Breaks → affinity clear, toast or MF. Clean → it
+   needs a capture that actually ran: the WGC teardown or `screen:stopped`.
+3. **A screen capture with Do Not Disturb ON.** `toast()` still runs;
+   Windows withholds the display. Clean → the toast's *display*.
 
-If (1) says start, (2) says audio is clean and (3) says a refused capture
-still breaks, that converges on one line with no remaining alternative, and
-the editor going blank is corroboration on our own window. If they split,
-that is decisive the other way. Still worth one look after those: a capture
-with **no audio devices**, a **window** capture, and a **snip of the buddy**
-while broken (missing or black → the exclusion is still set on it).
+Audio clean + refused breaks → the affinity clear or `MFShutdown`, and the
+editor going white at the same instant reads as `SetWindowDisplayAffinity`
+resetting the window's composition surface under WebView2. Audio breaks →
+the toast, which lands in ShellExperienceHost, the same WinUI process
+family as Explorer's command bar. Either way one step is left standing.
 
 **Why this is High rather than Medium.** It degrades an application the user
 did not launch us to affect, it is invisible from inside our app, and the
