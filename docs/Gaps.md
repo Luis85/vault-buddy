@@ -4373,10 +4373,29 @@ indicator at all"), and `focus: false` so it cannot blur the panel and trip
 
 - The spec is approved but unreviewed against Phase 5, which landed after it.
   The export and the staged-capture list did not exist when it was written.
-- No sweep has been done for OTHER approved-but-unimplemented specs in
-  `docs/superpowers/specs/`. This one was found because a user hit its
-  symptom; there is no mechanism that would have surfaced it otherwise, and
-  the same mechanism (or absence of one) covers every other spec in there.
+- **The sweep this residual asked for has now been done (2026-09-21), and
+  this spec is the only one it found.** Every other `*-design.md` in
+  `docs/superpowers/specs/` was checked against the tree, not against the
+  plans directory alone — a name match is not evidence, because several
+  shipped specs carry a plan filed under a different stem
+  (`increment-3-local-speech-to-text` → `2026-07-04-local-speech-to-text`),
+  and an absent plan is not evidence either, because some increments were
+  executed without one. The four with neither a name-matching plan nor a
+  mention in AGENTS.md were each resolved by an implementation marker in the
+  code: `rpg-characters-settings` (`src/assets/buddies/`, the
+  `vault-buddy.character` setting), `buddy-acknowledgement-messages` (the
+  `announce` command + `useBuddyAnnouncements`), `record-view-improvements`
+  ("Browse recordings" as a card in `RecordMode.vue`, no `defaultMode`
+  remnant anywhere), and `capture-panel-and-document-import-ux` (the
+  "Capture knowledge" title, the `documentImport` view,
+  `open_imported_document`). All four had shipped.
+- **What is still missing is the mechanism, not the sweep.** Nothing links a
+  spec to the branch that executed it, so the only way to answer "did this
+  land" is the by-hand pass above. That is cheap at 66 specs and is why this
+  one went unnoticed for a day rather than a release; it does not scale, and
+  a later increment should make the link explicit (a status line the spec
+  itself carries once implemented, or a plan reference). Filing it here
+  rather than as its own entry, because the cost so far is one spec.
 
 ### GAP-166 · High · Windows Explorer's toolbar stops accepting clicks while Vault Buddy is running — UNLOCALISED
 Reported by the 2026-09-21 manual pass: *"in windows explorer the top tool
