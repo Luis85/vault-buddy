@@ -1433,9 +1433,13 @@ write here, it belongs in `export_worker/` or it is a design change.
   position** (GAP-135, closed): `Segment`/`Timeline` carry
   `rename_all = "camelCase"` derives, and both former hand mappings —
   `timeline.rs`'s `segments_of` and, crucially,
-  `export_commands::timeline_from_sidecar`, the production reader — go
-  through them, so no two Rust spellings of the wire shape exist to drift.
-  `timeline_from_sidecar` still owns the DEGRADE (a malformed sidecar reads
+  `core::timeline::Timeline::from_sidecar_value`, the production reader (the
+  tutorial-editor migration task moved the parsing here from
+  `export_commands::timeline_from_sidecar`, which is now a thin wrapper, so
+  `core::editor::migrate` — which cannot depend on this shell crate — reads
+  the exact same value rather than growing a second copy) — go through them,
+  so no two Rust spellings of the wire shape exist to drift.
+  `from_sidecar_value` still owns the DEGRADE (a malformed sidecar reads
   as the whole capture, never an error), since serde decides only the shape.
   A literal-JSON test spelled the way the editor writes pins it, and it is a
   literal precisely so a rename cannot be made green by re-serializing the
@@ -1496,7 +1500,9 @@ write here, it belongs in `export_worker/` or it is a design change.
     crash-safety promise is off and only the user can act on it.
   - **Key the export fast path on `is_untouched`, NOT on
     `Option::is_none()`** — written as a phase-5 hand-off, and phase 5 took
-    it: `export_commands::timeline_from_sidecar` parses the field and
+    it: `export_commands::timeline_from_sidecar` (a thin wrapper over
+    `core::timeline::Timeline::from_sidecar_value` since the tutorial-editor
+    migration task moved the actual parsing into `core`) parses the field and
     `export_worker` asks `Timeline::is_untouched`. It stays here because the
     rule is what a future edit would break. The editor writes the timeline on every edit and
     NEVER writes `null`, so after the first edit the sidecar always carries
@@ -1587,13 +1593,17 @@ write here, it belongs in `export_worker/` or it is a design change.
     `is_none()` would call a previously-edited capture untouched on spec
     §10's Resume and restore footage the user deleted.
   - **The sidecar's `timeline` is interpreted in exactly ONE place**,
-    `export_commands::timeline_from_sidecar`. It is hand-editable, so
-    anything malformed — absent, null, wrong-typed, a non-numeric or
-    fractional bound — degrades to the WHOLE capture, which is safe only
-    because `is_untouched` then answers exactly as an absent field would and
-    the degraded read REMUXES. An EXPLICITLY empty segment list is NOT
-    degraded: the user deleted everything, and `export_refusal` must see that
-    rather than silently restore their recording.
+    `core::timeline::Timeline::from_sidecar_value` — moved out of
+    `export_commands::timeline_from_sidecar` (still the export path's entry
+    point, now a thin `Option<Value>` → `Timeline` wrapper over it) by the
+    tutorial-editor migration task, since `core::editor::migrate` needs the
+    same reader and cannot depend on the shell crate that used to own it. It
+    is hand-editable, so anything malformed — absent, null, wrong-typed, a
+    non-numeric or fractional bound — degrades to the WHOLE capture, which is
+    safe only because `is_untouched` then answers exactly as an absent field
+    would and the degraded read REMUXES. An EXPLICITLY empty segment list is
+    NOT degraded: the user deleted everything, and `export_refusal` must see
+    that rather than silently restore their recording.
   - **Almost every refusal is ordered AHEAD of any vault mutation, and the
     ONE that is not rolls itself back.** The missing-source check, the empty
     vault id, the empty timeline, the missing ffmpeg and the containment

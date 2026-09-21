@@ -71,42 +71,25 @@ pub(crate) fn busy_refusal(active: Option<CaptureKind>) -> Option<String> {
 
 /// Turn the sidecar's hand-editable `timeline` field into a real timeline.
 ///
-/// This is the ONLY place that value is interpreted (docs/Gaps.md GAP-134:
-/// `load_staged_capture` passes it through as an opaque `serde_json::Value`
-/// it never inspects). Anything malformed — absent, null, wrong-typed, a
-/// segment with a non-numeric, negative or fractional bound — degrades to
-/// the WHOLE capture, the same defensive-read posture as the rest of the
-/// vault domain.
-///
-/// That default is safe only because `Timeline::is_untouched` is the
-/// authority on the fast path: a whole-capture timeline answers it exactly
-/// as an absent field would, so a degraded read REMUXES rather than
-/// re-encoding. An EXPLICITLY empty segment list is NOT degraded — the user
-/// deleted everything, and `export_refusal` must see that rather than have
-/// their recording silently restored underneath them.
-///
-/// The key names come from `Timeline`'s own `rename_all = "camelCase"`
-/// derive, never from a hand mapping here (GAP-135). Spelling
-/// `"sourceStartMs"` in this function made it the third independent copy of
-/// a wire shape nothing enforced: a rename on the TypeScript side left this
-/// reader parsing nothing, degrading silently to the whole capture, and
-/// EXPORTING FOOTAGE THE USER DELETED — with every test green, because the
-/// other two copies agreed with each other under the old name. Going through
-/// the derive means that rename now has to redden
-/// `timeline::tests::the_on_disk_timeline_parses_from_the_spelling_the_editor_writes`,
-/// which holds a literal of what the editor writes.
-///
-/// `serde` is used for the SHAPE only; the degrade is still this function's,
-/// because `from_value` returning `Err` must not become an error the user
-/// sees — it is a hand-edited file, and the safe reading of one is the whole
-/// capture.
+/// A thin wrapper over `core::timeline::Timeline::from_sidecar_value` (moved
+/// there by the tutorial-editor migration task, docs/Gaps.md GAP-134 still
+/// applies: `load_staged_capture` passes the field through as an opaque
+/// `serde_json::Value` it never inspects) — this crate's own contribution is
+/// just the `Option<Value>` → `Timeline` mapping for the absent-field case
+/// (`load_staged_capture` never even sees a `timeline` key on a capture that
+/// predates the editor, so there is no `Value` at all to hand the reader).
+/// `core::timeline::Timeline::from_sidecar_value` is now the ONE place the
+/// field's value is actually interpreted — `core::editor::migrate`, which
+/// cannot depend on this shell crate, calls the exact same reader rather
+/// than growing a second copy.
 pub(crate) fn timeline_from_sidecar(
     value: Option<serde_json::Value>,
     source_duration_ms: u64,
 ) -> Timeline {
-    let whole = || Timeline::whole(source_duration_ms);
-    let Some(value) = value else { return whole() };
-    serde_json::from_value::<Timeline>(value).unwrap_or_else(|_| whole())
+    match value {
+        Some(v) => Timeline::from_sidecar_value(&v, source_duration_ms),
+        None => Timeline::whole(source_duration_ms),
+    }
 }
 
 /// The number `screen:exportProgress` carries.

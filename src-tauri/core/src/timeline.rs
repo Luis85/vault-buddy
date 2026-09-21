@@ -132,6 +132,42 @@ impl Timeline {
             [Segment { source_start_ms: 0, source_end_ms }] if *source_end_ms == source_duration_ms
         )
     }
+
+    /// Turn the staged sidecar's hand-editable `timeline` field into a real
+    /// `Timeline`.
+    ///
+    /// This is the ONE place that value is interpreted (moved here from
+    /// `export_commands::timeline_from_sidecar` by the tutorial-editor
+    /// migration task, so `core::editor::migrate` — which cannot depend on
+    /// the `vault-buddy` shell crate — reads the exact same reader the
+    /// export path does, rather than growing a second copy). Anything
+    /// malformed — absent, null, wrong-typed, a segment with a non-numeric,
+    /// negative or fractional bound — degrades to the WHOLE capture, the
+    /// same defensive-read posture as the rest of the vault domain.
+    ///
+    /// That default is safe only because `is_untouched` is the authority on
+    /// the fast path: a whole-capture timeline answers it exactly as an
+    /// absent field would, so a degraded read REMUXES rather than
+    /// re-encoding. An EXPLICITLY empty segment list (`{"segments": []}`) is
+    /// NOT degraded — the user deleted everything, and a caller like
+    /// `export_refusal` must see that rather than have their recording
+    /// silently restored underneath them.
+    ///
+    /// The key names come from `Timeline`'s own `rename_all = "camelCase"`
+    /// derive, never from a hand mapping (GAP-135): a rename on the
+    /// TypeScript side has to redden
+    /// `the_on_disk_timeline_parses_from_the_spelling_the_editor_writes`
+    /// below, rather than silently degrading every timeline on disk to the
+    /// whole capture with every other test green.
+    ///
+    /// `value` is a borrow rather than an owned `Value` (unlike the reader
+    /// this replaced) so a caller holding a `&serde_json::Value` — the
+    /// staged sidecar's own JSON, or `StagedInput::legacy_timeline` — never
+    /// has to clone it first.
+    pub fn from_sidecar_value(value: &serde_json::Value, source_duration_ms: u64) -> Timeline {
+        <Timeline as serde::Deserialize>::deserialize(value)
+            .unwrap_or_else(|_| Timeline::whole(source_duration_ms))
+    }
 }
 
 #[cfg(test)]

@@ -14,8 +14,11 @@
 
 pub mod error;
 pub mod ids;
+pub mod migrate;
 pub mod model;
 pub mod model_cues;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod time;
 pub mod validate;
 mod validate_media;
