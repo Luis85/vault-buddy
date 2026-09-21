@@ -10,23 +10,33 @@
 //! (`Asset`, `Project`) rather than inventing a second shape for the same
 //! data.
 //!
-//! `ClipboardFragment` and `EffectProps` are the two structs the wire needs
-//! before their owning tasks land (F9: Task 8's clipboard behaviour and
-//! Task 34's per-kind effect defaults, respectively) -- their field sets are
-//! FIXED here and never renamed, but neither is `deny_unknown_fields`: later
-//! tasks only ADD behaviour around them, never new fields to them.
+//! `ClipboardFragment` and `EffectProps` are two of the structs the wire
+//! needs before their owning tasks land (F9: Task 8's clipboard behaviour,
+//! Task 34's per-kind effect defaults). Their STRUCT NAMES and enum tags
+//! are FIXED here and never renamed; their FIELD SETS may still grow as
+//! later tasks need them (the brief's rule) -- editing one of the per-kind
+//! effect structs below to add a field is a normal future evolution, not a
+//! reopening of the decision recorded here. The per-kind effect structs
+//! (not `ClipboardFragment`) ARE individually `#[serde(deny_unknown_
+//! fields)]` -- controller ruling, Task 6 fix round 1 -- which is a
+//! DIFFERENT guarantee than "this shape is closed forever": it rejects a
+//! field that belongs to a DIFFERENT kind (e.g. `fontSize`, a `text`-only
+//! field, on an `arrow` effect) as a decode error today, not a silently
+//! swallowed typo.
 //!
-//! **Decision, recorded per the task brief**: `EffectProps` is a single flat
-//! struct with every field `Option`, not a Rust enum tagged by `kind`.
-//! `addEffect`'s wire shape is `{clipId, kind, startMs, endMs, props}`, with
-//! `kind` a SIBLING of `props` -- serde has no way to tag an enum from a
-//! sibling field's value ("untagged-by-sibling" is not expressible), and
-//! duplicating the tag inside `props` (an internally-tagged `EffectProps`
-//! enum with its own `kind`) would let the two disagree (e.g. outer
-//! `kind: "arrow"` beside `props: {kind: "text", ...}`). A flat struct
-//! carrying the union of every kind's fields sidesteps that: Task 34 is the
-//! one that validates `props` against the OUTER `kind` and applies
-//! per-kind defaults for whatever the caller omitted.
+//! **Decision, recorded per controller ruling (Task 6 fix round 1)**:
+//! `EffectProps` is the seven-variant union the original brief named
+//! (`Text`/`Arrow`/`Highlight`/`Spotlight`/`Zoom`/`Step`/`Mask`), one
+//! variant per `EffectKind`, not the flat 15-field struct Task 6 shipped
+//! first. `addEffect`'s wire shape is `{clipId, kind, startMs, endMs,
+//! props}` with `kind` (wire name `effectKind`) a SIBLING of `props`; a
+//! plain `#[derive(Deserialize)]` cannot make `props`'s shape depend on a
+//! sibling field's value, so `AddEffectPayload` gets a hand-written
+//! `Deserialize` (below) that reads `effectKind` first and decodes `props`
+//! into the matching variant via `EffectProps::from_kind_and_value`.
+//! `EffectProps` itself derives `Serialize` only, as `#[serde(untagged)]`
+//! (a variant serializes as exactly its own flat fields, no second tag) --
+//! see `EffectProps`'s own doc for why it does NOT derive `Deserialize`.
 
 use serde::{Deserialize, Serialize};
 
@@ -402,13 +412,17 @@ pub struct InsertIntroPayload {
     pub subtitle: String,
 }
 
-// ---- effects ----------------------------------------------------------
+// ---- effects ------------------------------------------------------------
 
-/// See the module doc: a flat struct, every field `Option`, validated
-/// against the sibling `kind` at apply time (Task 34).
+/// One effect kind's own field set (Task 34's Behavior section, per the
+/// cross-task facts this task's brief carried). Every field is `Option`:
+/// Task 34 applies per-kind defaults for whatever a caller omits, so
+/// nothing here is required at the wire layer -- but `deny_unknown_fields`
+/// still rejects a field that belongs to a DIFFERENT kind (see the module
+/// doc).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EffectProps {
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TextEffectProps {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -425,20 +439,153 @@ pub struct EffectProps {
     pub color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<bool>,
+}
+
+/// See `TextEffectProps`'s doc.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArrowEffectProps {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x2: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub y2: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke: Option<Num>,
+}
+
+/// See `TextEffectProps`'s doc.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HighlightEffectProps {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub w: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<Num>,
+}
+
+/// See `TextEffectProps`'s doc.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SpotlightEffectProps {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub w: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dim: Option<Num>,
+}
+
+/// See `TextEffectProps`'s doc.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ZoomEffectProps {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub factor: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub easing: Option<Num>,
+}
+
+/// See `TextEffectProps`'s doc.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StepEffectProps {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub number: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+/// See `TextEffectProps`'s doc.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaskEffectProps {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub w: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h: Option<Num>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+/// The seven-kind union (see the module doc for the representation
+/// decision). `#[serde(untagged)]` serializes a variant as exactly its own
+/// struct's fields -- no second tag inside `props` -- which is what makes
+/// `AddEffectPayload`'s `{effectKind, ..., props: {..flat fields..}}`
+/// shape round-trip.
+///
+/// Deliberately NOT `Deserialize`: an untagged enum decodes by trying each
+/// variant in declaration order until one parses, and since EVERY field on
+/// EVERY variant here is `Option`, that guess is hopelessly ambiguous --
+/// `{"x": 1, "y": 2}` would parse as `Text` (the first variant) no matter
+/// which kind the caller actually meant. Decoding instead goes through
+/// `from_kind_and_value`, driven by the SIBLING `effectKind` field on the
+/// command that carries this (`AddEffectPayload`'s hand-written
+/// `Deserialize`, below) or by the target effect's existing kind
+/// (`UpdateEffectPayload`'s doc).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum EffectProps {
+    Text(TextEffectProps),
+    Arrow(ArrowEffectProps),
+    Highlight(HighlightEffectProps),
+    Spotlight(SpotlightEffectProps),
+    Zoom(ZoomEffectProps),
+    Step(StepEffectProps),
+    Mask(MaskEffectProps),
+}
+
+impl EffectProps {
+    /// Decodes `value` into the variant matching `kind`, rejecting any
+    /// field that kind's struct does not declare (each struct's own
+    /// `deny_unknown_fields`) -- e.g. `fontSize` (a `text`-only field) on
+    /// an `arrow`'s `props` is a decode error, not a silently-dropped
+    /// typo.
+    pub fn from_kind_and_value(
+        kind: EffectKind,
+        value: serde_json::Value,
+    ) -> Result<Self, serde_json::Error> {
+        Ok(match kind {
+            EffectKind::Text => EffectProps::Text(serde_json::from_value(value)?),
+            EffectKind::Arrow => EffectProps::Arrow(serde_json::from_value(value)?),
+            EffectKind::Highlight => EffectProps::Highlight(serde_json::from_value(value)?),
+            EffectKind::Spotlight => EffectProps::Spotlight(serde_json::from_value(value)?),
+            EffectKind::Zoom => EffectProps::Zoom(serde_json::from_value(value)?),
+            EffectKind::Step => EffectProps::Step(serde_json::from_value(value)?),
+            EffectKind::Mask => EffectProps::Mask(serde_json::from_value(value)?),
+        })
+    }
 }
 
 /// `addEffect{clipId, kind, startMs, endMs, props}`. `start_ms`/`end_ms`
@@ -448,7 +595,14 @@ pub struct EffectProps {
 /// renamed `effectKind` -- see `AddTrackPayload`'s doc for why a payload's
 /// own `kind` field cannot share the JSON level with `EditorCommand`'s
 /// internally-tagged `"kind"`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// `Deserialize` is hand-written below, not derived: `props` must be
+/// decoded according to the SIBLING `effectKind` field, which a plain
+/// `#[derive(Deserialize)]` cannot express (one field's shape cannot
+/// depend on another field's value in a derived impl). `Serialize` stays
+/// derived -- `EffectProps`'s own `#[serde(untagged)]` already produces
+/// the flat `props` object this needs.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddEffectPayload {
     pub clip_id: String,
@@ -459,6 +613,41 @@ pub struct AddEffectPayload {
     pub props: EffectProps,
 }
 
+impl<'de> Deserialize<'de> for AddEffectPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Raw {
+            clip_id: String,
+            #[serde(rename = "effectKind")]
+            kind: EffectKind,
+            start_ms: u64,
+            end_ms: u64,
+            props: serde_json::Value,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let props = EffectProps::from_kind_and_value(raw.kind, raw.props)
+            .map_err(serde::de::Error::custom)?;
+        Ok(AddEffectPayload {
+            clip_id: raw.clip_id,
+            kind: raw.kind,
+            start_ms: raw.start_ms,
+            end_ms: raw.end_ms,
+            props,
+        })
+    }
+}
+
+/// `updateEffect{effectId, startMs?, endMs?, props?}`. `props` stays a raw
+/// `serde_json::Value` here rather than `EffectProps` -- an update carries
+/// no sibling `effectKind` (an effect's kind cannot change once it
+/// exists), so there is nothing for a decoder to dispatch on at THIS
+/// layer. Task 34, which has the live `Project` (and therefore the target
+/// effect's EXISTING kind) in hand at apply time, is the one that calls
+/// `EffectProps::from_kind_and_value` against it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateEffectPayload {
@@ -468,7 +657,7 @@ pub struct UpdateEffectPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub props: Option<EffectProps>,
+    pub props: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -600,3 +789,10 @@ pub struct RestoreSnapshotPayload {
 pub struct RelinkAssetsPayload {
     pub asset_ids: Vec<String>,
 }
+
+// Tests live in the sibling `payloads_tests.rs` (not inline) so this file
+// stays well under the 800-nonblank-line Rust cap (the `validate.rs`/
+// `validate_tests.rs` precedent).
+#[cfg(test)]
+#[path = "payloads_tests.rs"]
+mod tests;

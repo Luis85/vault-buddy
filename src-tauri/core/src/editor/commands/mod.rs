@@ -429,11 +429,11 @@ mod tests {
                     kind: EffectKind::Highlight,
                     start_ms: 0,
                     end_ms: 500,
-                    props: EffectProps {
+                    props: EffectProps::Highlight(HighlightEffectProps {
                         x: Some(num(0)),
                         y: Some(num(0)),
                         ..Default::default()
-                    },
+                    }),
                 }),
             ),
             (
@@ -625,11 +625,16 @@ mod tests {
             kind: EffectKind::Highlight,
             start_ms: 0,
             end_ms: 500,
-            props: EffectProps::default(),
+            props: EffectProps::Highlight(HighlightEffectProps::default()),
         });
         let value = serde_json::to_value(&add_effect).unwrap();
         assert_eq!(value["kind"], "addEffect");
         assert_eq!(value["effectKind"], "highlight");
+        assert_eq!(
+            serde_json::from_value::<EditorCommand>(value).unwrap(),
+            add_effect,
+            "addEffect must round-trip through its hand-written Deserialize too"
+        );
     }
 
     #[test]
