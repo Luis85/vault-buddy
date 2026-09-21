@@ -66,6 +66,22 @@ function mountTab(
   return { wrapper: active, calls };
 }
 
+/** Drive a SelectMenu: open the trigger, then click the option.
+ *
+ * The popup is Teleported to document.body, so it is NOT inside the wrapper —
+ * the same helper RecordingConfigTab's suite uses, for the same reason. */
+const pick = async (
+  wrapper: ReturnType<typeof mount>,
+  testid: string,
+  value: string | number,
+) => {
+  await wrapper.get(`[data-testid="${testid}"]`).trigger("click");
+  (
+    document.body.querySelector(`[data-testid="${testid}-option-${value}"]`) as HTMLElement
+  ).click();
+  await flushPromises();
+};
+
 /** The `cfg` payload of the last set call. */
 function lastSaved(calls: Array<{ cmd: string; args: unknown }>) {
   // Indexed rather than `.at(-1)`: the project's tsconfig lib predates
@@ -96,14 +112,14 @@ describe("ScreenCaptureConfigTab", () => {
       (wrapper.get("[data-testid='screen-date-folders-toggle']")
         .element as HTMLInputElement).checked,
     ).toBe(true);
-    expect(
-      (wrapper.get("[data-testid='screen-quality-select']")
-        .element as HTMLSelectElement).value,
-    ).toBe("high");
-    expect(
-      (wrapper.get("[data-testid='screen-fps-select']")
-        .element as HTMLSelectElement).value,
-    ).toBe("60");
+    // A SelectMenu renders its trigger as a button showing the option LABEL
+    // (a native <select> is deliberately not used — see the component).
+    expect(wrapper.get("[data-testid='screen-quality-select']").text()).toContain(
+      "High",
+    );
+    expect(wrapper.get("[data-testid='screen-fps-select']").text()).toContain(
+      "60 fps",
+    );
     expect(
       (wrapper.get("[data-testid='screen-create-note-toggle']")
         .element as HTMLInputElement).checked,
@@ -122,10 +138,7 @@ describe("ScreenCaptureConfigTab", () => {
     const { wrapper, calls } = mountTab();
     await flushPromises();
 
-    const quality = wrapper.get("[data-testid='screen-quality-select']");
-    (quality.element as HTMLSelectElement).value = "low";
-    await quality.trigger("change");
-    await flushPromises();
+    await pick(wrapper, "screen-quality-select", "low");
 
     // Every field travels on every save: the command is a whole-DTO
     // read-modify-write, so a partial payload would write serde's defaults
@@ -141,18 +154,16 @@ describe("ScreenCaptureConfigTab", () => {
     });
   });
 
-  // A <select>'s value is ALWAYS a string. screenFps crosses IPC as a u32,
-  // and serde rejects "60" rather than coercing it -- so a missing Number()
-  // makes the frame-rate control fail every save while the quality control
-  // beside it works, which reads as the setting being broken.
-  it("sends the frame rate as a number, never the select's string", async () => {
+  // screenFps crosses IPC as a u32 and serde rejects "60" rather than
+  // coercing it, so a string here fails every save while the quality control
+  // beside it works -- which reads as the setting being broken. SelectMenu
+  // emits the option's OWN value, so a number stays a number; that is a
+  // property of the options table, which is what this pins.
+  it("sends the frame rate as a number, never a string", async () => {
     const { wrapper, calls } = mountTab();
     await flushPromises();
 
-    const fps = wrapper.get("[data-testid='screen-fps-select']");
-    (fps.element as HTMLSelectElement).value = "60";
-    await fps.trigger("change");
-    await flushPromises();
+    await pick(wrapper, "screen-fps-select", 60);
 
     expect(lastSaved(calls)?.screenFps).toBe(60);
     expect(typeof lastSaved(calls)?.screenFps).toBe("number");

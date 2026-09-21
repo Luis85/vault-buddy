@@ -5,6 +5,7 @@ import { onMounted, ref } from "vue";
 import { useAutosave } from "../composables/useAutosave";
 import { useSettingsLoad } from "../composables/useSettingsLoad";
 import type { ScreenCaptureConfig } from "../types";
+import SelectMenu from "./SelectMenu.vue";
 import Banner from "./ui/Banner.vue";
 import VaultFolderSetting from "./VaultFolderSetting.vue";
 
@@ -28,17 +29,30 @@ const screenCreateNote = ref(true);
 const screenExtraFrontmatter = ref("");
 const screenBodyTemplate = ref("");
 
-// The KEYS the Rust parser reads, not display words: one spelling serves the
-// wire, config.json and ScreenQuality::from_key.
+// SelectMenu, not a native <select>, and that is the point rather than a
+// preference. A <select>'s option popup is drawn by the OS, and it takes its
+// surface from the control's own background -- `bg-white/5` composites to
+// near-white, on which the panel's `text-fg` (slate-100) is invisible. The
+// page already sets `color-scheme: dark`, which is not enough once an
+// explicit background is in play. Every other dropdown in the app is a
+// SelectMenu for this reason; this tab was the only raw <select> left.
+//
+// The option VALUES are the keys the Rust parser reads -- one spelling for
+// the wire, config.json and ScreenQuality::from_key -- and the fps values
+// stay NUMBERS, since SelectMenu emits the option's own value and screenFps
+// crosses IPC as a u32 that serde will not coerce from a string.
 const QUALITIES = [
-  { key: "low", label: "Low — smallest files" },
-  { key: "balanced", label: "Balanced" },
-  { key: "high", label: "High — sharpest text" },
+  { value: "low", label: "Low — smallest files" },
+  { value: "balanced", label: "Balanced" },
+  { value: "high", label: "High — sharpest text" },
 ];
 
 // Rust REFUSES anything but these two rather than normalising, so the
 // control offers exactly them and cannot send a third.
-const FRAME_RATES = [30, 60];
+const FRAME_RATES = [
+  { value: 30, label: "30 fps" },
+  { value: 60, label: "60 fps" },
+];
 
 // Written in a script string, never inline in template text: Vue's mustache
 // tokenizer finds the FIRST `}}` textually, so typing it into the markup
@@ -100,14 +114,12 @@ function onCreateNoteToggle(event: Event) {
   screenCreateNote.value = (event.target as HTMLInputElement).checked;
   autosave.saveNow();
 }
-function onQualityChange(event: Event) {
-  screenQuality.value = (event.target as HTMLSelectElement).value;
+function onQualityChange(value: string | number) {
+  screenQuality.value = String(value);
   autosave.saveNow();
 }
-// Number(), because a <select>'s value is always a string and screenFps
-// crosses IPC as a u32 — a "30" would be rejected by serde, not coerced.
-function onFpsChange(event: Event) {
-  screenFps.value = Number((event.target as HTMLSelectElement).value);
+function onFpsChange(value: string | number) {
+  screenFps.value = Number(value);
   autosave.saveNow();
 }
 function onExtraFrontmatterInput(event: Event) {
@@ -175,21 +187,15 @@ function onBodyTemplateInput(event: Event) {
         >
           Quality
         </label>
-        <select
+        <SelectMenu
           id="screen-quality"
           data-testid="screen-quality-select"
-          class="w-full rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg focus:border-focus focus:outline-none"
-          :value="screenQuality"
-          @change="onQualityChange"
-        >
-          <option
-            v-for="q in QUALITIES"
-            :key="q.key"
-            :value="q.key"
-          >
-            {{ q.label }}
-          </option>
-        </select>
+          aria-label="Quality"
+          wide
+          :model-value="screenQuality"
+          :options="QUALITIES"
+          @update:model-value="onQualityChange"
+        />
         <p class="text-xs text-fg-subtle">
           Applies to an EDITED save, which re-encodes. An untouched capture is
           copied as recorded, so this does not affect it.
@@ -202,21 +208,15 @@ function onBodyTemplateInput(event: Event) {
         >
           Frame rate
         </label>
-        <select
+        <SelectMenu
           id="screen-fps"
           data-testid="screen-fps-select"
-          class="w-full rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg focus:border-focus focus:outline-none"
-          :value="screenFps"
-          @change="onFpsChange"
-        >
-          <option
-            v-for="fps in FRAME_RATES"
-            :key="fps"
-            :value="fps"
-          >
-            {{ fps }} fps
-          </option>
-        </select>
+          aria-label="Frame rate"
+          wide
+          :model-value="screenFps"
+          :options="FRAME_RATES"
+          @update:model-value="onFpsChange"
+        />
         <p class="text-xs text-fg-subtle">
           Applies to the NEXT recording, not one already staged.
         </p>

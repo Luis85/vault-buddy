@@ -12,6 +12,12 @@ export default defineConfig({
   envPrefix: ["VITE_", "TAURI_ENV_"],
   test: {
     environment: "happy-dom",
+    // The Playwright specs live under tests/e2e and are driven by
+    // `playwright.config.ts` against a real Chromium and the built dist/.
+    // Vitest's default glob would otherwise collect them, import
+    // @playwright/test inside happy-dom, and fail on a connection refused —
+    // a confusing red that says nothing about either suite.
+    exclude: ["**/node_modules/**", "**/dist/**", "tests/e2e/**"],
     coverage: {
       // Istanbul over v8: portable coverage/ artifact and stable numbers for
       // the rise-only floors below.
