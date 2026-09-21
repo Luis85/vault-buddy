@@ -4370,9 +4370,10 @@ window is NOT excluded by declaring it (the config-pin test is inverted —
 `main` in, everything else out), it is excluded by being ADDED to
 `EXCLUDED_LABELS`, and that addition is a hardware decision: a sixth
 WebView2 window under affinity is exactly the hazard just found. So the
-design's own trap list gains a first entry — prove on hardware that THIS
+design's own trap list gained a first entry — prove on hardware that THIS
 window can carry the affinity without reproducing GAP-166 (rows 16, 17, 43)
-before anything else — and keeps the rest: the window must be DECLARED in
+before anything else. **That probe has now been RUN, and it is clean**
+(below). The rest of the trap list stands: the window must be DECLARED in
 `tauri.conf.json` rather than built at runtime (`capture_exclusion`'s
 one-shot apply goes blind to a runtime-built window), it needs
 `set_ignore_cursor_events(true)` before it is
@@ -4380,6 +4381,47 @@ first shown (without it the indicator is a full-region transparent window
 swallowing every click for the whole capture, "strictly worse than no
 indicator at all"), and `focus: false` so it cannot blur the panel and trip
 `schedule_focus_out_check`.
+
+**The premise probe (2026-09-21, the reporter's machine — CLEAN).** Before
+any design or code, the question GAP-166 raised was settled by one
+one-variable rebuild: is a SECOND WebView2 window under display affinity
+hazardous as such, or was the editor specifically the problem? The probe
+excluded a second window, `EXCLUDED_LABELS = ["main", "panel"]`, and the
+reporter ran several captures.
+
+`panel` was chosen on two grounds, and the first is why one rebuild was
+enough. Measured from `tauri.conf.json`, `panel` and `bubble` are
+configurationally identical to each other and to the indicator the spec
+proposes — `transparent`, `decorations: false`, `alwaysOnTop`,
+`resizable: false`, `skipTaskbar`, `shadow: false`, `focus: false` — differing
+only in size, and `main`, the one window already proven clean, is that same
+shape minus `focus: false`. `editor` is the only structurally different
+window in the app (opaque, decorated, resizable, in the taskbar, not
+always-on-top), and it is the one that visibly stopped painting. So `panel`
+probes the indicator's exact shape class. Second, it is the one window that
+can be kept visible and clicked throughout a capture, so a single run
+answers both of GAP-166's symptoms.
+
+The prediction was stated before the run: a hazard belonging to the editor
+specifically would leave this clean, and a hazard belonging to "any second
+excluded WebView2 window" would reproduce.
+
+**Result, across several capture sessions:** Explorer's toolbar and Notepad's
+menu bar both still take clicks AFTER a capture stops with Vault Buddy still
+running — the exact symptom, checked deliberately rather than inferred from
+the app looking fine — and the panel painted normally throughout each
+capture. Nothing reproduced.
+
+**What that licenses, and what it does not.** It licenses proceeding: a
+second window of the indicator's shape class can carry the affinity
+round-trip on this machine. It does NOT identify what made the other four
+hazardous — `editor` is now the leading suspect and `panel` is exonerated,
+but `bubble` and `overlay` were never probed individually and the count
+hypothesis is only weakened, not killed, since this probe tested two
+excluded windows and the broken set had five. So the inverted config-pin
+test stays exactly as it is: the indicator is excluded by being ADDED to
+`EXCLUDED_LABELS` with this evidence named, not by being declared, and the
+next window after it needs its own run.
 
 **Residuals:**
 
