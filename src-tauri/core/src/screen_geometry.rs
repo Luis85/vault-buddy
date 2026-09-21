@@ -116,6 +116,39 @@ pub fn clamp_to_frame(rect: PhysicalRect, frame_w: u32, frame_h: u32) -> Option<
     })
 }
 
+/// Where an indicator window tracing `rect` sits on the virtual desktop.
+///
+/// `rect` is PHYSICAL pixels relative to its own monitor's origin (see this
+/// module's doc for why that distinction is load-bearing); a window's
+/// position is virtual-desktop coordinates. This translation is the whole
+/// of the function.
+///
+/// It is a function rather than an inline addition because omitting the
+/// origin fails SILENTLY in the worst way: the border lands on the primary
+/// monitor while the capture records the secondary one -- precisely the
+/// confusion the region indicator exists to remove. Inline, nothing could
+/// pin it; here, Linux can, and does, on hardware nobody has.
+///
+/// The position is SIGNED: a monitor left of or above the primary has
+/// negative virtual-desktop coordinates. The size is the rect's own, and is
+/// never the monitor's.
+pub fn indicator_bounds(monitor_origin: (i32, i32), rect: PhysicalRect) -> (i32, i32, u32, u32) {
+    // `try_from` rather than `as`: a u32 above i32::MAX would wrap to a
+    // NEGATIVE offset and place the border on another monitor entirely.
+    // Unreachable in practice -- `clamp_to_frame` has already bounded the
+    // rect by the monitor's own size -- so it saturates rather than
+    // returning an Option every caller would have to invent a behaviour
+    // for.
+    let dx = i32::try_from(rect.x).unwrap_or(i32::MAX);
+    let dy = i32::try_from(rect.y).unwrap_or(i32::MAX);
+    (
+        monitor_origin.0.saturating_add(dx),
+        monitor_origin.1.saturating_add(dy),
+        rect.width,
+        rect.height,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,5 +438,53 @@ mod tests {
             clamp_to_frame(physical, 1920, 1080).map(|r| r.width),
             Some(600)
         );
+    }
+
+    // The three tests below are deliberately ASYMMETRIC -- a non-zero
+    // origin whose components differ, and a non-square rect. A square rect
+    // at the origin distinguishes none of the three ways this can be wrong
+    // (dropping the offset, adding it to the wrong axis, transposing width
+    // and height), and this addition is the one the indicator's design
+    // calls the single most likely thing to get wrong.
+
+    #[test]
+    fn a_region_on_a_monitor_at_the_origin_is_the_rect_itself() {
+        // The numbers the 2026-09-21 verification pass actually reported
+        // for checklist row 11, so a reader can line the two up.
+        let rect = PhysicalRect {
+            x: 770,
+            y: 290,
+            width: 1840,
+            height: 1684,
+        };
+        assert_eq!(indicator_bounds((0, 0), rect), (770, 290, 1840, 1684));
+    }
+
+    #[test]
+    fn the_monitor_origin_is_added_to_both_axes_independently() {
+        let rect = PhysicalRect {
+            x: 10,
+            y: 20,
+            width: 300,
+            height: 400,
+        };
+        // Omitting the offset gives (10, 20); crossing the axes gives
+        // (130, -1900); transposing the size gives (.., 400, 300).
+        assert_eq!(indicator_bounds((-1920, 120), rect), (-1910, 140, 300, 400));
+    }
+
+    #[test]
+    fn a_monitor_left_of_and_above_the_primary_keeps_negative_coordinates() {
+        // A window's position is virtual-desktop coordinates, which are
+        // SIGNED. Returning unsigned here would put a secondary monitor's
+        // border on the primary -- the exact confusion the indicator
+        // exists to remove.
+        let rect = PhysicalRect {
+            x: 5,
+            y: 7,
+            width: 64,
+            height: 32,
+        };
+        assert_eq!(indicator_bounds((-2560, -300), rect), (-2555, -293, 64, 32));
     }
 }
