@@ -4377,3 +4377,55 @@ indicator at all"), and `focus: false` so it cannot blur the panel and trip
   `docs/superpowers/specs/`. This one was found because a user hit its
   symptom; there is no mechanism that would have surfaced it otherwise, and
   the same mechanism (or absence of one) covers every other spec in there.
+
+### GAP-166 · High · Windows Explorer's toolbar stops accepting clicks while Vault Buddy is running — UNLOCALISED
+Reported by the 2026-09-21 manual pass: *"in windows explorer the top tool
+bar is not clickable anymore when the recording editor window is active or
+the vault buddy is active."*
+
+**This entry deliberately proposes no cause.** Two hypotheses were formed and
+both were killed by the reporter's own answers; a third would be guessing,
+which is what the systematic-debugging skill exists to stop. What follows is
+only what is established.
+
+**Established:**
+
+- It is OUR app. The reporter confirms it does **not** persist after tray →
+  Quit.
+- It is **not the buddy window covering it**. The buddy is 88x88 and parked
+  bottom-right; the affected toolbar is at the top of the screen.
+- It affects the **whole toolbar width**, not a small patch — so it is not
+  any of our small transparent windows sitting over a corner of it.
+- It occurs while **the editor** is the active window, and the editor is
+  `alwaysOnTop: false` (verified in `tauri.conf.json`). That is the fact that
+  kills the whole "a topmost window of ours is over it" family of
+  explanations: when the editor has focus, nothing of ours is necessarily
+  above Explorer at all.
+- The 1 s metronome's always-on-top re-assert is not a candidate:
+  `window_upkeep_tick` fetches `"main"` alone and returns early unless it is
+  visible, so it never touches another window's z-order.
+
+**Not established:** whether it needs a capture to have run first; whether
+the panel is open when it happens; whether the first click is swallowed and a
+second works. Those three are the discriminators and they have been put to
+the reporter.
+
+**Why this is High rather than Medium.** It degrades an application the user
+did not launch us to affect, it is invisible from inside our app, and the
+only remedy the reporter has found is quitting Vault Buddy. Whatever the
+cause, a companion app that quietly breaks File Explorer is worse than any
+defect inside our own surfaces.
+
+**Constraints a fix must respect** (from the window-system section, so a
+future fix does not trade this for a worse regression):
+
+- The buddy's always-on-top is re-asserted every tick on purpose — Windows
+  re-shuffles the topmost band when taskbar previews and flyouts appear, and
+  no event reaches us, so dropping the re-assert puts the buddy behind the
+  taskbar.
+- `set_ignore_cursor_events` is NOT a blanket answer: the buddy and panel
+  must stay clickable, and the one window the approved region-indicator
+  design does apply it to (GAP-165) does not exist yet.
+- Any change here touches `cfg(windows)` behaviour that no automated gate on
+  any platform can observe (GAP-117/GAP-163), so it needs a checklist row of
+  its own and a hardware re-run, not a green CI badge.
