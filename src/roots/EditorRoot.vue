@@ -25,16 +25,11 @@ import ExportBar from "../components/editor/ExportBar.vue";
 import TimelineStrip from "../components/editor/TimelineStrip.vue";
 import AppButton from "../components/ui/AppButton.vue";
 import Banner from "../components/ui/Banner.vue";
+import { useEditorExport } from "../composables/useEditorExport";
 import { useEditorSelection } from "../composables/useEditorSelection";
 import { useEditorTimeline } from "../composables/useEditorTimeline";
 import { logWarning } from "../logging";
-import type {
-  ExportFailure,
-  ExportProgress,
-  ExportResult,
-  StagedCaptureDetail,
-  TimelineDto,
-} from "../types";
+import type { StagedCaptureDetail, TimelineDto } from "../types";
 import { wholeTimeline } from "../utils/timelineGeometry";
 
 const detail = ref<StagedCaptureDetail | null>(null);
@@ -85,23 +80,25 @@ const src = computed(() =>
  * banner, because the editor stays perfectly usable. */
 const saveFailed = computed(() => editor.value?.saveFailed.value ?? false);
 
-/** Spec 8.3's export, as this window sees it. EVERY one of these is reset by
- * `load()` (`resetExport`): the editor window is HIDDEN and REUSED, so a ref
- * that survives a capture is a chance to show the previous one's state under
- * the new one's title — and a stale `done` is the sharpest of them, because
- * `done` is the one state with no Save button in it at all. */
-const exportPhase = ref<"idle" | "exporting" | "done" | "failed">("idle");
-const exportFraction = ref(0);
-const exportMessage = ref<string | null>(null);
-/** What Open launches: the NOTE when the vault writes one, the video
- * otherwise. The note is the richer destination — it embeds the video, the
- * way the audio domain's note embeds its audio — and with notes turned off
- * there is none, so the video is the only answer.
- * `staged_commands::capture_file_param` takes either: it drops the extension
- * for exactly-`.md` and keeps it otherwise. */
-const savedPath = ref<string | null>(null);
-const savedVaultId = ref<string | null>(null);
-const discardBusy = ref(false);
+/** Spec 8.3's export — the state machine feeding `ExportBar`, its four
+ * `screen:export*` listeners and the bar's verbs — lives in
+ * `useEditorExport`. Discard is the one verb that changes what this window
+ * shows, so it reports back rather than writing `detail` itself. */
+const {
+  exportPhase,
+  exportFraction,
+  exportMessage,
+  discardBusy,
+  resetExport,
+  onSave,
+  onCancelExport,
+  onDiscard,
+  onOpenSaved,
+  listenExportEvents,
+} = useEditorExport(detail, () => {
+  detail.value = null;
+  noCapture.value = true;
+});
 
 /** Is there any footage left to export? A UI HINT, not the rule:
  * `export::export_refusal` is the authority and refuses an empty timeline
@@ -115,122 +112,6 @@ const discardBusy = ref(false);
  * `tests/fixtures/timeline-cases.json` holds against `core::timeline`, and a
  * hand-rolled predicate is held against nothing (docs/Gaps.md GAP-136). */
 const canSave = computed(() => (editor.value?.outputMs.value ?? 0) > 0);
-
-/** Every `screen:export*` event is emitted APP-WIDE and carries the base it
- * is about. This window edits exactly one capture and is reused, so an editor
- * reopened on B while A is still exporting would otherwise render A's
- * progress — and, worse, A's "Saved" under B's title. */
-function addressesOpenCapture(base: string): boolean {
-  return detail.value !== null && detail.value.base === base;
-}
-
-function onExportProgress(p: ExportProgress) {
-  if (!addressesOpenCapture(p.base)) return;
-  // A progress tick IS an export running, so it drives the phase as well as
-  // the number: the bar cannot show a fraction it is not rendering a bar for.
-  exportPhase.value = "exporting";
-  exportFraction.value = p.fraction;
-}
-
-function onExported(p: ExportResult) {
-  if (!addressesOpenCapture(p.base)) return;
-  exportPhase.value = "done";
-  exportFraction.value = 1;
-  savedPath.value = p.notePath ?? p.videoPath;
-  savedVaultId.value = p.vaultId;
-  // A warning means the video landed and its note did not: a degraded
-  // SUCCESS. Dropping it would leave the user believing in a note that is
-  // not there.
-  // `vaultName` and not `vaultId`: the id is Obsidian's opaque hex registry
-  // key, which names nothing to a human. A payload written by an older build
-  // (or a test) carries no name, so fall back rather than render "undefined".
-  exportMessage.value =
-    p.warning ??
-    (p.vaultName ? `Saved ${p.base} to ${p.vaultName}.` : `Saved ${p.base} into your vault.`);
-}
-
-/** Spec 14: a cancel keeps the staged capture AND its timeline. There is
- * nothing to apologise for, so no message and no banner — the bar returns to
- * exactly the state Save was pressed from. */
-function onExportCancelled(p: { base: string }) {
-  if (!addressesOpenCapture(p.base)) return;
-  resetExport();
-}
-
-function onExportFailed(p: ExportFailure) {
-  if (!addressesOpenCapture(p.base)) return;
-  exportPhase.value = "failed";
-  exportFraction.value = 0;
-  exportMessage.value = p.message;
-}
-
-function resetExport() {
-  exportPhase.value = "idle";
-  exportFraction.value = 0;
-  exportMessage.value = null;
-  savedPath.value = null;
-  savedVaultId.value = null;
-}
-
-async function onSave() {
-  const base = detail.value?.base;
-  if (base === undefined) return;
-  exportPhase.value = "exporting";
-  exportFraction.value = 0;
-  exportMessage.value = null;
-  try {
-    await invoke("export_and_save_capture", { base });
-  } catch (e) {
-    // The command REJECTS for anything it decides before a worker starts — no
-    // ffmpeg, a refused base, no disk space. No `screen:exportFailed` follows
-    // one of those, so a root that only listened would sit at "exporting"
-    // forever.
-    exportPhase.value = "failed";
-    exportMessage.value = String(e);
-  }
-}
-
-async function onCancelExport() {
-  try {
-    await invoke("cancel_export");
-  } catch (e) {
-    // The terminal state still arrives as `screen:exportCancelled` or, if
-    // the export had already finished, as `screen:exported`.
-    logWarning(`cancel_export failed: ${String(e)}`);
-  }
-}
-
-/** The bar confirms first; this is the second click. The staged capture is
- * gone afterwards, so the window stops offering it rather than leaving Save
- * pointed at a sidecar that no longer exists. */
-async function onDiscard() {
-  const base = detail.value?.base;
-  if (base === undefined) return;
-  discardBusy.value = true;
-  try {
-    await invoke("discard_staged_capture", { base });
-    detail.value = null;
-    noCapture.value = true;
-    resetExport();
-  } catch (e) {
-    exportPhase.value = "failed";
-    exportMessage.value = String(e);
-  } finally {
-    discardBusy.value = false;
-  }
-}
-
-async function onOpenSaved() {
-  const path = savedPath.value;
-  const id = savedVaultId.value;
-  if (path === null || id === null) return;
-  try {
-    await invoke("open_screen_capture", { id, path });
-  } catch (e) {
-    exportPhase.value = "failed";
-    exportMessage.value = String(e);
-  }
-}
 
 async function load(base: string) {
   // Let the capture we are LEAVING finish writing before we read anything.
@@ -367,10 +248,7 @@ onMounted(async () => {
   // still emitting, and the bar has to be able to see it finish.
   unlisteners.push(
     await listen("editor:open", () => void openRequested()),
-    await listen<ExportProgress>("screen:exportProgress", (e) => onExportProgress(e.payload)),
-    await listen<ExportResult>("screen:exported", (e) => onExported(e.payload)),
-    await listen<{ base: string }>("screen:exportCancelled", (e) => onExportCancelled(e.payload)),
-    await listen<ExportFailure>("screen:exportFailed", (e) => onExportFailed(e.payload)),
+    ...(await listenExportEvents()),
   );
   await openRequested();
 });
