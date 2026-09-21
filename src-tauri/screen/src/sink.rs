@@ -142,6 +142,32 @@ fn to_hns(d: Duration) -> i64 {
     i64::try_from(d.as_nanos() / 100).unwrap_or(i64::MAX)
 }
 
+/// The refusal shown when the H.264 encoder rejects the capture's video
+/// format outright (`MF_E_INVALIDMEDIATYPE` from `SetInputMediaType`).
+///
+/// Media Foundation's own text for this is a bare, LOCALISED HRESULT string —
+/// a user on a German Windows reads "Die für den Medientyp angegebenen Daten
+/// sind ungültig" and has nothing to act on. `ScreenError::Refused` exists so
+/// a condition the app can describe is never dressed up as somebody else's
+/// error, and this is one: we know the size and the frame rate we asked for.
+///
+/// The remedy DIFFERS by frame rate, which is the whole reason this branches
+/// rather than printing one sentence. Microsoft's encoder tops out around
+/// 4096x2304 and its level caps trade resolution against rate, so a large
+/// source that encodes happily at 30 is refused at 60 — the reported case was
+/// a 3840x2400 monitor that had recorded fine until the frame rate became
+/// settable. At 30 there is no rate left to give up, so the advice has to be
+/// about the SOURCE instead.
+pub fn unsupported_format_message(width: u32, height: u32, fps: u32) -> String {
+    let head =
+        format!("This machine's H.264 encoder will not record {width}x{height} at {fps} fps.");
+    if fps > 30 {
+        format!("{head} Set Frame rate to 30 fps in Vault settings → Screen, or capture a window or a region instead of the whole screen.")
+    } else {
+        format!("{head} Capture a window or a region instead of the whole screen — a smaller frame is within more encoders' limits.")
+    }
+}
+
 #[cfg(not(windows))]
 mod imp {
     use super::*;
@@ -410,6 +436,16 @@ mod imp {
                         // be misreported as one - see VideoFormat::validate.
                         if e.code() == MF_E_TOPO_CODEC_NOT_FOUND {
                             ScreenError::EncoderUnavailable
+                        } else if e.code() == MF_E_INVALIDMEDIATYPE {
+                            // The encoder exists and refuses THIS format. We
+                            // know the size and rate we asked for, so say so
+                            // and name the remedy rather than surfacing MF's
+                            // own localised HRESULT text (super::tests).
+                            ScreenError::Refused(super::unsupported_format_message(
+                                video.width,
+                                video.height,
+                                video.fps,
+                            ))
                         } else {
                             ScreenError::Sink(format!("configure the video stream: {e}"))
                         }
@@ -531,6 +567,68 @@ pub use imp::FragmentedSink;
 
 #[cfg(test)]
 mod tests {
+    // REGRESSION: reported from the running app. A 3840x2400 monitor had
+    // recorded fine at 30 fps; the moment the settings tab made 60 settable,
+    // `SetInputMediaType` returned MF_E_INVALIDMEDIATYPE and the user was
+    // shown Media Foundation's own LOCALISED HRESULT text:
+    //
+    //   "Die für den Medientyp angegebenen Daten sind ungültig ... (0xC00D36B4)"
+    //
+    // which names neither what was refused nor what to do about it.
+    #[test]
+    fn a_refused_format_names_the_size_the_rate_and_a_remedy() {
+        let at_60 = unsupported_format_message(3840, 2400, 60);
+        assert!(at_60.contains("3840x2400"), "{at_60}");
+        assert!(at_60.contains("60 fps"), "{at_60}");
+        // The remedy the reporter could actually take, naming where it lives.
+        assert!(at_60.contains("30 fps"), "{at_60}");
+        assert!(at_60.contains("Vault settings"), "{at_60}");
+        // Never Media Foundation's own words.
+        assert!(!at_60.contains("0xC00D36B4"), "{at_60}");
+    }
+
+    // The message being right does not prove the sink USES it. That arm is
+    // `cfg(windows)`, so no test on this runner can execute it and the
+    // Windows-target clippy proves only that it type-checks — the GAP-163
+    // class. A source scan is what is left, and it is worth having: dropping
+    // the MF_E_INVALIDMEDIATYPE arm would silently restore the localised
+    // HRESULT the user was shown, with every Linux test still green.
+    #[test]
+    fn the_sink_maps_an_invalid_media_type_to_the_actionable_refusal() {
+        let src = include_str!("sink.rs");
+        let site = src
+            .split("SetInputMediaType(\n                        VIDEO_STREAM")
+            .nth(1)
+            .or_else(|| src.split("configure the video stream").nth(1))
+            .expect("the video SetInputMediaType site");
+        // Only the error closure, not the rest of the file.
+        let closure = &site[..site.len().min(1800)];
+        assert!(
+            closure.contains("MF_E_INVALIDMEDIATYPE"),
+            "the invalid-media-type arm is gone; MF's localised HRESULT would \
+             be shown again: {closure}"
+        );
+        assert!(
+            closure.contains("unsupported_format_message"),
+            "the arm no longer composes the app's own refusal: {closure}"
+        );
+    }
+
+    // At 30 there is no frame rate left to trade, so advice to lower it would
+    // send the user in a circle. The branch is the point of the function.
+    #[test]
+    fn at_thirty_the_remedy_is_the_source_not_the_frame_rate() {
+        let at_30 = unsupported_format_message(3840, 2400, 30);
+        assert!(
+            at_30.contains("window") && at_30.contains("region"),
+            "{at_30}"
+        );
+        assert!(
+            !at_30.contains("30 fps in Vault settings"),
+            "advising 30 fps at 30 fps is a loop: {at_30}"
+        );
+    }
+
     use super::*;
 
     // The Linux compile gate builds this crate. The stub must DEGRADE, not
