@@ -4236,3 +4236,78 @@ forever. Run against the whole shell it found no other instance.
   which needs `ring` to build — a vendored `lib.exe`, a different TLS backend,
   or dropping the dependency that pulls it. Worth pricing before the next
   extraction moves code across a `cfg` boundary again.
+
+### GAP-164 · ~~Medium~~ FIXED 2026-09-21 · An empty monitor name put "Region on " — dangling preposition and all — into a user's vault, because three fallbacks caught `Err` and not `Ok("")`
+Found by the manual Windows pass, by reading a log line nobody was
+scrutinising. `screen/src/source.rs` had the same construction at three
+sites:
+
+```rust
+let title = m.name().unwrap_or_else(|_| format!("Screen {index}"));
+```
+
+`Monitor::name()` is `Result<String, _>`, so that reads as though it covers
+"this monitor has no usable name". It does not — it covers `Err` alone, and
+an `Ok("")` passes through as a perfectly valid empty label. On the
+2026-09-21 machine that is precisely what came back:
+
+```
+screen capture: started (Region on ) -> ...\.2026-09-21 1152 Region on.mp4.part
+screen export: saved 2026-09-21 1152 Region on to C:\...\Screen Captures\2026-09-21 1152 Region on.mp4
+```
+
+**It did not stop at the log, which is why this is Medium and not Low.** The
+resolved title is the capture bar's label, the staging sidecar's
+`sourceTitle`, and — through `sanitize_title` and `capture_paths::base_name`
+— the name of the `.mp4` the export commits into a vault. So a file called
+`2026-09-21 1152 Region on.mp4` is now in somebody's notes, permanently:
+nothing in this app renames a saved capture (GAP-142), so the only remedy is
+Explorer.
+
+`sanitize_title` is what kept it merely ugly rather than broken — it trims a
+trailing space, because Windows silently strips one from a file name and a
+name ending in one stops matching the name that was reserved. The reservation
+machinery was never at risk. The *reading* was.
+
+**FIXED** by one pure function, `source::display_label(name: Option<&str>,
+index: usize)`, used by all three sites: the picker's monitor list, the
+whole-screen resolve, and the region resolve. It takes `Option<&str>` rather
+than the `Result` deliberately — that makes the caller spell `.ok()` and
+leaves the function one question, "is there a usable name?", which is the
+question the three sites kept answering wrong. Whitespace-only is treated as
+absent for the same reason empty is: neither tells a reader which screen this
+is. A test asserts all five arms and reddens with `left: ""` / `right:
+"Screen 2"` when the emptiness filter is removed — the user's exact symptom,
+reproduced.
+
+**The TypeScript twin was deliberately NOT changed.**
+`src/utils/regionLabel.ts` formats `Region on ${monitorTitle}` from whatever
+`list_capture_sources` returns, and site one is now guaranteed non-empty, so
+it is fixed transitively. Adding an emptiness rule there too would be a
+second implementation of the same decision, one IPC hop apart, in a codebase
+that already carries GAP-136 for exactly that shape — and it has no index to
+fall back to anyway.
+
+**What this says about the gates is the larger half.** Every Linux gate was
+green on the broken code and stayed green on the first draft of the fix:
+`cargo test` passed, workspace clippy passed, the new unit test passed. The
+three call sites are inside `cfg(windows)`, and the first version of
+`display_label` took `u32` while all three sites hold a `usize`
+(`Monitor::index()`'s type) — the old `format!("Screen {index}")` accepted
+any `Display`, which is why the original compiled. **`cargo clippy -p
+vault_buddy_screen --target x86_64-pc-windows-msvc` caught all three**, and
+nothing else here could have: that is GAP-163's hole, and this is the second
+time in one day a `cfg(windows)` body would have shipped broken. Run that
+command for any change touching this crate's Windows arms.
+
+**Residuals:**
+
+- Why Windows returned an empty name for that display is not established.
+  Nothing here can reach it, and it does not matter to the fix — an
+  unnameable monitor is exactly what a fallback is for — but it means the
+  `Ok("")` case is real on shipped hardware and not theoretical.
+- The already-saved file in the user's vault is not renamed by this or
+  anything else (GAP-142).
+- The identical `.unwrap_or_else(|_| ...)`-over-a-`Result<String, _>` shape
+  has not been swept for elsewhere in the codebase. This one was found by
+  eye, in a log line, during a manual pass.

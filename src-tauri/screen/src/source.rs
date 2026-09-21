@@ -150,6 +150,38 @@ pub fn region_dims(
     Some((r.x, r.y, r.width, r.height))
 }
 
+/// What to call a monitor: its own name, or `Screen <index>` when it has
+/// none we can use.
+///
+/// THE BUG THIS EXISTS FOR. `Monitor::name()` is a `Result<String, _>`, and
+/// the obvious `.unwrap_or_else(|_| format!("Screen {index}"))` reads as
+/// though it covers the no-name case. It does not: it covers `Err` only, and
+/// an `Ok("")` passes straight through as a perfectly valid empty label. On
+/// the machine of the 2026-09-21 manual pass that is exactly what came back,
+/// so the region arm built `format!("Region on {label}")` out of nothing and
+/// the user's log read `screen capture: started (Region on )`.
+///
+/// It did not stop at the log. The title is the capture bar's label, the
+/// staging sidecar's `sourceTitle`, and — through `sanitize_title` and
+/// `capture_paths::base_name` — the name of the `.mp4` the export commits
+/// into a vault. `sanitize_title` trims the trailing space, so the file was
+/// never malformed; it was just called `2026-09-21 1152 Region on.mp4`,
+/// permanently, in somebody's notes. A dangling preposition is a small thing
+/// to read and not a small thing to have written into a user's knowledge
+/// base, where nothing in this app renames it (docs/Gaps.md GAP-142).
+///
+/// Taking `Option<&str>` rather than the `Result` is deliberate: it makes
+/// the caller spell `.ok()` and leaves this function with one question to
+/// answer — is there a usable name? — which is the question the three call
+/// sites kept getting wrong. Whitespace-only is treated as absent for the
+/// same reason empty is: neither tells a reader which screen this is.
+pub fn display_label(name: Option<&str>, index: usize) -> String {
+    match name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(name) => name.to_string(),
+        None => format!("Screen {index}"),
+    }
+}
+
 /// A source re-checked at START time and ready to capture.
 pub struct ResolvedSource {
     pub handle: SourceHandle,
@@ -275,7 +307,7 @@ mod imp {
                         continue;
                     };
                     let is_primary = index == 1; // Monitor::index is 1-based
-                    let title = m.name().unwrap_or_else(|_| format!("Screen {index}"));
+                    let title = display_label(m.name().ok().as_deref(), index);
                     let detail = if is_primary {
                         format!("{width}x{height} - Primary")
                     } else {
@@ -373,7 +405,7 @@ mod imp {
                 let (Ok(width), Ok(height)) = (monitor.width(), monitor.height()) else {
                     return Err(ScreenError::SourceGone);
                 };
-                let title = monitor.name().unwrap_or_else(|_| format!("Screen {index}"));
+                let title = display_label(monitor.name().ok().as_deref(), index);
                 let (crop_x, crop_y, width, height) = uncropped_dims(width, height);
                 Ok(ResolvedSource {
                     handle: SourceHandle::Screen(monitor),
@@ -470,9 +502,7 @@ mod imp {
                     );
                     return Err(ScreenError::SourceGone);
                 };
-                let label = monitor
-                    .name()
-                    .unwrap_or_else(|_| format!("Screen {}", region.monitor));
+                let label = display_label(monitor.name().ok().as_deref(), region.monitor);
                 Ok(ResolvedSource {
                     handle: SourceHandle::Screen(monitor),
                     width,
@@ -495,6 +525,32 @@ pub use imp::{list_sources, resolve, SourceHandle};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A monitor whose name comes back EMPTY must fall back, not label the
+    /// source with nothing.
+    ///
+    /// Found by the 2026-09-21 manual Windows pass, not by any gate:
+    /// `Monitor::name()` answered `Ok("")` on that machine, the three
+    /// `.unwrap_or_else(|_| ...)` call sites handled only the `Err` arm, and
+    /// the empty string sailed through into `format!("Region on {label}")`.
+    /// The user's log read `screen capture: started (Region on )` and a file
+    /// called `2026-09-21 1152 Region on.mp4` landed permanently in their
+    /// vault. An `Err` and an `Ok("")` mean the same thing to a reader — we
+    /// do not know what this screen is called — so they must take the same
+    /// branch.
+    #[test]
+    fn an_empty_monitor_name_falls_back_like_a_missing_one() {
+        assert_eq!(display_label(Some("DELL U2720Q"), 1), "DELL U2720Q");
+        // The Err arm, which already worked.
+        assert_eq!(display_label(None, 2), "Screen 2");
+        // The arm that shipped: empty is not a name.
+        assert_eq!(display_label(Some(""), 2), "Screen 2");
+        // Whitespace-only is empty for every purpose a label has.
+        assert_eq!(display_label(Some("   "), 3), "Screen 3");
+        // A real name keeps its content but loses framing whitespace, which
+        // would otherwise reach `sanitize_title` and the capture bar.
+        assert_eq!(display_label(Some("  DELL U2720Q  "), 1), "DELL U2720Q");
+    }
     use vault_buddy_core::screen_geometry::PhysicalRect;
 
     #[test]
