@@ -4407,9 +4407,11 @@ Explorer**, **minimize / maximize / close still work** on the affected
 windows, and **closing the editor does not fix it** — only quitting Vault
 Buddy does.
 
-**This entry still proposes no cause.** Five hypotheses have now been formed
-and all five were killed — three by the reporter's answers and two by reading
-the code — and a sixth is weakened but not dead (below). Every one of the
+**This entry still proposes no cause.** Six hypotheses have now been formed
+and five were killed — three by the reporter's answers and two by reading
+the code — and the sixth is weakened but not dead (below). The editor has
+now been cleared twice over: as a covering window and, in the third
+sitting, as a trigger. Every one of the
 kills came from a cheap observation at the machine, not from reading code;
 this entry's own history is the argument for asking before reasoning. What
 follows is only what is established.
@@ -4447,6 +4449,30 @@ follows is only what is established.
 - **Hiding every window of ours does not fix it**, and neither does closing
   the editor. Only ending the process does.
 
+**Established from the reporter** (third sitting, 2026-09-21):
+
+- **Using the editor does NOT trigger it.** On a fresh launch with a staged
+  capture waiting, Resume → edit was clean: Explorer's and other windows'
+  toolbars kept working. The editor is out as a *trigger* as well as as a
+  covering window.
+- **The affected toolbars do not react to hover either.** Icons neither
+  click nor highlight. A click that reached the surface would open a
+  flyout in a separate window even if the toolbar itself did not repaint,
+  so this is pointer input not reaching those surfaces, not a stale paint.
+- **A SECOND symptom, on our own window.** With the editor visible and
+  showing a capture, a new screen recording was started and stopped. At
+  stop, the editor was on screen **blank** — its content had stopped
+  painting — and that was the moment the toolbars were noticed dead.
+  Clicking **Edit** then loaded the new capture into it and the content
+  came back. Nothing in the stop path shows, hides or touches the editor
+  (below), so it did not get *shown* blank: it was visible throughout and
+  its webview stopped painting at some point during the capture; the DOM
+  change from loading a capture is what forced a repaint. Two symptoms at
+  one moment, one of them on a window that had `WDA_EXCLUDEFROMCAPTURE`
+  applied at capture start, are worth more than either alone.
+- Closing the editor afterwards still did not restore the toolbars; only
+  quitting did — consistent with every earlier sitting.
+
 **Established from the code** (each read on this tree, not recalled):
 
 - **The editor is exonerated.** `window_close.rs:37-40` answers its ✕ with
@@ -4472,6 +4498,12 @@ follows is only what is established.
   session, same sink, same threads, same teardown as a whole-screen capture.
   **There is no region-specific capture code at all**, so if the symptom
   really is region-exclusive, the cause cannot be in the capture.
+- **The capture STOP path touches no window but the buddy.** The one
+  `show()` on the screen path is `screen_commands.rs:324`, and it shows
+  `main` at *start* as the recording indicator. `EditorRoot` listens only
+  to `editor:open` and the four `screen:export*` events — nothing on
+  `screen:stopped`. So the editor observed blank at stop was not shown by
+  the stop; it was already visible and had stopped painting.
 - **The overlay's lifecycle is airtight.** `select_capture_region` calls
   `select_region_inner(...)` and then `finish_region_selection(&app)`
   **unconditionally** (`region_commands.rs:246`) — on success, cancel, the
@@ -4491,27 +4523,33 @@ documented to affect *capture*, not *input*, and **no mechanism has been
 established** by which it would block another process's clicks. It is
 unproven on both sides; the snip of the buddy (below) is the cheap test.
 
-**Not established — the observations still to run, in priority order.**
-Each is a hardware observation; none can be made from this tree.
+**Not established — the three observations that now decide it.** Each is
+a hardware observation; none can be made from this tree. They are
+independent of one another and can be run in any order.
 
-1. **How dead is dead** — in an affected window: does the client area away
-   from the toolbar still take clicks; does the address bar still take
-   typing; does hovering a toolbar button still highlight it; does Alt+F
-   still open the menu by keyboard; and does a Notepad launched AFTER the
-   capture, while broken, have a dead toolbar too. Hover-but-no-click,
-   keyboard-but-no-mouse, and fresh-window-vs-existing-window each point
-   somewhere different. Note Explorer's command bar and Windows 11 Notepad's
-   toolbar are both WinUI/XAML surfaces while the working caption buttons
-   are classic non-client — worth testing, not worth assuming.
-2. **A capture that is REFUSED** (60 fps, whole screen, so the sink refuses
-   at configuration). That runs `capture_exclusion::apply`,
-   `source::resolve` and the cpal endpoint open, then tears down — with no
-   working WGC session and no frame. Breaks → the cause is in the
-   pre-session half. Doesn't → it needs a capture that actually ran.
-3. **A capture with NO audio devices selected** — isolates cpal/WASAPI.
-4. **A window capture** (`SourceHandle::Window`, not a display).
-5. **Snip the buddy specifically** while broken. Missing or black → the
-   exclusion is still set on it.
+1. **Start or stop?** With Explorer visible and the editor open *with
+   content showing*, start a screen capture and, **while it is still
+   recording**, try Explorer's toolbar and look at the editor's content;
+   then stop. Both break *during* recording → both are effects of capture
+   **start** (`capture_exclusion::apply` at `screen_capture_worker.rs:148`
+   and everything after it). Fine during, broken after → the trigger is on
+   the **stop** path (`clear`, finalize, the toast).
+2. **An audio recording** (Meeting or Voice Note). Audio never calls
+   `capture_exclusion::apply` — the one apply site in the whole shell is
+   in the screen worker, pinned by a structural test. Breaks → the
+   exclusion is exonerated outright. Doesn't → a strong vote for it.
+3. **A capture that is REFUSED** (60 fps, whole screen, so the sink
+   refuses `MF_E_INVALIDMEDIATYPE`). That runs `apply` → `source::resolve`
+   → the cpal endpoint open → the sink refusal → `clear_active_screen`,
+   with no WGC frame ever captured. Breaks → it is in the apply/clear pair.
+   Doesn't → it needs a capture that actually ran.
+
+If (1) says start, (2) says audio is clean and (3) says a refused capture
+still breaks, that converges on one line with no remaining alternative, and
+the editor going blank is corroboration on our own window. If they split,
+that is decisive the other way. Still worth one look after those: a capture
+with **no audio devices**, a **window** capture, and a **snip of the buddy**
+while broken (missing or black → the exclusion is still set on it).
 
 **Why this is High rather than Medium.** It degrades an application the user
 did not launch us to affect, it is invisible from inside our app, and the
