@@ -28,8 +28,11 @@ Run against a build of `claude/screen-capture-intake-g0j49q`
 
 **Phase 5 needs one thing installed before any of rows 29–36 will run:
 ffmpeg.** The export shells out to a user-installed one and is refused
-without it, and there is no in-app status card or Browse (docs/Gaps.md
-GAP-144), so confirm `ffmpeg -version` answers in a fresh terminal first.
+without it, so confirm `ffmpeg -version` answers in a fresh terminal first.
+(There IS now an in-app card — Buddy settings → Integrations, beside
+Pandoc — with a status line and a Browse for an off-PATH binary, and the
+Record Screen picker shows a non-blocking notice. GAP-144 closed; this
+paragraph said otherwise for longer than that was true.)
 
 ## Measurement discipline
 
@@ -63,7 +66,7 @@ hoped-for outcome fails for unrelated reasons and tells you nothing.
 | 7 | **Hide to tray mid-capture** | Mid-capture, tray → *Show / Hide* (and try the buddy's own hide). | **2026-09-19: PASS on the refusal** — the buddy cannot be hidden to tray while capturing. The badge half of this row (buddy red/amber dot, vault-row dot) was not separately confirmed; worth a glance on the next run, since that is the affordance which makes the refusal legible rather than looking wedged. |
 | 8 | **Kill the process mid-capture** (spec §6.4, through the real pipeline) | Record ~60 s, then Task Manager → *End task* on Vault Buddy. Relaunch. Copy the orphaned `.<base>.mp4.part` out of the staging dir, rename it `.mp4`, and open it in a player / `ffprobe -count_frames` it. | **2026-09-19: PASS — the headline result of this phase.** Process killed mid-capture via Task Manager; the orphaned `.part` renamed to `.mp4` plays. §6.4's crash-resilient-prefix property, previously only proven by the synthetic spike, now holds through the real pipeline. Byte/frame counts not recorded — optional, the qualitative result is the one that mattered. |
 | 9 | **Static-screen heartbeat** | Start a capture and leave the screen **completely still** for ~60 s (no cursor movement), then move something, then Stop. | **2026-09-19: BLOCKED, then unblocked.** Untestable on that run: every capture played ~10x too fast (40 s recorded, 3–4 s elapsed). Root cause was this row's own subject — `VideoPacer` stamped each sample with the nominal 1/fps duration while WGC delivers only on change, so a still screen wrote ~2 samples/s and the summed track was ~10x short (audio, derived from sample counts, stayed correct, so the tracks also desynced). Fixed in `d5ed392` by repeating once per elapsed frame slot, making the stream constant-rate by construction. **A still screen is the worst case for that bug, so this row is now the sharpest test of the fix — run it first.** |
-| 10 | **4K @ 60 fps for two minutes** (spec §17.3) | There is no settings surface for this in Phase 2 (`ScreenCaptureConfigTab` and `set_screen_capture_config` are Phase 6): with the app CLOSED, hand-edit the target vault's entry in `%APPDATA%\vault-buddy\config.json`, setting `"screenFps": 60`, then relaunch. Now capture a 4K monitor playing video for 2 minutes, Stop. | **2026-09-19: DEFERRED by the user** until a settings surface exists (Phase 6). Measuring 4K60 behind an app-closed `config.json` hand-edit tells us little, and §17.3's measurement is worth more once the knob is real. Carry this row into Phase 6. |
+| 10 | **4K @ 60 fps for two minutes** (spec §17.3) | **UNBLOCKED 2026-09-21** — the hand-edit this row was deferred over is gone: Vault settings → **Screen** → *Frame rate* → 60 (it applies to the NEXT recording, as the control says). Capture a 4K monitor playing video for 2 minutes, Stop. **Record:** total frames, dropped frames and average fps from `vault-buddy.log`, plus the file's size and whether playback is smooth. **Expect a refusal, not a recording, if this machine is the one from 2026-09-21**: 60 fps raised `MF_E_INVALIDMEDIATYPE` (0xC00D36B4) there, and `bc28ac2` turned that HRESULT into an app-authored message naming the dimensions and frame rate the encoder refused. So this row now asks TWO questions: does 4K60 work at all here, and — if not — **is the refusal the readable one rather than the raw HRESULT?** Write down the message verbatim either way. | **2026-09-19: DEFERRED** by the user until a settings surface existed. That surface landed 2026-09-21 (GAP-103), so the deferral no longer applies — this row is runnable and is now also the only manual check of `bc28ac2`'s refusal message. |
 
 Extra observations worth writing down whatever the outcome: the CPU/GPU load
 during (10), whether the encoder chosen was hardware or software (if the log
@@ -162,17 +165,29 @@ Foundation** fragmented MP4, the disk probe's Windows arm, and every
 judgement about what the user actually sees.
 
 **Before running any of rows 29–36: install ffmpeg and confirm it is on
-PATH** (`ffmpeg -version` in a fresh terminal). There is no in-app ffmpeg
-settings card and no pre-flight check — `detect_ffmpeg` and
-`set_ffmpeg_path` exist but nothing in the UI calls them (docs/Gaps.md
-GAP-144) — so without ffmpeg every row below fails at Save with a message
-pointing at a Buddy-settings screen that does not exist. That is worth
-observing ONCE, deliberately, as part of row 29; it is not a finding to
-re-file.
+PATH** (`ffmpeg -version` in a fresh terminal). Without it every row below
+fails at Save with:
+
+> Saving a screen capture needs ffmpeg, which is not installed. Install it,
+> then set its location in Buddy settings → Integrations if it is not on
+> your PATH.
+
+That screen **exists** (`FfmpegSettings.vue`: status, Browse, Recheck), so
+the message is actionable and following it is not a finding. This paragraph
+previously said the opposite — that the message pointed at a screen that did
+not exist — which would have had a runner filing a defect against a closed
+gap. Observing the refusal ONCE, deliberately, is still worth doing as part
+of row 29; what is NOT worth doing is re-filing it.
+
+**What is still missing is the PRE-FLIGHT, and it is a different thing:**
+nothing checks ffmpeg when the EDITOR opens, so a capture resumed from the
+staged list meets the dependency only at Save (GAP-144's largest residual).
+The picker's notice deliberately does not gate Start — recording and editing
+work fine without ffmpeg, and only the save needs it.
 
 | # | Check | Steps | Result |
 | --- | --- | --- | --- |
-| 29 | **The untouched fast path, and ffmpeg against a real fMP4** (spec §8.3; the highest-value row in the phase) | Record ~60 s. Open the editor, **change nothing**, press **Save to vault**. **Record:** how long the save took in seconds (a re-encode of 60 s would be plainly slower — seconds, not minutes); the saved `.mp4`'s byte size beside the staged one's; and whether it plays. Then check `vault-buddy.log` for the line `screen export: saved … (remuxed: true)` — `remuxed: false` means the fast path did not take, which is the one thing this row exists to find. Windows ffmpeg meeting Media Foundation's fragmented output is proven nowhere but here: if `-c copy` cannot remux it, this is where that shows. **Also do the no-ffmpeg case once, first**, before installing it: press Save and write down the exact message and where it tells you to go (GAP-144). | |
+| 29 | **The untouched fast path, and ffmpeg against a real fMP4** (spec §8.3; the highest-value row in the phase) | Record ~60 s. Open the editor, **change nothing**, press **Save to vault**. **Record:** how long the save took in seconds (a re-encode of 60 s would be plainly slower — seconds, not minutes); the saved `.mp4`'s byte size beside the staged one's; and whether it plays. Then check `vault-buddy.log` for the line `screen export: saved … (remuxed: true)` — `remuxed: false` means the fast path did not take, which is the one thing this row exists to find. Windows ffmpeg meeting Media Foundation's fragmented output is proven nowhere but here: if `-c copy` cannot remux it, this is where that shows. **Also do the no-ffmpeg case once, first**, before installing it: press Save and write down the exact message and confirm Buddy settings → Integrations really holds the ffmpeg card it names. | |
 | 30 | **An edited export matches the preview** (spec §8.1/§8.2; the two implementations of the segment algebra, docs/Gaps.md GAP-136) | Record ~60 s of something with a **visible running clock**. In the editor: trim the first 20 s, delete a middle block, and drag one block to reorder it. Note the clock value the preview shows at each cut. Save, then open the result in a player. **Record: the clock values at each cut in the EXPORTED file, beside the values the preview showed.** This is the only comparison anyone has ever made between the TypeScript algebra the user watched and the Rust one the export planned on. Also record the exported file's total duration against the editor's own readout. | |
 | 31 | **The companion note** (spec §9) | Open the saved note in Obsidian. **Record:** whether the video plays **inside Obsidian** from the note's embed; whether `duration` is the EXPORTED length and not the original (a capture trimmed from ten minutes to two must not claim ten); whether `resolution` matches the file's real pixels; and whether `source` survived a window title containing a colon or a quote — repeat the recording once with such a title if none is at hand. Also record whether the note's file name matches the video's. | |
 | 32 | **Never clobber** (the ninth vault write's discipline) | Save a capture. Then record and save a second one **in the same minute with the same window title**, so both derive the same base name. **Record both file names, and both note names.** The second must carry ` (2)` on BOTH, and the first must be byte-for-byte untouched (check its size and play it). A second pair that landed as `Demo.mp4` + `Demo (2).md` — video and note disagreeing about which suffix they took — is the pairwise-reservation failure this is really testing. | |
@@ -250,9 +265,9 @@ export exactness, the untouched fast path, the vault write and its note, and
 
 | Item | Arrives in |
 | --- | --- |
-| The screen-capture settings tab (`screen_quality`, `screen_fps`, the capture folder, the date-folder toggle — all `config.json` hand-edits today) | Phase 6 |
+| ~~The screen-capture settings tab~~ — **LANDED 2026-09-21** (GAP-103): Vault settings → **Screen**, all seven `screen_*` fields settable. Verify it rather than expecting a hand-edit | — |
 | The staging directory's total size and a "Clear staged captures" action (docs/Gaps.md GAP-115's remaining half) | Phase 6 |
-| An in-app ffmpeg status card / Browse / pre-flight check (docs/Gaps.md GAP-144 — `detect_ffmpeg` and `set_ffmpeg_path` exist and nothing calls them) | unscheduled |
+| An ffmpeg **pre-flight in the EDITOR** — the status card and Browse LANDED (Buddy settings → Integrations) and the picker shows a notice, but a capture resumed from the staged list still meets the dependency at Save (docs/Gaps.md GAP-144's remaining residual) | unscheduled |
 | Renaming a saved capture, or re-exporting one (docs/Gaps.md GAP-142) | unscheduled |
 | Saved screen captures in the Recordings browser, and transcribing them (docs/Gaps.md GAP-143) | unscheduled |
 
