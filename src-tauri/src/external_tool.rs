@@ -489,9 +489,19 @@ mod tests {
     fn merged_path_prefers_registry_over_stale_process_path_without_dupes() {
         // Registry entries (extra) come FIRST so a just-upgraded tool wins
         // over the stale process-PATH snapshot; process-only entries follow;
-        // no duplicates.
-        let merged = merged_path("/usr/bin:/bin", &["/opt/pandoc".into(), "/usr/bin".into()]);
-        assert_eq!(merged, "/opt/pandoc:/usr/bin:/bin");
+        // no duplicates. Built with the PLATFORM path-list separator
+        // (';' on Windows, ':' elsewhere), the same `cfg!(windows)` choice
+        // `merged_path` itself makes: a hardcoded ':' here split nothing out
+        // of the Windows-separated base string, so on a Windows host the
+        // "process-only entries follow" and "no duplicates" guarantees were
+        // never actually exercised — the assert failed instead, but for the
+        // wrong reason (a literal separator mismatch, not a merge defect).
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let base = ["/usr/bin", "/bin"].join(&sep.to_string());
+        let extra = vec!["/opt/pandoc".to_string(), "/usr/bin".to_string()];
+        let merged = merged_path(&base, &extra);
+        let expected = ["/opt/pandoc", "/usr/bin", "/bin"].join(&sep.to_string());
+        assert_eq!(merged, expected);
         assert_eq!(merged.matches("/usr/bin").count(), 1);
     }
 
