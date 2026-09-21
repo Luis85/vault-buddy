@@ -3473,7 +3473,7 @@ extensions and give `RecordingEntry` a kind. Transcription is the larger half
 demuxing first (ffmpeg is now a resolved dependency of the screen domain and
 could extract it, but only when the user has installed it — see GAP-144).
 
-### GAP-144 · Medium · `detect_ffmpeg` and `set_ffmpeg_path` have NO frontend caller, so nothing surfaces the export's hard dependency and the error message names a screen that does not exist
+### GAP-144 · ~~Medium~~ FIXED 2026-09-21 · `detect_ffmpeg` and `set_ffmpeg_path` have NO frontend caller, so nothing surfaces the export's hard dependency and the error message names a screen that does not exist
 `src-tauri/src/ffmpeg.rs` (both commands, registered in `lib.rs`'s
 `generate_handler!`) against `grep -rn 'detect_ffmpeg\|set_ffmpeg_path' src/
 tests/`, which returns **nothing**.
@@ -3507,6 +3507,40 @@ be copied rather than invented. `DocumentImportSettings.vue` +
 blocked-Import route to a focused setup view is the pre-flight. Until then,
 **do not write documentation claiming the gate is surfaced** — the phase-5
 plan's "honest limit" section does, and it is wrong.
+
+> **Fixed.** The card is `FfmpegSettings.vue` in Buddy settings → Integrations,
+> the cached store is `src/stores/ffmpeg.ts`, and the Record Screen picker
+> consults it on mount. The refusal now names the tab it lives on, so the
+> string quoted above is stale.
+>
+> **What shipped is a NOTICE, not a gate, and the distinction is the point.**
+> The phase-5 plan's sentence promised a gate and is *still* wrong: blocking
+> Record Screen would remove a capture the user can perfectly well make and
+> edit, since only the Save needs ffmpeg. Start is enabled identically either
+> way and a regression test reddens if a future change disables it.
+>
+> The card was, as instructed, a copy of the Pandoc one — and `check:quality`
+> caught it (cloneGroups 4, duplicatedLines 204 against a baseline of 0). No
+> `--update` was run: the shared half became `useExternalTool` and BOTH cards
+> were refactored onto it.
+>
+> **Residuals, named rather than implied:**
+> 1. **The editor has no pre-flight.** A capture RESUMED from
+>    `StagedCaptureList` or the capture bar's Edit never passes the picker, so
+>    `ExportBar`'s Save is still that user's first notice. The largest one.
+> 2. **The missing-encoder case has no notice arm.** `ffmpegMissing` is
+>    `!installed`; a minimal LGPL build warns nowhere but the card, and fails
+>    only on an EDITED capture. Widening it needs a second, differently-worded
+>    arm ("you can save this only if you don't edit it") — a copy decision.
+> 3. **A failed probe reads as "not installed"** in the picker. Deliberate
+>    (warn on unknown; it blocks nothing) but the card distinguishes the two
+>    and the notice does not.
+> 4. **`FfmpegStatus` has no Rust↔TS key-parity test** — the GAP-135 class.
+>    `export_commands.rs` pins `ExportResult`'s keys against `src/types.ts`;
+>    this status has no equivalent, so a renamed field renders
+>    `Installed (undefined)`.
+> 5. **Nothing exercises the reply shape against a real `ffmpeg -version`**
+>    from the frontend side; every new test mocks IPC.
 
 ### GAP-145 · Low · The preview seeks at every cut, so what the user approves is not frame-exact — and the export now makes that difference land in their vault
 `src/components/editor/CapturePreview.vue` — one `<video>` element seeking
@@ -3710,7 +3744,7 @@ reasoned from the Win32 sharing rules, not measured: no runner in this
 repository is Windows, and this path executes in no automated test anywhere
 (GAP-140's class).
 
-### GAP-153 · Medium · The AUDIO domain's note embed has GAP-149's exact bug, via `rename_capture`, and has shipped with it far longer
+### GAP-153 · ~~Medium~~ FIXED 2026-09-21 · The AUDIO domain's note embed has GAP-149's exact bug, via `rename_capture`, and has shipped with it far longer
 Found while fixing GAP-149, out of that fix wave's scope, and recorded rather
 than fixed because it needs a decision GAP-149's did not.
 
@@ -3741,6 +3775,29 @@ already holds the character set and the label escape) in `render_note`, and
 teach `retarget_embed` both forms in the same change, with a round-trip test
 that renames a metacharacter title twice. Do not fix the writer without the
 retarget.
+
+> **Fixed, exactly as prescribed.** Both emit sites and `retarget_embed` now
+> live in `src-tauri/core/src/capture_embed.rs` — extracted because the fix
+> plus its tests took `capture_note.rs` to 838 nonblank against the 800 cap,
+> so the file references above are stale. They share a module on purpose: the
+> markdown shape has ONE producer, consumed by the writer and the retarget
+> alike, so the two cannot drift.
+>
+> `sanitize_title` is unchanged, per this entry and the reasoning AGENTS.md
+> already records for the screen side. Only the note was wrong.
+>
+> The rename-twice test is the proof the halves are wired, and it fails in
+> BOTH crates when the retarget is reverted — including end to end through the
+> real `rename_plan` and `execute` on disk, with the embeds still naming the
+> pre-rename title.
+>
+> **Residual: notes already on disk are NOT repaired.** Nothing sweeps them, so
+> a note whose embed was broken by an earlier rename stays broken. But it
+> self-heals on the NEXT rename, because a pre-existing dead embed is exactly
+> the literal wikilink line the retarget still matches first — pinned by
+> `retarget_rewrites_a_pre_existing_wikilink_embed_to_either_form`. Renamed to
+> a plain title it becomes a working wikilink; to another metacharacter title,
+> a working markdown link; never renamed again, it stays dead.
 
 ### GAP-154 · High · Alt+F4 on the buddy destroys only `main`, leaving the process alive with four hidden windows and crash detection switched off
 
