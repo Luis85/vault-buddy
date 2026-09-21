@@ -13,6 +13,7 @@ import FfmpegSettings from "./FfmpegSettings.vue";
 import McpSettings from "./McpSettings.vue";
 import PanelSizeSetting from "./PanelSizeSetting.vue";
 import SelectMenu from "./SelectMenu.vue";
+import StagedCapturesCard from "./StagedCapturesCard.vue";
 import TabGroup from "./TabGroup.vue";
 import TranscriptionAppSettings from "./TranscriptionAppSettings.vue";
 import TranscriptionModelsCard from "./TranscriptionModelsCard.vue";
@@ -341,6 +342,7 @@ async function pickPanelSize(size: PanelSize) {
         </section>
         <UpdateSettings />
         <DiagnosticsSettings />
+        <StagedCapturesCard />
       </div>
     </template>
     <template #integrations>

@@ -36,6 +36,7 @@ mod shutdown_gate;
 // this crate reads, so a pin's coverage is a property of one module rather
 // than of whichever files its author happened to `include_str!`.
 mod staged_commands;
+mod staging_commands;
 #[cfg(test)]
 mod structural_scan;
 mod task_commands;
@@ -483,6 +484,8 @@ pub fn run() {
             export_commands::cancel_export,
             staged_commands::discard_staged_capture,
             staged_commands::list_staged_captures,
+            staging_commands::staging_usage,
+            staging_commands::clear_staged_captures,
             staged_commands::open_screen_capture,
         ])
         .setup(|app| {

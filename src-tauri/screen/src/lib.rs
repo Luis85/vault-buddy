@@ -34,6 +34,12 @@ pub mod ffmpeg_args;
 #[cfg(windows)]
 pub(crate) mod frames;
 pub mod mp4_boxes;
+// Which files one staged capture owns and what they weigh. Split from
+// `staging.rs`, which is at 790 of this repo's 800-line Rust cap and has
+// already been trimmed back under it once. No-follow throughout: a symlink
+// wearing one of our names is not ours to count and not ours to delete.
+pub mod staging_files;
+
 // The region source's id encoding and the display-number parse that joins
 // Tauri's monitor names to windows-capture's indices. PURE: phase 3's
 // correctness lives here, because its cfg(windows) consumer is testable

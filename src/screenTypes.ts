@@ -219,3 +219,28 @@ export interface ScreenCaptureConfig {
   screenExtraFrontmatter?: string | null;
   screenBodyTemplate?: string | null;
 }
+
+/** What the staging directory is holding, as Buddy settings reports it
+ * (`staging_usage`). App-global, never per-vault: a staged capture records
+ * which vault it is FOR, but it lives in one shared directory outside every
+ * vault, and the list surfaces are app-wide for the same reason. */
+export interface StagingUsage {
+  /** Staged captures waiting to be resumed, saved or discarded. */
+  captures: number;
+  /** What a Clear would free: the bytes those captures occupy across their
+   * video, sidecar and any abandoned export temp. NOT the directory's whole
+   * size — a foreign file nobody vouched for is deliberately uncounted,
+   * because this number is labelled as space Clear can reclaim. */
+  bytes: number;
+}
+
+/** The outcome of `clear_staged_captures`. Four numbers, not a bare
+ * success: a capture can be removed, left alone because an export is
+ * writing it, or refused (a symlinked leaf), and reporting only "done"
+ * would claim the skipped ones were deleted. */
+export interface ClearStagedResult {
+  cleared: number;
+  bytesFreed: number;
+  skipped: number;
+  failed: number;
+}

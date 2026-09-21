@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::uri;
-use vault_buddy_screen::staging;
+use vault_buddy_screen::{staging, staging_files};
 
 use crate::export_commands::{emit_discarded, timeline_from_sidecar, ExportState};
 
@@ -132,22 +132,12 @@ pub(crate) fn capture_file_param(path: &Path, vault_root: &Path) -> Option<Strin
     }
 }
 
-fn staging_dir_for(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn staging_dir_for(app: &AppHandle) -> Result<PathBuf, String> {
     let local = app
         .path()
         .app_local_data_dir()
         .map_err(|e| format!("Could not resolve the staging directory: {e}"))?;
     Ok(staging::staging_dir(&local))
-}
-
-/// Everything staging can hold for one capture: the video, its sidecar, and
-/// an export temp abandoned by a killed or crashed save.
-fn staged_file_names(base: &str) -> [String; 3] {
-    [
-        staging::mp4_file_name(base),
-        staging::sidecar_file_name(base),
-        staging::export_part_file_name(base),
-    ]
 }
 
 /// Forget a staged capture, on disk.
@@ -171,7 +161,7 @@ fn staged_file_names(base: &str) -> [String; 3] {
 /// property of the function rather than of whoever wrote the directory.
 pub(crate) fn discard_staged_files(dir: &Path, base: &str) -> Result<(), String> {
     let mut targets = Vec::new();
-    for name in staged_file_names(base) {
+    for name in staging_files::capture_file_names(base) {
         let path = dir.join(&name);
         match std::fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

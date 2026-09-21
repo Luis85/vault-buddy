@@ -2481,7 +2481,7 @@ what checklist item 10 produces. The running total is visible in the UI as of
 2026-09-19 (`ScreenCaptureBar.vue`'s dropped chip, GAP-118); the per-drop
 log lines and the teardown total remain the fuller record.
 
-### GAP-115 · ~~Medium~~ Low (NARROWED 2026-09-20, phase 5) · The staging directory is swept and surfaced now, but still unbounded and not bulk-clearable
+### GAP-115 · ~~Medium~~ Low (NARROWED 2026-09-20, phase 5; size readout + bulk clear LANDED 2026-09-21, unverified on Windows) · The staging directory is swept, surfaced, measured and clearable now — what is left is the size bound and the browser
 
 **What phase 5 closed, verified at source rather than assumed:**
 - **The sweep exists.** `src-tauri/src/screen_recovery.rs`'s
@@ -2505,18 +2505,53 @@ log lines and the teardown total remain the fuller record.
   vault write) deletes it after the vault write lands, so the common path no
   longer accumulates anything at all.
 
-**What is still open, and it is the original entry's second half:** nothing
-bounds the directory's total SIZE and there is no bulk "Clear staged
-captures" action or size readout. A user who records a dozen 1080p captures
-and saves none still accumulates gigabytes under `%LOCALAPPDATA%`; the
-Record Screen list shows them, so they are at least discoverable and
-removable one at a time, which is why this drops to Low. The 60 s staleness
-rule deliberately does NOT expire a COMPLETE staged capture — only orphans
-and temps — because deleting a recording the user has not decided about is
-the loss this whole design exists to prevent. **Fix shape:** Phase 6's
-settings card gets the size readout and the bulk clear (spec §10's
-disk-pressure paragraph); Task 9's sweep and Task 8's
-`list_staged_captures` are what it builds on.
+**CLOSED IN PART, 2026-09-21: the size readout and the bulk clear landed.**
+Spec §10's disk-pressure paragraph asked for two things — *"the staging
+dir's total size is shown in the settings card with a 'Clear staged
+captures' action"* — and both now exist:
+
+- `screen::staging_files` (a new PURE-ish module in the screen crate, so it
+  is covered by `rust-core` and the `llvm-cov` floor rather than living in
+  the shell where nothing on Linux compiles it) owns which files one staged
+  capture consists of and what they weigh. It is **no-follow throughout**: a
+  symlink wearing one of our names contributes zero, because its target is
+  outside staging, so counting it would promise the user space no Clear
+  could ever free — and `discard_staged_files` refuses to unlink through it
+  anyway. It also deliberately EXCLUDES the live `.<base>.mp4.part`, which
+  belongs to a recording still being written.
+- `staging_commands::{staging_usage, clear_staged_captures}` (a third shell
+  module along the seam this feature already draws twice: `export_commands`
+  is the export's LIFECYCLE, `staged_commands` is one capture as an OBJECT,
+  this is the DIRECTORY) back a **Staged screen captures** card in Buddy
+  settings → System. Every rule it applies is borrowed rather than re-grown
+  — `staged_summaries` for what exists, `discard_conflict` for what may go,
+  `discard_staged_files` for the removal — because a second answer to "is
+  this file ours" on the one path that deletes many recordings at once is
+  the hazard, not the convenience.
+- The card is **System, not Integrations**: this is app-owned storage on the
+  user's disk, the concern logs and crash records sit under, where
+  Integrations is external tools. It is app-GLOBAL, which is also why it is
+  not a card in the per-vault Screen tab.
+- Clear is confirm-gated in two steps (spec §10: nothing is ever deleted
+  silently), reports four numbers rather than a bare success — a capture
+  left alone because an export is writing it, or refused for a symlinked
+  leaf, must never read as deleted — and emits one `screen:discarded` per
+  capture actually removed, or `lastStaged` would keep offering **Edit** for
+  a base no longer on disk.
+
+**What remains open is the SIZE BOUND and the staged-capture browser.**
+Nothing expires a completed staged capture, and that is deliberate, not an
+omission: the 60 s staleness rule applies to orphans and temps only, because
+deleting a recording the user has not decided about is the loss this whole
+design exists to prevent. A bound would have to answer "delete which one",
+and there is no answer to that which is not somebody's footage — so the
+honest shape is what landed (show the number, let the user act) plus, in
+Phase 6, the browser that makes a per-capture decision easy. Severity stays
+Low.
+
+**Not verified on Windows.** The card, the measurement and the clear were
+built and tested on Linux; no row of the manual checklist covers them, and
+the `%LOCALAPPDATA%` path they measure only exists on Windows.
 
 ### GAP-115 (original text, for the record) · Phase 2 never sweeps, surfaces or bounds its staging directory — for CRASHED and for cleanly finished captures alike
 `src-tauri/src/lib.rs` (`setup` wires `capture_commands::run_recovery` and

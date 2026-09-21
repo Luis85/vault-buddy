@@ -53,7 +53,8 @@ the app has grown six vertical domains:
   in its own window; then export it through a user-installed ffmpeg and save
   it into a vault as a playable `.mp4` plus a companion note, with a **Screen**
   tab in Vault settings for the seven per-vault fields. What is left of Phase 6
-  is the staged-capture browser and a staging size bound (GAP-115); the
+  is the staged-capture browser alone (GAP-115's size readout and bulk
+  clear landed; the browser did not); the
   settings surface that was its other half landed with GAP-103.
 - **Transcription** — opt-in, fully local speech-to-text (whisper.cpp via
   `whisper-rs`) run after a recording, writing a transcript sidecar the
@@ -141,6 +142,8 @@ vault-buddy/
 │   │                           #   export_commands.rs (the export LIFECYCLE + all 5 events) +
 │   │                           #     export_worker/ (the screen-export thread: ffmpeg,
 │   │                           #     the NINTH vault write, the note) +
+│   │                           #     staging_commands.rs (staging as a WHOLE: its
+│   │                           #     size, and the bulk clear) +
 │   │                           #     staged_commands.rs (a staged capture as an OBJECT:
 │   │                           #     list / discard / open) + screen_recovery/ (the
 │   │                           #     staging sweep, wired after run_import_recovery),
@@ -174,6 +177,9 @@ vault-buddy/
 │   │                           #   frames (WGC callback), session/ (3 threads, one clock),
 │   │                           #   ffmpeg_args (PURE: the export's argv + -progress
 │   │                           #     parsing — where its correctness lives), export
+│   │                           #     staging_files (PURE-ish: which files one staged
+│   │                           #       capture owns and what they weigh, no-follow;
+│   │                           #       split from staging.rs at 790/800), export
 │   │                           #     (spawn/stream/cancel; tests/export_roundtrip.rs
 │   │                           #     is the real CI round trip), disk (free space,
 │   │                           #     Option not Result), mp4_boxes (the .part footage sniff)
@@ -339,7 +345,7 @@ Six OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 94 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 96 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands — and COUNT the
 `generate_handler![…]` list rather than adding to the previous number: this
 sentence has been wrong four times (73 when it was 79, 79 when it was 81,
@@ -368,6 +374,7 @@ awk '/generate_handler!\[/,/\]\)/' src-tauri/src/lib.rs | grep -cE '^\s+[a-z_]+:
 | `editor_commands.rs` | The capture editor's surface (spec §8, §11), its own module because opening the editor takes TWO commands. `open_capture_editor` *(sync — it shows and focuses a window, so it is main-thread-only; it therefore STASHES the base name rather than reading the capture, because a sync command must not touch disk — the `begin_document_import`/`take_pending_import` split, for the same reason. It emits `editor:open` to the editor window alone, BEFORE `show()`, and rolls the stash back on either failure so a later drain can never open a capture the user was just told failed)*, `take_editor_request` *(sync — the one-shot drain of that stash)*, `load_staged_capture` *(async — reads the staging sidecar and confirms the `.mp4` is on disk, off the main thread; it also REFUSES a sidecar whose own `base` disagrees with the file name it was read from, since that field is hand-editable and becomes the identity the editor later saves under)*, `save_capture_timeline` *(async — an fsync'd, temp-then-replacing sidecar rewrite on EVERY edit, spec §10's "a crash loses at most the last operation")*. The three that take a `base` from the frontend gate it through `is_safe_base` — no separator, no leading/trailing dot, no trailing space, no `:` (a drive prefix or an NTFS ADS marker), no control character and no Windows reserved device stem — before it becomes a path; an INTERIOR `..` is deliberately allowed, because within one path component it traverses nowhere and refusing it stranded real captures from windows titled "Saving... please wait". A structural test scans this file and fails if any command taking a base stops refusing an unsafe one, and asserts the whole command list so a NEW command has to be considered |
 | `export_commands.rs` | The export LIFECYCLE, and with it all five `screen:export*`/`screen:discarded` emits. Split from `staged_commands.rs` below because one file carrying both came to 989 nonblank lines against the 800 Rust cap; the seam is **lifecycle versus object**. `export_and_save_capture` *(async — it reads the sidecar, probes free space, runs ffmpeg on a named `screen-export` thread and waits for it, unbounded on purpose: a long recording legitimately takes minutes and a deadline would abandon a worker still writing into the vault)*, `cancel_export` *(sync — it takes one mutex, sets one `AtomicBool` and drops it; no I/O, so the sync rule keeps it off the blocking pool. `Ok` even when nothing is running, because a Cancel click racing the export's own completion is not the user's error)*. Both gate a frontend-supplied `base` through `editor_commands::is_safe_base` — never a second copy of those rules — and a structural test pins the refusal in the command's own body |
 | `staged_commands.rs` | A staged capture as an OBJECT. `discard_staged_capture` *(async — an irreversible three-file delete (`.mp4`, `.json`, any `.export.mp4.part`), gated behind the editor's and the picker's own two-step confirms, and REFUSED while that capture is the one being exported)*, `list_staged_captures` *(async — a `read_dir` of staging plus a sidecar parse per row; it DEGRADES to what it could read rather than erroring, so a transient failure never blanks a list the user is reading)*, `open_screen_capture` *(sync — the read-only `uri::launch` hand-off for a SAVED capture, the `open_recording`/`open_task` shape)*. `screen:discarded` is emitted from `export_commands`' single warning-logging emitter on this module's behalf, so the one-emitter invariant survives the split |
+| `staging_commands.rs` | Staging as a WHOLE — the DIRECTORY, where `staged_commands` is one capture as an object and `export_commands` is the export's lifecycle. Its own module for that seam and because `staged_commands` sits at 686 of the 800-line Rust cap. `staging_usage` *(async — a `read_dir`, a sidecar parse per capture and a `symlink_metadata` per file; DEGRADES to zero rather than rejecting, so a settings card can always render, and the Clear beside it is disabled by that same zero)*, `clear_staged_captures` *(async — up to three unlinks per capture; the widest-reaching destructive action in the app, behind the card's two-step confirm, spec §10's "nothing is ever deleted silently")*. **Every rule it applies is borrowed, never re-grown**: which captures exist is `staged_summaries`, which files one owns is `screen::staging_files::capture_file_names`, whether one may go is `discard_conflict`, and the removal with its two-pass symlink refusal is `discard_staged_files` — a second answer to "is this file ours" on the one path that deletes many recordings at once is exactly the hazard. It deliberately does NOT refuse while a capture is RECORDING: a live capture owns `.<base>.mp4.part`, which is not one of a staged capture's three files, and has no published `<base>.mp4`, so `staged_summaries` cannot see it and a clear cannot reach it. It emits one `screen:discarded` per capture actually removed, through `export_commands`' single emitter, or `lastStaged` would keep offering **Edit** for a base no longer on disk |
 | `ffmpeg.rs` | The export's external tool, resolved the way Pandoc is (`external_tool.rs` is the shared layer both consume — `CREATE_NO_WINDOW`, the timeout kill, the bounded drain, the registry-fresh PATH). `detect_ffmpeg` *(async — it spawns `ffmpeg -version` and `ffmpeg -encoders`)*, `set_ffmpeg_path` *(async — an fsync'd config write; the override lands in the app-global `documentImport` section beside `pandocPath`, which is where that section's tool overrides live rather than a statement about document import)*. **Both now have frontend callers** (GAP-144, closed): `FfmpegSettings.vue` in Buddy settings → Integrations, and `src/stores/ffmpeg.ts`, the `pandoc.ts` analogue whose `ensureDetected()` the Record Screen picker consults on mount. The picker shows a **non-blocking NOTICE, deliberately not a gate**: recording and editing work fine without ffmpeg and only the Save needs it, so disabling Start would take away a capture the user can make and edit. A regression test pins that Start stays enabled either way. Both cards consume one `useExternalTool` composable — the frontend mirror of `external_tool.rs` being the tool-agnostic half Pandoc and ffmpeg already share in Rust; a third tool card should reuse it rather than copy a fourth time |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
@@ -453,7 +460,7 @@ subscribe.
 | Per-vault capture/tasks/`documents_folder` settings (including six additive per-vault template fields — `note_extra_frontmatter`/`note_body_template` capture-owned via `set_capture_config`, `task_extra_frontmatter`/`task_body_template` owned by `set_task_template_config`, `document_extra_frontmatter`/`document_body_template` documents-owned via `set_documents_config`; each save preserves the other two pairs untouched — `config_merge.rs`'s `merge_capture_owned`/`merge_documents_owned` for the capture/documents surfaces, a direct read-modify-write for the task-template surface) + app-global `mcp`, `document_import` (the user-set `pandoc_path` override **and, since phase 5, `ffmpeg_path`** — both tool overrides live in that section; the name is where the first one landed, not a claim about document import), and `panel` (the S/M/L preset size, `core::panel_config`) sections | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse; `serialize_config` round-trips every section) |
 | Whisper models | `%APPDATA%\vault-buddy\models\ggml-<tier>.bin` + `ggml-silero-v5.1.2.bin` (pinned Hugging Face URLs + SHA-256) |
 | Buddy window position | tauri-plugin-window-state file in `%APPDATA%\com.vaultbuddy.desktop` (POSITION only; panel/bubble/overlay **and editor** denylisted — `tray::POSITION_DENYLIST` is `ALL_WINDOW_LABELS` minus `main`, so every window but the buddy is excluded) |
-| Staged screen captures | `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures` — `<base>.mp4` + `<base>.json` (the sidecar, which carries the editor's `timeline`), a hidden `.<base>.mp4.part` while recording, and a hidden `.<base>.export.mp4.part` while exporting (`staging::EXPORT_PART_INFIX`). **OUTSIDE every vault, deliberately:** an unedited, unapproved capture is not knowledge, so discarding one must not leave litter in the user's notes. Phase 5 gave the directory a startup sweep, `screen_recovery::run_screen_recovery`, wired into `setup` after `run_import_recovery`: it promotes an orphaned `.part` that holds real footage, deletes an abandoned export temp outright, classifies anything that does not round-trip through `capture_paths::is_capture_base` as **Foreign** and never touches it, never follows a symlink, and postpones while EITHER capture domain holds `CaptureGuard` **or an export holds the `ExportState` reservation** — the third source, added in the 2026-09-20 fix wave (see the screen-capture section). Its staleness window, `STALE_AFTER`, is the audio sweep's 60 s — named rather than inlined so the next reader can see it is shared on purpose. A completed staged capture is still never size-bounded and has no "Clear staged captures" action; that is Phase 6 (docs/Gaps.md GAP-115) |
+| Staged screen captures | `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures` — `<base>.mp4` + `<base>.json` (the sidecar, which carries the editor's `timeline`), a hidden `.<base>.mp4.part` while recording, and a hidden `.<base>.export.mp4.part` while exporting (`staging::EXPORT_PART_INFIX`). **OUTSIDE every vault, deliberately:** an unedited, unapproved capture is not knowledge, so discarding one must not leave litter in the user's notes. Phase 5 gave the directory a startup sweep, `screen_recovery::run_screen_recovery`, wired into `setup` after `run_import_recovery`: it promotes an orphaned `.part` that holds real footage, deletes an abandoned export temp outright, classifies anything that does not round-trip through `capture_paths::is_capture_base` as **Foreign** and never touches it, never follows a symlink, and postpones while EITHER capture domain holds `CaptureGuard` **or an export holds the `ExportState` reservation** — the third source, added in the 2026-09-20 fix wave (see the screen-capture section). Its staleness window, `STALE_AFTER`, is the audio sweep's 60 s — named rather than inlined so the next reader can see it is shared on purpose. A completed staged capture is still never size-BOUNDED — nothing expires one, deliberately, since deleting a recording the user has not decided about is the loss this design exists to prevent — but the directory is now measured and clearable: `staging_commands::{staging_usage, clear_staged_captures}` back the **Staged screen captures** card in Buddy settings → System (docs/Gaps.md GAP-115). What is left of Phase 6 there is the browser |
 | Logs / crash records / run marker | `%LOCALAPPDATA%\com.vaultbuddy.desktop\logs` — `vault-buddy.log` (5 MB rotate), `crash.log`, `.vault-buddy.run` |
 | Frontend settings | localStorage `vault-buddy.animations/.character/.dragging/.messages/.messageDuration/.checkUpdatesOnStart` |
 | Recent searches | localStorage `vault-buddy:recent-searches` (cap 5) |
@@ -1128,8 +1135,11 @@ write here, it belongs in `export_worker/` or it is a design change.
   a stale orphaned `.part` whose prefix really holds footage is PROMOTED to
   a staged capture rather than deleted, an abandoned `.export.mp4.part` is
   deleted outright, and anything that is not ours is left alone. What GAP-115
-  still names is the SIZE bound and a "Clear staged captures" action, which
-  are Phase 6's.
+  still names is the staged-capture BROWSER. Its other half — the size
+  readout and the bulk clear — landed: `screen::staging_files` measures what
+  a capture owns (no-follow, so a symlink wearing one of our names is neither
+  counted nor deleted) and `staging_commands` turns that into the two
+  commands behind the Buddy settings card.
   **The sweep postpones on THREE sources, and the third is the one that was
   missing.** `decide::should_postpone(active, exporting)` reads
   `CaptureGuard::active()` (audio means the app is writing elsewhere, screen
@@ -1210,7 +1220,8 @@ write here, it belongs in `export_worker/` or it is a design change.
   undiscoverable: `ScreenCaptureBar`'s finished row offers **Edit** for the
   most recent one, and `StagedCaptureList` in the Record Screen picker lists
   every one of them with Resume and Discard. What is still absent is a size
-  bound and a bulk clear (GAP-115, Phase 6).
+  bound (GAP-115, Phase 6; the bulk clear now lives in Buddy settings →
+  System, and nothing expires a staged capture on its own).
 - **The start tail must not announce a capture that already ended.**
   `start_screen_capture`'s async tail runs after the blocking start returns,
   and the `screen-capture-monitor` thread is live before then — so spec §14's
