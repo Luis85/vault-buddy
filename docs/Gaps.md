@@ -4065,3 +4065,96 @@ did.
 > their gate and `finish_quit`, not closable by any lock this app could hold
 > across a process-replacing install; and a refusal rendering through the
 > `error` phase, since the machine has no `refused` state.
+
+### GAP-161 · ~~Critical~~ FIXED 2026-09-21 · The export named no output format, so every save failed — and the round trip that exists to prove otherwise used a filename production never mints
+Found by running the app on Windows, not by any gate. Every **Save to vault**
+failed before ffmpeg wrote a byte:
+
+```
+Unable to choose an output format for
+'...\screen-captures\.2026-09-21 0848 Screen Capture.export.mp4.part';
+use a standard extension for the filename or specify the format manually.
+```
+
+ffmpeg picks its muxer from the output's EXTENSION unless `-f` says
+otherwise. The export writes to `staging::export_part_file_name(base)` —
+`.<base>.export.mp4.part` — so a killed or crashed export can never be
+mistaken for a finished one, and `.part` names no format. Both paths were
+affected (`remux_args` and `reencode_args` alike), so the ninth sanctioned
+vault write had **never once landed on real hardware** across the whole of
+phase 5.
+
+**FIXED** by naming the container explicitly in both builders
+(`ffmpeg_args::OUTPUT_FORMAT`). The `.part` convention is deliberately NOT
+what changed: it is load-bearing across both capture domains,
+`screen_recovery::classify` keys on it, and renaming the temp to something
+ffmpeg can infer would trade a total failure for a subtler one. Being
+explicit about the container is correct whatever the file is called, which is
+what makes the two facts independent.
+
+**The reason it shipped green is the part worth keeping.**
+`screen/tests/export_roundtrip.rs` is this feature's only executable
+end-to-end proof and the stated reason the export route left Media Foundation
+(see AGENTS.md's phase-5 bullet, and PR #79's own description). Every one of
+its seven round trips invented its own destination — `edited.mp4`,
+`remuxed.mp4`, `reordered.mp4`, `cancelled.mp4`, `fast.mp4`, `slow.mp4` — all
+of which ffmpeg can infer a muxer for. **The suite proved the export worked
+against a filename the app never produces.** Pointing the tests at
+`staging::export_part_file_name` reddens SIX of the seven immediately, each
+with the user's exact message.
+
+This is the campaign's signature defect in its most expensive form, and the
+generalisation is the lesson, not the `-f`:
+
+> A test that constructs its own version of a production value proves the
+> code works on the test's value. Where the value is an INPUT the code
+> branches on — a filename, an extension, a path shape, an id — the test must
+> mint it through the same function production calls, or it is testing a
+> sibling of the real thing.
+
+**Residuals:**
+
+- `export.rs`'s two own tests still use `out.mp4`, and that is deliberate:
+  both point ffmpeg at `/nonexistent` and assert no child is ever spawned, so
+  the name cannot matter. Changing them would be noise.
+- CI proves this on **Linux** ffmpeg. Windows ffmpeg is a different binary
+  with a different muxer set, and nothing automated runs it — checklist row
+  38 is the only evidence there will be, and it says not to skip it as a
+  duplicate of row 29.
+- Nothing audits the OTHER direction: a test that mints a production value
+  correctly but then asserts against a hand-written expectation. No sweep has
+  been done for that shape elsewhere in this feature.
+
+### GAP-162 · Medium · The editor's layout was never tested at any window size, and happy-dom cannot be
+Two defects from one hardware session, one root cause, both invisible to every
+gate: `EditorRoot` was a fixed `h-screen` flex column whose preview `<video>`
+was `w-full` with no height bound, so widening the window made the video
+TALLER and the column carried more content than window. The timeline strip
+collapsed to a hairline (`h-16` is a height, not a minimum, and a flex item
+with no intrinsic content height yields first), and maximised, **Save to
+vault** and **Discard** were pushed past the bottom edge with nothing to
+scroll — the capture could be edited and never saved.
+
+**FIXED** (`tests/editorLayout.test.ts`): the preview takes the slack
+(`flex-1 min-h-0`, `object-contain` so a bounded height cannot stretch the
+picture), everything below it is `shrink-0`, and `main` gains
+`overflow-y-auto` for the case where the chrome alone exceeds the window.
+
+**The gap that remains is the testing one.** happy-dom has no layout engine.
+The tests assert the CLASS CONTRACT that produces the layout — which is the
+mechanism, and they say so in their own header — but nothing here measures a
+pixel, and a test claiming to would be exactly the kind this repo keeps
+finding. So:
+
+- A layout defect that does not change a class (a parent's `display`, a
+  competing `min-height` further up, a CSS specificity collision) is
+  undetectable by this suite by construction.
+- The whole editor window has never been rendered at any real size by
+  anything. Checklist row 37 is the only evidence there will be.
+- Closing this properly means a real layout engine — a Playwright check
+  against the built `dist/` at two or three viewport sizes. Chromium and
+  Playwright are already available in the dev container, and `EditorRoot`
+  needs no Tauri runtime to render its empty state, so the cost is a CI job
+  and a fixture, not a new dependency. Weighed against the fact that this is
+  the second window-sizing defect the feature has shipped, that is probably
+  worth doing before Phase 6 adds more surface.
