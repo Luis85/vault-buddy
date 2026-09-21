@@ -4158,3 +4158,52 @@ finding. So:
   and a fixture, not a new dependency. Weighed against the fact that this is
   the second window-sizing defect the feature has shipped, that is probably
   worth doing before Phase 6 adds more surface.
+
+### GAP-163 · Medium · Neither Linux gate compiles a `cfg(windows)` body, and one shipped broken through both
+AGENTS.md sells the Linux shell build as catching "type errors, IPC signature
+drift, and missing `cfg` gates locally instead of push-and-wait". True of
+everything it COMPILES — and a `#[cfg(windows)]` body is exactly what it does
+not. The other Linux gate cannot cover it either: `cargo clippy -p vault-buddy
+--target x86_64-pc-windows-msvc` cannot run in this container at any scope
+(`ring` fails in cc-rs for want of MSVC's `lib.exe`), which is the documented
+reason `set_display_affinity` lives in `vault_buddy_screen` instead.
+
+**A real commit fell through the hole.** Splitting `window_upkeep.rs` out of
+`lib.rs` at the 800-line cap moved this into a sibling module:
+
+```rust
+#[cfg(windows)]
+if commands::primary_button_down() { return; }
+```
+
+In `lib.rs` that resolved (`mod commands;` puts it at the crate root); from a
+sibling it needs `crate::commands::`. `cargo fmt --check`, workspace clippy,
+the shell's 205 tests and a full `tauri build --no-bundle` were **all green**,
+and `cargo check -p vault-buddy` reports **0 errors** for the broken code
+today — measured. The Windows job failed the build with E0433 eleven minutes
+after the push.
+
+**Partly closed** by `src-tauri/src/cfg_windows_guard.rs`: a source scan
+requiring every sibling-module path inside a `cfg(windows)` region to be
+`crate::`/`super::`/`self::`-qualified or brought in by a `use`. It reddens on
+the exact line that failed CI, naming file and line, and a second test pins
+its own parser and file set so a scan that found nothing could not pass
+forever. Run against the whole shell it found no other instance.
+
+**What it does NOT close, and must not be read as closing:**
+
+- It catches the **unresolvable-path** class only. A type error, a wrong
+  argument count, a moved field, a borrow error or a changed signature inside
+  a `cfg(windows)` body is still invisible until the Windows job runs. That is
+  most of what a compiler does.
+- It is a text scan with a 30-line window after each `cfg(windows)` attribute.
+  A gated `mod`, or a long gated `fn` whose offending line sits further down,
+  is outside its reach.
+- It says nothing about `cfg(windows)` code in the member crates — only the
+  shell. `vault_buddy_screen` genuinely cross-checks under the Windows target,
+  which is why its `cfg(windows)` arms at least type-check (GAP-140); the
+  shell has no equivalent and this is the substitute.
+- The real fix is making the shell cross-check for `x86_64-pc-windows-msvc`,
+  which needs `ring` to build — a vendored `lib.exe`, a different TLS backend,
+  or dropping the dependency that pulls it. Worth pricing before the next
+  extraction moves code across a `cfg` boundary again.

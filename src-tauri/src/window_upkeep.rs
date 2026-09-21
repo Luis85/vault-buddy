@@ -145,7 +145,7 @@ fn window_upkeep_tick(
     // run on the main thread here, so a direct button-state read is valid and
     // catches exactly that case — never touch a window the user is dragging.
     #[cfg(windows)]
-    if commands::primary_button_down() {
+    if crate::commands::primary_button_down() {
         return;
     }
     let Some(window) = handle.get_webview_window("main") else {

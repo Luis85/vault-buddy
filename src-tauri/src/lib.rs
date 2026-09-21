@@ -2,6 +2,11 @@ mod capture_commands;
 mod capture_config_commands;
 mod capture_exclusion;
 mod capture_guard;
+// Test-only structural pin: the ONE defect class both Linux gates are blind
+// to, a name error inside a `cfg(windows)` body. Excluded from non-test
+// builds entirely, the `config_lock_guard` / `window_close_guard` precedent.
+#[cfg(test)]
+mod cfg_windows_guard;
 mod commands;
 // Test-only structural pin (Task 6b, fix 2): no production code depends on
 // it, so it's excluded from non-test builds entirely rather than adding to

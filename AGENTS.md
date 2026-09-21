@@ -127,7 +127,9 @@ vault-buddy/
 │   │                           #   screen_config_commands.rs (the per-vault Screen
 │   │                           #     Capture SETTINGS surface — config, not lifecycle),
 │   │                           #   window_upkeep.rs (the 1 s metronome's tick + the
-│   │                           #     main-thread window upkeep it posts, split from lib.rs),
+│   │                           #     main-thread window upkeep it posts, split from lib.rs) +
+│   │                           #     cfg_windows_guard.rs (test-only: the scan standing in
+│   │                           #     for the cfg(windows) bodies Linux never compiles),
 │   │                           #   editor_commands.rs (the editor's open/load/save surface),
 │   │                           #   shutdown_gate.rs (the ONE composition of all three
 │   │                           #     shutdown predicates, read by quit, Alt+F4 and the updater) +
@@ -201,7 +203,16 @@ Linux container as a compile gate: run `npm run setup:linux` once (it
 installs the WebView/GTK/tray system libs — the single source of truth is
 `scripts/setup-linux-deps.sh`), then `npx tauri build --no-bundle`. This
 catches type errors, IPC signature drift, and missing `cfg` gates locally
-instead of push-and-wait. It is a **compile gate only** — the Windows job
+instead of push-and-wait — **for everything it COMPILES, which excludes every
+`cfg(windows)` body**. That is not a quibble: extracting `window_upkeep.rs`
+out of `lib.rs` carried `commands::primary_button_down()` into a sibling
+module where the path does not resolve, and fmt, workspace clippy, the shell's
+own tests and the whole `--no-bundle` build all stayed green while the Windows
+job failed with E0433. The Windows-target clippy cannot cover the shell either
+(`ring` needs MSVC's `lib.exe`), so `cfg_windows_guard.rs` is a source scan
+standing in that hole: it requires every sibling-module path inside a
+`cfg(windows)` region to be crate-qualified or imported. Weaker than compiling
+the arm, and the strongest thing available on Linux. It is a **compile gate only** — the Windows job
 remains the release + desktop-behavior gate (transparency, tray, drag, the
 Obsidian round-trip). Mirror existing `cfg`-gate patterns for any
 platform-specific code, run `cargo fmt --check`, and let CI's `windows-app`
