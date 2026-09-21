@@ -410,6 +410,13 @@ ever written into your vaults except recordings and their notes.
       "documentsFolder": "Documents", // optional — vault-relative home of imported documents
       "documentDateFolders": true, // optional — omit → true; same dated/flat toggle as recordings, for imports
       "documentExtractImages": true, // optional — omit → true; false = import text only (drop images, no media folder)
+      "screenCaptureFolder": "Screen Captures", // optional — vault-relative home of saved screen captures
+      "screenCaptureDateFolders": true, // optional — omit → false; same dated/flat toggle as recordings
+      "screenQuality": "balanced", // "low" | "balanced" | "high" — an EDITED save only; an untouched one is copied as recorded
+      "screenFps": 30,             // 30 | 60 — applies to the NEXT recording
+      "screenCreateNote": true,    // companion .md embedding the saved .mp4
+      "screenExtraFrontmatter": "area: Demos", // optional — added to that note's frontmatter
+      "screenBodyTemplate": "## Notes", // optional — added below the video embed
       "defaultList": "Inbox",      // optional — the list (folder under tasksFolder) new tasks land in when none is picked
       "listOrder": ["Inbox", "Next"] // optional — display order for list sections/pickers; unlisted folders append alphabetically
     }
@@ -439,6 +446,35 @@ ever written into your vaults except recordings and their notes.
   `--extract-media`, so no media folder is created and no dangling image links
   remain. Per-vault, changes only NEW imports, omitted when `true` — the same
   discipline as `documentDateFolders`.
+- The seven `screen*` keys — the per-vault **Screen Capture** settings, edited
+  in Vault settings → **Screen** (they were `config.json` hand-edits until
+  GAP-103 closed).
+  - `screenCaptureFolder` (string or omit, default `"Screen Captures"`) — the
+    vault-relative folder a saved capture's `.mp4` and its note land in. The
+    ninth sanctioned vault write reserves the pair there.
+  - `screenCaptureDateFolders` (bool, default `false`) — the dated `YYYY/MM`
+    vs flat toggle, the same discipline and defaults as
+    `recordingDateFolders`/`documentDateFolders` above.
+  - `screenQuality` (`"low"` | `"balanced"` | `"high"`, default
+    `"balanced"`) — the bitrate target for an **edited** save, which
+    re-encodes. It does **not** affect an untouched capture: that takes the
+    `-c copy` fast path and is saved exactly as recorded.
+  - `screenFps` (30 | 60, default 30) — the capture frame rate, applied when
+    the **next** recording starts; a capture already staged keeps the rate it
+    was recorded at. A value that is neither is normalized to 30 on read, so
+    a hand-edited file still opens the app — but the settings command
+    **refuses** it rather than normalizing, because a control the user is
+    looking at must not quietly become something else.
+  - `screenCreateNote` (bool, default `true`) — whether an export writes the
+    companion note beside the video. Note-off is the one case where
+    `screen:exported` carries a null `notePath`.
+  - `screenExtraFrontmatter` / `screenBodyTemplate` (string or omit) — the
+    additive per-vault note template, the same machinery as the capture and
+    document templates. Placeholders for both: `{{date}}`, `{{recordedAt}}`,
+    `{{duration}}`, `{{source}}`, `{{resolution}}`, `{{vault}}`. The managed
+    identity keys (`type`, `recorded`, `duration`, `source`, `inputs`,
+    `resolution`, `vault`, `created-by`) are always written and cannot be
+    overridden; the body template is appended **below** the video embed.
 - `followUpTemplate` (bool, default `true`) — append a `## Follow-up`
   scaffold (action items, decisions, notes) to each recording's companion
   note. Only applies when `createNote` is on.

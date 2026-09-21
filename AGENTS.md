@@ -51,8 +51,10 @@ the app has grown six vertical domains:
   monitor, a window or a region with any number of audio devices mixed in,
   into a crash-survivable fragmented MP4 staged OUTSIDE every vault; edit it
   in its own window; then export it through a user-installed ffmpeg and save
-  it into a vault as a playable `.mp4` plus a companion note. Phase 6 (the
-  settings surface and the staged-capture browser) is still ahead.
+  it into a vault as a playable `.mp4` plus a companion note, with a **Screen**
+  tab in Vault settings for the seven per-vault fields. What is left of Phase 6
+  is the staged-capture browser and a staging size bound (GAP-115); the
+  settings surface that was its other half landed with GAP-103.
 - **Transcription** — opt-in, fully local speech-to-text (whisper.cpp via
   `whisper-rs`) run after a recording, writing a transcript sidecar the
   note embeds; plus a read-only recordings browser.
@@ -109,6 +111,8 @@ vault-buddy/
 │   ├── composables/            # settings sync, startup update check, bubble, announcements,
 │   │                           #   tasks helpers, useEditorTimeline (undo/redo + persist-on-edit),
 │   │                           #   useEditorSelection (the selection/playhead remap)
+│   ├── types.ts                # the wire types; re-exports screenTypes.ts, which holds
+│   │                           #   the screen-capture domain's (split at the 500 cap)
 │   └── utils/                  # highlight, recentSearches, formatDuration, timelineGeometry
 ├── src-tauri/                  # Rust workspace: root shell crate + 5 member crates
 │   ├── tauri.conf.json         # the 5 windows, updater endpoint, version,
@@ -120,6 +124,10 @@ vault-buddy/
 │   │                           #   search_commands.rs, mcp_commands.rs, document_commands.rs,
 │   │                           #   screen_commands.rs, screen_capture_worker.rs,
 │   │                           #   region_commands.rs (the overlay's selection lifecycle),
+│   │                           #   screen_config_commands.rs (the per-vault Screen
+│   │                           #     Capture SETTINGS surface — config, not lifecycle),
+│   │                           #   window_upkeep.rs (the 1 s metronome's tick + the
+│   │                           #     main-thread window upkeep it posts, split from lib.rs),
 │   │                           #   editor_commands.rs (the editor's open/load/save surface),
 │   │                           #   shutdown_gate.rs (the ONE composition of all three
 │   │                           #     shutdown predicates, read by quit, Alt+F4 and the updater) +
@@ -313,11 +321,11 @@ Five OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 92 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 94 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands — and COUNT the
 `generate_handler![…]` list rather than adding to the previous number: this
 sentence has been wrong four times (73 when it was 79, 79 when it was 81,
-81 when it was 85, then 85 when it was 92), and the count below was measured,
+81 when it was 85, then 85 when it was 92), and the count above was measured,
 not incremented:
 
 ```bash
@@ -337,6 +345,7 @@ awk '/generate_handler!\[/,/\]\)/' src-tauri/src/lib.rs | grep -cE '^\s+[a-z_]+:
 | `document_commands.rs` | `detect_pandoc` *(async)*, `convert_document` *(async — spawns the pandoc child off the main thread)*, `get_documents_config`, `set_documents_config` *(async — now also carries the `document_date_folders` layout toggle, the `document_extract_images` images/text-only toggle, and the additive `document_extra_frontmatter`/`document_body_template` note-template fields)*, `set_pandoc_path` *(async)*, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `take_add_document_request` (one-shot drain of the buddy-menu "Import document…" flag — armed by the non-command `begin_add_document`, which the lib.rs menu handler calls; routes the panel to the vault-first import picker), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
 | `model_commands.rs` | `list_transcription_models`, `delete_transcription_model` *(async — the delete's bounded retry must not sit on the main thread)* |
 | `screen_commands.rs` | The screen-capture CAPTURE-lifecycle surface (the later-phase commands — the editor and the config setters — are deliberately absent; region select landed in phase 3, in its own `region_commands.rs` below). `list_capture_sources` *(async — WGC/WinRT enumeration takes hundreds of ms, GAP-22's reasoning for `list_audio_devices`; degrades to an empty list rather than an error)*, `start_screen_capture` *(async — source re-resolve, cpal endpoint opening, sink creation and staging-directory I/O all block, and the start waits on a 15 s ready handshake)*, `stop_screen_capture` *(async — the wait is bounded at 30 s of mux teardown + fMP4 finalize + the publish rename, wider than audio's 15 s; returns typed `stillSaving` on expiry, mirroring `stop_capture`)*, `pause_screen_capture`, `resume_screen_capture`, `screen_capture_status` *(all three sync: each takes the reservation mutex for O(1) work and sends on an unbounded channel, so none can block the main thread — the same posture as the audio siblings)*. Mutual exclusion with the audio domain lives in `CaptureGuard` (spec §7.3), claimed before the reservation and freed from exactly one chokepoint, `clear_active_screen` — both facts pinned by structural tests |
+| `screen_config_commands.rs` | The per-vault SCREEN-CAPTURE SETTINGS surface (spec §12, closing docs/Gaps.md GAP-103 — until it landed all seven `screen_*` fields were read in production and settable nowhere). Its own module for the seam the screen domain draws everywhere else: `screen_commands` is the capture LIFECYCLE, `region_commands` a WINDOW lifecycle, `staged_commands` an OBJECT — and this is CONFIGURATION, which touches none of them; it mirrors `capture_config_commands.rs` sitting beside `capture_commands.rs`. `get_screen_capture_config` *(sync — `load_config` degrades per field, so a malformed entry yields defaults rather than an error the settings screen would have to render instead of fields)*, `set_screen_capture_config` *(async — the fsync'd config write, and `config_write_lock()` can be held across a full task-vault scan; takes ONE `cfg` DTO like `set_capture_config`, not eight positional params — two of the seven fields are `bool` with unrelated fields between them, so a transposed positional call would compile and write each choice into the other's setting)*. It VALIDATES where the parse layer NORMALISES: an unknown quality or an fps that is neither 30 nor 60 is refused inline. The parse layer normalises so a hand-edited `config.json` still opens the app; a settings screen is the opposite case — the user is looking right at the control, and a value that quietly became something else is how a setting reads as broken. Containment is asserted on the EFFECTIVE folder (the explicit one or the `Screen Captures` default) BEFORE anything is written, since a blank field means the default and the default is a path into the vault too |
 | `region_commands.rs` | The overlay's selection lifecycle (spec §5.2), split out of `screen_commands.rs` because it is a WINDOW-lifecycle concern — it touches no `CaptureGuard`, no `ScreenCaptureState` and no session. `select_capture_region` *(async — it waits for a human to draw a rectangle; on the main thread that would freeze the very event loop that dispatches the overlay's own pointer events. Bounded at 120 s so a webview that never answers cannot strand a full-screen invisible always-on-top window, and its overlay-show handshake is bounded at 5 s separately)*, `resolve_region_selection` *(sync — O(1) under a mutex plus one unbounded-channel send, the posture of the screen domain's own sync siblings)* |
 | `editor_commands.rs` | The capture editor's surface (spec §8, §11), its own module because opening the editor takes TWO commands. `open_capture_editor` *(sync — it shows and focuses a window, so it is main-thread-only; it therefore STASHES the base name rather than reading the capture, because a sync command must not touch disk — the `begin_document_import`/`take_pending_import` split, for the same reason. It emits `editor:open` to the editor window alone, BEFORE `show()`, and rolls the stash back on either failure so a later drain can never open a capture the user was just told failed)*, `take_editor_request` *(sync — the one-shot drain of that stash)*, `load_staged_capture` *(async — reads the staging sidecar and confirms the `.mp4` is on disk, off the main thread; it also REFUSES a sidecar whose own `base` disagrees with the file name it was read from, since that field is hand-editable and becomes the identity the editor later saves under)*, `save_capture_timeline` *(async — an fsync'd, temp-then-replacing sidecar rewrite on EVERY edit, spec §10's "a crash loses at most the last operation")*. The three that take a `base` from the frontend gate it through `is_safe_base` — no separator, no leading/trailing dot, no trailing space, no `:` (a drive prefix or an NTFS ADS marker), no control character and no Windows reserved device stem — before it becomes a path; an INTERIOR `..` is deliberately allowed, because within one path component it traverses nowhere and refusing it stranded real captures from windows titled "Saving... please wait". A structural test scans this file and fails if any command taking a base stops refusing an unsafe one, and asserts the whole command list so a NEW command has to be considered |
 | `export_commands.rs` | The export LIFECYCLE, and with it all five `screen:export*`/`screen:discarded` emits. Split from `staged_commands.rs` below because one file carrying both came to 989 nonblank lines against the 800 Rust cap; the seam is **lifecycle versus object**. `export_and_save_capture` *(async — it reads the sidecar, probes free space, runs ffmpeg on a named `screen-export` thread and waits for it, unbounded on purpose: a long recording legitimately takes minutes and a deadline would abandon a worker still writing into the vault)*, `cancel_export` *(sync — it takes one mutex, sets one `AtomicBool` and drops it; no I/O, so the sync rule keeps it off the blocking pool. `Ok` even when nothing is running, because a Cancel click racing the export's own completion is not the user's error)*. Both gate a frontend-supplied `base` through `editor_commands::is_safe_base` — never a second copy of those rules — and a structural test pins the refusal in the command's own body |
@@ -633,7 +642,9 @@ Invariants:
   geometry; the plugin's Moved listener takes the same lock on the main
   thread. An off-main save colliding with a drag's Moved flood deadlocked
   both threads and froze the app with no crash record (the original
-  "drag crash"). The 1s loop in `lib.rs` is therefore a pure metronome: it
+  "drag crash"). The 1s loop (its tick and the upkeep it
+  posts now live in `window_upkeep.rs`, split from `lib.rs` at the 800-line
+  cap — `run()` is unchanged) is therefore a pure metronome: it
   posts `window_upkeep_tick` (always-on-top re-assert + position
   checkpoint) to the main thread via `run_on_main_thread` with backpressure
   (at most one closure outstanding), and it warns when the main thread
@@ -1286,10 +1297,19 @@ write here, it belongs in `export_worker/` or it is a design change.
   reads those two again plus `screen_capture_folder` (via
   `screen_capture_root()`), `screen_capture_date_folders`,
   `screen_create_note`, `screen_extra_frontmatter` and
-  `screen_body_template`. None is write-only. What is still missing is the
-  SETTINGS SURFACE: there is no `ScreenCaptureConfigTab` and no
-  `set_screen_capture_config`, so every one of the seven is a `config.json`
-  hand-edit until Phase 6.
+  `screen_body_template`. None is write-only. **And none is a hand-edit any
+  more** — the sentence here used to end "there is no `ScreenCaptureConfigTab`
+  and no `set_screen_capture_config`, so every one of the seven is a
+  `config.json` hand-edit until Phase 6", which a 2026-09-21 hardware session
+  made the user's fourth reported defect. Both now exist
+  (`screen_config_commands.rs`, `ScreenCaptureConfigTab.vue`, the **Screen**
+  tab of Vault settings, second so the two capture providers read together),
+  so all seven are settable and GAP-103 is closed. Two things the tab
+  deliberately does NOT do, because the fields do not mean what a settings
+  screen implies: `screen_quality` is consulted only on an EDITED save (an
+  untouched capture is `-c copy`'d as recorded), and `screen_fps` applies to
+  the NEXT recording, not one already staged — both stated on the controls
+  rather than left to be discovered.
 
 - **The editor (phase 4) — `editor_commands.rs` + `EditorRoot.vue`.** A
   staged capture is opened in its own window, cut into segments, and saved

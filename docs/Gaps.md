@@ -2013,7 +2013,7 @@ worse in kind than the pre-async behavior:
   "saving" until reload. Requires a webview reload to resync the wedged
   state first; the old bare-`Ok` had the identical hole.
 
-### GAP-103 · Low · `set_screen_capture_config` (Phase 6) inherits three obligations already visible from Phase 1's config work
+### GAP-103 · FIXED (2026-09-21) · `set_screen_capture_config` (Phase 6) inherits three obligations already visible from Phase 1's config work
 Deferred-by-phasing follow-ups the settings command must not land without,
 found while wiring the seven Screen Capture config fields into
 `vault_config.rs`/`config_merge.rs` (spec §12) ahead of the command that
@@ -2048,6 +2048,56 @@ will own writing them:
   under any lock other than the one core lock (or under no lock) would
   reopen the exact desync GAP-83 closed, just for an eighth writer instead
   of a seventh.
+
+**FIXED** by `src-tauri/src/screen_config_commands.rs` +
+`src/components/ScreenCaptureConfigTab.vue` (the **Screen** tab of Vault
+settings), after a hardware session reported the absent surface as a defect
+rather than a deferral. All three obligations are met, but the FIRST was met
+in the opposite direction from the one this entry proposed, which is worth
+recording so nobody "restores" it:
+
+- **fps is REFUSED, not normalized on write.** The entry asked the command to
+  normalize its incoming value before it reaches `serialize_vault_entry`.
+  It refuses anything but 30 or 60 instead. Normalizing is right for the
+  PARSE layer — a hand-edited `config.json` must still open the app — and
+  wrong for a settings screen, where the user is looking straight at the
+  control and a value that silently became something else is exactly how a
+  setting reads as broken. The serializer hazard the entry described is
+  closed either way: an out-of-range value now never reaches it.
+  `screen_quality` is refused on the same reasoning.
+- **The seven keys are documented** in docs/DEVELOPMENT.md's `config.json`
+  reference, with the two non-obvious ones spelled out: `screenQuality`
+  applies only to an EDITED save (an untouched one is `-c copy`'d as
+  recorded) and `screenFps` to the NEXT recording, not one already staged.
+  Both are also stated on the controls themselves.
+- **`config_write_lock()` is taken**, read-modify-write under it, via a new
+  `config_merge::merge_screen_owned` — the seventh merge helper, so a screen
+  save cannot reset another domain's fields or be reset by one.
+
+Two notes for whoever extends it:
+
+- `merge_screen_owned` takes a NAMED `ScreenOwned` struct, not seven
+  positional arguments. `date_folders` and `create_note` are both `bool` with
+  two unrelated fields between them, so a transposed positional call would
+  have compiled and written each user's choice into the other's setting.
+- An eighth `screen_*` field added to `VaultCaptureConfig` and forgotten in
+  the merge would be silently unwritable through the only surface that offers
+  it, with every save restoring the old value. A test counts the declarations
+  against the assignments so that cannot happen quietly.
+
+**Residuals, none of them this entry's:**
+
+- The tab is reachable only from **Vault settings**, not from the Record
+  Screen picker where a user is actually choosing a source. Nothing links the
+  two.
+- Changing `screenFps` or `screenQuality` says which capture it affects, but
+  nothing in the app shows what a STAGED capture was recorded at, so the
+  sidecar remains the only record.
+- `screenExtraFrontmatter` is validated only at render time by
+  `render_extra_frontmatter` (malformed YAML yields `""`). The tab accepts any
+  text and reports nothing, so a typo is discovered as a note that quietly
+  lacks the frontmatter — the same posture as the three sibling template
+  fields, not a regression, but the one place a preview would earn its keep.
 
 Owner: Phase 6 (the settings-surface phase). None of these are bugs in
 Phase 1's landed code — `config_merge.rs::merge_capture_owned` already
