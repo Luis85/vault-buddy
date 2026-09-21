@@ -4691,3 +4691,58 @@ future fix does not trade this for a worse regression):
 - Any change here touches `cfg(windows)` behaviour that no automated gate on
   any platform can observe (GAP-117/GAP-163), so it needs a checklist row of
   its own and a hardware re-run, not a green CI badge.
+
+### GAP-167 · Low · The Windows release build fetches three third-party artifacts from github.com at bundle time, so a transient 5xx reddens the release gate on any commit — including a docs-only one
+Observed 2026-09-21 on head `aa4685e`, a **documentation-only** commit:
+
+```
+Info Verifying NSIS package
+ Downloading https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip
+ Downloading https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll
+failed to bundle project: `http status: 504`
+```
+
+Everything that could fail on the diff had already passed. The release-profile
+Rust build finished in 3 m 43 s, `vault-buddy.exe` was produced, WiX ran, and
+the MSI was written. The job then died fetching a DLL from GitHub releases —
+and the commit changed one markdown file, so the diff cannot have caused it.
+
+`npx tauri build` downloads **three** artifacts at bundle time, none pinned by
+us and none cached: `wix314-binaries.zip`, `nsis-3.11.zip` and
+`nsis_tauri_utils.dll`. The bundler owns these downloads; the workflow has no
+step that pre-seeds them, and there is no cache keyed on them. So the
+`windows-app` job's success is conditional on three github.com release
+endpoints being healthy for the ~60 s window in which it asks.
+
+**Why this is worth an entry rather than a shrug.** `windows-app` is the
+**release + desktop-behaviour gate** — the one job whose green means an
+installer exists. A failure mode that reddens it for reasons unrelated to any
+diff trains the next reader to treat a red `windows-app` as noise and re-run
+it, which is exactly the reflex that would wave through a real regression in
+the `cfg(windows)` code no other gate compiles (GAP-117 / GAP-163). The cost
+is not the seven wasted runner-minutes; it is the eroded signal on the only
+gate that has any.
+
+**Not a `cargo` problem.** The Rust dependency graph is locked and vendored
+through `Cargo.lock`, and `cargo deny check`'s `[sources] unknown-git = "deny"`
+already refuses git-sourced dependencies. These three are outside that
+discipline entirely: they are fetched by the Tauri bundler, at bundle time,
+by URL, with a hash check but no retry and no local cache.
+
+**Constraints a fix must respect:**
+
+- **The downloads are the bundler's, not ours.** There is no supported flag to
+  point `tauri build` at pre-fetched copies of all three; a fix is a cache of
+  the directory the bundler extracts into (`%LOCALAPPDATA%\tauri`), which
+  means keying that cache on the Tauri CLI version and accepting that a stale
+  key silently re-downloads — i.e. it reduces the exposure, never removes it.
+- **A blanket step-level retry is the wrong shape.** `tauri build` is a ~4 min
+  release compile before it reaches the bundler, so retrying the step retries
+  the compile too. Any retry belongs around the bundling, which is not
+  separately invocable from the current single `npx tauri build` invocation.
+- **Do not "fix" this by relaxing what the job proves.** Dropping NSIS from the
+  bundle targets would make the failure go away and take the release artifact
+  with it.
+- **Self-healing, which is why this is Low.** The next push re-attempts it, and
+  the failure is loud and unambiguous rather than silent. It has been seen
+  once.
