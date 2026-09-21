@@ -23,7 +23,7 @@ here documents a failure mode somebody already hit.
 - [The capture domain](#the-capture-domain-src-tauricapture--capture_commandsrs--capture-store)
 - [The document-import domain](#the-document-import-domain-coresrcdocument_importrs--src-taurisrcdocument_commandsrs--documentimportsettingsvue--importvaultpickervue)
 - [The transcription & recordings domains](#the-transcription--recordings-domains-src-tauritranscribe--coresrctranscriptrecordingsrs--transcriptionrs)
-- [The tasks domain](#the-tasks-domain-coresrctasksrs--task_commandsrs--tasksvue)
+- [The tasks domain](#the-tasks-domain-coresrctasks--task_commandsrs--tasksvue)
 - [The search domain](#the-search-domain-coresrcsearchrs--search_commandsrs--searchvue)
 - [The MCP server domain](#the-mcp-server-domain-src-taurimcp--mcp_commandsrs--mcpsettingsvue)
 - [Updater flow](#updater-flow-srcstoresupdatests-updatesettingsvue)
@@ -103,17 +103,18 @@ here is deliberately only the shipped increments.
 ```
 vault-buddy/
 ├── AGENTS.md / CLAUDE.md / CONTEXT.md / README.md
-├── index.html                  # single HTML entry — all five windows load it
+├── index.html                  # single HTML entry — all six windows load it
 ├── package.json / vite.config.ts / tsconfig.json
 ├── .github/workflows/          # ci.yml, release.yml, bump-version.yml
 ├── .claude/                    # vendored superpowers skills + SessionStart hook
 ├── docs/                       # see the documentation map above
 ├── scripts/                    # bump-version.mjs, setup-linux-deps.sh, make-icon.mjs
-├── src/                        # Vue 3 frontend — ONE bundle, five window roots
+├── src/                        # Vue 3 frontend — ONE bundle, six window roots
 │   ├── main.ts                 # mounts rootFor(window label)
-│   ├── roots/                  # BuddyRoot / PanelRoot / BubbleRoot / RegionRoot / EditorRoot + rootFor() map
+│   ├── roots/                  # BuddyRoot / PanelRoot / BubbleRoot / RegionRoot / EditorRoot /
+│   │                           #   RegionIndicatorRoot + rootFor() map
 │   ├── components/             # panel views + buddy character (ActionPanel is the shell)
-│   │   └── editor/             # CapturePreview + TimelineStrip (the editor window's surface)
+│   │   └── editor/             # CapturePreview + TimelineStrip + ExportBar (the editor window's surface)
 │   ├── stores/                 # Pinia: vaults, capture, screenCapture, documentImports,
 │   │                           #   pandoc, ffmpeg, updates, settings, settingsStatus, notifications
 │   ├── composables/            # settings sync, startup update check, bubble, announcements,
@@ -123,9 +124,9 @@ vault-buddy/
 │   │                           #   the screen-capture domain's (split at the 500 cap)
 │   └── utils/                  # highlight, recentSearches, formatDuration, timelineGeometry
 ├── src-tauri/                  # Rust workspace: root shell crate + 5 member crates
-│   ├── tauri.conf.json         # the 5 windows, updater endpoint, version,
+│   ├── tauri.conf.json         # the 6 windows, updater endpoint, version,
 │   │                           #   assetProtocol scope (staging only — a security boundary)
-│   ├── capabilities/           # single default capability (all 5 windows)
+│   ├── capabilities/           # single default capability (all 6 windows)
 │   ├── src/                    # SHELL: lib.rs (builder/setup/metronome), commands.rs,
 │   │                           #   capture_commands.rs, capture_config_commands.rs,
 │   │                           #   transcription.rs, task_commands.rs, task_config_commands.rs,
@@ -144,6 +145,8 @@ vault-buddy/
 │   │                           #     main-thread window upkeep it posts, split from lib.rs) +
 │   │                           #     cfg_windows_guard.rs (test-only: the scan standing in
 │   │                           #     for the cfg(windows) bodies Linux never compiles),
+│   │                           #   structural_scan.rs (test-only: the source-scan helpers
+│   │                           #     the structural tests share),
 │   │                           #   editor_commands.rs (the editor's open/load/save surface),
 │   │                           #   shutdown_gate.rs (the ONE composition of all three
 │   │                           #     shutdown predicates, read by quit, Alt+F4 and the updater) +
@@ -324,14 +327,15 @@ Six OS windows, one frontend bundle, one Rust process:
    │  screen_recovery/ ── staging sweep (mod + pure decide);  ffmpeg.rs / external_tool.rs ── the tool      │
    │  window_close.rs ── CloseRequested routing (buddy quit path; editor X → hide)        │
    │  tray.rs ── tray icon/menu + hide_buddy chokepoint;  diagnostics.rs ── crash/marker  │
-   └─────┬────────────┬────────────┬────────────┬──────────────┬──────────────────────────┘
-         │            │            │            │              │  IPC commands + events
-   ┌─────┴────┐ ┌─────┴────┐ ┌─────┴────┐ ┌─────┴────┐ ┌───────┴──────┐
-   │main (88²)│ │panel     │ │bubble    │ │overlay   │ │editor 960×640│
-   │BuddyRoot │ │PanelRoot │ │BubbleRoot│ │RegionRoot│ │EditorRoot    │
-   │character,│ │ActionPnl │ │greeting /│ │rubber    │ │preview +     │
-   │drag, dots│ │all views │ │announce  │ │band (1×) │ │strip         │
-   └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────────┘
+   └─────┬────────────┬────────────┬────────────┬──────────────┬────────────┬─────────────┘
+         │            │            │            │              │            │  IPC + events
+   ┌─────┴────┐ ┌─────┴────┐ ┌─────┴────┐ ┌─────┴────┐ ┌───────┴──────┐ ┌───┴──────────┐
+   │main (88²)│ │panel     │ │bubble    │ │overlay   │ │editor 960×640│ │region-       │
+   │BuddyRoot │ │PanelRoot │ │BubbleRoot│ │RegionRoot│ │EditorRoot    │ │indicator     │
+   │character,│ │ActionPnl │ │greeting /│ │rubber    │ │preview +     │ │RegionIndic.  │
+   │drag, dots│ │all views │ │announce  │ │band (1×) │ │strip         │ │border, click-│
+   │          │ │          │ │          │ │          │ │              │ │through       │
+   └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────────┘ └──────────────┘
       each webview = own Pinia; cross-window sync = Tauri events + localStorage `storage`
 
    pure logic lives below the shell:
@@ -387,7 +391,7 @@ awk '/generate_handler!\[/,/\]\)/' src-tauri/src/lib.rs | grep -cE '^\s+[a-z_]+:
 | `editor_commands.rs` | The capture editor's surface (spec §8, §11), its own module because opening the editor takes TWO commands. `open_capture_editor` *(sync — it shows and focuses a window, so it is main-thread-only; it therefore STASHES the base name rather than reading the capture, because a sync command must not touch disk — the `begin_document_import`/`take_pending_import` split, for the same reason. It emits `editor:open` to the editor window alone, BEFORE `show()`, and rolls the stash back on either failure so a later drain can never open a capture the user was just told failed)*, `take_editor_request` *(sync — the one-shot drain of that stash)*, `load_staged_capture` *(async — reads the staging sidecar and confirms the `.mp4` is on disk, off the main thread; it also REFUSES a sidecar whose own `base` disagrees with the file name it was read from, since that field is hand-editable and becomes the identity the editor later saves under)*, `save_capture_timeline` *(async — an fsync'd, temp-then-replacing sidecar rewrite on EVERY edit, spec §10's "a crash loses at most the last operation")*. The three that take a `base` from the frontend gate it through `is_safe_base` — no separator, no leading/trailing dot, no trailing space, no `:` (a drive prefix or an NTFS ADS marker), no control character and no Windows reserved device stem — before it becomes a path; an INTERIOR `..` is deliberately allowed, because within one path component it traverses nowhere and refusing it stranded real captures from windows titled "Saving... please wait". A structural test scans this file and fails if any command taking a base stops refusing an unsafe one, and asserts the whole command list so a NEW command has to be considered |
 | `export_commands.rs` | The export LIFECYCLE, and with it all five `screen:export*`/`screen:discarded` emits. Split from `staged_commands.rs` below because one file carrying both came to 989 nonblank lines against the 800 Rust cap; the seam is **lifecycle versus object**. `export_and_save_capture` *(async — it reads the sidecar, probes free space, runs ffmpeg on a named `screen-export` thread and waits for it, unbounded on purpose: a long recording legitimately takes minutes and a deadline would abandon a worker still writing into the vault)*, `cancel_export` *(sync — it takes one mutex, sets one `AtomicBool` and drops it; no I/O, so the sync rule keeps it off the blocking pool. `Ok` even when nothing is running, because a Cancel click racing the export's own completion is not the user's error)*. Both gate a frontend-supplied `base` through `editor_commands::is_safe_base` — never a second copy of those rules — and a structural test pins the refusal in the command's own body |
 | `staged_commands.rs` | A staged capture as an OBJECT. `discard_staged_capture` *(async — an irreversible three-file delete (`.mp4`, `.json`, any `.export.mp4.part`), gated behind the editor's and the picker's own two-step confirms, and REFUSED while that capture is the one being exported)*, `list_staged_captures` *(async — a `read_dir` of staging plus a sidecar parse per row; it DEGRADES to what it could read rather than erroring, so a transient failure never blanks a list the user is reading)*, `open_screen_capture` *(sync — the read-only `uri::launch` hand-off for a SAVED capture, the `open_recording`/`open_task` shape)*. `screen:discarded` is emitted from `export_commands`' single warning-logging emitter on this module's behalf, so the one-emitter invariant survives the split |
-| `staging_commands.rs` | Staging as a WHOLE — the DIRECTORY, where `staged_commands` is one capture as an object and `export_commands` is the export's lifecycle. Its own module for that seam and because `staged_commands` sits at 686 of the 800-line Rust cap. `staging_usage` *(async — a `read_dir`, a sidecar parse per capture and a `symlink_metadata` per file; DEGRADES to zero rather than rejecting, so a settings card can always render, and the Clear beside it is disabled by that same zero)*, `clear_staged_captures` *(async — up to three unlinks per capture; the widest-reaching destructive action in the app, behind the card's two-step confirm, spec §10's "nothing is ever deleted silently")*. **Every rule it applies is borrowed, never re-grown**: which captures exist is `staged_summaries`, which files one owns is `screen::staging_files::capture_file_names`, whether one may go is `discard_conflict`, and the removal with its two-pass symlink refusal is `discard_staged_files` — a second answer to "is this file ours" on the one path that deletes many recordings at once is exactly the hazard. It deliberately does NOT refuse while a capture is RECORDING: a live capture owns `.<base>.mp4.part`, which is not one of a staged capture's three files, and has no published `<base>.mp4`, so `staged_summaries` cannot see it and a clear cannot reach it. It emits one `screen:discarded` per capture actually removed, through `export_commands`' single emitter, or `lastStaged` would keep offering **Edit** for a base no longer on disk |
+| `staging_commands.rs` | Staging as a WHOLE — the DIRECTORY, where `staged_commands` is one capture as an object and `export_commands` is the export's lifecycle. Its own module for that seam and because `staged_commands` sits at 677 of the 800-line Rust cap. `staging_usage` *(async — a `read_dir`, a sidecar parse per capture and a `symlink_metadata` per file; DEGRADES to zero rather than rejecting, so a settings card can always render, and the Clear beside it is disabled by that same zero)*, `clear_staged_captures` *(async — up to three unlinks per capture; the widest-reaching destructive action in the app, behind the card's two-step confirm, spec §10's "nothing is ever deleted silently")*. **Every rule it applies is borrowed, never re-grown**: which captures exist is `staged_summaries`, which files one owns is `screen::staging_files::capture_file_names`, whether one may go is `discard_conflict`, and the removal with its two-pass symlink refusal is `discard_staged_files` — a second answer to "is this file ours" on the one path that deletes many recordings at once is exactly the hazard. It deliberately does NOT refuse while a capture is RECORDING: a live capture owns `.<base>.mp4.part`, which is not one of a staged capture's three files, and has no published `<base>.mp4`, so `staged_summaries` cannot see it and a clear cannot reach it. It emits one `screen:discarded` per capture actually removed, through `export_commands`' single emitter, or `lastStaged` would keep offering **Edit** for a base no longer on disk |
 | `ffmpeg.rs` | The export's external tool, resolved the way Pandoc is (`external_tool.rs` is the shared layer both consume — `CREATE_NO_WINDOW`, the timeout kill, the bounded drain, the registry-fresh PATH). `detect_ffmpeg` *(async — it spawns `ffmpeg -version` and `ffmpeg -encoders`)*, `set_ffmpeg_path` *(async — an fsync'd config write; the override lands in the app-global `documentImport` section beside `pandocPath`, which is where that section's tool overrides live rather than a statement about document import)*. **Both now have frontend callers** (GAP-144, closed): `FfmpegSettings.vue` in Buddy settings → Integrations, and `src/stores/ffmpeg.ts`, the `pandoc.ts` analogue whose `ensureDetected()` the Record Screen picker consults on mount. The picker shows a **non-blocking NOTICE, deliberately not a gate**: recording and editing work fine without ffmpeg and only the Save needs it, so disabling Start would take away a capture the user can make and edit. A regression test pins that Start stays enabled either way. Both cards consume one `useExternalTool` composable — the frontend mirror of `external_tool.rs` being the tool-agnostic half Pandoc and ffmpeg already share in Rust; a third tool card should reuse it rather than copy a fourth time |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
@@ -485,7 +489,7 @@ Six windows. FIVE of them are the always-on-top transparent companions, so
 the buddy window never resizes. The old design was one window that grew from
 88×88 to hold the panel; WebView2 repaints its stale last frame at the new
 bounds for a frame on resize, flashing the buddy to a corner. Splitting the
-concerns removed the resize entirely. The fifth, `editor`, is deliberately
+concerns removed the resize entirely. The sixth, `editor`, is deliberately
 none of those things — an ordinary decorated, resizable application window —
 and the rules below say so where they differ:
 
@@ -758,8 +762,9 @@ Invariants:
   None of these may drift, and none of them is maintained by memory: unit
   tests derive each from `tauri.conf.json` — `ALL_WINDOW_LABELS` and
   `COMPANION_LABELS` directly, `POSITION_DENYLIST` transitively through
-  `ALL_WINDOW_LABELS`, `EXCLUDED_LABELS` the INVERSE way (`main` in, every
-  other declared window OUT, each named in the failure) — with an
+  `ALL_WINDOW_LABELS`, `EXCLUDED_LABELS` the INVERSE way (the hardware-cleared labels —
+  `main`, `region-indicator` — in, every other declared window OUT, each
+  named in the failure) — with an
   explicit assertion that `COMPANION_LABELS` does NOT contain `editor`, and
   another that `lib.rs` feeds the window-state plugin the constant rather
   than a literal list that drifted from it once already.
@@ -1204,8 +1209,10 @@ write here, it belongs in `export_worker/` or it is a design change.
   chokepoints also run on paths where that domain never claimed and an
   unkeyed release there would free the OTHER domain's live claim. The screen
   side frees it from exactly ONE place, `clear_active_screen` (which drops
-  the reservation and releases the claim together — all ten of the worker's
-  early-return paths funnel through it); the audio side has `clear_active`
+  the reservation and releases the claim together — nine of the start
+  path's ten early returns call it directly, and the tenth, the ready
+  timeout, hands the release to `spawn_outcome_monitor`, which calls it once
+  the device thread ends, GAP-110); the audio side has `clear_active`
   plus one defensive already-reserved arm. Both counts are pinned by
   structural source scans that fail if a raw release site is ever added.
   Its lock-ordering rule is in the tasks domain's concurrency note: the
@@ -1315,19 +1322,22 @@ write here, it belongs in `export_worker/` or it is a design change.
   an unactionable `HRESULT`; regions made it arithmetically false until it
   was threaded through.
 - **`WDA_EXCLUDEFROMCAPTURE` keeps the BUDDY out of the FOOTAGE (spec §5.3,
-  amended 2026-09-21) — and since GAP-166, ONLY the buddy.** Through phases
+  amended 2026-09-21) — and since GAP-166, ONLY the buddy and the region
+  border.** Through phases
   3–5 `EXCLUDED_LABELS` was every declared window; a one-variable rebuild on
   the reporter's machine showed the affinity round-trip on WebView2-hosting
   windows blanking the editor AND killing pointer input to Explorer's and
   Notepad's toolbars until the process exited, and `main` alone clean. The
-  const is `["main"]` and its config-pin test is INVERTED: `main` in, every
-  other declared window OUT, so a new window is not excluded until a hardware
+  const is `["main", "region-indicator"]` — the buddy plus the region border
+  (GAP-165), the two hardware-cleared labels — and its config-pin test is
+  INVERTED: each cleared label in, every other declared window OUT, so a new window is not excluded until a hardware
   run says it can be (see the window-system section).
-  `capture_exclusion::apply` sets the affinity on that one label from ONE
+  `capture_exclusion::apply` sets the affinity on those labels from ONE
   place, `screen_capture_worker`'s `start_screen_capture_blocking`, before the
   session opens; `capture_exclusion::clear` lifts it from ONE place,
-  `screen_commands::clear_active_screen` — the chokepoint every teardown
-  already funnels through, including all of the start path's early returns.
+  `screen_commands::clear_capture_window_effects`, which `clear_active_screen`
+  calls unconditionally and which the ready-timeout arm calls on its own (it
+  keeps the reservation but drops the window effects, GAP-110).
   Both the count AND the enclosing function are pinned by a structural test,
   because moving the apply into `start_screen_capture`'s async tail, or the
   clear into `stop_screen_capture`, both leak permanently under §14's
@@ -1368,7 +1378,7 @@ write here, it belongs in `export_worker/` or it is a design change.
   the offset fails silently by putting the border on the wrong monitor) all
   run on the calling worker thread; only four numbers cross. One show site in
   `start_screen_capture_blocking` beside the exclusion apply, gated on
-  `SourceId::Region`; one unconditional hide in `clear_active_screen` beside
+  `SourceId::Region`; one unconditional hide in `clear_capture_window_effects` beside
   the exclusion clear. Both pinned to their enclosing functions, the
   `capture_exclusion` discipline, because both natural relocations leak a
   border the user cannot dismiss. **Nothing about it has been seen on
@@ -2125,7 +2135,7 @@ by type. Opening a row hands off to Obsidian via `open_recording` /
 `open_transcript` (`obsidian://`, read-only, `uri::launch`-logged) — it never
 writes.
 
-## The tasks domain (`core/src/tasks.rs` + `task_commands.rs` + `Tasks.vue`)
+## The tasks domain (`core/src/tasks/` + `task_commands.rs` + `Tasks.vue`)
 
 A per-vault todo list over `type: Task` markdown documents (v0.5.0). A Task is
 its own document — Obsidian-Properties/Dataview-compatible frontmatter, not an
@@ -2330,7 +2340,7 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   shared `core::vault_walk` helper — canonical containment (a
   symlink/junction escaping the folder is skipped), a walked-set bounding
   reparse cycles, dot-directory skips (`.obsidian`/`.trash`/`.git`) — with
-  the per-file `type: Task` filter in `tasks.rs`. The sort stays clock-free:
+  the per-file `type: Task` filter in `core::tasks`. The sort stays clock-free:
   open tasks (`status != "done"`) first, then due ascending (no/unparseable
   due sorts last), then priority tier (high < normal < low), then newest
   `created`, then title; done tasks ignore due and sort by newest `created`
@@ -3439,7 +3449,7 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
 | `frontend` | Linux | ESLint, LOC guard (frontend + Rust files), fallow quality ratchet, version-file agreement, `vue-tsc` typecheck + build, the **Playwright layout check** against the just-built `dist/` (`tests/e2e/`, chromium only — see Testing conventions), then the Vitest suite with coverage floors. The e2e step sits between the build and `test:coverage` because it needs `dist/` and must not disturb the coverage ordering |
 | `rust-core` | Linux | `cargo fmt --check` (whole workspace), clippy `-D warnings` + tests on `core`, `capture`, `transcribe`, `mcp`, `screen` — including `--features whisper` (the only place the whisper FFI tests execute) — plus `cargo machete` (unused deps), a `cargo llvm-cov` line-coverage floor (94) over `core`/`capture`/`transcribe`/`screen`, and `cargo deny check` (RustSec advisories + license policy, `src-tauri/deny.toml`). **It also installs ffmpeg**, explicitly rather than trusting the runner image, because `screen::export`'s round-trip tests SKIP when ffmpeg is absent — an image that quietly dropped it would turn the screen-capture feature's only executable end-to-end proof into a silent no-op with the job still green |
 | `linux-app` | Linux (after the two above) | `npx tauri build --no-bundle` — shell compile gate, never released — then **workspace clippy incl. the shell** and the **shell crate's unit tests** (`cargo test -p vault-buddy --lib`; both need the GUI libs + built `dist/` this job has) |
-| `windows-app` | Windows (after the two above) | Full `npx tauri build`, MSI/NSIS installers as artifacts; leaves updater artifacts unsigned on every PR event by design (the signing secrets are injected only on push to `main`, never on PRs — GAP-36); + `cargo test` for core/capture/transcribe (incl. `--features whisper`) after the build to exercise platform-sensitive code (process detection, GetKeyState, WASAPI gates, MoveFileExW fallback) |
+| `windows-app` | Windows (after the two above) | Full `npx tauri build`, MSI/NSIS installers as artifacts; leaves updater artifacts unsigned on every PR event by design (the signing secrets are injected only on push to `main`, never on PRs — GAP-36); + `cargo test` for core/capture/transcribe/screen (incl. `--features whisper`, and `--features whisper-vulkan` for transcribe) after the build to exercise platform-sensitive code (process detection, GetKeyState, WASAPI gates, MoveFileExW fallback) |
 
 ## Releases
 
