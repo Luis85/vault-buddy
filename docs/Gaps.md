@@ -5032,7 +5032,8 @@ tests the member crates only; the shell's clippy and tests live in
 - **`export_worker::vault_dir::a_symlinked_capture_folder_is_refused_before_anything_is_created`
   (bounded `981bf67`).** `symlink_dir` needs `SeCreateSymbolicLinkPrivilege`
   (Developer Mode or elevation); without it Windows returns OS error 1314. The
-  test now prints a visible `SKIP` on exactly that error and panics on any
+  test now prints a `SKIP` line on exactly that error (on stderr, so it shows
+  under `--nocapture`, like the ffmpeg round-trip's skips) and panics on any
   other. **So the escape refusal this test guards is exercised only on Linux
   CI and on privileged Windows hosts** — which is where it ran before, too;
   the change is that a Windows dev run no longer reads as a failure.

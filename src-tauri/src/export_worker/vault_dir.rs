@@ -204,8 +204,8 @@ mod tests {
             // (an elevated process, or Developer Mode on). A CI/dev account
             // without either gets ERROR_PRIVILEGE_NOT_HELD (raw OS error
             // 1314) — an environment limitation, not a failure of the
-            // security property this test guards. Skip VISIBLY rather than
-            // silently passing (the screen crate's export round-trip tests
+            // security property this test guards. Skip with a SKIP line (shown
+            // under --nocapture, as test stderr is) rather than silently passing (the screen crate's export round-trip tests
             // use the same posture when ffmpeg is absent) — any OTHER error
             // still panics, since that would be a real regression.
             if let Err(e) = std::os::windows::fs::symlink_dir(outside.path(), &link) {

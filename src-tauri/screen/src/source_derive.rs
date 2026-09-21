@@ -22,7 +22,7 @@
 
 /// A window's capture size, derived from a DWM extended-frame-bounds rect.
 ///
-/// PURE and on both platforms deliberately: the `cfg(windows)` arm below
+/// PURE and on both platforms deliberately: `source.rs`'s `cfg(windows)` arm
 /// executes in no automated test anywhere (docs/Gaps.md GAP-117), so the
 /// arithmetic that decides how big a recording is opened has to live where
 /// Linux can pin it.
