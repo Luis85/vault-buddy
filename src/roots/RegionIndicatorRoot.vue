@@ -22,6 +22,62 @@
  * root mirrors one boolean with no derived state, which is less machinery
  * than the wiring a store would need.
  */
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+
+const paused = ref(false);
+
+const unlisteners: UnlistenFn[] = [];
+
+/**
+ * FOUR events, not two, and the last two are the interesting ones.
+ *
+ * `screen:paused` / `screen:resumed` are the transitions the design asked
+ * for. `screen:stopped` and `screen:failed` are what returns the border to
+ * the recording colour BETWEEN captures — and without them the colour
+ * outlives its capture, because this window is declared in the config and
+ * hidden-not-destroyed, so its webview mounts exactly once per process (the
+ * property that forced `editor:open` to exist).
+ *
+ * The failure that buys: pause a region capture, stop it while paused,
+ * start another, and the border comes up amber on a capture that is
+ * genuinely recording — a silent lie in the one surface whose whole job is
+ * telling the truth about what is being recorded. Every path that showed
+ * this window is past the capture's commit point, so one of `stopped` /
+ * `failed` always arrives. Spec amendment A5.
+ */
+onMounted(async () => {
+  unlisteners.push(
+    await listen("screen:paused", () => {
+      paused.value = true;
+    }),
+    await listen("screen:resumed", () => {
+      paused.value = false;
+    }),
+    await listen("screen:stopped", () => {
+      paused.value = false;
+    }),
+    await listen("screen:failed", () => {
+      paused.value = false;
+    }),
+  );
+});
+
+onBeforeUnmount(() => {
+  for (const off of unlisteners) off();
+  unlisteners.length = 0;
+});
+
+/**
+ * `ScreenCaptureBar`'s own status-dot colours, deliberately — one visual
+ * language across the buddy, the capture bar and this border. That bar uses
+ * a bespoke dot rather than the `StatusDot` primitive because the primitive
+ * has no amber tone; this follows the bar, not the primitive, for the same
+ * reason.
+ */
+const borderClass = computed(() =>
+  paused.value ? "border-amber-400" : "border-recording",
+);
 </script>
 
 <template>
@@ -33,6 +89,7 @@
        than no indicator at all. -->
   <div
     data-testid="region-indicator-border"
-    class="pointer-events-none fixed inset-0 border-2 border-recording"
+    class="pointer-events-none fixed inset-0 border-2"
+    :class="borderClass"
   />
 </template>
