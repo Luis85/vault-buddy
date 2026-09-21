@@ -23,9 +23,10 @@ use crate::capture_commands::now_ms;
 use crate::capture_guard::{CaptureGuard, CaptureKind};
 
 use crate::screen_commands::{
-    clear_active_screen, emit_screen_failed, emit_screen_stopped, selection_from,
-    ActiveScreenCapture, ScreenCaptureState, ScreenStatusPayload, StagedCaptureDto, READY_TIMEOUT,
+    clear_active_screen, clear_capture_window_effects, emit_screen_failed, emit_screen_stopped,
+    selection_from, ActiveScreenCapture, ScreenCaptureState, READY_TIMEOUT,
 };
+use crate::screen_dto::{ScreenStatusPayload, StagedCaptureDto};
 
 fn source_kind_str(id: &source::SourceId) -> &'static str {
     match id.kind() {
@@ -423,6 +424,17 @@ pub(crate) fn start_screen_capture_blocking(
             if let Some(active) = lock_ignoring_poison(&state.0).as_mut() {
                 active.startup_wedged = true;
             }
+            // The WINDOW effects go NOW, even though the reservation does
+            // not. The reservation tracks what the DEVICES are doing; these
+            // track what the USER sees, and the user is about to be told
+            // this start failed. A region border left up is a click-through
+            // window over their screen that nothing recording explains and
+            // that they cannot dismiss without quitting; the buddy's
+            // exclusion is invisible from inside the app and would silently
+            // keep it out of other applications' recordings. Both are
+            // idempotent, so the monitor's own `clear_active_screen` will
+            // re-run them harmlessly.
+            clear_capture_window_effects(app);
             emit_screen_failed(app, &msg, None);
             return Err(msg);
         }
@@ -665,7 +677,11 @@ mod tests {
         let after_match = &code
             [crate::structural_scan::offset_of(code, "ready_rx.recv_timeout(READY_TIMEOUT)")..];
         let arm = crate::structural_scan::offset_of(after_match, "Err(_) =>");
-        let end = crate::structural_scan::offset_of(after_match, "return Err(msg)");
+        // The whole arm, not just up to its first `return`: the
+        // monitor-spawn fallback returns EARLY, so a nearer anchor would cut
+        // the slice off before the code these tests are about. This one sits
+        // after the match closes.
+        let end = crate::structural_scan::offset_of(after_match, "Announce::Events");
         &after_match[arm..end]
     }
 
@@ -687,6 +703,32 @@ mod tests {
             "the ready-timeout arm must hand `done_rx` to a monitor so the \
              reservation is released when the device thread really ends, not \
              while it may still be opening audio endpoints (GAP-110). Arm was:\n{arm}"
+        );
+    }
+
+    // The other half of GAP-110's fix, and the defect the fix itself would
+    // otherwise have introduced. `clear_active_screen` does FOUR things at
+    // once: drop the reservation, release the guard, clear the buddy's
+    // capture exclusion and hide the region border. Keeping the reservation
+    // past a ready timeout keeps all four — including a click-through border
+    // drawn over the user's screen with nothing recording, which
+    // `region_indicator`'s own doc calls worse than no border at all, and
+    // which they cannot dismiss without quitting.
+    //
+    // The reservation tracks what the DEVICES are doing; the window effects
+    // track what the USER sees. A ready timeout is exactly the case where
+    // those diverge, so the window effects go now and the reservation waits
+    // for the monitor.
+    #[test]
+    fn the_ready_timeout_tears_down_the_window_effects_even_though_it_keeps_the_reservation() {
+        let code =
+            crate::structural_scan::production_code(include_str!("screen_capture_worker.rs"));
+        let arm = ready_timeout_arm(&code);
+        assert!(
+            arm.contains("clear_capture_window_effects"),
+            "a region capture whose start times out must not leave its border on \
+             screen with nothing recording, nor the buddy excluded from every \
+             other application's capture. Arm was:\n{arm}"
         );
     }
 }

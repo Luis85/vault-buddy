@@ -323,15 +323,30 @@ mod tests {
              nothing recording"
         );
 
-        let commands = production_half(include_str!("screen_commands.rs"));
-        let chokepoint = offset_of(commands, "fn clear_active_screen(");
-        let clear_call = offset_of(commands, "crate::capture_exclusion::clear(");
-        let after_chokepoint = offset_of(commands, "\npub fn is_capturing(");
+        // GAP-110 split the window-visible half of a teardown into
+        // `clear_capture_window_effects` so the ready-timeout arm can tear
+        // the border and the exclusion down WITHOUT freeing the guard. So
+        // the raw clear no longer sits in `clear_active_screen` literally,
+        // and asserting on where it sits in the FILE would pass on layout
+        // rather than on structure. Assert the call chain instead: the
+        // chokepoint must still reach it unconditionally.
+        let commands = crate::structural_scan::production_code(include_str!("screen_commands.rs"));
+        let clear_call = offset_of(&commands, "crate::capture_exclusion::clear(");
+        let holder = offset_of(&commands, "fn clear_capture_window_effects(");
+        let after_holder = offset_of(&commands, "\npub fn is_capturing(");
         assert!(
-            chokepoint < clear_call && clear_call < after_chokepoint,
-            "the clear must sit INSIDE clear_active_screen. Moved into stop_screen_capture \
-             it is skipped entirely by a self-finalized capture, which never goes through \
-             that command"
+            holder < clear_call && clear_call < after_holder,
+            "the clear must sit inside clear_capture_window_effects. Moved into \
+             stop_screen_capture it is skipped entirely by a self-finalized capture, \
+             which never goes through that command"
+        );
+        let chokepoint_body = crate::structural_scan::fn_body(&commands, "fn clear_active_screen(");
+        assert!(
+            chokepoint_body.contains("clear_capture_window_effects("),
+            "every teardown funnels through clear_active_screen, so it must still call \
+             clear_capture_window_effects -- otherwise a stopped capture leaves the buddy \
+             excluded from every other application's recording, and a region capture \
+             leaves its border on screen. Body was:\n{chokepoint_body}"
         );
     }
 }

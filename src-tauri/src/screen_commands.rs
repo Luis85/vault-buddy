@@ -47,6 +47,7 @@ use vault_buddy_screen::source;
 
 use crate::capture_commands::{now_ms, toast};
 use crate::capture_guard::{CaptureGuard, CaptureKind};
+use crate::screen_dto::{ScreenStatusPayload, ScreenStopOutcomeDto, StagedCaptureDto};
 
 /// A start that has not reported readiness within this long is treated as
 /// wedged (difference 1 above) — release the guard and fail rather than
@@ -93,59 +94,6 @@ pub struct ActiveScreenCapture {
 /// would either busy-poll or add latency to a stop the user is watching for.
 #[derive(Default)]
 pub struct ScreenCaptureState(pub Mutex<Option<ActiveScreenCapture>>, pub Condvar);
-
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ScreenStatusPayload {
-    pub capturing: bool,
-    pub vault_id: Option<String>,
-    pub started_at_ms: Option<u64>,
-    pub paused: bool,
-    pub paused_total_ms: u64,
-    pub paused_since_ms: Option<u64>,
-    pub source_title: Option<String>,
-}
-
-impl ScreenStatusPayload {
-    /// Every field cleared. A reloaded webview re-reads the status; leaking
-    /// the last capture's vault id or start time would render a phantom
-    /// capture bar counting up from a recording that already ended.
-    pub fn idle() -> ScreenStatusPayload {
-        ScreenStatusPayload {
-            capturing: false,
-            vault_id: None,
-            started_at_ms: None,
-            paused: false,
-            paused_total_ms: 0,
-            paused_since_ms: None,
-            source_title: None,
-        }
-    }
-}
-
-/// What the editor/capture-bar needs about a just-finished capture. `path`
-/// is the staged `.mp4` inside the (outside-every-vault) staging directory —
-/// nothing here is a vault write yet.
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StagedCaptureDto {
-    pub base: String,
-    pub path: String,
-    pub duration_ms: u64,
-    pub source_title: String,
-    pub width: u32,
-    pub height: u32,
-}
-
-/// Wire result for `stop_screen_capture`, mirroring `StopOutcomeDto`:
-/// `still_saving` = the bounded wait expired while finalize was still
-/// running, so the frontend keeps its saving UI and lets `screen:stopped` /
-/// `screen:failed` finish the story instead of reporting a false success.
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ScreenStopOutcomeDto {
-    pub still_saving: bool,
-}
 
 /// Build the device selection from the IPC arguments VERBATIM. These names
 /// were ticked in front of the live device list; any normalization here
@@ -223,19 +171,46 @@ pub(crate) fn clear_active_screen(app: &AppHandle) {
     let state = app.state::<ScreenCaptureState>();
     *lock_ignoring_poison(&state.0) = None;
     app.state::<CaptureGuard>().release(CaptureKind::Screen);
+    clear_capture_window_effects(app);
+    state.1.notify_all();
+}
+
+/// The window-visible half of a teardown: the buddy's capture exclusion and
+/// the region border.
+///
+/// Split out of `clear_active_screen` for ONE caller (GAP-110's ready-timeout
+/// arm) and no others. That arm deliberately KEEPS the reservation, because
+/// the device thread may still be opening endpoints and freeing
+/// `CaptureGuard` under it is the hazard spec 7.3 exists to prevent — but
+/// keeping all FOUR of the chokepoint's effects would leave a click-through
+/// border drawn over the user's screen with nothing recording, which
+/// `region_indicator`'s own doc calls worse than no border at all, and which
+/// they could not dismiss without quitting.
+///
+/// The seam is real rather than convenient: **the reservation tracks what the
+/// DEVICES are doing, these track what the USER sees**, and a start that has
+/// just been reported as failed is exactly the case where those diverge.
+///
+/// Both calls are idempotent — clearing an exclusion that was never applied
+/// sets `WDA_NONE` on windows that already had it, and hiding a border that
+/// was never raised is a no-op — so the monitor's later `clear_active_screen`
+/// re-running them costs nothing. That is also why the structural tests in
+/// `capture_exclusion.rs` still find exactly one raw call site each: it is
+/// here, and `clear_active_screen` reaches it unconditionally.
+pub(crate) fn clear_capture_window_effects(app: &AppHandle) {
     // Spec 5.3's exclusion is lifted HERE and nowhere else, for the same
-    // reason the guard is: this is the one function every teardown path
-    // funnels through. Clearing an exclusion that was never applied (a
-    // start that failed before the commit point) sets WDA_NONE on windows
-    // that already had it, which is a no-op -- strictly safer than a
-    // conditional that could be wrong in the other direction and leave the
-    // user's windows hidden from every other app's recordings.
+    // reason the guard is: every teardown path funnels through
+    // `clear_active_screen`, which calls this. Clearing an exclusion that
+    // was never applied (a start that failed before the commit point) sets
+    // WDA_NONE on windows that already had it, which is a no-op -- strictly
+    // safer than a conditional that could be wrong in the other direction
+    // and leave the user's windows hidden from every other app's
+    // recordings.
     crate::capture_exclusion::clear(app);
     // Unconditional, like the exclusion clear above: hiding a border that
     // was never raised is a no-op, and the other direction strands one on
     // the user's desktop with nothing recording (GAP-165).
     crate::region_indicator::hide(app);
-    state.1.notify_all();
 }
 
 pub fn is_capturing(app: &AppHandle) -> bool {
@@ -600,43 +575,6 @@ mod tests {
             !bypasses_shutdown_wait(&reservation(false, Some(PathBuf::from("/s/.a.mp4.part")))),
             "a live capture always blocks shutdown"
         );
-    }
-
-    #[test]
-    fn the_status_payload_serializes_camel_case_for_the_webview() {
-        let payload = ScreenStatusPayload {
-            capturing: true,
-            vault_id: Some("v1".into()),
-            started_at_ms: Some(1_700_000_000_000),
-            paused: false,
-            paused_total_ms: 0,
-            paused_since_ms: None,
-            source_title: Some("Screen 1".into()),
-        };
-        let json = serde_json::to_string(&payload).unwrap();
-        assert!(json.contains("\"startedAtMs\""), "got {json}");
-        assert!(json.contains("\"sourceTitle\""), "got {json}");
-        assert!(!json.contains("started_at_ms"), "got {json}");
-    }
-
-    #[test]
-    fn an_idle_status_payload_reports_nothing_rather_than_stale_values() {
-        // A reloaded webview re-reads this. Leaking the last capture's vault
-        // id or start time into an idle payload would render a phantom
-        // capture bar counting up from a recording that ended.
-        // EVERY field, not a sample: `paused: true` with a stale
-        // `paused_since_ms` is the worst of the phantoms — it renders a
-        // PAUSED capture bar counting from a timestamp that belongs to a
-        // recording that already ended, and a sampled assertion leaves that
-        // exact pair unpinned.
-        let p = ScreenStatusPayload::idle();
-        assert!(!p.capturing);
-        assert_eq!(p.vault_id, None);
-        assert_eq!(p.started_at_ms, None);
-        assert!(!p.paused);
-        assert_eq!(p.paused_total_ms, 0);
-        assert_eq!(p.paused_since_ms, None);
-        assert_eq!(p.source_title, None);
     }
 
     #[test]

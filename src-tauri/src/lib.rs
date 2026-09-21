@@ -29,6 +29,7 @@ mod region_indicator;
 mod screen_capture_worker;
 mod screen_commands;
 mod screen_config_commands;
+mod screen_dto;
 mod screen_recovery;
 mod search_commands;
 mod shutdown_gate;

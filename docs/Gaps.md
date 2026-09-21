@@ -2397,6 +2397,36 @@ simply has not reserved its `.part` yet skip it. The ready-timeout arm itself
 is pinned by a structural test that reads the arm with comments stripped and
 requires it to hand the release to the monitor.
 
+**Keeping the reservation had a second consequence, caught before it
+shipped.** `clear_active_screen` does FOUR things at once: drop the
+reservation, release the guard, clear the buddy's `WDA_EXCLUDEFROMCAPTURE`
+and hide the region border. Deferring all four to the monitor would have left
+a region capture's click-through border drawn over the user's screen with
+nothing recording — which `region_indicator`'s own doc calls worse than no
+border at all — dismissable only by quitting. So the window-visible half is
+now `clear_capture_window_effects`, which the chokepoint still calls
+unconditionally and which the timeout arm calls on its own. The seam is real
+rather than convenient: **the reservation tracks what the DEVICES are doing,
+those two track what the USER sees**, and a start already reported as failed
+is exactly where they diverge. Both are idempotent, so the monitor's later
+`clear_active_screen` re-runs them harmlessly.
+
+`capture_exclusion.rs`'s structural test was STRENGTHENED rather than merely
+re-pointed. It asserted the clear's POSITION in the file, between two
+function signatures — which after this extraction would have kept passing on
+layout instead of on structure, since the new helper happens to sit in that
+range. It now asserts the call chain: the raw clear sits inside
+`clear_capture_window_effects`, and `clear_active_screen`'s body calls it.
+Mutation-proved by removing that call, which the old positional form would
+not have caught.
+
+That extraction pushed `screen_commands.rs` to 824 nonblank against the
+shrink-only 800-line cap, so the three wire DTOs moved to
+`src-tauri/src/screen_dto.rs` (740 / 101 after). The seam is the frontend's
+own, on this same feature and for this same cause: `screen_commands` is the
+capture LIFECYCLE, and these are the shapes it REPORTS to the webview, which
+is exactly why `src/types.ts` spun out `screenTypes.ts` at its own cap.
+
 **Two residuals, neither of them the ones this entry opened with:**
 
 - The device thread's late `ready_tx.send` still lands in a dropped receiver,
