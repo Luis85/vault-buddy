@@ -4311,3 +4311,69 @@ command for any change touching this crate's Windows arms.
 - The identical `.unwrap_or_else(|_| ...)`-over-a-`Result<String, _>` shape
   has not been swept for elsewhere in the codebase. This one was found by
   eye, in a log line, during a manual pass.
+
+### GAP-165 · Medium · An APPROVED design for the region-capture indicator was never implemented, and nothing tracked that
+Reported again by the 2026-09-21 manual pass: *"when recording a region, it
+draws the yellow border around the whole screen and does not draw a region
+box; the recording looks correctly bounded to the region."*
+
+That is not a new finding. It is
+`docs/superpowers/specs/2026-09-20-region-capture-indicator-design.md`,
+**status: approved (2026-09-20)**, whose own Context paragraph describes the
+exact symptom and says it "Lands on: `claude/screen-capture-intake-g0j49q`
+(PR #79), after Phase 4's editor tasks". It did not land. Measured on this
+tree:
+
+- No implementation plan in `docs/superpowers/plans/` (phase 3's region
+  overlay is there; the indicator is not).
+- `grep -rn "region-indicator\|region_indicator" src-tauri/src/
+  src-tauri/tauri.conf.json src/` returns **nothing**. The sixth window was
+  never declared, and none of the five list memberships the spec enumerates
+  exist.
+- **No entry in this file.** That is the part worth naming: an approved,
+  unimplemented design with no backlog entry is invisible to every later
+  reader, so the next person to hit the symptom re-discovers it as a bug —
+  which is exactly what happened.
+
+**Why the symptom is not a bug in the capture.** Region capture resolves to
+`SourceHandle::Screen(monitor)`; WGC captures the whole monitor and
+`convert::bgra_crop_to_nv12` crops on the CPU (§6, kept that way so the crop
+stays testable on Linux — GAP-125). Windows draws its border around what it
+is genuinely capturing, which really is the whole screen. WGC captures
+monitors or windows, never an arbitrary rectangle, so no change to what we
+ask Windows for can retarget that border. The recording is correctly
+cropped — the user confirmed it — and only the on-screen feedback lies.
+
+**`DrawBorderSettings::WithoutBorder` is NOT the fix, and it is worth saying
+why** so the next reader does not reach for it. `windows_session.rs:467`
+passes `DrawBorderSettings::Default`, and the crate does expose
+`WithoutBorder`, so it looks like a one-token fix. But (a) Windows gates
+`IsBorderRequired = false` behind the `graphicsCaptureWithoutBorder`
+restricted capability, which an unpackaged desktop app does not have, so it
+would most likely fail at runtime in a `cfg(windows)` path nothing here can
+test; and (b) even if it worked it is the wrong outcome — the border is
+Windows' own "you are being recorded" privacy affordance, and suppressing it
+on a full-monitor capture removes the only signal that recording is
+happening, replacing a misleading indicator with no indicator.
+
+**The approved answer is an indicator of our own**, enabled by
+`WDA_EXCLUDEFROMCAPTURE` (§5.3): a window in `EXCLUDED_LABELS` is invisible
+to screen capture while fully visible to the user, so a border we draw over
+the recorded area is seen and does not appear in the recording. The spec's
+own trap list is worth carrying forward — the window must be DECLARED in
+`tauri.conf.json` rather than built at runtime (the config-derived label
+tests and `capture_exclusion`'s one-shot apply both go blind to a
+runtime-built window), it needs `set_ignore_cursor_events(true)` before it is
+first shown (without it the indicator is a full-region transparent window
+swallowing every click for the whole capture, "strictly worse than no
+indicator at all"), and `focus: false` so it cannot blur the panel and trip
+`schedule_focus_out_check`.
+
+**Residuals:**
+
+- The spec is approved but unreviewed against Phase 5, which landed after it.
+  The export and the staged-capture list did not exist when it was written.
+- No sweep has been done for OTHER approved-but-unimplemented specs in
+  `docs/superpowers/specs/`. This one was found because a user hit its
+  symptom; there is no mechanism that would have surfaced it otherwise, and
+  the same mechanism (or absence of one) covers every other spec in there.
