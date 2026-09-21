@@ -49,6 +49,10 @@ pub mod select;
 pub mod session;
 pub mod sink;
 pub mod source;
+// What `source`'s cfg(windows) arm derives from a live monitor or window --
+// capture size, crop, label. PURE, split from `source.rs` at 783 of the
+// 800-line Rust cap; `source` re-exports it, so no caller's path changed.
+pub mod source_derive;
 pub mod staging;
 
 // A window title becomes a file-name FRAGMENT here; it becomes a NAME in
