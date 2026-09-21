@@ -46,6 +46,17 @@ jobs:
       # next bump attempt (docs/Gaps.md GAP-44).
       - run: node scripts/bump-version.mjs --check
       - run: npm run build
+      # The real-browser layout check (docs/Gaps.md GAP-162). It drives the
+      # `dist/` the step above just built, in Chromium, and measures pixels —
+      # the thing Vitest cannot do, because happy-dom has no layout engine.
+      # Two window-sizing defects shipped through the class-contract tests
+      # that stand in for it.
+      #
+      # `--with-deps chromium` and nothing else: one browser is what the
+      # suite runs, and the app ships on WebView2 anyway, so Firefox and
+      # WebKit would cost minutes to prove nothing about the product.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
       - run: npm run test:coverage
 
   rust-core:

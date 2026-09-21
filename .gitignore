@@ -17,3 +17,7 @@ app-icon.png
 # Quality tooling artifacts (docs/DEVELOPMENT.md § Quality pipeline)
 coverage/
 .fallow/
+
+# Playwright (tests/e2e) run artifacts
+test-results/
+playwright-report/

@@ -177,6 +177,8 @@ vault-buddy/
 │   └── transcribe/src/         # STT: decode (Symphonia), model (download+verify),
 │                               #   engine (whisper-rs FFI), lib (orchestration)
 └── tests/                      # Vitest suite (happy-dom + mockIPC, no Tauri runtime)
+    └── e2e/                    # Playwright: the built dist/ in real Chromium —
+                                #   the only place any layout is MEASURED
 ```
 
 Rule of thumb for where logic goes: **anything that doesn't need Tauri
@@ -225,6 +227,8 @@ npm ci                              # install (Node 22)
 npm test                            # full Vitest suite
 npx vitest run tests/<file>.test.ts # single test file
 npm run build                       # vue-tsc typecheck + production build
+npm run test:e2e                    # Playwright layout check — needs `npm run build`
+                                    #   first (it serves dist/, not the dev server)
 npm run dev                         # Vite dev server only
 npm run test-build                  # `tauri dev` — full app, Windows only
 npx tauri build                     # real installer build (Windows only)
@@ -3251,6 +3255,38 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
   Tauri IPC is mocked with `mockIPC` from `@tauri-apps/api/mocks`; plugin
   modules are mocked with `vi.mock` + `vi.hoisted`. Tests must never require
   a real Tauri runtime.
+- **`tests/e2e/` is Playwright, not Vitest, and it exists for the ONE thing
+  the suite above structurally cannot do: measure.** happy-dom has no layout
+  engine, so every geometry assertion in `tests/*.test.ts` is really a class
+  assertion — and two window-sizing defects shipped through exactly that
+  (docs/Gaps.md GAP-162). `tests/e2e/editorLayout.spec.ts` drives the BUILT
+  `dist/` in real Chromium at four viewport sizes and reads real bounding
+  boxes. `vite.config.ts` excludes `tests/e2e/**` from Vitest (it collected
+  the spec once and failed trying to reach a dev server); `npm run test:e2e`
+  runs it, after `npm run build`, and the `frontend` CI job does both.
+  Four rules for anything added here, each one a defect this suite already
+  had:
+  - **Serve `dist/`, never the dev server.** Tailwind's purge runs only in
+    the build, so a class that survives in dev and is purged in the bundle
+    would pass a dev check and fail the app.
+  - **Give the layout real content to be wrong about.** The preview
+    `<video>` is fed a VP9/WebM fixture because an empty `<video>` has no
+    intrinsic aspect ratio and renders at the CSS default 300x150, where the
+    defect under test cannot reproduce at all — the first draft of the suite
+    passed against the unfixed layout for precisely that reason. VP9 and not
+    H.264: Playwright's Chromium carries no proprietary codecs, and an H.264
+    clip fails with `video.error = 4` and no other symptom.
+  - **Measure the real scroll container.** `EditorRoot`'s is `main`
+    (`h-screen` + `overflow-y-auto`), so `document.documentElement.scrollHeight
+    - window.innerHeight` reads 0 at every size and cannot fail. Two
+    assertions were written that way.
+  - **Mutate before trusting it.** Every assertion here was run against the
+    pre-fix files (`git show <fix>^:<path>`) and required to fail with a
+    message naming the defect. Three did not and were re-pointed or deleted,
+    one of them because it asserted a Chromium UA default.
+  It is Chromium, and the app ships on WebView2 — related, not identical. A
+  green run is evidence, not the desktop-behavior gate; that is still the
+  manual checklist.
 - Rust unit tests sit next to the code in `src-tauri/core/`,
   `src-tauri/capture/`, `src-tauri/transcribe/`, and the shell
   (`src-tauri/src/transcription.rs` carries the queue's tests); keep new
@@ -3286,7 +3322,7 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
 
 | Job | Runner | Gates |
 | --- | --- | --- |
-| `frontend` | Linux | ESLint, LOC guard (frontend + Rust files), fallow quality ratchet, version-file agreement, `vue-tsc` typecheck + build, Vitest suite with coverage floors |
+| `frontend` | Linux | ESLint, LOC guard (frontend + Rust files), fallow quality ratchet, version-file agreement, `vue-tsc` typecheck + build, the **Playwright layout check** against the just-built `dist/` (`tests/e2e/`, chromium only — see Testing conventions), then the Vitest suite with coverage floors. The e2e step sits between the build and `test:coverage` because it needs `dist/` and must not disturb the coverage ordering |
 | `rust-core` | Linux | `cargo fmt --check` (whole workspace), clippy `-D warnings` + tests on `core`, `capture`, `transcribe`, `mcp`, `screen` — including `--features whisper` (the only place the whisper FFI tests execute) — plus `cargo machete` (unused deps), a `cargo llvm-cov` line-coverage floor (94) over `core`/`capture`/`transcribe`/`screen`, and `cargo deny check` (RustSec advisories + license policy, `src-tauri/deny.toml`). **It also installs ffmpeg**, explicitly rather than trusting the runner image, because `screen::export`'s round-trip tests SKIP when ffmpeg is absent — an image that quietly dropped it would turn the screen-capture feature's only executable end-to-end proof into a silent no-op with the job still green |
 | `linux-app` | Linux (after the two above) | `npx tauri build --no-bundle` — shell compile gate, never released — then **workspace clippy incl. the shell** and the **shell crate's unit tests** (`cargo test -p vault-buddy --lib`; both need the GUI libs + built `dist/` this job has) |
 | `windows-app` | Windows (after the two above) | Full `npx tauri build`, MSI/NSIS installers as artifacts; leaves updater artifacts unsigned on every PR event by design (the signing secrets are injected only on push to `main`, never on PRs — GAP-36); + `cargo test` for core/capture/transcribe (incl. `--features whisper`) after the build to exercise platform-sensitive code (process detection, GetKeyState, WASAPI gates, MoveFileExW fallback) |

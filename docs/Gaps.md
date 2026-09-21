@@ -4125,7 +4125,7 @@ generalisation is the lesson, not the `-f`:
   correctly but then asserts against a hand-written expectation. No sweep has
   been done for that shape elsewhere in this feature.
 
-### GAP-162 · Medium · The editor's layout was never tested at any window size, and happy-dom cannot be
+### GAP-162 · ~~Medium~~ FIXED 2026-09-21 · The editor's layout was never tested at any window size, and happy-dom cannot be
 Two defects from one hardware session, one root cause, both invisible to every
 gate: `EditorRoot` was a fixed `h-screen` flex column whose preview `<video>`
 was `w-full` with no height bound, so widening the window made the video
@@ -4136,28 +4136,57 @@ vault** and **Discard** were pushed past the bottom edge with nothing to
 scroll — the capture could be edited and never saved.
 
 **FIXED** (`tests/editorLayout.test.ts`): the preview takes the slack
-(`flex-1 min-h-0`, `object-contain` so a bounded height cannot stretch the
-picture), everything below it is `shrink-0`, and `main` gains
+(`flex-1 min-h-0`), everything below it is `shrink-0`, and `main` gains
 `overflow-y-auto` for the case where the chrome alone exceeds the window.
+(An earlier draft of this entry credited `object-contain` with preventing a
+stretch. It does not: `object-fit: contain` is Chromium's own UA default for
+`<video>`, measured in a real browser. The class is a pinned INTENT, not a
+fix, and the test comment now says so.)
 
-**The gap that remains is the testing one.** happy-dom has no layout engine.
-The tests assert the CLASS CONTRACT that produces the layout — which is the
-mechanism, and they say so in their own header — but nothing here measures a
-pixel, and a test claiming to would be exactly the kind this repo keeps
-finding. So:
+**The TESTING half is now closed too** (`tests/e2e/editorLayout.spec.ts`,
+`playwright.config.ts`): Playwright drives the built `dist/` in real Chromium
+at 960x640, 1280x720, 1600x900 and 1920x1080, measuring `boundingBox()` and
+`main`'s own scroll height. Restoring the three pre-fix files reddens all
+four sizes with `the timeline strip collapsed to 0px at 1920x1080`, and the
+same mutation puts `main` 97px (960x640) and 197px (1920x1080) past its
+container with **Save to vault**'s top at 705px and 1245px — below the fold at
+both. It runs in `frontend` after the build, and needs no Tauri runtime: a
+stub installs `__TAURI_INTERNALS__` with the editor's window label and a
+canned `invoke`.
 
-- A layout defect that does not change a class (a parent's `display`, a
-  competing `min-height` further up, a CSS specificity collision) is
-  undetectable by this suite by construction.
-- The whole editor window has never been rendered at any real size by
-  anything. Checklist row 37 is the only evidence there will be.
-- Closing this properly means a real layout engine — a Playwright check
-  against the built `dist/` at two or three viewport sizes. Chromium and
-  Playwright are already available in the dev container, and `EditorRoot`
-  needs no Tauri runtime to render its empty state, so the cost is a CI job
-  and a fixture, not a new dependency. Weighed against the fact that this is
-  the second window-sizing defect the feature has shipped, that is probably
-  worth doing before Phase 6 adds more surface.
+**Three things about it are worth knowing before trusting or extending it:**
+
+- **The video fixture is the control, not scenery.** A `<video>` with no
+  media has no intrinsic aspect ratio and renders at the CSS default 300x150,
+  where the defect cannot reproduce at all — the first version of this suite
+  passed against the pre-fix layout for exactly that reason. `the fixture
+  really loads` asserts 1920x1080 and every other test waits on
+  `videoWidth > 0`. The fixture is VP9/WebM because Playwright's bundled
+  Chromium carries no proprietary codecs; an H.264 clip fails with
+  `video.error = 4` and no other symptom.
+- **Two assertions in the first draft could not fail, and both were the
+  documentElement/`main` confusion.** The scroll container here is `main`
+  (`h-screen` + `overflow-y-auto`), so `document.documentElement.scrollHeight
+  - window.innerHeight` reads 0 at every size forever. The short-window test
+  had the same problem from the other end: at its original 900x360 the chrome
+  (230px) fit comfortably, so `scrollIntoViewIfNeeded` scrolled nothing and
+  the assertion passed having exercised no fallback. It is now 900x160 and
+  asserts the precondition — Save really is below the container's bottom edge
+  — before scrolling.
+- **A third test was deleted rather than fixed**: it asserted
+  `getComputedStyle(video).objectFit === "contain"`, which is the UA default
+  (see above) and unfailable either way.
+
+**What is still open:**
+
+- Chromium only. WebView2 is Chromium-derived but not identical, and the app
+  ships on WebView2. Checklist row 37 remains the only evidence there.
+- Four viewport sizes, one window. No other window has any layout coverage,
+  and the panel is the one users resize least — but also the one with the
+  most surfaces.
+- It measures the editor's EMPTY-ish state driven by a stubbed `invoke`. A
+  layout that only breaks under real content (a very long source title, a
+  timeline with fifty segments) is not covered.
 
 ### GAP-163 · Medium · Neither Linux gate compiles a `cfg(windows)` body, and one shipped broken through both
 AGENTS.md sells the Linux shell build as catching "type errors, IPC signature

@@ -66,8 +66,15 @@ describe("the editor's layout contract", () => {
     // overflow this pair exists to prevent.
     expect(v).toContain("flex-1");
     expect(v).toContain("min-h-0");
-    // Bounded height plus `w-full` would STRETCH the picture. object-contain
-    // letterboxes it instead, which is why the element carries bg-black.
+    // `object-contain` is BELT, not braces, and this comment says so because
+    // its first version did not: it claimed a bounded box plus `w-full`
+    // would stretch the picture. It would not. Chromium's UA stylesheet
+    // already sets `object-fit: contain` on every `<video>` (probed in a
+    // real browser, not assumed), so the class changes nothing today. It is
+    // pinned anyway because the default is the BROWSER's, not ours, and a
+    // stated intent survives a UA change or an `object-fit` rule arriving
+    // from somewhere else in the cascade. The `bg-black` beside it is what
+    // makes the letterbox bars read as deliberate.
     expect(v).toContain("object-contain");
   });
 

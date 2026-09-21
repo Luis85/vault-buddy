@@ -79,6 +79,13 @@ Alternatively, every push through CI builds Windows installers — download the
 npm run test                       # Vitest component/store tests
 npm run build                      # vue-tsc typecheck + production build
 
+# The layout check. Vitest runs on happy-dom, which has no layout engine, so
+# it can only assert the CLASSES that produce a layout. This drives the
+# BUILT dist/ in real Chromium and measures actual pixels, which is why
+# `npm run build` has to come first.
+npx playwright install chromium    # once per machine
+npm run test:e2e
+
 # from src-tauri/ — mirrors the CI "Rust core" job (Linux needs ALSA's
 # headers first: sudo apt-get install -y libasound2-dev)
 cargo fmt --check
@@ -133,7 +140,7 @@ CI runs on every push to `main` and every pull request
 
 | Job | Runner | What it gates |
 | --- | --- | --- |
-| Frontend | Linux | ESLint, LOC guard, fallow quality ratchet, `vue-tsc` typecheck + production build, Vitest with coverage floors |
+| Frontend | Linux | ESLint, LOC guard, fallow quality ratchet, `vue-tsc` typecheck + production build, the Playwright layout check against that build, Vitest with coverage floors |
 | Rust core | Linux | `cargo fmt --check`, `clippy -D warnings`, core unit tests |
 | Linux app | Linux | `tauri build --no-bundle` compile gate (no installer, never released) |
 | Windows app | Windows | Full Tauri compile + MSI/NSIS installers, uploaded as artifacts (14-day retention) |
