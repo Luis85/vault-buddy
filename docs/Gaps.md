@@ -5008,3 +5008,89 @@ by URL, with a hash check but no retry and no local cache.
 - **Self-healing, which is why this is Low.** The next push re-attempts it, and
   the failure is loud and unambiguous rather than silent. It has been seen
   once.
+
+### GAP-168 · Low · A Windows developer host runs gates CI never runs on Windows — and three of them were red (FIXED 2026-09-21 for all three; the class is open)
+Found by the 2026-09-21 polish pass, which ran on a Windows 11 host rather than
+the Linux container every earlier session used. On Windows the shell crate and
+every `cfg(windows)` body compile natively, so `cargo clippy -p vault-buddy
+--all-targets -- -D warnings` and `cargo test -p vault-buddy --lib` run in
+full — and CI's `windows-app` job runs NEITHER (it builds the installer and
+tests the member crates only; the shell's clippy and tests live in
+`linux-app`). Three failures had been sitting there, invisible to every gate:
+
+- **Shell clippy, `dead_code` (fixed `7944cee`).** The test fixture
+  `screen_recovery::decide::fixtures::OTHER` is used only by a
+  `#[cfg(unix)]` symlink test, so on Windows it was never used. It now carries
+  `#[cfg(unix)]` itself, matching its sole consumer — not an `allow`, which
+  would also hide a future genuinely-dead fixture.
+- **`external_tool::merged_path_prefers_registry_over_stale_process_path_without_dupes`
+  (fixed `9fbb90d`).** The test hard-coded `:` as the PATH separator while
+  `merged_path` (correctly) uses `;` on Windows, so on a Windows host it failed
+  on the literal and never exercised the ordering or dedup it exists for. It
+  now builds input and expectation with the platform separator.
+  Mutation-proven there against a registry-after-process ordering.
+- **`export_worker::vault_dir::a_symlinked_capture_folder_is_refused_before_anything_is_created`
+  (bounded `981bf67`).** `symlink_dir` needs `SeCreateSymbolicLinkPrivilege`
+  (Developer Mode or elevation); without it Windows returns OS error 1314. The
+  test now prints a visible `SKIP` on exactly that error and panics on any
+  other. **So the escape refusal this test guards is exercised only on Linux
+  CI and on privileged Windows hosts** — which is where it ran before, too;
+  the change is that a Windows dev run no longer reads as a failure.
+
+**What stays open is the class.** Nothing gates the shell crate's clippy or
+tests on Windows, so the next `cfg(unix)`-only fixture or `:`-assuming test
+will land the same way. It is the mirror image of GAP-163 (Linux cannot
+compile a `cfg(windows)` body); together they mean the shell crate is fully
+checked by NO single job. Adding `cargo clippy -p vault-buddy` and
+`cargo test -p vault-buddy --lib` to `windows-app` would close both halves
+for the shell crate, at the cost of the job's wall-clock; not done here
+because a CI change is not polish and wants its own measured PR.
+
+**The inverse limitation, recorded so nobody re-attempts it:** from a Windows
+host the screen crate cannot be clippied for Linux either —
+`cargo clippy -p vault_buddy_screen --target x86_64-unknown-linux-gnu` fails
+in `alsa-sys`'s build script (screen → capture → cpal → ALSA). `core` does
+cross-check cleanly that way. So a Linux-only `dead_code` in the screen
+crate is caught by CI's `rust-core` job and by nothing local on Windows; the
+2026-09-21 `sink_format.rs` / `source_derive.rs` extractions were reviewed
+for exactly that by reading, and the first `rust-core` run is their real
+check.
+
+### GAP-169 · Medium (unverified) · Two concurrent task-file writes on Windows can fail with "Access denied", even under the per-file lock
+Seen once, 2026-09-21, on a Windows 11 host under heavy concurrent build load:
+`tasks::disk::tests::concurrent_parent_id_stamp_and_status_flip_never_lose_either`
+failed with `Access is denied. (os error 5)` at the `.unwrap()` of
+`update_task_fields`'s own `Result` (`core/src/tasks/disk/tests.rs`, the
+`thread_stamp` join). It passed on every re-run. Nothing in that code was
+touched by the pass that saw it.
+
+**Why this is not filed as a mere test flake.** The failing call is the
+PRODUCTION write path, and the two threads are serialised by
+`with_task_file_lock` (GAP-83), so the error is not a data race between them:
+it is Windows refusing the second write's replacing rename (or its temp
+create) moments after the first one landed. The usual causes are a
+delete-pending replaced file, or a scanner/indexer (Defender, Search) holding
+the just-renamed file without `FILE_SHARE_DELETE` — the same sharing-rule
+family `screen_recovery` already reasons about for ffmpeg's handle. If that
+is what happened, the panel and the MCP server writing one Task in quick
+succession can surface a spurious error toast on a real user's machine.
+It would be a failed write, reported, never a lost or torn one: the writer is
+temp-then-replace, so nothing on disk is half-written.
+
+**Not investigated here** — it is outside a polish pass, reproduces only
+under load, and needs a Windows machine and systematic-debugging, not a
+guess. Next step: loop the test (`--test-threads=1`, a few hundred
+iterations) with and without Defender real-time scanning on the temp dir,
+capture which syscall returns error 5, and only then decide between a bounded
+retry on `ERROR_ACCESS_DENIED`/`ERROR_SHARING_VIOLATION` in
+`capture_note::write_atomic_replacing` (the audio domain's `rename_noreplace`
+already carries a MoveFileExW fallback, so there is precedent) and accepting
+it.
+
+**A second, genuinely test-only flake from the same session:**
+`screen/tests/export_roundtrip.rs::the_remux_is_faster_than_re_encoding_the_same_fixture`
+compares two wall-clock durations and failed three times under concurrent
+cargo builds (e.g. remux 9871 ms vs re-encode 8396 ms), passing whenever run
+alone. A performance claim asserted on a shared machine's wall clock is
+load-sensitive by construction. Low; worth either a generous ratio or
+measuring CPU time, whenever that file is next touched.

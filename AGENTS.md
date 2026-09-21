@@ -119,10 +119,13 @@ vault-buddy/
 │   │                           #   pandoc, ffmpeg, updates, settings, settingsStatus, notifications
 │   ├── composables/            # settings sync, startup update check, bubble, announcements,
 │   │                           #   tasks helpers, useEditorTimeline (undo/redo + persist-on-edit),
-│   │                           #   useEditorSelection (the selection/playhead remap)
+│   │                           #   useEditorSelection (the selection/playhead remap),
+│   │                           #   useEditorExport (the editor's export lifecycle + its four
+│   │                           #   screen:export* listeners), useTaskDetailSubtasks
 │   ├── types.ts                # the wire types; re-exports screenTypes.ts, which holds
 │   │                           #   the screen-capture domain's (split at the 500 cap)
-│   └── utils/                  # highlight, recentSearches, formatDuration, timelineGeometry
+│   └── utils/                  # highlight, recentSearches, formatDuration, timelineGeometry,
+│                               #   searchResults (Search.vue's pure grouping/summary)
 ├── src-tauri/                  # Rust workspace: root shell crate + 5 member crates
 │   ├── tauri.conf.json         # the 6 windows, updater endpoint, version,
 │   │                           #   assetProtocol scope (staging only — a security boundary)
@@ -167,7 +170,7 @@ vault-buddy/
 │   │                           #   capture_exclusion.rs (WDA_EXCLUDEFROMCAPTURE apply/clear),
 │   │                           #   capture_guard.rs (cross-domain capture exclusion),
 │   │                           #   tray.rs, diagnostics.rs, config_lock_guard.rs, main.rs
-│   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, search_cache, tasks, services,
+│   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search (+ search/text: pure name/snippet helpers), search_cache, tasks, services,
 │   │                           #   transcript, recordings, capture_{config,note,paths}, vault_config,
 │   │                           #   mcp_config + document_import_config + transcription_config (split-out config sections),
 │   │                           #   document_import, companion_placement, checkpoint,
@@ -187,8 +190,10 @@ vault-buddy/
 │   │                           #   and the names a capture owns), staging_title
 │   │                           #   (a window title → a file-name FRAGMENT; never a
 │   │                           #   whole name — see GAP-108),
-│   │                           #   sink (fMP4 via Media Foundation), source
-│   │                           #   (monitors/windows/regions), region (the region
+│   │                           #   sink (fMP4 via Media Foundation) + sink_format (its PURE
+│   │                           #   format/bitrate/timestamp arithmetic), source
+│   │                           #   (monitors/windows/regions) + source_derive (its PURE
+│   │                           #   size/crop/label derivations), region (the region
 │   │                           #   source id), exclusion (SetWindowDisplayAffinity),
 │   │                           #   frames (WGC callback), session/ (3 threads, one clock),
 │   │                           #   ffmpeg_args (PURE: the export's argv + -progress
@@ -244,6 +249,15 @@ remains the release + desktop-behavior gate (transparency, tray, drag, the
 Obsidian round-trip). Mirror existing `cfg`-gate patterns for any
 platform-specific code, run `cargo fmt --check`, and let CI's `windows-app`
 and `linux-app` jobs verify the build.
+
+**On a Windows host the picture inverts** (docs/Gaps.md GAP-168): the shell
+crate and every `cfg(windows)` body compile natively, so run
+`cargo clippy -p vault-buddy --all-targets -- -D warnings` and
+`cargo test -p vault-buddy --lib` there — CI's `windows-app` runs neither,
+and the first Windows-host run found three red results no gate had seen.
+What a Windows host cannot do is clippy the screen crate for Linux
+(`alsa-sys` will not cross-build), so its Linux-only `dead_code` is still
+CI's `rust-core` job's to catch.
 
 ## Commands
 
@@ -3201,7 +3215,9 @@ wiring a store would need.
 
 **Phase 5 did not change that, and the reason is worth stating so the next
 reader does not "fix" it.** `EditorRoot` now listens to FIVE events rather
-than one — `editor:open` plus the four `screen:export*` — but they are the
+than one — `editor:open` itself, plus the four `screen:export*`, which it
+registers through `useEditorExport` (split out at the 500 cap; the root still
+awaits all five before its first drain) — but they are the
 editor's own in-flight progress, not state the app owns anywhere else: there
 is no `export` store in any window, so there is nothing to `init()`. Every
 one of the four is filtered through `addressesOpenCapture(base)` first,
