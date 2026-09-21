@@ -384,7 +384,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="flex h-screen w-screen flex-col gap-3 bg-slate-900 p-4 text-fg">
+  <main
+    class="flex h-screen w-screen flex-col gap-3 overflow-y-auto bg-slate-900 p-4 text-fg"
+  >
     <!-- A load failure REPLACES the editor rather than sitting beside it:
          there is no capture behind it to edit. The save-failure banner
          further down is the opposite case and renders INSIDE the editor,
@@ -405,7 +407,7 @@ onBeforeUnmount(() => {
       No capture open. Pick one from Record Screen.
     </p>
     <template v-else-if="detail">
-      <header class="flex items-baseline justify-between">
+      <header class="flex shrink-0 items-baseline justify-between">
         <h1 class="truncate text-sm font-medium">
           {{ detail.sourceTitle }}
         </h1>
@@ -422,6 +424,7 @@ onBeforeUnmount(() => {
         edits are still on screen, but a crash would lose them.
       </Banner>
       <CapturePreview
+        class="min-h-0 flex-1"
         :src="src"
         :timeline="timeline"
         :output-ms="playheadMs"
@@ -438,7 +441,7 @@ onBeforeUnmount(() => {
         @select="selected = $event"
         @reorder="onReorder"
       />
-      <div class="flex gap-2">
+      <div class="flex shrink-0 gap-2">
         <AppButton
           data-testid="editor-split"
           variant="secondary"

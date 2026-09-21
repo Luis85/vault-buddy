@@ -66,7 +66,7 @@ watch(
 </script>
 
 <template>
-  <div class="flex flex-col gap-2">
+  <div class="flex shrink-0 flex-col gap-2">
     <Banner
       v-if="message"
       data-testid="export-message"

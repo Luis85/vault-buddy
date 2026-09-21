@@ -98,7 +98,7 @@ onBeforeUnmount(() => window.removeEventListener("pointerup", onUp));
   <div
     ref="strip"
     data-testid="timeline-strip"
-    class="relative h-16 w-full overflow-hidden rounded-control bg-white/5"
+    class="relative h-16 w-full shrink-0 overflow-hidden rounded-control bg-white/5"
     @pointerup="onUp"
     @pointercancel="dragFrom = null"
   >

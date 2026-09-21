@@ -106,16 +106,16 @@ function toggle() {
 </script>
 
 <template>
-  <div class="flex flex-col gap-2">
+  <div class="flex min-h-0 flex-col gap-2">
     <video
       ref="video"
       data-testid="preview-video"
       :src="src"
-      class="w-full rounded-control bg-black"
+      class="min-h-0 w-full flex-1 rounded-control bg-black object-contain"
       preload="metadata"
       @timeupdate="onTimeUpdate"
     />
-    <div class="flex items-center gap-2">
+    <div class="flex shrink-0 items-center gap-2">
       <AppButton
         data-testid="preview-toggle"
         variant="secondary"
@@ -135,7 +135,7 @@ function toggle() {
         @input="onScrub"
       >
     </div>
-    <p class="text-micro text-fg-subtle">
+    <p class="shrink-0 text-micro text-fg-subtle">
       Preview only — boundaries hitch while seeking. The exported file is exact.
     </p>
   </div>
