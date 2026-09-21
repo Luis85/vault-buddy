@@ -12,8 +12,13 @@ import {
   loadRecentSearches,
   pushRecentSearch,
 } from "../utils/recentSearches";
+import {
+  groupSearchHits,
+  searchHitId,
+  searchSummary,
+} from "../utils/searchResults";
 import AppIcon from "./AppIcon.vue";
-import HighlightText from "./HighlightText.vue";
+import SearchResultList from "./SearchResultList.vue";
 import Banner from "./ui/Banner.vue";
 import EmptyState from "./ui/EmptyState.vue";
 
@@ -64,50 +69,14 @@ const kindFiltered = computed(() => {
   return all;
 });
 
-const resultView = computed(() => {
-  const map = new Map<
-    string,
-    {
-      vaultName: string;
-      collapsed: boolean;
-      count: number;
-      rows: { hit: SearchHit; i: number }[];
-    }
-  >();
-  const flat: SearchHit[] = [];
-  for (const hit of kindFiltered.value) {
-    let group = map.get(hit.vaultId);
-    if (!group) {
-      group = {
-        vaultName: hit.vaultName,
-        collapsed: collapsed.value.has(hit.vaultId),
-        count: 0,
-        rows: [],
-      };
-      map.set(hit.vaultId, group);
-    }
-    group.count++;
-    if (!group.collapsed) {
-      group.rows.push({ hit, i: flat.length });
-      flat.push(hit);
-    }
-  }
-  return {
-    groups: [...map.entries()].map(([vaultId, g]) => ({ vaultId, ...g })),
-    flat,
-  };
-});
+const resultView = computed(() =>
+  groupSearchHits(kindFiltered.value, collapsed.value),
+);
 const visibleHits = computed(() => resultView.value.flat);
 
 // `N matches in M vaults` over the FULL response (pre-filter); `100+` when
 // truncated. Rendered aria-live so screen readers hear result updates.
-const summary = computed(() => {
-  const all = hits.value;
-  if (all.length === 0) return null;
-  const vaults = new Set(all.map((h) => h.vaultId)).size;
-  const n = truncated.value ? `${all.length}+` : `${all.length}`;
-  return `${n} ${all.length === 1 && !truncated.value ? "match" : "matches"} in ${vaults} ${vaults === 1 ? "vault" : "vaults"}`;
-});
+const summary = computed(() => searchSummary(hits.value, truncated.value));
 
 function toggleGroup(vaultId: string) {
   if (collapsed.value.has(vaultId)) collapsed.value.delete(vaultId);
@@ -117,7 +86,6 @@ function toggleGroup(vaultId: string) {
 // Keyboard selection: a flat index into `hits`, moved by the arrow keys on
 // the input, opened by Enter. Reset to the top hit on every new result set.
 const selected = ref(0);
-const hitId = (i: number) => `search-hit-${i}`;
 
 watch(results, () => {
   selected.value = 0;
@@ -141,7 +109,7 @@ function onArrow(event: KeyboardEvent, delta: 1 | -1) {
   );
   void nextTick(() => {
     document
-      .getElementById(hitId(selected.value))
+      .getElementById(searchHitId(selected.value))
       ?.scrollIntoView({ block: "nearest" });
   });
 }
@@ -264,7 +232,7 @@ onUnmounted(() => {
         :aria-expanded="visibleHits.length > 0 ? 'true' : 'false'"
         aria-autocomplete="list"
         aria-controls="search-results"
-        :aria-activedescendant="visibleHits.length ? hitId(selected) : undefined"
+        :aria-activedescendant="visibleHits.length ? searchHitId(selected) : undefined"
         class="w-full rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
         @keydown.escape="onEscape"
         @keydown.down="onArrow($event, 1)"
@@ -378,139 +346,14 @@ onUnmounted(() => {
       v-if="hits.length > 0 && kindFiltered.length === 0"
       title="Nothing matches this filter."
     />
-    <div
-      id="search-results"
-      role="listbox"
-      aria-label="Search results"
-      class="flex flex-col gap-2"
-    >
-      <div
-        v-for="group in resultView.groups"
-        :key="group.vaultId"
-        class="flex flex-col gap-1"
-      >
-        <div class="flex items-center gap-1">
-          <button
-            type="button"
-            data-testid="group-toggle"
-            :aria-expanded="!group.collapsed"
-            :aria-controls="`search-group-${group.vaultId}`"
-            :aria-label="`${group.collapsed ? 'Expand' : 'Collapse'} ${group.vaultName}`"
-            class="cursor-pointer rounded p-0.5 text-fg-muted transition-colors hover:bg-white/10 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-            @click="toggleGroup(group.vaultId)"
-          >
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-              class="transition-transform"
-              :class="group.collapsed ? '-rotate-90' : ''"
-            >
-              <path d="m6 9 6 6 6-6" />
-            </svg>
-          </button>
-          <h2
-            class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-fg-muted"
-          >
-            {{ group.vaultName }}
-            <span
-              data-testid="group-count"
-              class="rounded-full bg-white/10 px-1.5 py-0.5 text-micro font-normal normal-case text-fg-muted"
-            >{{ group.count }}</span>
-          </h2>
-        </div>
-        <div
-          :id="`search-group-${group.vaultId}`"
-          class="flex flex-col gap-1"
-        >
-          <button
-            v-for="row in group.rows"
-            :id="hitId(row.i)"
-            :key="row.hit.file + (row.hit.isNote ? ':n' : ':a')"
-            type="button"
-            data-testid="search-hit"
-            role="option"
-            :aria-selected="row.i === selected"
-            class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-control border px-2 py-1 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-            :class="
-              row.i === selected
-                ? 'border-violet-400/60 bg-white/10'
-                : 'border-white/10 bg-white/5'
-            "
-            @click="openHit(row.hit, $event.ctrlKey || $event.metaKey)"
-            @mousemove="selected = row.i"
-          >
-            <span class="flex w-full min-w-0 items-center gap-1.5">
-              <svg
-                v-if="row.hit.isNote"
-                data-testid="hit-icon-note"
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-                class="shrink-0 text-fg-muted"
-              >
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
-              </svg>
-              <svg
-                v-else
-                data-testid="hit-icon-file"
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-                class="shrink-0 text-fg-muted"
-              >
-                <path
-                  d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
-                />
-              </svg>
-              <span
-                class="min-w-0 flex-1 truncate text-sm text-fg"
-                :title="row.hit.name"
-              >
-                <HighlightText
-                  :text="row.hit.name"
-                  :query="resultsQuery"
-                />
-              </span>
-            </span>
-            <span
-              v-if="row.hit.folder"
-              class="w-full truncate text-xs text-fg-subtle"
-            >
-              {{ row.hit.folder }}
-            </span>
-            <span
-              v-if="row.hit.snippet"
-              class="w-full truncate text-xs text-fg-muted"
-            >
-              <HighlightText
-                :text="row.hit.snippet"
-                :query="resultsQuery"
-              />
-            </span>
-          </button>
-        </div>
-      </div>
-    </div>
+    <SearchResultList
+      :groups="resultView.groups"
+      :selected="selected"
+      :query="resultsQuery"
+      @open="openHit"
+      @hover="selected = $event"
+      @toggle="toggleGroup"
+    />
     <p
       v-if="truncated"
       data-testid="search-truncated"
