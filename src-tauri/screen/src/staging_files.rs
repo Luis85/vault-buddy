@@ -1,7 +1,7 @@
 //! Which files one staged capture owns, and what they weigh on disk.
 //!
 //! Its own module rather than more of `staging.rs` for a measured reason:
-//! that file sits at 790 nonblank against this repo's 800-line Rust cap and
+//! that file sat at 790 nonblank against this repo's 800-line Rust cap and
 //! has already been hand-trimmed back under it once, so the next feature to
 //! land there breaches a baseline that is shrink-only. The seam is real
 //! enough to stand on its own terms — `staging.rs` decides what a capture is

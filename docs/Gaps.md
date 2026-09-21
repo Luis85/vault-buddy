@@ -2261,54 +2261,65 @@ not regress:
   per-row busy set serializes writes; the transcription job map is bounded
   with terminal-only eviction — all covered by tests.
 
-### GAP-108 · Medium · `sanitize_title` does not neutralize Windows reserved device names
-`src-tauri/screen/src/staging.rs` `sanitize_title` maps reserved *characters*
-(`: \ / ? * " < > |`) and collapses separator runs, but leaves the reserved
-*device names* untouched: `sanitize_title("CON")` returns `"CON"`.
+### GAP-108 · ~~Medium~~ FIXED 2026-09-21 (premise corrected) · A base could in principle name a Windows reserved device
+`src-tauri/screen/src/staging.rs` `reserve_base` now refuses to hand back a
+base whose stem is `CON`/`PRN`/`AUX`/`NUL`/`COM1`-`COM9`/`LPT1`-`LPT9`,
+renaming past it on the STEM (`con.mp4` -> `con_.mp4`, never `con.mp4_`,
+which would still name the device because `is_reserved_device_stem` reads the
+text before the FIRST dot).
 
-Win32 reserves `CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9` and `LPT1`–`LPT9`
-**with or without an extension** — `CON.mp4` is as unopenable as `CON`. Vault
-Buddy ships only on Windows, so a user who titles a screen capture "CON" (or
-"nul", the match is case-insensitive) gets a capture that cannot create its
-own staged file. The failure surfaces at `File::create` inside the capture
-session, i.e. after the user has already started recording.
+**This entry's original premise was false, and that matters more than the
+fix.** It claimed that "a user who titles a screen capture 'CON' ... gets a
+capture that cannot create its own staged file", failing at `File::create`
+after recording had started. It does not. `sanitize_title` yields a
+*fragment*, not a name: the only production caller is
+`screen_capture_worker.rs`, which composes
+`capture_paths::base_name(date, h, m, fragment)` =
+`YYYY-MM-DD HHmm <fragment>`. So a window titled "CON" produces
+`2026-09-21 1430 CON.mp4`, whose stem begins with the date and which Windows
+opens perfectly well. Measured on this tree before anything was changed: for
+every reserved name, `is_reserved_device_stem(fragment)` is true and
+`is_reserved_device_stem(composed_file_name)` is false.
 
-Found by the Task 2 review (phase 2). Not the implementer's error: the case is
-absent from the plan's own Step 2 test list, so it is a plan omission rather
-than a deviation.
+**So the fix this entry asked for would have been a regression.** It proposed
+teaching `sanitize_title` to rename, which would have cost that user a file
+called `2026-09-21 1430 CON_.mp4` in exchange for no safety at all — the same
+"don't rename people's files" trade `core::screen_note`'s own doc already
+makes for `#`, `^`, `[` and `]`. The guard went to `reserve_base` instead,
+where a base becomes the name three files are created under, so it is a
+no-op for every capture the app actually mints today and a real backstop for
+any FUTURE caller that builds a base without the timestamp prefix.
 
-**Still open after phase 4, and the boundary of what phase 4 closed matters.**
-Phase 4 introduced `staging::is_reserved_device_stem` — a public,
-case-insensitive, any-extension predicate over `CON`/`PRN`/`AUX`/`NUL`/
-`COM1`–`COM9`/`LPT1`–`LPT9` — and `editor_commands::is_safe_base` consumes it,
-so no name arriving from the frontend can become a device path. Phase 4 also
-gave `write_sidecar` a structural containment check (it compares the joined
-path's `parent()` against the staging dir, which catches a separator, a `..`
-and a Windows drive prefix in one comparison). **Neither of those is this
-entry.** `sanitize_title` and `reserve_base` — the NAMING path, where a
-window title first becomes a base — still do not consult
-`is_reserved_device_stem`: `sanitize_title("CON")` is still `"CON"`, so a
-capture of a window titled that still fails at `File::create`, after the user
-has started recording. The list exists now; the naming path simply does not
-read it.
+Three tests pin it, and each was mutation-proved:
+`reserve_base_never_hands_back_a_reserved_windows_device_name`,
+`a_reserved_base_is_disambiguated_on_its_stem_not_its_tail` (the tail-append
+mutation leaves the first test green — this is the one that catches it), and
+`a_real_capture_base_is_never_renamed_by_the_reserved_name_guard`, which
+pins the protecting invariant so that making the guard unconditional, or
+moving it back into the title path, turns red with
+`"2026-09-21 1430 CON_" != "2026-09-21 1430 CON"`.
 
-Two related path-safety items belong with it:
+`staging.rs` was at 867 nonblank with the fix and its tests in place, against
+this repo's shrink-only 800-line Rust cap, so the title sanitizer moved to
+`src-tauri/screen/src/staging_title.rs` (623 / 275 after the split). The seam
+is the finding itself: that module takes a `&str` and returns a `String` and
+touches no `Path`, because it produces a fragment; `staging.rs` mints names.
+Its module doc says so, so the next reader does not re-file this gap.
+
+Two related path-safety items, both still open and both deliberately not
+bundled into this fix:
 
 - `reserve_base` still does not re-assert that `base` contains no path
-  separators; it trusts the caller sanitized first, and unlike `write_sidecar`
-  it was not hardened. It only probes `.exists()`, so this remains
-  defence-in-depth rather than a live bug while the only caller is the
-  sanitizing one.
-- Two distinct titles can collide onto one sanitized base (`"a:b"` and
+  separators. It only probes `.exists()`, so this remains defence-in-depth
+  rather than a live bug while the only caller is the sanitizing one — and
+  `write_sidecar`'s structural `parent()` containment check already catches a
+  separator, a `..` and a drive prefix at the one place a base becomes a
+  written path.
+- Two distinct titles can collide onto one sanitized fragment (`"a:b"` and
   `"a/b"` both become `"a-b"`). That one IS handled, by `reserve_base`'s
   ` (N)` suffix retry — recorded here only so a future reader does not
   re-discover it as a bug.
 
-**Fix shape:** have `sanitize_title` rename rather than merely refuse — the
-open question this entry has always carried is what `"CON"` should BECOME
-(`"CON_"`? `"Capture"`?), which is why it belongs with the capture session's
-write-site hardening and not with the editor's input validation, where
-refusing is the right answer and is already done.
 
 ### GAP-109 · Medium · A reused HWND can resolve to a different live window than the one picked
 `src-tauri/screen/src/source.rs`, `resolve`'s `SourceId::Window` arm validates

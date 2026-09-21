@@ -42,8 +42,9 @@ pub struct ScreenNoteMeta {
 
 /// The video embed line.
 ///
-/// **Fixed HERE, in the note, and deliberately NOT in `staging::sanitize_title`
-/// — the two are different trades and the wrong one renames people's files.**
+/// **Fixed HERE, in the note, and deliberately NOT in
+/// `staging_title::sanitize_title` — the two are different trades and the
+/// wrong one renames people's files.**
 /// A capture's base comes from a scraped window title, and `sanitize_title`
 /// maps only the characters that would make the name unsafe AS A PATH
 /// (`: \ / ? * " < > |` and controls). `#`, `^`, `[` and `]` are perfectly
@@ -221,8 +222,8 @@ mod tests {
     }
 
     // REGRESSION (fix wave): a window title is whatever the recorded
-    // application put in its title bar, and `staging::sanitize_title` maps
-    // only the Windows-reserved set — `#`, `^`, `[` and `]` all survive into
+    // application put in its title bar, and `staging_title::sanitize_title`
+    // maps only the Windows-reserved set — `#`, `^`, `[` and `]` all survive into
     // the base, and all four are WIKILINK metacharacters. `![[... Issue #42
     // ...]]` makes Obsidian split at the `#` and resolve a heading inside a
     // file that does not exist, so the embed is silently dead beside a video

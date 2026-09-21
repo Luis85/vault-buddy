@@ -86,9 +86,9 @@ pub struct StagedCaptureDetail {
 /// - a leading dot is how our own in-progress `.mp4.part` files are named,
 ///   and must never be opened as a finished capture;
 /// - a trailing dot or space is silently STRIPPED by Windows from a file
-///   name actually on disk (`staging::sanitize_title`'s own trim exists for
-///   the same reason), so accepting one here would look up a path that can
-///   never exist rather than the one that does;
+///   name actually on disk (`staging_title::sanitize_title`'s own trim
+///   exists for the same reason), so accepting one here would look up a path
+///   that can never exist rather than the one that does;
 /// - a `:` is a drive prefix (`"C:"`, `"C:Windows"`) or an NTFS
 ///   alternate-data-stream marker (`"cap:ads"`) — both resolve OUTSIDE the
 ///   staging directory entirely, because `PathBuf::join`/`push` REPLACES

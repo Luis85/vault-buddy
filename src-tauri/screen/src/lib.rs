@@ -35,7 +35,7 @@ pub mod ffmpeg_args;
 pub(crate) mod frames;
 pub mod mp4_boxes;
 // Which files one staged capture owns and what they weigh. Split from
-// `staging.rs`, which is at 790 of this repo's 800-line Rust cap and has
+// `staging.rs`, which was at 790 of this repo's 800-line Rust cap and had
 // already been trimmed back under it once. No-follow throughout: a symlink
 // wearing one of our names is not ours to count and not ours to delete.
 pub mod staging_files;
@@ -50,6 +50,11 @@ pub mod session;
 pub mod sink;
 pub mod source;
 pub mod staging;
+
+// A window title becomes a file-name FRAGMENT here; it becomes a NAME in
+// `staging::reserve_base`. Keeping the two apart is what GAP-108 turned out
+// to be about, so the seam is documented rather than just convenient.
+pub mod staging_title;
 
 // Phase 2's gating spike (spec 6.4). Windows-only and feature-gated, so it
 // is absent from every default build; see the module docs for how to run it.

@@ -17,7 +17,7 @@ use vault_buddy_core::{capture_config, capture_paths};
 use vault_buddy_screen::session::{
     Control, FrameStats, ScreenOutcome, ScreenSession, ScreenSessionParams,
 };
-use vault_buddy_screen::{source, staging, ScreenError};
+use vault_buddy_screen::{source, staging, staging_title, ScreenError};
 
 use crate::capture_commands::now_ms;
 use crate::capture_guard::{CaptureGuard, CaptureKind};
@@ -221,7 +221,7 @@ pub(crate) fn start_screen_capture_blocking(
                 now.date_naive(),
                 now.hour(),
                 now.minute(),
-                &staging::sanitize_title(&title),
+                &staging_title::sanitize_title(&title),
             );
             let base = staging::reserve_base(&dir, &candidate);
             let part = dir.join(staging::part_file_name(&base));

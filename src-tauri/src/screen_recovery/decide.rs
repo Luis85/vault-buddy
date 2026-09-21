@@ -49,8 +49,8 @@ pub(super) enum Entry {
 /// promoted, skipping `part_holds_footage` entirely — so a crash while
 /// recording a window titled e.g. "Build.export" destroyed exactly what this
 /// sweep exists to rescue. **The two are no longer indistinguishable by name.**
-/// They only ever were because `staging::sanitize_title` permitted a title to
-/// END in the marker; it now disambiguates that one ending, and a capture base
+/// They only ever were because `staging_title::sanitize_title` permitted a
+/// title to END in the marker; it now disambiguates that one ending, and a capture base
 /// is that sanitized title behind a `YYYY-MM-DD HHmm ` prefix, so this app
 /// cannot mint a base ending in `EXPORT_PART_INFIX` at all. The fix is at the
 /// source, where identity is decided, instead of arbitrated here.
@@ -261,15 +261,15 @@ mod tests {
     // transcode -- skipping `part_holds_footage`, the one check standing
     // between the sweep and real footage.
     //
-    // The guarantee now lives in `staging::sanitize_title`, one crate away,
-    // so pin the two halves together here: nothing else spans them, and a
+    // The guarantee now lives in `staging_title::sanitize_title`, one crate
+    // away, so pin the two halves together here: nothing else spans them, and a
     // "simplification" of that disambiguation would otherwise redden
     // nothing on this side.
     #[test]
     fn a_window_title_ending_in_the_export_marker_still_stages_as_a_capture() {
         let base = format!(
             "2026-09-20 1432 {}",
-            staging::sanitize_title("Build.export")
+            vault_buddy_screen::staging_title::sanitize_title("Build.export")
         );
         assert_eq!(
             classify(&staging::part_file_name(&base)),
