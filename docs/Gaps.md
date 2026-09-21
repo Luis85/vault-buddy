@@ -4397,43 +4397,104 @@ indicator at all"), and `focus: false` so it cannot blur the panel and trip
   itself carries once implemented, or a plan reference). Filing it here
   rather than as its own entry, because the cost so far is one spec.
 
-### GAP-166 · High · Windows Explorer's toolbar stops accepting clicks while Vault Buddy is running — UNLOCALISED
-Reported by the 2026-09-21 manual pass: *"in windows explorer the top tool
-bar is not clickable anymore when the recording editor window is active or
-the vault buddy is active."*
+### GAP-166 · High · Other applications' toolbars stop accepting clicks after a region capture — UNLOCALISED
+Reported by the 2026-09-21 manual pass, and refined twice since. First as
+*"in windows explorer the top tool bar is not clickable anymore when the
+recording editor window is active or the vault buddy is active"*, then:
+**it happens only after a region capture**, it affects **Notepad as well as
+Explorer**, **minimize / maximize / close still work** on the affected
+windows, and **closing the editor does not fix it** — only quitting Vault
+Buddy does.
 
-**This entry deliberately proposes no cause.** Two hypotheses were formed and
-both were killed by the reporter's own answers; a third would be guessing,
-which is what the systematic-debugging skill exists to stop. What follows is
-only what is established.
+**This entry still proposes no cause.** Four hypotheses have now been formed
+and all four were killed — two by the reporter's answers and two by reading
+the code. A fifth would be guessing, which is what the systematic-debugging
+skill exists to stop. What follows is only what is established, and the whole
+region-exclusive code path has now been read end to end without finding it.
 
-**Established:**
+**Established from the reporter:**
 
-- It is OUR app. The reporter confirms it does **not** persist after tray →
-  Quit.
+- It is OUR app: it does not persist after tray → Quit.
 - It is **not the buddy window covering it**. The buddy is 88x88 and parked
-  bottom-right; the affected toolbar is at the top of the screen.
-- It affects the **whole toolbar width**, not a small patch — so it is not
-  any of our small transparent windows sitting over a corner of it.
-- It occurs while **the editor** is the active window, and the editor is
-  `alwaysOnTop: false` (verified in `tauri.conf.json`). That is the fact that
-  kills the whole "a topmost window of ours is over it" family of
-  explanations: when the editor has focus, nothing of ours is necessarily
-  above Explorer at all.
-- The 1 s metronome's always-on-top re-assert is not a candidate:
-  `window_upkeep_tick` fetches `"main"` alone and returns early unless it is
-  visible, so it never touches another window's z-order.
+  bottom-right; the affected toolbar is at the top of the screen, full width.
+- It is **not a window of ours covering the area at all.** The affected
+  windows' caption buttons (minimize / maximize / close) keep working, and
+  those sit in the same top strip a covering window would have to occupy.
+  Any explanation that puts one of our surfaces over the toolbar has to
+  explain why it stops short of the caption buttons.
+- It is **not Explorer-specific** — Notepad behaves the same way.
+- **Hiding every window of ours does not fix it**, and neither does closing
+  the editor. Only ending the process does.
 
-**Not established:** whether it needs a capture to have run first; whether
-the panel is open when it happens; whether the first click is swallowed and a
-second works. Those three are the discriminators and they have been put to
-the reporter.
+**Established from the code** (each read on this tree, not recalled):
+
+- **The editor is exonerated.** `window_close.rs:37-40` answers its ✕ with
+  `prevent_close()` + `hide()`, so its HWND survives a close — but the
+  reporter says closing it changes nothing either way, and it is declared
+  `alwaysOnTop: false`, `transparent: false` in `tauri.conf.json`, so it can
+  neither cover another window nor be an invisible sheet.
+- **The 1 s metronome is exonerated.** `window_upkeep_tick`
+  (`src-tauri/src/window_upkeep.rs`) fetches `"main"` alone and returns early
+  at `!window.is_visible()`. With the buddy in the tray it does nothing at
+  all, yet the symptom persists in the tray.
+- **The shell makes no input-affecting Win32 call anywhere.** Grepped the
+  whole `src-tauri` tree for `SetWindowsHookEx`, `RegisterRawInputDevices`,
+  `BlockInput`, `SetCapture`/`ReleaseCapture`, `SetForegroundWindow`,
+  `set_ignore_cursor_events`, `SetWindowLong`, `WS_EX_*`. Two hits total:
+  `start_dragging()` (`commands.rs:191`, the buddy drag) and the exonerated
+  `set_always_on_top(true)`. The eight registered plugins are
+  single-instance, notification, dialog, log, window-state, updater, process
+  and autostart; none installs a hook.
+- **A region capture IS a monitor capture.** `source::resolve`'s Region arm
+  (`screen/src/source.rs`) returns `SourceHandle::Screen(monitor)` plus four
+  crop integers applied on the CPU by `convert::bgra_crop_to_nv12`. Same WGC
+  session, same sink, same threads, same teardown as a whole-screen capture.
+  **There is no region-specific capture code at all**, so if the symptom
+  really is region-exclusive, the cause cannot be in the capture.
+- **The overlay's lifecycle is airtight.** `select_capture_region` calls
+  `select_region_inner(...)` and then `finish_region_selection(&app)`
+  **unconditionally** (`region_commands.rs:246`) — on success, cancel, the
+  120 s timeout and every inner error alike. That one cleanup hides the
+  overlay and clears `DIALOG_ACTIVE`, and a structural test forbids a second
+  hide site. The overlay is also in `tray::COMPANION_LABELS` (`tray.rs:26`),
+  so a tray-hide hides it a second time. Between them, "an overlay left
+  covering the screen" is ruled out.
+
+**The confound in "only region", which must be resolved before anything
+else.** It is NOT established that the symptom is region-*exclusive*. The
+same machine's whole-screen capture was REFUSED — 3840x2400 @ 60 fps raised
+`MF_E_INVALIDMEDIATYPE` (checklist row 10) — so **no successful whole-screen
+capture has ever run on it.** Since a region *is* a display capture, "only
+region" may simply mean "only the display captures that actually ran". The
+controlled comparison has never been made, and every conclusion above that
+leans on region-exclusivity is provisional until it is.
+
+**Not established — the discriminators, in the order they should be run:**
+
+1. **Cancel a region selection without recording** (Escape, or a click with
+   no drag). Reproduces → it is the overlay/selection and the capture is
+   irrelevant. Does not → it is the capture, and the overlay is fully out.
+2. **A whole-screen capture that succeeds** (Vault settings → Screen → Frame
+   rate 30 fps, which is what the refusal message itself recommends).
+   Reproduces → not region-specific at all; the cause is capturing a display
+   via WGC, and the region framing dissolves.
+3. **A window capture** (`SourceHandle::Window`, not a display). Reproduces
+   or not.
+4. **Does Windows' yellow capture border persist after the capture stops?**
+   That border is the system's own WGC indicator; if it outlives the capture,
+   our `GraphicsCaptureSession` is not being released — which would also
+   explain why only ending the process clears the symptom.
+5. **How dead is dead** — in an affected window: does the client area away
+   from the toolbar still take clicks; does the address bar still take
+   typing; does hovering a toolbar button still highlight it; does Alt+F
+   still open the menu by keyboard? Hover-but-no-click, or
+   keyboard-but-no-mouse, each point somewhere different.
 
 **Why this is High rather than Medium.** It degrades an application the user
 did not launch us to affect, it is invisible from inside our app, and the
 only remedy the reporter has found is quitting Vault Buddy. Whatever the
-cause, a companion app that quietly breaks File Explorer is worse than any
-defect inside our own surfaces.
+cause, a companion app that quietly breaks File Explorer and Notepad is worse
+than any defect inside our own surfaces.
 
 **Constraints a fix must respect** (from the window-system section, so a
 future fix does not trade this for a worse regression):
