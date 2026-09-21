@@ -48,6 +48,11 @@ pub mod region;
 pub mod select;
 pub mod session;
 pub mod sink;
+// The sink's format contract -- the video/audio parameters, their boundary
+// validation, the AAC byte-rate snap and the MF time base. PURE, split from
+// `sink.rs` at 774 of the 800-line Rust cap; `sink` re-exports the public
+// items, so no caller's path changed.
+pub mod sink_format;
 pub mod source;
 // What `source`'s cfg(windows) arm derives from a live monitor or window --
 // capture size, crop, label. PURE, split from `source.rs` at 783 of the
