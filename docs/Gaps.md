@@ -2932,6 +2932,54 @@ Microsoft still documents none, so the diagnosis path added alongside the
 fix (a zero-video capture explains itself and names both sizes) remains
 the thing that keeps a future drift loud instead of silent.
 
+**Update 2026-09-21 — the first-frame rework was EVALUATED and deliberately
+not taken, and the reason is bigger than the entry above assumed.** That
+text calls the robust fix an inversion of the ready handshake. Reading the
+code, it is also a change to the PRODUCER/MUX DATA CONTRACT, which is a
+different order of work:
+
+- The NV12 conversion happens in the **WGC frame callback**
+  (`frames.rs::on_frame_arrived`), using `FrameFlags`' predicted
+  `width`/`height` via `convert::bgra_crop_to_nv12`. What reaches the mux
+  over `MuxMsg::Video` is already-converted bytes; the delivered frame's
+  true dimensions are consumed by `pacing::usable_frame` and discarded in
+  the producer. So the mux CANNOT learn a real size from the first message
+  it receives — the first frame would have to carry its raw dimensions as
+  new data, or the conversion would have to move off the callback thread.
+- Moving the conversion to the mux is not neutral either: the bounded
+  `try_send` on the callback thread is what turns a slow muxer into a
+  COUNTED drop (`screen:frames`) rather than a stall at the source, and the
+  crop's memcpy currently happens where the GPU staging texture is already
+  mapped.
+- `FrameFlags` is built before the producer starts, so a size learned from
+  the first frame needs a second mutation path into a callback that is
+  already running.
+- The ordering inversion is real on top of that: `spawn_producers` runs
+  AFTER the ready wait and consumes `self`, so the session assembly and its
+  `abandon` unwind both have to cope with a producer running while the sink
+  has not been created.
+
+That is three `cfg(windows)` modules, a changed thread contract, and a
+blast radius of *no capture works at all* if it is wrong. **What is
+available here is a type-check and nothing more**: `cargo clippy -p
+vault_buddy_screen --target x86_64-pc-windows-msvc` does work on Linux once
+the target is added (the shell's cannot — `ring` fails in cc-rs for want of
+MSVC's `lib.exe`), but these bodies still execute in no automated test
+anywhere (GAP-117 / GAP-140 / GAP-163), and the prediction they would
+replace currently works on real hardware. Shipping it type-checked-only,
+onto a branch with 31 unrun verification rows, would add an unverifiable
+change with a total-failure mode to a feature that cannot yet verify the
+behaviour it already has. **It wants its own design pass, with hardware in
+the loop.**
+
+**What landed instead is the evidence that pass will need.** Checklist rows
+54 and 55: row 54 records, per window style (plain, maximized, a browser's
+custom frame, undecorated, DPI-scaled), whether video is produced and — when
+it is not — the two sizes the `undersized` drop line already names; row 55
+covers a window RESIZED mid-capture, the one case where the prediction is
+KNOWN to go stale and where nothing has ever observed what the user sees.
+Both are empty.
+
 ### GAP-123 · Medium · The pacer governs only the UNDER-delivery direction of the video timeline
 `src-tauri/screen/src/session/pacing.rs` (`VideoPacer`),
 `src-tauri/screen/src/frames.rs` (`on_frame_arrived`) and
