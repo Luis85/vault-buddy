@@ -12,12 +12,15 @@
 //! `editor/` (validation, time mapping, migration, …) rather than growing
 //! this file.
 
+pub mod commands;
 pub mod error;
 pub mod fingerprint;
+pub mod history;
 pub mod ids;
 pub mod migrate;
 pub mod model;
 pub mod model_cues;
+pub mod session;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod time;
@@ -25,11 +28,14 @@ pub mod validate;
 mod validate_media;
 pub mod workspace;
 
+pub use commands::{EditorCommand, InternalCommand};
 pub use error::{EditorError, EditorErrorCode};
 pub use fingerprint::{assets_referenced, canonical_json, edit_fingerprint, new_product};
+pub use history::History;
 pub use ids::{is_valid_id, new_entity_id, new_project_id};
 pub use model::*;
 pub use model_cues::*;
+pub use session::{EditorSession, EditorSnapshot, ExecuteRequest};
 pub use validate::{validate_envelope, validate_project};
 pub use workspace::{sanitize, DeleteMode, Selected, Workspace};
 
