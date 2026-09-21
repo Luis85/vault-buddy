@@ -4445,7 +4445,9 @@ condition. Residual, Low: the four-way split, if anyone ever wants a second
 window excluded.
 
 **Verification status.** Checklist row 43 records the fix rebuild as
-verified; row 16 passes for the buddy on it. Both are re-run on the next
+verified; row 16 passes for the buddy on it, and row 17 — a snip AFTER
+stop showing the buddy present, so the exclusion is lifted and nothing
+leaks into later captures — passes too. All three re-run on the next
 installer build to close, since a hand-edited dev build is not the
 artifact users install.
 
