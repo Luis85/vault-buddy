@@ -16,11 +16,16 @@ pub mod error;
 pub mod ids;
 pub mod model;
 pub mod model_cues;
+pub mod validate;
+mod validate_media;
+pub mod workspace;
 
 pub use error::{EditorError, EditorErrorCode};
 pub use ids::{is_valid_id, new_entity_id, new_project_id};
 pub use model::*;
 pub use model_cues::*;
+pub use validate::{validate_envelope, validate_project};
+pub use workspace::{sanitize, DeleteMode, Selected, Workspace};
 
 /// A raw JSON object of fields this crate does not model, preserved
 /// verbatim on every entity via `#[serde(flatten)]` so an interchange
