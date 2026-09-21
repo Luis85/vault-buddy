@@ -124,6 +124,9 @@ vault-buddy/
 │   │                           #   search_commands.rs, mcp_commands.rs, document_commands.rs,
 │   │                           #   screen_commands.rs, screen_capture_worker.rs,
 │   │                           #   region_commands.rs (the overlay's selection lifecycle),
+│   │                           #   region_indicator.rs (the region BORDER's window
+│   │                             #     lifecycle -- a window concern like region_commands,
+│   │                             #     not a capture one; one show site, one hide site),
 │   │                           #   screen_config_commands.rs (the per-vault Screen
 │   │                           #     Capture SETTINGS surface — config, not lifecycle),
 │   │                           #   window_upkeep.rs (the 1 s metronome's tick + the
@@ -275,7 +278,7 @@ launched the app on the CI runner and never exited.
 
 ## Architecture overview
 
-Five OS windows, one frontend bundle, one Rust process:
+Six OS windows, one frontend bundle, one Rust process:
 
 ```
    ┌───────────────────────────── Rust shell (src-tauri/src) ─────────────────────────────┐
@@ -458,7 +461,7 @@ subscribe.
 
 ## The window system (most invariant-heavy area)
 
-Five windows. FOUR of them are the always-on-top transparent companions, so
+Six windows. FIVE of them are the always-on-top transparent companions, so
 the buddy window never resizes. The old design was one window that grew from
 88×88 to hold the panel; WebView2 repaints its stale last frame at the new
 bounds for a frame on resize, flashing the buddy to a corner. Splitting the
@@ -506,6 +509,21 @@ and the rules below say so where they differ:
   The overlay is hidden and REUSED, never reloaded, so its component state
   survives between selections — which is why `region:begin` exists (see the
   Events table).
+- **`region-indicator`** — the region border (spec
+  `2026-09-20-region-capture-indicator-design.md`, GAP-165), created hidden.
+  Shown only while a REGION capture runs, over exactly the recorded
+  rectangle, and **click-through**: `set_ignore_cursor_events(true)` is
+  applied on EVERY show rather than once at startup, because one silent
+  failure at startup would otherwise turn every later capture's indicator
+  into a full-region window swallowing every click, with no retry. If that
+  call fails the window is **not shown at all** — a missing border returns
+  the user to today's behaviour, a click-swallowing one is worse than
+  nothing. Sized and positioned while hidden, like every companion. Never
+  focused (`focus: false`): taking focus would blur the panel and trip
+  `schedule_focus_out_check`. It is the app's SIXTH window and the second
+  entry in `EXCLUDED_LABELS`, which is the whole reason a border drawn over
+  the recorded area is free — the user sees it and the recording does not
+  contain it.
 - **`editor`** — the capture editor (spec §5.1, §8), 960×640, created hidden.
   The odd one out in every respect, and each difference is load-bearing:
   - It is **not transparent, not always-on-top, `decorations: true`,
@@ -696,17 +714,26 @@ Invariants:
     hide-to-tray walk.
   - `tray::POSITION_DENYLIST` — `ALL_WINDOW_LABELS` minus `main`; the windows
     whose position the window-state plugin must not persist.
-  - `capture_exclusion::EXCLUDED_LABELS` — **`["main"]`, the buddy and ONLY
-    the buddy**, kept out of a recording's pixels by `WDA_EXCLUDEFROMCAPTURE`.
-    Through phases 3–5 this was every declared window and its test failed
+  - `capture_exclusion::EXCLUDED_LABELS` — **the windows a HARDWARE run has
+    cleared**, kept out of a recording's pixels by `WDA_EXCLUDEFROMCAPTURE`.
+    Today that is `["main", "region-indicator"]`: the buddy, and the region
+    border whose whole value depends on being invisible to the capture.
+    Through phases 3–5 it was every declared window and its test failed
     until a new window was added. **GAP-166 inverted it on hardware**:
     `SetWindowDisplayAffinity` on a WebView2-hosting window stopped the
     editor painting AND stopped other applications' toolbars taking pointer
     input until the process exited, and `main` alone was clean. So the
     panel, bubble, overlay and editor are IN a recording now, by design, and
-    a window declared in the config is NOT excluded until a hardware run says
-    it can be. Which property of the other four made them hazardous is not
-    established; `main` is the empirically clean set, not a theory.
+    **a window declared in the config is NOT excluded until a hardware run
+    says it can be** — the allowlist lives in the TEST
+    (`HARDWARE_CLEARED_FOR_AFFINITY`, each label carrying its evidence) and
+    production is checked against it, so adding a seventh window cannot
+    quietly exclude it. `region-indicator` joined on GAP-165's premise probe
+    (a second window of its exact shape class, excluded across several
+    captures, with other applications' toolbars surviving); rows 44–52 are
+    its own verification and are unrun. Which property of the other four
+    made them hazardous is still not established; this is an empirically
+    cleared set, not a theory.
 
   None of these may drift, and none of them is maintained by memory: unit
   tests derive each from `tauri.conf.json` — `ALL_WINDOW_LABELS` and
@@ -1285,6 +1312,31 @@ write here, it belongs in `export_worker/` or it is a design change.
   docs/Gaps.md GAP-124. Windows 10 before 2004 has no
   `WDA_EXCLUDEFROMCAPTURE`: the call logs a warning and the capture proceeds
   with the buddy in frame, by design.
+- **The region indicator (`region_indicator.rs`, GAP-165) is the one surface
+  that exists because Windows' own feedback LIES.** While a region capture
+  runs, Windows draws its yellow border around the whole monitor — truthfully,
+  because WGC really is capturing the whole monitor and
+  `convert::bgra_crop_to_nv12` crops on the CPU — so nothing on screen says
+  which rectangle is being recorded. `DrawBorderSettings::WithoutBorder` is
+  NOT the answer (it is gated behind a restricted capability an unpackaged app
+  lacks, and suppressing Windows' own "you are being recorded" affordance
+  would replace a misleading indicator with none), so the indicator is ours.
+  **Its show is SPLIT ACROSS TWO THREADS and the single-threaded reading
+  deadlocks**: it needs the monitor's origin, and `available_monitors`
+  marshals to the event loop and blocks with no timeout, so calling it inside
+  a `run_on_main_thread` closure is the main thread waiting on a reply only it
+  can produce — a hang on every region capture start, with no crash record.
+  Enumeration, the GDI display-number join (`region_commands::matches_display`,
+  reused and never copied) and the bounds arithmetic
+  (`core::screen_geometry::indicator_bounds`, pure and Linux-tested because
+  the offset fails silently by putting the border on the wrong monitor) all
+  run on the calling worker thread; only four numbers cross. One show site in
+  `start_screen_capture_blocking` beside the exclusion apply, gated on
+  `SourceId::Region`; one unconditional hide in `clear_active_screen` beside
+  the exclusion clear. Both pinned to their enclosing functions, the
+  `capture_exclusion` discipline, because both natural relocations leak a
+  border the user cannot dismiss. **Nothing about it has been seen on
+  hardware** — checklist rows 44–52, all unrun.
 - **After phase 5 there are NO orphan modules left**, and this bullet exists
   to retire the paragraph it replaces. Through phases 1–4 it read "Three
   Phase-1 modules STILL have no production caller — `core::timeline`,
@@ -3070,7 +3122,8 @@ Each window loads the same bundle and mounts a different root by its label:
 `main.ts` reads `getCurrentWindow().label` and `rootFor(label)`
 (`src/roots/index.ts`, a pure map, unit-tested) picks the component —
 `main` → `BuddyRoot`, `panel` → `PanelRoot`, `bubble` → `BubbleRoot`,
-`overlay` → `RegionRoot`, `editor` → `EditorRoot`, any
+`overlay` → `RegionRoot`, `editor` → `EditorRoot`,
+`region-indicator` → `RegionIndicatorRoot`, any
 unexpected label → `BuddyRoot`. The roots are thin: `BuddyRoot` hosts
 `CompanionCharacter` and invokes `toggle_panel`/`close_panel`; `PanelRoot`
 hosts `ActionPanel` and closes via `close_panel` on Escape/gutter-click;
@@ -3083,9 +3136,12 @@ Ctrl+Shift+Z / Ctrl+Y on `window` (the editor fills its own window, so there
 is no narrower focus target) — removed on unmount, because a surviving
 `window` listener would go on editing AND persisting a timeline nobody can
 see, and gated on the event's target so the first `<input>` this window grows
-keeps its own native text undo. **`RegionRoot` and `EditorRoot` install no
-store** — they are the TWO roots that mirror no Rust state, which is why they
-are the two that need no per-window `init()` wiring.
+keeps its own native text undo. **`RegionRoot`, `EditorRoot` and
+`RegionIndicatorRoot` install no store** — they are the THREE roots that
+mirror no Rust state, which is why they are the three that need no per-window
+`init()` wiring. The indicator mirrors ONE boolean (paused or not) from four
+app-wide `screen:*` events, which is less machinery than the per-window
+wiring a store would need.
 
 **Phase 5 did not change that, and the reason is worth stating so the next
 reader does not "fix" it.** `EditorRoot` now listens to FIVE events rather

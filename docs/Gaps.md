@@ -4314,28 +4314,45 @@ command for any change touching this crate's Windows arms.
   has not been swept for elsewhere in the codebase. This one was found by
   eye, in a log line, during a manual pass.
 
-### GAP-165 · Medium · An APPROVED design for the region-capture indicator was never implemented, and nothing tracked that
+### GAP-165 · Medium · The region-capture indicator: approved 2026-09-20, unimplemented and untracked for a day, implemented 2026-09-21 — rows 44-52 unrun
 Reported again by the 2026-09-21 manual pass: *"when recording a region, it
 draws the yellow border around the whole screen and does not draw a region
 box; the recording looks correctly bounded to the region."*
 
-That is not a new finding. It is
+That was not a new finding. It was
 `docs/superpowers/specs/2026-09-20-region-capture-indicator-design.md`,
 **status: approved (2026-09-20)**, whose own Context paragraph describes the
 exact symptom and says it "Lands on: `claude/screen-capture-intake-g0j49q`
-(PR #79), after Phase 4's editor tasks". It did not land. Measured on this
-tree:
+(PR #79), after Phase 4's editor tasks". It had not landed: no plan, no
+`region-indicator` anywhere in the tree, none of the five list memberships,
+and — the part worth naming — **no entry in this file**. An approved,
+unimplemented design with no backlog entry is invisible to every later
+reader, so the next person to hit the symptom re-discovers it as a bug,
+which is exactly what happened.
 
-- No implementation plan in `docs/superpowers/plans/` (phase 3's region
-  overlay is there; the indicator is not).
-- `grep -rn "region-indicator\|region_indicator" src-tauri/src/
-  src-tauri/tauri.conf.json src/` returns **nothing**. The sixth window was
-  never declared, and none of the five list memberships the spec enumerates
-  exist.
-- **No entry in this file.** That is the part worth naming: an approved,
-  unimplemented design with no backlog entry is invisible to every later
-  reader, so the next person to hit the symptom re-discovers it as a bug —
-  which is exactly what happened.
+**Implemented 2026-09-21** (spec amendments A1-A7, plan
+`docs/superpowers/plans/2026-09-21-region-capture-indicator.md`): the window
+is declared, it is in all five lists, the border tracks pause and resets
+between captures, and the lifecycle has one show site and one hide site,
+both pinned.
+
+**This entry stays OPEN, because code landing is not verification.** Nothing
+about the border has been observed on hardware: whether it appears at all,
+whether it traces the rectangle, whether it is genuinely click-through,
+whether it is genuinely absent from the footage, and whether it lands on the
+right monitor are checklist rows **44-52**, every one of them unrun. Two of
+those matter more than the rest:
+
+- **Row 44** is GAP-166's symptom against the SIXTH excluded window, which
+  is the one thing the premise probe below could not test — it probed
+  `panel`, a window that already existed. If row 44 fails, the indicator
+  loses its exclusion and the feature goes with it.
+- **Row 49** (the border on a non-primary monitor) is expected **BLOCKED**
+  on the verification machine, which has one monitor — like row 13. So the
+  monitor-offset arithmetic is verified only by `indicator_bounds`' own
+  Linux unit tests, and the step between that arithmetic and a lit pixel
+  (monitor enumeration, the GDI display-number join, `set_position`) is
+  verified by nothing at all.
 
 **Why the symptom is not a bug in the capture.** Region capture resolves to
 `SourceHandle::Screen(monitor)`; WGC captures the whole monitor and
