@@ -11,17 +11,20 @@
 //!
 //! THREE deliberate differences from the audio domain:
 //!
-//! 1. No startup-wedged janitor (yet). Audio needs one because a wedged
-//!    driver can hang device setup past the handshake with a .part already
-//!    on disk. The same is true here — `ScreenSession::start` blocks until
-//!    the mux has OPENED the .part, so a timeout can fire with a file on
-//!    disk — but a screen capture stages OUTSIDE every vault, so the orphan
-//!    is a near-empty staged .mp4 in the app's own staging directory rather
-//!    than something in the user's notes. The start fails cleanly and
-//!    releases the guard; sweeping the staging directory is Phase 5's job.
-//!    Both residuals (the unswept orphan, and the window in which the freed
-//!    guard lets a retry run beside the still-starting first capture) are
-//!    recorded as docs/Gaps.md GAP-110.
+//! 1. No startup-wedged janitor. Audio needs one because a wedged driver can
+//!    hang device setup past the handshake with a .part already on disk. The
+//!    same is true here — `ScreenSession::start` blocks until the mux has
+//!    OPENED the .part, so a timeout can fire with a file on disk — but a
+//!    screen capture stages OUTSIDE every vault, so the orphan is a
+//!    near-empty staged .mp4 in the app's own staging directory rather than
+//!    something in the user's notes, and `screen_recovery` (Phase 5) sweeps
+//!    it. What the timeout does NOT do any more is release the guard
+//!    (GAP-110, closed): the device thread is by definition still alive
+//!    there, so the release belongs to the outcome monitor, which is the
+//!    only thing that learns it has ended. The reservation therefore
+//!    outlives the failed start, which is why `bypasses_shutdown_wait`
+//!    below exists — a wedged start with nothing on disk must not make the
+//!    app unquittable (GAP-08).
 //! 2. Mutual exclusion lives in `CaptureGuard`, claimed FIRST. The
 //!    reservation below is defence in depth behind it, not the mechanism.
 //! 3. A source closing mid-capture is a WARNING that finalizes cleanly
@@ -68,6 +71,13 @@ pub struct ActiveScreenCapture {
     /// The `.part` the live session owns, once the worker has reserved it —
     /// `None` while the source is still being resolved and devices opened.
     pub part: Option<PathBuf>,
+    /// Set when the 15 s ready handshake expired and this reservation was
+    /// deliberately KEPT (GAP-110), so the device thread that is still
+    /// opening devices cannot have `CaptureGuard` pulled out from under it.
+    /// The capture never reported ready, so `capture_status` and friends go
+    /// on describing it conservatively as running — but shutdown must not
+    /// (see `bypasses_shutdown_wait`).
+    pub startup_wedged: bool,
 }
 
 /// The mutex holds the active-capture reservation. Unlike the tuple struct
@@ -232,10 +242,32 @@ pub fn is_capturing(app: &AppHandle) -> bool {
     lock_ignoring_poison(&app.state::<ScreenCaptureState>().0).is_some()
 }
 
+/// Whether shutdown/hide may skip waiting on this reservation: only a
+/// start whose ready handshake timed out and that has nothing on disk.
+///
+/// Byte-for-byte the audio domain's rule
+/// (`capture_commands::bypasses_shutdown_wait`), and for the same reason.
+/// GAP-110's fix keeps the reservation past a ready timeout so the guard
+/// stays claimed while the device thread may still be opening endpoints —
+/// but a thread wedged in `open_selected_sources` never ends, and without
+/// this exception that reservation would block quit, hide and the updater
+/// for the rest of the process. That is GAP-08, which the audio domain
+/// already paid for once. Nothing is on disk in that state, so nothing is
+/// stranded by leaving.
+///
+/// A capture that DID reach ready keeps the wait-forever posture, because
+/// its `.part` is real and an exit through it strands footage.
+fn bypasses_shutdown_wait(active: &ActiveScreenCapture) -> bool {
+    active.startup_wedged && active.part.is_none()
+}
+
 /// The buddy is the capture indicator for screen capture too, so a live
-/// capture blocks hide and shutdown exactly as an audio recording does.
+/// capture blocks hide and shutdown exactly as an audio recording does —
+/// with the one scoped exception above.
 pub fn capture_blocks_shutdown(app: &AppHandle) -> bool {
-    is_capturing(app)
+    lock_ignoring_poison(&app.state::<ScreenCaptureState>().0)
+        .as_ref()
+        .is_some_and(|active| !bypasses_shutdown_wait(active))
 }
 
 fn our_window_titles(app: &AppHandle) -> Vec<String> {
@@ -524,6 +556,51 @@ pub fn finalize_if_capturing(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reservation(startup_wedged: bool, part: Option<PathBuf>) -> ActiveScreenCapture {
+        let (control_tx, _rx) = std::sync::mpsc::channel::<Control>();
+        ActiveScreenCapture {
+            control_tx,
+            vault_id: "vault-1".to_string(),
+            source_title: "Demo".to_string(),
+            started_at_ms: 0,
+            paused: false,
+            paused_total_ms: 0,
+            paused_since_ms: None,
+            part,
+            startup_wedged,
+        }
+    }
+
+    // GAP-110's fix keeps the reservation past a ready timeout so the guard
+    // stays claimed. GAP-08 is the bill that comes with it: a device thread
+    // wedged in `open_selected_sources` never ends, so that reservation is
+    // never cleared, and a shutdown predicate reading it alone would refuse
+    // quit, hide AND the updater for the rest of the process. Only the
+    // wedged-with-nothing-on-disk case is exempt, because only that case
+    // strands nothing by leaving.
+    #[test]
+    fn only_a_wedged_start_with_nothing_on_disk_skips_the_shutdown_wait() {
+        assert!(
+            bypasses_shutdown_wait(&reservation(true, None)),
+            "a wedged start with no .part strands nothing, so it must not \
+             make the app unquittable (GAP-08)"
+        );
+        assert!(
+            !bypasses_shutdown_wait(&reservation(false, None)),
+            "an ordinary start that has not reserved its .part YET is still \
+             on its way to one; it keeps the wait-forever posture"
+        );
+        assert!(
+            !bypasses_shutdown_wait(&reservation(true, Some(PathBuf::from("/s/.a.mp4.part")))),
+            "a wedged start that DID open a .part strands real footage on \
+             the way out -- being wedged is not enough on its own"
+        );
+        assert!(
+            !bypasses_shutdown_wait(&reservation(false, Some(PathBuf::from("/s/.a.mp4.part")))),
+            "a live capture always blocks shutdown"
+        );
+    }
 
     #[test]
     fn the_status_payload_serializes_camel_case_for_the_webview() {

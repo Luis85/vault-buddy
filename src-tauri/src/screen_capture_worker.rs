@@ -48,6 +48,85 @@ struct ScreenStopBundle {
     inputs: Vec<String>,
 }
 
+/// Whether the outcome monitor tells the user how the capture ended.
+///
+/// `Events` is the ordinary capture: the user pressed Start, saw it running,
+/// and is owed `screen:stopped` (or `screen:failed`) when it finishes.
+///
+/// `Silent` is the ready-handshake timeout. That start has ALREADY been
+/// reported to the user as a failure, so a later "Screen capture ready"
+/// toast would contradict the error they are still looking at and park a
+/// capture they were told did not happen in the bar's **Edit** slot. The
+/// monitor still runs, and still writes the sidecar, so the footage the
+/// device thread did manage to publish is a complete staged capture — it
+/// shows up in the Record Screen picker's staged list, where a capture the
+/// user did not expect is discoverable rather than announced.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Announce {
+    Events,
+    Silent,
+}
+
+/// Spawn the one thread that drains the device worker's outcome.
+///
+/// It owns the release of the reservation — and therefore of `CaptureGuard`,
+/// which `clear_active_screen` frees with it. That ownership is the whole
+/// point: the monitor is the only thing in the process that learns when the
+/// device thread has really ended, so any path that frees the reservation
+/// without it is guessing (GAP-110).
+fn spawn_outcome_monitor(
+    app: &AppHandle,
+    vault_id: String,
+    done_rx: mpsc::Receiver<Result<ScreenStopBundle, ScreenError>>,
+    announce: Announce,
+) -> std::io::Result<()> {
+    let monitor_app = app.clone();
+    let monitor_vault_id = vault_id;
+    std::thread::Builder::new()
+        .name("screen-capture-monitor".into())
+        .spawn(move || {
+            let result = done_rx.recv().unwrap_or_else(|_| {
+                Err(ScreenError::Sink("screen capture thread vanished".into()))
+            });
+            // Clear FIRST, then announce — the ordering capture_commands.rs's
+            // capture-monitor uses. The device thread has already finalized
+            // and published the .mp4 by the time `done_rx` yields, so the
+            // reservation is protecting nothing from here on; holding it
+            // across the sidecar write and the OS toast would let a listener
+            // reacting to `screen:stopped` read `capturing: true`, and would
+            // put that disk I/O inside stop_screen_capture's 30 s budget so
+            // a slow disk reports `stillSaving` on a fully-saved capture.
+            clear_active_screen(&monitor_app);
+            match result {
+                Ok(bundle) => {
+                    // The sidecar write happens on BOTH announce modes: a
+                    // staged .mp4 without one is invisible to the staged
+                    // list and only guessable by the recovery sweep.
+                    let (dto, warning) = finalize_stopped(&monitor_vault_id, bundle);
+                    if announce == Announce::Events {
+                        emit_screen_stopped(&monitor_app, &dto, warning.as_deref());
+                    } else {
+                        log::warn!(
+                            "screen capture: a start that timed out published {:?} anyway; \
+                             staged without an event",
+                            dto.base
+                        );
+                    }
+                }
+                Err(e) => {
+                    let (message, retained) = describe_screen_error(&e);
+                    if announce == Announce::Events {
+                        emit_screen_failed(&monitor_app, &message, retained.as_deref());
+                    } else {
+                        log::warn!("screen capture: a start that timed out ended: {message}");
+                    }
+                }
+            }
+            crate::tray::set_capture_state(&monitor_app, crate::tray::TrayCaptureState::Idle);
+        })
+        .map(|_| ())
+}
+
 /// What the device thread hands back over `ready_tx` on success.
 struct ReadyInfo {
     part: PathBuf,
@@ -135,6 +214,7 @@ pub(crate) fn start_screen_capture_blocking(
             paused_total_ms: 0,
             paused_since_ms: None,
             part: None,
+            startup_wedged: false,
         });
     }
 
@@ -309,25 +389,40 @@ pub(crate) fn start_screen_capture_blocking(
             return Err(e);
         }
         Err(_) => {
-            // Brief-mandated: release the guard and fail cleanly rather than
-            // keep a reservation nothing will ever clear on its own. Be
-            // clear about what that COSTS, because the obvious justification
-            // is false: `run_mux` opens the .part BEFORE it signals ready,
-            // and ScreenSession::start blocks on that handshake
-            // (screen/src/session/windows_session.rs), so the sink exists
-            // strictly before `start` returns — a timeout here can fire with
-            // an open .part on disk. The likelier shape is a device thread
-            // still inside open_selected_sources (a wedged audio driver);
-            // when it later succeeds it sees the pre-emptive Stop below,
-            // finalizes, and renames to a staged .mp4 whose done_tx.send
-            // lands in a dropped receiver — so it publishes with no sidecar
-            // and no event, and no janitor sweeps the staging dir (Phase 5
-            // owns staging recovery). The guard is also free for that whole
-            // stretch, so a retry can open the same audio endpoint beside
-            // the first capture. Both residuals: docs/Gaps.md GAP-110.
-            clear_active_screen(app);
+            // GAP-110. The timeout fires while the device thread is BY
+            // DEFINITION still alive — the commonest shape is one wedged
+            // inside `open_selected_sources` on a bad audio driver, the same
+            // premise the audio domain's own timeout was written for. So the
+            // reservation is NOT freed here: freeing it frees `CaptureGuard`
+            // with it, and the user's retry then opens the same audio
+            // endpoint beside a capture that is still starting — the exact
+            // reliability hazard spec 7.3 says the guard exists to prevent.
+            //
+            // Stop pre-emptively (the thread sees it the moment it reaches
+            // its control loop), then hand `done_rx` to the monitor, which
+            // is the only thing that learns the device thread has really
+            // ended. It clears the reservation then, writes the sidecar for
+            // whatever did get published — an .mp4 without one is invisible
+            // to the staged list — and stays SILENT, because the user is
+            // about to be told this start failed.
             let _ = control_tx.send(Control::Stop);
             let msg = "Screen capture did not start in time.".to_string();
+            if let Err(e) = spawn_outcome_monitor(app, id.clone(), done_rx, Announce::Silent) {
+                // No monitor means nothing would EVER free the reservation,
+                // which is worse than the window this arm exists to close:
+                // the app would refuse every later capture until restart.
+                // Fall back to today's behaviour and say why.
+                log::warn!("screen capture: no monitor for a timed-out start ({e}); releasing");
+                clear_active_screen(app);
+                emit_screen_failed(app, &msg, None);
+                return Err(msg);
+            }
+            // The reservation now outlives this call, so mark it: with no
+            // `.part` yet it must not make the app unquittable or unhidable
+            // (GAP-08, the audio domain's own scoped exception).
+            if let Some(active) = lock_ignoring_poison(&state.0).as_mut() {
+                active.startup_wedged = true;
+            }
             emit_screen_failed(app, &msg, None);
             return Err(msg);
         }
@@ -337,35 +432,7 @@ pub(crate) fn start_screen_capture_blocking(
     // AND self-finalization (the source closing mid-capture), so the
     // reservation clears and screen:stopped/failed fires no matter who
     // ended the capture (mirrors capture_commands.rs's capture-monitor).
-    let monitor_app = app.clone();
-    let monitor_vault_id = id.clone();
-    let monitor = std::thread::Builder::new()
-        .name("screen-capture-monitor".into())
-        .spawn(move || {
-            let result = done_rx.recv().unwrap_or_else(|_| {
-                Err(ScreenError::Sink("screen capture thread vanished".into()))
-            });
-            // Clear FIRST, then announce — the ordering capture_commands.rs's
-            // capture-monitor uses. The device thread has already finalized
-            // and published the .mp4 by the time `done_rx` yields, so the
-            // reservation is protecting nothing from here on; holding it
-            // across the sidecar write and the OS toast would let a listener
-            // reacting to `screen:stopped` read `capturing: true`, and would
-            // put that disk I/O inside stop_screen_capture's 30 s budget so
-            // a slow disk reports `stillSaving` on a fully-saved capture.
-            clear_active_screen(&monitor_app);
-            match result {
-                Ok(bundle) => {
-                    let (dto, warning) = finalize_stopped(&monitor_vault_id, bundle);
-                    emit_screen_stopped(&monitor_app, &dto, warning.as_deref());
-                }
-                Err(e) => {
-                    let (message, retained) = describe_screen_error(&e);
-                    emit_screen_failed(&monitor_app, &message, retained.as_deref());
-                }
-            }
-            crate::tray::set_capture_state(&monitor_app, crate::tray::TrayCaptureState::Idle);
-        });
+    let monitor = spawn_outcome_monitor(app, id.clone(), done_rx, Announce::Events);
     if let Err(e) = monitor {
         // Without a monitor nothing would ever drain the outcome or clear
         // the reservation. Stop the session — the device thread still
@@ -589,6 +656,37 @@ mod tests {
              just told had finished, and puts the sidecar write and the OS toast inside \
              stop_screen_capture's 30 s budget (a slow disk then reports stillSaving on a \
              fully-saved capture)"
+        );
+    }
+
+    /// The slice of `start_screen_capture_blocking` that runs when the ready
+    /// handshake times out, comments stripped.
+    fn ready_timeout_arm(code: &str) -> &str {
+        let after_match = &code
+            [crate::structural_scan::offset_of(code, "ready_rx.recv_timeout(READY_TIMEOUT)")..];
+        let arm = crate::structural_scan::offset_of(after_match, "Err(_) =>");
+        let end = crate::structural_scan::offset_of(after_match, "return Err(msg)");
+        &after_match[arm..end]
+    }
+
+    // GAP-110 residual 2. The 15 s ready timeout fires while the device
+    // thread is, by definition, still alive — the commonest shape is one
+    // wedged inside `open_selected_sources` on a bad audio driver. Freeing
+    // the reservation there frees `CaptureGuard` with it, so the user's
+    // retry opens the SAME audio endpoint beside a capture that is still
+    // starting: the exact reliability hazard spec 7.3 says the guard
+    // exists to prevent. The release has to belong to whoever learns the
+    // device thread has really ended, which is the outcome monitor.
+    #[test]
+    fn the_ready_timeout_hands_the_release_to_a_monitor_rather_than_freeing_it() {
+        let code =
+            crate::structural_scan::production_code(include_str!("screen_capture_worker.rs"));
+        let arm = ready_timeout_arm(&code);
+        assert!(
+            arm.contains("spawn_outcome_monitor"),
+            "the ready-timeout arm must hand `done_rx` to a monitor so the \
+             reservation is released when the device thread really ends, not \
+             while it may still be opening audio endpoints (GAP-110). Arm was:\n{arm}"
         );
     }
 }
