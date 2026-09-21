@@ -9,6 +9,7 @@ import { useVaultsStore } from "../stores/vaults";
 import type { CaptureSourceInfo, RegionSelection, StagedCaptureSummary } from "../types";
 import ScreenAudioPicker from "./ScreenAudioPicker.vue";
 import ScreenRegionPicker from "./ScreenRegionPicker.vue";
+import ScreenWindowPicker from "./ScreenWindowPicker.vue";
 import StagedCaptureList from "./StagedCaptureList.vue";
 import TabGroup from "./TabGroup.vue";
 import AppButton from "./ui/AppButton.vue";
@@ -27,8 +28,6 @@ const TABS = [
 
 /** The two tabs that render a plain row list from `list_capture_sources`.
  * Region builds its own row from a selection, so it gets its own slot. */
-const LIST_TABS = TABS.filter((t) => t.id !== "region");
-
 const props = defineProps<{ vaultId: string }>();
 const store = useVaultsStore();
 const screenCapture = useScreenCaptureStore();
@@ -55,6 +54,7 @@ const ffmpegMissing = computed(
 
 const sources = ref<CaptureSourceInfo[]>([]);
 const selectedId = ref<string | null>(null);
+
 const inputs = ref<string[]>([]);
 const outputs = ref<string[]>([]);
 const error = ref<string | null>(null);
@@ -286,23 +286,18 @@ async function onStart() {
       @discard="onDiscardStaged"
     />
     <TabGroup :tabs="[...TABS]">
-      <template
-        v-for="t in LIST_TABS"
-        #[t.id]
-      >
+      <template #screen>
         <EmptyState
-          v-if="rowsFor(t.id).length === 0"
-          :key="`${t.id}-empty`"
+          v-if="screens.length === 0"
           title="No capture sources available."
           hint="Open a window or connect a display, then reopen this screen."
         />
         <ul
           v-else
-          :key="`${t.id}-list`"
           class="flex flex-col gap-1"
         >
           <li
-            v-for="s in rowsFor(t.id)"
+            v-for="s in screens"
             :key="s.id"
           >
             <button
@@ -318,6 +313,13 @@ async function onStart() {
             </button>
           </li>
         </ul>
+      </template>
+      <template #window>
+        <ScreenWindowPicker
+          :windows="rowsFor('window')"
+          :selected-id="selectedId"
+          @update:selected-id="selectedId = $event"
+        />
       </template>
       <template #region>
         <ScreenRegionPicker

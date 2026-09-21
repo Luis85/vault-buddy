@@ -1,5 +1,5 @@
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { flushPromises, mount } from "@vue/test-utils";
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -127,9 +127,48 @@ async function armRegionOn(w: ReturnType<typeof mount>, target: string) {
 const panel = (w: ReturnType<typeof mount>, id: string) =>
   w.get(`[data-testid="panel-${id}"]`).text();
 
+/** Open the Window tab's dropdown and return its popup element.
+ *
+ * The Window tab is a SelectMenu rather than a list of cards (an open-window
+ * list is unbounded and filled the panel), and its popup is TELEPORTED to
+ * document.body — so it is not inside the wrapper and `panel()` cannot see
+ * it. Every window assertion below goes through here. */
+async function openWindowMenu(w: ReturnType<typeof mount>) {
+  // Idempotent: the trigger TOGGLES, so a second call on an already-open menu
+  // would close it — which surfaced as "the dropdown did not open" in a test
+  // that had merely looked at it first.
+  const already = document.body.querySelector('[role="listbox"]');
+  if (already) return already as HTMLElement;
+  await w.get('[data-testid="source-window-select"]').trigger("click");
+  await flushPromises();
+  const popup = document.body.querySelector('[role="listbox"]');
+  if (!popup) throw new Error("the window dropdown did not open");
+  return popup as HTMLElement;
+}
+
+/** Pick a window by its source id, the way a user does. */
+async function pickWindow(w: ReturnType<typeof mount>, id: string) {
+  await openWindowMenu(w);
+  const option = document.body.querySelector(
+    `[data-testid="source-window-select-option-${id}"]`,
+  );
+  if (!option) throw new Error(`no window option for ${id}`);
+  (option as HTMLElement).click();
+  await flushPromises();
+}
+
+// The Window tab's dropdown TELEPORTS its popup to document.body, so a
+// mounted component outliving its test leaves a stale listbox behind and the
+// next test's `document.body.querySelector` finds the wrong one — which reads
+// as a selection that silently did not happen.
+enableAutoUnmount(afterEach);
+
 describe("ScreenSourcePicker", () => {
   beforeEach(() => setActivePinia(createPinia()));
-  afterEach(() => clearMocks());
+  afterEach(() => {
+    clearMocks();
+    document.body.innerHTML = "";
+  });
 
   it("lists monitors under Screen and windows under Window", async () => {
     mockSources();
@@ -139,13 +178,53 @@ describe("ScreenSourcePicker", () => {
     // Both directions: a picker that ignored `kind` and listed everything
     // twice would satisfy either assertion on its own.
     expect(panel(w, "screen")).not.toContain("Figma");
-    expect(panel(w, "window")).toContain("Figma");
-    expect(panel(w, "window")).toContain("Figma.exe");
-    expect(panel(w, "window")).not.toContain("Screen 1");
+    // The Window tab is a dropdown, so its rows are in the teleported popup.
+    // The process name rides in the same label because it is often the only
+    // thing telling two windows apart.
+    const menu = (await openWindowMenu(w)).textContent ?? "";
+    expect(menu).toContain("Figma");
+    expect(menu).toContain("Figma.exe");
+    expect(menu).not.toContain("Screen 1");
     // And the Window tab really is reachable, not just rendered.
     await w.get('[data-testid="tab-window"]').trigger("click");
     expect(w.get('[data-testid="tab-window"]').attributes("aria-selected")).toBe("true");
     expect(w.get('[data-testid="tab-screen"]').attributes("aria-selected")).toBe("false");
+  });
+
+  // THE REPORTED DEFECT: a dozen open windows rendered as a dozen cards,
+  // which filled the panel, pushed Start below the fold and made choosing a
+  // scroll-and-hunt. The tab is a dropdown now, so the panel cost is one row
+  // no matter how many windows are open — while the Screen tab keeps its
+  // cards, because two or three monitors are better told apart by the
+  // resolution on their second line.
+  it("keeps the Window tab to one row however many windows are open", async () => {
+    const many = Array.from({ length: 24 }, (_, i) => ({
+      id: `window:${1000 + i}`,
+      kind: "window",
+      title: `Project ${i} - Visual Studio Code`,
+      detail: "Code.exe",
+      width: 1280,
+      height: 800,
+      isPrimary: false,
+    }));
+    mockSources([SOURCES[0], ...many]);
+    const w = await mountPicker();
+
+    // One control, not 24 rows.
+    expect(w.findAll('[data-testid^="source-window:"]')).toHaveLength(0);
+    expect(w.find('[data-testid="source-window-select"]').exists()).toBe(true);
+
+    // Every window is still reachable, and still distinguishable: the
+    // process name rides in the label because these titles differ only by a
+    // number and three of them would otherwise read identically.
+    const menu = (await openWindowMenu(w)).textContent ?? "";
+    expect(menu).toContain("Project 0 - Visual Studio Code");
+    expect(menu).toContain("Project 23 - Visual Studio Code");
+    expect(menu).toContain("Code.exe");
+
+    // And picking one still arms Start.
+    await pickWindow(w, "window:1023");
+    expect(w.get('[data-testid="screen-start"]').attributes("disabled")).toBeUndefined();
   });
 
   it("offers Screen, Window and Region tabs", async () => {
@@ -369,7 +448,7 @@ describe("ScreenSourcePicker", () => {
     await w.get('[data-testid="audio-input-0"]').setValue(true);
     await w.get('[data-testid="audio-output-0"]').setValue(true);
     expect(w.text()).not.toContain("No audio will be recorded");
-    await w.get('[data-testid="source-window:1234"]').trigger("click");
+    await pickWindow(w, "window:1234");
     await w.get('[data-testid="screen-start"]').trigger("click");
     await flushPromises();
     // The ticked names travel VERBATIM — Rust matches them against what cpal
@@ -446,14 +525,22 @@ describe("ScreenSourcePicker", () => {
       return undefined;
     });
     const w = await mountPicker();
-    await w.get('[data-testid="source-window:1234"]').trigger("click");
+    await pickWindow(w, "window:1234");
     await w.get('[data-testid="screen-start"]').trigger("click");
     await flushPromises();
     expect(w.get('[data-testid="screen-error"]').text()).toContain("no longer available");
     // The re-read is the point: two enumerations, and the vanished row is
     // gone from the refreshed list.
     expect(listed).toBe(2);
-    expect(w.find('[data-testid="source-window:1234"]').exists()).toBe(false);
+    // The refreshed enumeration has no windows left, so the tab falls back to
+    // its empty state — there is no dropdown to open and no option to pick.
+    // Asserting BOTH says the row really went rather than merely being
+    // unreachable behind a closed menu.
+    expect(w.find('[data-testid="source-window-select"]').exists()).toBe(false);
+    expect(panel(w, "window")).toContain("No capture sources available");
+    expect(
+      document.body.querySelector('[data-testid="source-window-select-option-window:1234"]'),
+    ).toBeNull();
     // A refused start must not navigate away, and must not leave the store
     // believing a capture is running.
     expect(useVaultsStore().view).toBe("screenCapture");
@@ -477,7 +564,7 @@ describe("ScreenSourcePicker", () => {
       return undefined;
     });
     const w = await mountPicker();
-    await w.get('[data-testid="source-window:1234"]').trigger("click");
+    await pickWindow(w, "window:1234");
     await w.get('[data-testid="screen-start"]').trigger("click");
     await flushPromises();
     expect(w.get('[data-testid="screen-start"]').attributes("disabled")).toBeDefined();
