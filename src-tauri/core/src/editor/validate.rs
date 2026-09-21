@@ -157,6 +157,16 @@ fn check_master_gain(p: &Project) -> Result<(), EditorError> {
     Ok(())
 }
 
+/// `Track.volume` (`workspace.schema.json`'s `track.volume`: `minimum: 0,
+/// maximum: 2`) — controller ruling: added alongside the fields the brief
+/// already listed by name, since it is the same class of scalar-range
+/// check (step 3) the schema bounds just as concretely.
+fn check_track(track: &Track) -> Result<(), EditorError> {
+    let v = as_f64(&track.id, "volume", &track.volume)?;
+    check_range(&track.id, "volume", v, 0.0, 2.0)?;
+    Ok(())
+}
+
 fn check_clip(
     clip: &Clip,
     assets: &HashMap<&str, &Asset>,
@@ -240,6 +250,14 @@ fn check_clip(
     check_range(&clip.id, "w", w, 0.1, 1.0)?;
     let h = as_f64(&clip.id, "h", &clip.h)?;
     check_range(&clip.id, "h", h, 0.1, 1.0)?;
+
+    // `Clip.opacity`/`Clip.volume` (`workspace.schema.json`: opacity
+    // `[0,1]`, volume `[0,2]`) — controller ruling, same class of check as
+    // x/y/w/h just above.
+    let opacity = as_f64(&clip.id, "opacity", &clip.opacity)?;
+    check_range(&clip.id, "opacity", opacity, 0.0, 1.0)?;
+    let volume = as_f64(&clip.id, "volume", &clip.volume)?;
+    check_range(&clip.id, "volume", volume, 0.0, 2.0)?;
 
     if let Some(crop_zoom) = clip.crop_zoom.as_ref() {
         let v = as_f64(&clip.id, "crop_zoom", crop_zoom)?;
@@ -391,6 +409,10 @@ pub fn validate_project(p: &Project) -> Result<(), EditorError> {
     check_canvas(p)?;
     check_master_gain(p)?;
 
+    for track in &p.tracks {
+        check_track(track)?;
+    }
+
     for asset in &p.assets {
         if asset.duration_ms > limits::MAX_DURATION_MS {
             return Err(invalid(format!(
@@ -468,264 +490,9 @@ pub fn validate_envelope(e: &WorkspaceEnvelope) -> Result<(), EditorError> {
     Ok(())
 }
 
+// Tests live in the sibling `validate_tests.rs` (not inline) so this
+// file stays well under the 800-nonblank-line Rust cap as the
+// DATA-MODEL.md § Validation order rule coverage grows.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::editor::model_cues::{Product, Record};
-
-    const REFERENCE_WORKSPACE: &str =
-        include_str!("../../../../tests/fixtures/editor/reference-workspace.example.json");
-
-    fn base_project_json() -> serde_json::Value {
-        serde_json::json!({
-            "schema": "vault-buddy-video-project/3",
-            "id": "proj1",
-            "title": "A tutorial",
-            "canvas": {"width": 1280, "height": 720, "fps": 30},
-            "master_gain": 0.8,
-            "assets": [
-                {"id": "a1", "kind": "video", "name": "Asset One", "duration_ms": 5000}
-            ],
-            "tracks": [
-                {
-                    "id": "t1", "kind": "video", "name": "Track",
-                    "visible": true, "locked": false, "muted": false, "solo": false,
-                    "volume": 1
-                }
-            ],
-            "clips": [
-                {
-                    "id": "c1", "asset_id": "a1", "track_id": "t1", "name": "Clip",
-                    "start_ms": 0, "in_ms": 0, "out_ms": 1000,
-                    "fade_in_ms": 0, "fade_out_ms": 0, "fade_curve": "linear",
-                    "opacity": 1, "volume": 1, "muted": false,
-                    "x": 0, "y": 0, "w": 1, "h": 1
-                }
-            ],
-            "effects": [],
-            "markers": [],
-            "transitions": [],
-            "destination": {"vault": "v1", "folder": "Videos", "dated": false}
-        })
-    }
-
-    fn base_project() -> Project {
-        serde_json::from_value(base_project_json()).expect("base project fixture must parse")
-    }
-
-    fn base_record() -> Record {
-        Record {
-            id: "rec1".to_string(),
-            revision: 1,
-            created_at: "2026-09-21T00:00:00Z".to_string(),
-            updated_at: "2026-09-21T00:00:00Z".to_string(),
-            products: Vec::new(),
-            extra: crate::editor::Map::new(),
-        }
-    }
-
-    fn base_envelope() -> WorkspaceEnvelope {
-        WorkspaceEnvelope {
-            schema: super::super::WORKSPACE_SCHEMA.to_string(),
-            project: base_project(),
-            workspace: serde_json::json!({}),
-            record: base_record(),
-            saved_at: "2026-09-21T00:00:00Z".to_string(),
-            extra: crate::editor::Map::new(),
-        }
-    }
-
-    #[test]
-    fn reference_example_is_valid() {
-        let envelope: WorkspaceEnvelope = serde_json::from_str(REFERENCE_WORKSPACE).unwrap();
-        assert!(
-            validate_envelope(&envelope).is_ok(),
-            "the reference tutorial workspace must validate cleanly"
-        );
-    }
-
-    #[test]
-    fn duplicate_clip_ids_are_rejected_naming_the_id() {
-        let mut project = base_project();
-        let dup = project.clips[0].clone();
-        project.clips.push(dup);
-        let err = validate_project(&project).unwrap_err();
-        assert_eq!(err.code, EditorErrorCode::InvalidProject);
-        assert!(err.message.contains("c1"), "message: {}", err.message);
-    }
-
-    #[test]
-    fn dangling_asset_reference_is_rejected() {
-        let mut project = base_project();
-        project.clips[0].asset_id = "missing".to_string();
-        let err = validate_project(&project).unwrap_err();
-        assert!(err.message.contains("missing"), "message: {}", err.message);
-    }
-
-    #[test]
-    fn audio_asset_on_video_track_is_rejected() {
-        let mut project = base_project();
-        project.assets.push(
-            serde_json::from_value(serde_json::json!({
-                "id": "a2", "kind": "audio", "name": "Audio Asset", "duration_ms": 5000
-            }))
-            .unwrap(),
-        );
-        project.clips[0].asset_id = "a2".to_string();
-        let err = validate_project(&project).unwrap_err();
-        assert!(err.message.contains("c1"), "message: {}", err.message);
-    }
-
-    #[test]
-    fn empty_source_range_is_rejected() {
-        let mut project = base_project();
-        project.clips[0].in_ms = 500;
-        project.clips[0].out_ms = 500;
-        let err = validate_project(&project).unwrap_err();
-        assert!(err.message.contains("c1"), "message: {}", err.message);
-    }
-
-    #[test]
-    fn out_ms_beyond_asset_duration_is_rejected() {
-        let mut project = base_project();
-        project.clips[0].out_ms = project.assets[0].duration_ms + 1;
-        let err = validate_project(&project).unwrap_err();
-        assert!(err.message.contains("c1"), "message: {}", err.message);
-    }
-
-    #[test]
-    fn fade_longer_than_half_the_clip_is_rejected() {
-        // clips[0]'s output duration is exactly 1000 ms (in_ms 0, out_ms 1000, no speed).
-        let mut too_long = base_project();
-        too_long.clips[0].fade_in_ms = 501;
-        let err = validate_project(&too_long).unwrap_err();
-        assert!(
-            err.message.contains("fade_in_ms"),
-            "message: {}",
-            err.message
-        );
-
-        let mut exactly_half = base_project();
-        exactly_half.clips[0].fade_in_ms = 500;
-        assert!(validate_project(&exactly_half).is_ok());
-    }
-
-    #[test]
-    fn cyclic_linked_assets_are_rejected() {
-        let mut project = base_project();
-        project.clips.clear();
-        project.assets = vec![
-            serde_json::from_value(serde_json::json!({
-                "id": "a1", "kind": "audio", "name": "A", "duration_ms": 1000,
-                "linked_asset": "a2"
-            }))
-            .unwrap(),
-            serde_json::from_value(serde_json::json!({
-                "id": "a2", "kind": "audio", "name": "B", "duration_ms": 1000,
-                "linked_asset": "a1"
-            }))
-            .unwrap(),
-        ];
-        let err = validate_project(&project).unwrap_err();
-        assert!(err.message.contains("cycle"), "message: {}", err.message);
-    }
-
-    #[test]
-    fn self_transition_is_rejected() {
-        let mut project = base_project();
-        project.transitions.push(
-            serde_json::from_value(serde_json::json!({
-                "id": "tr1", "from": "c1", "to": "c1", "duration_ms": 100, "kind": "dissolve"
-            }))
-            .unwrap(),
-        );
-        let err = validate_project(&project).unwrap_err();
-        assert!(err.message.contains("tr1"), "message: {}", err.message);
-    }
-
-    #[test]
-    fn cross_track_transition_is_rejected() {
-        let mut project = base_project();
-        project.tracks.push(
-            serde_json::from_value(serde_json::json!({
-                "id": "t2", "kind": "video", "name": "Track Two",
-                "visible": true, "locked": false, "muted": false, "solo": false,
-                "volume": 1
-            }))
-            .unwrap(),
-        );
-        project.clips.push(
-            serde_json::from_value(serde_json::json!({
-                "id": "c2", "asset_id": "a1", "track_id": "t2", "name": "Clip Two",
-                "start_ms": 2000, "in_ms": 0, "out_ms": 1000,
-                "fade_in_ms": 0, "fade_out_ms": 0, "fade_curve": "linear",
-                "opacity": 1, "volume": 1, "muted": false,
-                "x": 0, "y": 0, "w": 1, "h": 1
-            }))
-            .unwrap(),
-        );
-        project.transitions.push(
-            serde_json::from_value(serde_json::json!({
-                "id": "tr1", "from": "c1", "to": "c2", "duration_ms": 100, "kind": "dissolve"
-            }))
-            .unwrap(),
-        );
-        let err = validate_project(&project).unwrap_err();
-        assert!(err.message.contains("tr1"), "message: {}", err.message);
-        assert!(
-            err.message.contains("track"),
-            "message should name the track mismatch: {}",
-            err.message
-        );
-    }
-
-    #[test]
-    fn oversized_collection_is_rejected() {
-        let mut project = base_project();
-        let template = project.clips[0].clone();
-        project.clips = (0..601)
-            .map(|i| {
-                let mut c = template.clone();
-                c.id = format!("c{i}");
-                c
-            })
-            .collect();
-        let err = validate_project(&project).unwrap_err();
-        assert!(err.message.contains("clips"), "message: {}", err.message);
-    }
-
-    #[test]
-    fn snapshot_is_validated_too() {
-        let mut envelope = base_envelope();
-        let mut bad_snapshot = base_project();
-        bad_snapshot.clips[0].asset_id = "missing".to_string();
-        envelope.record.products.push(Product {
-            id: "prod1".to_string(),
-            project_id: envelope.project.id.clone(),
-            name: "Product".to_string(),
-            filename: "product.mp4".to_string(),
-            mime: "video/mp4".to_string(),
-            revision: 1,
-            duration_ms: 1000,
-            created_at: "2026-09-21T00:00:00Z".to_string(),
-            edit_fingerprint: "abc123".to_string(),
-            snapshot: Some(Box::new(bad_snapshot)),
-            render_range: None,
-            extra: crate::editor::Map::new(),
-        });
-        let err = validate_envelope(&envelope).unwrap_err();
-        assert!(err.message.contains("missing"), "message: {}", err.message);
-    }
-
-    #[test]
-    fn track_name_at_200_chars_is_valid_but_201_is_rejected() {
-        let mut ok = base_project();
-        ok.tracks[0].name = "n".repeat(200);
-        assert!(validate_project(&ok).is_ok(), "200 chars must be accepted");
-
-        let mut too_long = base_project();
-        too_long.tracks[0].name = "n".repeat(201);
-        let err = validate_project(&too_long).unwrap_err();
-        assert!(err.message.contains("t1"), "message: {}", err.message);
-    }
-}
+#[path = "validate_tests.rs"]
+mod tests;

@@ -106,6 +106,15 @@ pub(super) fn check_transitions(
             )));
         }
 
+        // Believed unreachable in practice: `validate::check_clip` (run on
+        // every clip before this function is ever called) already rejects
+        // a clip whose asset kind disagrees with its track's kind, and the
+        // `from.track_id != to.track_id` check just above already requires
+        // `from` and `to` to share one track — so two clips that get this
+        // far necessarily share one asset kind too. Kept anyway as
+        // defence: nothing in this function's own signature guarantees
+        // `check_clip` ran first (a future caller could construct `clips`/
+        // `assets` maps by hand), and the check is one cheap comparison.
         if let (Some(from_asset), Some(to_asset)) = (
             assets.get(from.asset_id.as_str()),
             assets.get(to.asset_id.as_str()),
