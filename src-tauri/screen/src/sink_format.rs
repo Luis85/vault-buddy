@@ -22,7 +22,14 @@
 //! so every caller's path is unchanged. `snap_aac_bytes_per_sec` and
 //! `to_hns` are `pub(crate)` and consumed only by `sink.rs`'s Windows arm,
 //! which is why they keep their `allow(dead_code)`: off Windows only the
-//! tests below call them.
+//! tests below call `snap_aac_bytes_per_sec` — `to_hns` has no test of its
+//! own here (its arithmetic is straightforward enough that the risk sits in
+//! the MF call site, not the conversion) and stays `dead_code` off Windows.
+//!
+//! `sink.rs`'s own structural scans (the never-`Flush`, never-probe-the-
+//! file-size rules) scan `sink.rs`'s source text only, so they say nothing
+//! about this module — which is exactly why this module must stay
+//! deliberately I/O-free, or those scans would need to follow the code here.
 
 use std::time::Duration;
 

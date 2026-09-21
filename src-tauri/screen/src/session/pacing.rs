@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 /// Media Foundation's time base is 100-nanosecond units, so this — not
 /// one nanosecond — is the smallest duration that does not round to
-/// ZERO hns on the way to `sink::to_hns`.
+/// ZERO hns on the way to `sink_format::to_hns`.
 ///
 /// Every sample handed to the AAC Encoder MFT must carry a valid time
 /// AND a nonzero duration: a zero duration makes `ProcessInput` succeed

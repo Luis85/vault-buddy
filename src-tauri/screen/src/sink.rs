@@ -436,7 +436,8 @@ pub use imp::FragmentedSink;
 
 #[cfg(test)]
 mod tests {
-    // The message being right does not prove the sink USES it. That arm is
+    // The message being right does not prove the sink USES it. (Its actual
+    // rightness is pinned by the tests in sink_format.rs.) That arm is
     // `cfg(windows)`, so no test on this runner can execute it and the
     // Windows-target clippy proves only that it type-checks — the GAP-163
     // class. A source scan is what is left, and it is worth having: dropping

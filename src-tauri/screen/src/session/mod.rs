@@ -295,7 +295,7 @@ mod tests {
     // ProcessOutput raise a divide-by-zero (a documented MF implementation
     // bug) — an unexplainable crash with no usable stack. MF's time base is
     // 100 ns units, so "nonzero" means >= 100 ns, not >= 1 ns: a 99 ns
-    // duration rounds to 0 hns in sink::to_hns and trips exactly the same
+    // duration rounds to 0 hns in sink_format::to_hns and trips exactly the same
     // bug while looking nonzero here.
 
     #[test]

@@ -8,13 +8,18 @@
  * which is why `init()`-per-window (the rule the buddy and panel roots follow
  * for the capture stores) does not apply here.
  *
- * It does subscribe to ONE event, and that is not an exception to the above:
- * `editor:open` carries no state, it is the edge that says "read the stash
- * again". `window_close.rs` answers this window's close with
- * `prevent_close()` + `hide()`, so the webview mounts exactly ONCE per
- * process — draining `take_editor_request` only from `onMounted` would open
- * the first capture and then show it forever while every later request sat
- * in the stash unread (`editor_commands.rs`'s module doc, at length).
+ * It subscribes to FIVE events, and that is not an exception to the "no
+ * state stream" claim above: `editor:open` carries no state, it is the edge
+ * that says "read the stash again". `window_close.rs` answers this window's
+ * close with `prevent_close()` + `hide()`, so the webview mounts exactly
+ * ONCE per process — draining `take_editor_request` only from `onMounted`
+ * would open the first capture and then show it forever while every later
+ * request sat in the stash unread (`editor_commands.rs`'s module doc, at
+ * length). The other four — `screen:exportProgress`/`exported`/
+ * `exportFailed`/`exportCancelled`, wired up in `useEditorExport`
+ * (`src/composables/useEditorExport.ts`) — are this window's own in-flight
+ * export progress, not state any store owns; see that composable and
+ * AGENTS.md's frontend-state section for why that still needs no `init()`.
  */
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
