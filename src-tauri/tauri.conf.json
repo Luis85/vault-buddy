@@ -78,6 +78,18 @@
         "alwaysOnTop": false,
         "skipTaskbar": false,
         "shadow": true
+      },
+      {
+        "label": "region-indicator",
+        "title": "Vault Buddy — Recording Region",
+        "visible": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "focus": false
       }
     ],
     "security": {

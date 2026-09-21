@@ -34,16 +34,22 @@
 
 use tauri::{AppHandle, Manager};
 
-/// The buddy, and ONLY the buddy. Through phases 3-5 this was every window
-/// the app owns, pinned to `tauri.conf.json` by a test that failed until a
-/// new window was added here. GAP-166 inverted that on hardware:
-/// `SetWindowDisplayAffinity` on a WebView2-hosting window stopped the
-/// editor painting and stopped OTHER applications' toolbars taking pointer
-/// input until the process exited, and `main` alone was clean. The test now
-/// pins the inverse -- a new window is NOT excluded until a hardware run
-/// says it can be. Which property of the other four made them hazardous is
-/// not established; `main` is the empirically clean set, not a theory.
-pub(crate) const EXCLUDED_LABELS: &[&str] = &["main"];
+/// The windows a HARDWARE run has cleared for `WDA_EXCLUDEFROMCAPTURE`.
+///
+/// Through phases 3-5 this was every window the app owns, pinned to
+/// `tauri.conf.json` by a test that failed until a new window was added
+/// here. GAP-166 inverted that on hardware: `SetWindowDisplayAffinity` on a
+/// WebView2-hosting window stopped the editor painting and stopped OTHER
+/// applications' toolbars taking pointer input until the process exited,
+/// and `main` alone was clean.
+///
+/// `region-indicator` joined on its OWN evidence rather than by being
+/// declared: a probe excluding a second window of its exact shape class was
+/// clean across several captures (docs/Gaps.md GAP-165). Which property of
+/// the other four made them hazardous is still not established, so the test
+/// below checks this constant against an allowlist naming each window's
+/// evidence -- a new window is NOT excluded by declaring it.
+pub(crate) const EXCLUDED_LABELS: &[&str] = &["main", "region-indicator"];
 
 /// The two affinity intents, named so that the DIRECTION is a value a test
 /// can read rather than a bare `true` / `false` at the call site. The
@@ -138,37 +144,65 @@ mod tests {
             .collect()
     }
 
-    // THE point of this test, and why it reads the config rather than
-    // repeating a list -- and why it is the INVERSE of the test that stood
-    // here through phases 3-5. That one asserted every declared window was
-    // excluded, on the theory that a window left out appears in every
-    // recording. GAP-166 found the cost of the other direction, on
-    // hardware: SetWindowDisplayAffinity on a window hosting WebView2
-    // stopped the editor painting AND stopped other applications' toolbars
-    // taking pointer input, until the process exited. Excluding `main`
-    // alone was clean on the same machine -- the buddy out of the snip and
-    // the recording, the toolbars alive. So the rule is now: the buddy, and
-    // ONLY the buddy. A new window declared in `tauri.conf.json` is NOT
-    // excluded by default, which is now the safe direction; adding one here
-    // is a decision that needs its own hardware run (checklist rows 16, 17
-    // and 43).
+    /// The labels a HARDWARE run has cleared for display affinity, and the
+    /// evidence for each. Production is checked against THIS, never the
+    /// other way round: a window added to `tauri.conf.json` must not become
+    /// excluded by being declared, which is the property GAP-166 bought and
+    /// the one worth keeping.
+    ///
+    /// - `main` -- the buddy. Three one-variable rebuilds on 2026-09-21:
+    ///   {all five windows} stopped the editor painting and stopped
+    ///   Explorer's and Notepad's toolbars taking pointer input until the
+    ///   process exited; a no-op `set_affinity` was clean; `main` alone was
+    ///   clean WITH the buddy absent from a Win+Shift+S snip during the
+    ///   capture and from the played-back file. Checklist rows 16, 17.
+    /// - `region-indicator` -- the region border (GAP-165), whose whole
+    ///   value depends on this. The premise probe on the same machine
+    ///   excluded a SECOND window of this one's exact shape class (`panel`:
+    ///   transparent, undecorated, always-on-top, skipTaskbar,
+    ///   focus:false) across several captures -- Explorer's and Notepad's
+    ///   toolbars survived and the window painted normally. Verified for
+    ///   this window itself by checklist rows 44 to 52.
+    const HARDWARE_CLEARED_FOR_AFFINITY: [&str; 2] = ["main", "region-indicator"];
+
+    // The INVERSE of the test that stood here through phases 3-5. That one
+    // asserted every declared window was excluded, on the theory that a
+    // window left out appears in every recording. GAP-166 found the cost of
+    // the other direction, on hardware: SetWindowDisplayAffinity on a
+    // window hosting WebView2 stopped the editor painting AND stopped other
+    // applications' toolbars taking pointer input, until the process
+    // exited. So a window is excluded only with a hardware run behind it,
+    // and the allowlist lives HERE rather than in production precisely so
+    // that declaring a seventh window cannot quietly exclude it.
     #[test]
-    fn only_the_buddy_is_excluded_from_capture() {
+    fn only_hardware_cleared_windows_are_excluded_from_capture() {
         let declared = declared_window_labels();
-        assert!(
-            declared.iter().any(|d| d == "main"),
-            "tauri.conf.json no longer declares the buddy window `main`"
+        for label in HARDWARE_CLEARED_FOR_AFFINITY {
+            assert!(
+                declared.iter().any(|d| d == label),
+                "tauri.conf.json no longer declares {label:?}"
+            );
+            assert!(
+                EXCLUDED_LABELS.contains(&label),
+                "{label:?} has a hardware run behind it and must be excluded from capture"
+            );
+        }
+        assert_eq!(
+            EXCLUDED_LABELS.len(),
+            HARDWARE_CLEARED_FOR_AFFINITY.len(),
+            "EXCLUDED_LABELS is {EXCLUDED_LABELS:?}, which is not the hardware-cleared set \
+             {HARDWARE_CLEARED_FOR_AFFINITY:?}"
         );
-        assert!(
-            EXCLUDED_LABELS.contains(&"main"),
-            "the buddy is the recording indicator and must be excluded from capture"
-        );
-        for label in declared.iter().filter(|d| d.as_str() != "main") {
+        for label in declared
+            .iter()
+            .filter(|d| !HARDWARE_CLEARED_FOR_AFFINITY.contains(&d.as_str()))
+        {
             assert!(
                 !EXCLUDED_LABELS.contains(&label.as_str()),
-                "window {label:?} is in EXCLUDED_LABELS. Setting display affinity on a \
-                 WebView2 window breaks its painting and other applications' input until \
-                 the process exits (GAP-166); only `main` has been shown clean on hardware"
+                "window {label:?} is in EXCLUDED_LABELS with no hardware run behind it. \
+                 Setting display affinity on a WebView2 window broke its painting and other \
+                 applications' input until the process exited (GAP-166); add it to \
+                 HARDWARE_CLEARED_FOR_AFFINITY only with checklist evidence"
             );
         }
     }

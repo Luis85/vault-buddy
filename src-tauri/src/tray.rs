@@ -14,7 +14,14 @@ use crate::capture_guard::{CaptureGuard, CaptureKind};
 /// editor: all of them share WebView2's `Chrome_WidgetWin_0` class, and
 /// leaving even one alive fails the unregister with
 /// `ERROR_CLASS_HAS_WINDOWS (1412)`.
-pub const ALL_WINDOW_LABELS: [&str; 5] = ["panel", "bubble", "overlay", "editor", "main"];
+pub const ALL_WINDOW_LABELS: [&str; 6] = [
+    "panel",
+    "bubble",
+    "overlay",
+    "editor",
+    "region-indicator",
+    "main",
+];
 
 /// The companion surfaces — every window hide-to-tray takes down.
 ///
@@ -23,14 +30,15 @@ pub const ALL_WINDOW_LABELS: [&str; 5] = ["panel", "bubble", "overlay", "editor"
 /// off-screen with no way back (spec 5.1, the same class as GAP-82's
 /// panel-hide problem). Hide-to-tray is a companion gesture; the editor is
 /// closed by the user, by a successful save, or by an explicit discard.
-pub const COMPANION_LABELS: [&str; 4] = ["panel", "bubble", "overlay", "main"];
+pub const COMPANION_LABELS: [&str; 5] = ["panel", "bubble", "overlay", "region-indicator", "main"];
 
 /// Windows whose position the window-state plugin must NOT persist: every
 /// window except the buddy. The panel, bubble and overlay are all positioned
 /// fresh — while hidden — every time they are shown, and the editor opens at
 /// its configured default, so a restored position is junk that only buys a
 /// startup restore and a `Moved` handler holding the plugin's cache lock.
-pub const POSITION_DENYLIST: [&str; 4] = ["panel", "bubble", "overlay", "editor"];
+pub const POSITION_DENYLIST: [&str; 5] =
+    ["panel", "bubble", "overlay", "editor", "region-indicator"];
 
 /// Hide the companion (and its panel/bubble); the tray "Show / Hide" brings
 /// the buddy back.
