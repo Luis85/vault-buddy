@@ -199,7 +199,27 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(outside.path(), &link).unwrap();
         #[cfg(not(unix))]
-        std::os::windows::fs::symlink_dir(outside.path(), &link).unwrap();
+        {
+            // Creating a Windows symlink needs SeCreateSymbolicLinkPrivilege
+            // (an elevated process, or Developer Mode on). A CI/dev account
+            // without either gets ERROR_PRIVILEGE_NOT_HELD (raw OS error
+            // 1314) — an environment limitation, not a failure of the
+            // security property this test guards. Skip VISIBLY rather than
+            // silently passing (the screen crate's export round-trip tests
+            // use the same posture when ffmpeg is absent) — any OTHER error
+            // still panics, since that would be a real regression.
+            if let Err(e) = std::os::windows::fs::symlink_dir(outside.path(), &link) {
+                if e.raw_os_error() == Some(1314) {
+                    eprintln!(
+                        "SKIP: a_symlinked_capture_folder_is_refused_before_anything_is_created \
+                         — symlink_dir needs SeCreateSymbolicLinkPrivilege (Developer Mode or an \
+                         elevated process); this account lacks it (OS error 1314)"
+                    );
+                    return;
+                }
+                panic!("symlink_dir failed unexpectedly: {e}");
+            }
+        }
 
         let dir = link.join("2026").join("09");
         let err = prepare_export_dir(vault.path(), &dir).expect_err("an escape must be refused");
