@@ -4397,7 +4397,7 @@ indicator at all"), and `focus: false` so it cannot blur the panel and trip
   itself carries once implemented, or a plan reference). Filing it here
   rather than as its own entry, because the cost so far is one spec.
 
-### GAP-166 · High · Other applications' toolbars stop accepting clicks after a screen capture — UNLOCALISED
+### GAP-166 · High · Other applications' toolbars stop accepting clicks after a screen capture — ROOT CAUSE CONFIRMED: the `SetWindowDisplayAffinity` round-trip on our WebView2 windows
 Reported by the 2026-09-21 manual pass, and refined three times since. First
 as *"in windows explorer the top tool bar is not clickable anymore when the
 recording editor window is active or the vault buddy is active"*, then as
@@ -4407,7 +4407,26 @@ Explorer**, **minimize / maximize / close still work** on the affected
 windows, and **closing the editor does not fix it** — only quitting Vault
 Buddy does.
 
-**This entry still proposes no cause.** Six hypotheses have now been formed
+**ROOT CAUSE CONFIRMED (fifth sitting, 2026-09-21) by a one-variable
+rebuild.** With `set_affinity` in `src-tauri/src/capture_exclusion.rs` made
+a no-op — so neither `apply` (`WDA_EXCLUDEFROMCAPTURE` at capture start)
+nor `clear` (`WDA_NONE` at stop) ever calls `SetWindowDisplayAffinity` —
+a screen capture was recorded and stopped with the editor open: **the
+editor stayed painted, and Explorer's toolbar stayed alive.** Both
+symptoms, one variable. The call is correct in every particular (right
+constant, Tauri's top-level HWND, main thread — `screen/src/exclusion.rs`);
+what is wrong is making it at all on windows that host WebView2. The
+white editor is that same call landing on the editor's own HWND: WebView2
+composes through DirectComposition, and the affinity change resets the
+window's redirection surface underneath it, which is why a later DOM
+change (clicking Edit) repainted it. **What is NOT yet established** is
+which of the five windows' affinity does the cross-process damage — all
+five host WebView2, all five receive the call — and therefore whether the
+feature can be kept for the one window that matters as the recording
+indicator (`main`) or has to go entirely. That is one more rebuild
+(exclude `main` alone), and it decides the fix's shape.
+
+**The entry below is the investigation as it stood before the rebuild, kept because its method — kill hypotheses with cheap observations at the machine, then one single-variable experiment — is the lesson.** **This entry still proposes no cause.** Six hypotheses have now been formed
 and five were killed — three by the reporter's answers and two by reading
 the code — and the sixth is weakened but not dead (below). The editor has
 now been cleared twice over: as a covering window and, in the third
