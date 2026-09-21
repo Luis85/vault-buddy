@@ -177,6 +177,10 @@ pub(super) mod fixtures {
     }
 
     pub(in crate::screen_recovery) const BASE: &str = "2026-09-20 1432 Demo";
+    // Unix-only because its one user is: the symlink test in mod.rs is
+    // cfg(unix). Compiled everywhere, it is dead code on Windows and
+    // `clippy -D warnings` fails there while Linux CI stays green.
+    #[cfg(unix)]
     pub(in crate::screen_recovery) const OTHER: &str = "2026-09-20 1500 Other";
     pub(in crate::screen_recovery) const ORPHAN: &str = "2026-09-20 1330 Orphan";
     pub(in crate::screen_recovery) const KEPT: &str = "2026-09-20 1340 Kept";
