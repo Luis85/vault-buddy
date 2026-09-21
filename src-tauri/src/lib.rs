@@ -25,6 +25,7 @@ mod mcp_commands;
 mod model_commands;
 mod pandoc;
 mod region_commands;
+mod region_indicator;
 mod screen_capture_worker;
 mod screen_commands;
 mod screen_config_commands;

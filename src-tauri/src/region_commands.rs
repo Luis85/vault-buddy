@@ -93,7 +93,7 @@ pub struct RegionSelectionState(pub Mutex<Option<Sender<Option<RegionPick>>>>);
 /// `windows_capture::monitor::Monitor::index()` is that same `n`. Never
 /// match on a friendly name, and never use a positional index — phase 2
 /// shipped a wrong-screen bug by crossing exactly these.
-fn matches_display(name: Option<&str>, display: usize) -> bool {
+pub(crate) fn matches_display(name: Option<&str>, display: usize) -> bool {
     name.and_then(region::display_number_from_device_name) == Some(display)
 }
 

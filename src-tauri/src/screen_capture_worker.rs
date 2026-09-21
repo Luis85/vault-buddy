@@ -147,6 +147,13 @@ pub(crate) fn start_screen_capture_blocking(
     // rather than delaying the start.
     crate::capture_exclusion::apply(app);
 
+    // The region border (GAP-165), beside the exclusion for the same
+    // reasons: both are capture-scoped window side effects, and both belong
+    // after the reservation so every failure below funnels through the same
+    // teardown. Gated INSIDE `show` on the source being a REGION -- Windows'
+    // own border is already truthful for a screen or window capture.
+    crate::region_indicator::show(app, &parsed);
+
     // Live source-loss / device warnings: forwarded to the panel while
     // capturing (spec 14's screen:warning).
     let (warn_tx, warn_rx) = mpsc::channel::<String>();

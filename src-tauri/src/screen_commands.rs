@@ -221,6 +221,10 @@ pub(crate) fn clear_active_screen(app: &AppHandle) {
     // conditional that could be wrong in the other direction and leave the
     // user's windows hidden from every other app's recordings.
     crate::capture_exclusion::clear(app);
+    // Unconditional, like the exclusion clear above: hiding a border that
+    // was never raised is a no-op, and the other direction strands one on
+    // the user's desktop with nothing recording (GAP-165).
+    crate::region_indicator::hide(app);
     state.1.notify_all();
 }
 
