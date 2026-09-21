@@ -1388,10 +1388,20 @@ write here, it belongs in `export_worker/` or it is a design change.
   (`src/utils/timelineGeometry.ts` + `useEditorTimeline.ts`) while
   `core::timeline` is what the export plans on, and `save_capture_timeline`
   still carries the editor's result through as an opaque
-  `serde_json::Value`. They are held apart only by the shared fixture table,
-  which phase 5 extended to cover `is_untouched` — the single predicate
-  deciding remux versus re-encode, with Rust owning the rule (docs/Gaps.md
-  GAP-135, GAP-136). **All seven `screen_*` `vault_config` fields are now
+  `serde_json::Value`. The ALGEBRA is held apart only by the shared fixture
+  table, which phase 5 extended to cover `is_untouched` — the single
+  predicate deciding remux versus re-encode, with Rust owning the rule
+  (docs/Gaps.md GAP-136). **The on-disk SHAPE is no longer in that
+  position** (GAP-135, closed): `Segment`/`Timeline` carry
+  `rename_all = "camelCase"` derives, and both former hand mappings —
+  `timeline.rs`'s `segments_of` and, crucially,
+  `export_commands::timeline_from_sidecar`, the production reader — go
+  through them, so no two Rust spellings of the wire shape exist to drift.
+  `timeline_from_sidecar` still owns the DEGRADE (a malformed sidecar reads
+  as the whole capture, never an error), since serde decides only the shape.
+  A literal-JSON test spelled the way the editor writes pins it, and it is a
+  literal precisely so a rename cannot be made green by re-serializing the
+  struct against itself. **All seven `screen_*` `vault_config` fields are now
   read in production**, which retires the "five of the seven … read by
   nothing until Phase 6" claim: `screen_quality` and `screen_fps` were
   already read by `screen_capture_worker.rs`, and `export_worker/` now

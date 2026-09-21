@@ -3185,47 +3185,61 @@ let `snapshot()` be written without a shape check; read it as "whatever the
 sidecar held", not as a contract (the phase-4 review's m-5; `types.ts` now
 says so at the field).
 
-### GAP-135 · Medium (REWRITTEN 2026-09-20, phase 5) · The on-disk timeline shape is now spelled by hand in THREE places and enforced by no derive
+### GAP-135 · ~~Medium~~ FIXED 2026-09-21 · The on-disk timeline shape was spelled by hand in three places and enforced by no derive
 
-Phase 5's export had to read the sidecar, and the "failure scenario" below
-predicted how it would go wrong: add `#[derive(Deserialize)]`, forget
-`rename_all = "camelCase"`, and every timeline the shipped editor has written
-fails to parse. **Task 7 sidestepped that by not deriving at all** — it reads
-`sourceStartMs` / `sourceEndMs` by hand in
-`export_commands::timeline_from_sidecar` and degrades to the whole capture on
-anything it cannot read. That is a genuinely safer failure mode than the one
-predicted, and it is tested; it also means the convention is still enforced by
-nothing.
+`core::timeline::{Segment, Timeline}` now carry
+`#[derive(Serialize, Deserialize)]` with `#[serde(rename_all = "camelCase")]`,
+and the two Rust hand mappings are gone: `timeline.rs`'s `segments_of` test
+helper and `export_commands::timeline_from_sidecar` — the PRODUCTION reader
+the export's correctness depends on — both go through the derive. Three
+independent spellings became one.
 
-**The count went up, not down.** The on-disk camelCase names are now spelled
-in three independent places:
-1. `src/utils/timelineGeometry.ts` + `useEditorTimeline.ts` — what WRITES them;
-2. `core/src/timeline.rs`'s test helper `segments_of` — the shared fixture
-   table's hand mapping (its comment used to claim it was the only place in
-   Rust; phase 5 made that false and the comment now says so);
-3. `export_commands::timeline_from_sidecar` — **production** Rust, the one
-   the export's correctness depends on.
+`timeline_from_sidecar` keeps its own degrade: `serde` decides the SHAPE, but a
+`from_value` error still becomes `Timeline::whole(source_duration_ms)` rather
+than an error the user sees, because the sidecar is hand-editable and the safe
+reading of a malformed one is the whole capture. Every degrade case the old
+hand parse covered is unchanged and still tested — absent, null, `{}`,
+wrong-typed, non-numeric / negative / fractional bounds, a missing bound, a
+top-level array — as is the one case that must NOT degrade, an explicitly
+empty segment list.
 
-Nothing connects them: not a derive, not a type, not a test that fails when
-one is renamed. Rename `sourceStartMs` on the TypeScript side and (3) reads
-nothing, degrades silently to the whole capture, and exports footage the user
-deleted — with every test green, because (2) and its fixture table use the old
-name and still agree with each other.
+**The enforcement is a LITERAL, not a round-trip.**
+`the_on_disk_timeline_parses_from_the_spelling_the_editor_writes` holds a
+literal JSON string spelled the way `useEditorTimeline.ts` writes it; a
+re-serialize of the struct would agree with itself under any renaming and
+prove nothing. A sibling,
+`the_rust_field_spelling_is_not_accepted_from_disk`, refuses snake_case, so
+"fixing" a dropped `rename_all` by teaching the editor to write snake_case
+cannot pass either.
 
-**A fourth, smaller instance of the same class landed with it, and IS pinned:**
-`screen:exported`'s payload is a `serde_json::json!` object literal in
-`emit_exported`, read by `src/types.ts`'s `ExportResult`. Dropping a key
-compiles in Rust (the field is still constructed) and passes Vitest (which
-emits its own payload). `export_commands`'s
+Mutation-proved end to end, in the order a real refactor would go:
+
+1. Derives added WITHOUT `rename_all` — the exact defect this entry
+   predicted. The literal test fails with
+   `Error("missing field `source_start_ms`")`: the reader refusing every
+   timeline the shipped editor has ever written.
+2. `sourceStartMs` renamed on the TypeScript side only
+   (`screenTypes.ts` + `timelineGeometry.ts` + `useEditorTimeline.ts`) —
+   14 Vitest failures in the shared fixture suite, reported as
+   `"startMs": undefined`.
+3. The shared fixture renamed too, which is the "fix" that makes Vitest
+   green again (18 passed) — 3 Rust failures,
+   `Error("missing field `sourceStartMs`")`.
+4. The Rust wire names then renamed to match, which is the fix that makes
+   (3) green — the literal test STILL fails,
+   `Error("missing field `startMs`")`. That is the step the old design had
+   no answer to: a consistent rename across all three copies was green
+   everywhere while every sidecar already on disk used the old name, and
+   the production reader degraded silently to the whole capture, exporting
+   footage the user had deleted.
+
+**A fourth instance of the same class is pinned separately and stays that
+way:** `screen:exported`'s payload is a `serde_json::json!` object literal in
+`emit_exported`, read by `src/types.ts`'s `ExportResult`, and
 `the_exported_event_carries_every_field_the_editor_reads` scans the emitter's
-source for each key — a structural pin, because there is no derive to enforce
-it. Do the same for any new hand-mapped payload.
+source for each key. A structural pin rather than a derive, because there is
+no struct there to derive on. Do the same for any new hand-mapped payload.
 
-**Fix shape, unchanged in substance:** derive `Serialize`/`Deserialize` with
-`rename_all = "camelCase"` on `Segment`/`Timeline`, have (2) and (3) both go
-through it, and keep a test that round-trips a LITERAL JSON string spelled the
-way `useEditorTimeline` writes it — a literal, not a re-serialize, so it fails
-when the names change on either side.
 
 ### GAP-135 (original text, for the record) · `core::timeline` has no serde derives, so the editor's on-disk timeline shape is an unenforced convention
 `src-tauri/core/src/timeline.rs` (`Segment`, `Timeline` — `#[derive(Debug,

@@ -7,7 +7,8 @@
 //! stack of snapshots rather than a set of inverse operations.
 
 /// A half-open span `[source_start_ms, source_end_ms)` of the staged capture.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Segment {
     pub source_start_ms: u64,
     pub source_end_ms: u64,
@@ -21,7 +22,8 @@ impl Segment {
 
 /// The ordered list of segments an editor session produces. Segments never
 /// overlap, are never empty, and may appear in any order.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Timeline {
     pub segments: Vec<Segment>,
 }
@@ -329,22 +331,16 @@ mod tests {
     }
 
     // Segment keys are read by the names the editor WRITES onto disk
-    // (camelCase). `Segment` has no serde derives (GAP-135), so this is a
-    // hand mapping on purpose. It was the ONLY place in Rust spelling the
-    // on-disk names until phase 5; `export_commands::timeline_from_sidecar`
-    // is now the second, and it is PRODUCTION code rather than a test. Two
-    // hand mappings of one wire shape, still held together by nothing but
-    // this fixture table -- which is why GAP-135 stays open. Change one and
-    // you must change the other.
+    // (camelCase), through `Segment`'s own `rename_all` derive -- NOT by a
+    // hand mapping. This used to be one of three independent spellings of
+    // that wire shape (GAP-135); it and
+    // `export_commands::timeline_from_sidecar` now both go through the
+    // derive, so the fixture table below cannot disagree with production
+    // about a key name. Renaming a field here fails
+    // `the_on_disk_timeline_parses_from_the_spelling_the_editor_writes`,
+    // which holds a literal of what the editor actually writes.
     fn segments_of(v: &serde_json::Value) -> Vec<Segment> {
-        v.as_array()
-            .expect("segments array")
-            .iter()
-            .map(|s| Segment {
-                source_start_ms: s["sourceStartMs"].as_u64().expect("sourceStartMs"),
-                source_end_ms: s["sourceEndMs"].as_u64().expect("sourceEndMs"),
-            })
-            .collect()
+        serde_json::from_value(v.clone()).expect("segments array")
     }
 
     #[test]
@@ -480,5 +476,51 @@ mod tests {
             checked >= 10,
             "only {checked} isUntouched rows were checked"
         );
+    }
+
+    /// GAP-135. The on-disk timeline is written by `useEditorTimeline.ts` and
+    /// read back by `export_commands::timeline_from_sidecar`, and the export's
+    /// correctness depends on the two agreeing about four key names.
+    ///
+    /// The JSON below is a LITERAL, spelled the way the shipped editor writes
+    /// it — deliberately not a re-serialize of this struct, which would agree
+    /// with itself under any renaming and prove nothing. Dropping
+    /// `rename_all = "camelCase"` makes this fail, which is the exact defect
+    /// GAP-135 predicted: the reader stops parsing every timeline the editor
+    /// has ever written, and `timeline_from_sidecar` degrades silently to the
+    /// whole capture — exporting footage the user deleted.
+    #[test]
+    fn the_on_disk_timeline_parses_from_the_spelling_the_editor_writes() {
+        let on_disk = r#"{"segments":[{"sourceStartMs":0,"sourceEndMs":2000},{"sourceStartMs":5000,"sourceEndMs":6000}]}"#;
+        let parsed: Timeline = serde_json::from_str(on_disk).expect("the editor's own spelling");
+        assert_eq!(
+            parsed,
+            Timeline {
+                segments: vec![
+                    Segment {
+                        source_start_ms: 0,
+                        source_end_ms: 2000
+                    },
+                    Segment {
+                        source_start_ms: 5000,
+                        source_end_ms: 6000
+                    },
+                ]
+            }
+        );
+
+        // And back out under the same names, so a WRITER added later cannot
+        // emit snake_case into a file the editor then fails to read.
+        assert_eq!(serde_json::to_string(&parsed).expect("serializes"), on_disk);
+    }
+
+    /// The snake_case spelling must NOT be accepted. Without this, a
+    /// `rename_all` that is dropped and then "fixed" by teaching the editor
+    /// to write snake_case would pass the test above while silently
+    /// abandoning every timeline already on disk.
+    #[test]
+    fn the_rust_field_spelling_is_not_accepted_from_disk() {
+        let wrong = r#"{"segments":[{"source_start_ms":0,"source_end_ms":2000}]}"#;
+        assert!(serde_json::from_str::<Timeline>(wrong).is_err());
     }
 }

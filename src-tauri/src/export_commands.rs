@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Emitter, Manager};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
-use vault_buddy_core::timeline::{Segment, Timeline};
+use vault_buddy_core::timeline::Timeline;
 
 use crate::capture_guard::{CaptureGuard, CaptureKind};
 use crate::export_worker::{ExportFailure, ExportSummary};
@@ -84,29 +84,29 @@ pub(crate) fn busy_refusal(active: Option<CaptureKind>) -> Option<String> {
 /// re-encoding. An EXPLICITLY empty segment list is NOT degraded — the user
 /// deleted everything, and `export_refusal` must see that rather than have
 /// their recording silently restored underneath them.
+///
+/// The key names come from `Timeline`'s own `rename_all = "camelCase"`
+/// derive, never from a hand mapping here (GAP-135). Spelling
+/// `"sourceStartMs"` in this function made it the third independent copy of
+/// a wire shape nothing enforced: a rename on the TypeScript side left this
+/// reader parsing nothing, degrading silently to the whole capture, and
+/// EXPORTING FOOTAGE THE USER DELETED — with every test green, because the
+/// other two copies agreed with each other under the old name. Going through
+/// the derive means that rename now has to redden
+/// `timeline::tests::the_on_disk_timeline_parses_from_the_spelling_the_editor_writes`,
+/// which holds a literal of what the editor writes.
+///
+/// `serde` is used for the SHAPE only; the degrade is still this function's,
+/// because `from_value` returning `Err` must not become an error the user
+/// sees — it is a hand-edited file, and the safe reading of one is the whole
+/// capture.
 pub(crate) fn timeline_from_sidecar(
     value: Option<serde_json::Value>,
     source_duration_ms: u64,
 ) -> Timeline {
     let whole = || Timeline::whole(source_duration_ms);
     let Some(value) = value else { return whole() };
-    let Some(segments) = value.get("segments").and_then(|s| s.as_array()) else {
-        return whole();
-    };
-    let mut parsed = Vec::with_capacity(segments.len());
-    for seg in segments {
-        let (Some(start), Some(end)) = (
-            seg.get("sourceStartMs").and_then(serde_json::Value::as_u64),
-            seg.get("sourceEndMs").and_then(serde_json::Value::as_u64),
-        ) else {
-            return whole();
-        };
-        parsed.push(Segment {
-            source_start_ms: start,
-            source_end_ms: end,
-        });
-    }
-    Timeline { segments: parsed }
+    serde_json::from_value::<Timeline>(value).unwrap_or_else(|_| whole())
 }
 
 /// The number `screen:exportProgress` carries.
