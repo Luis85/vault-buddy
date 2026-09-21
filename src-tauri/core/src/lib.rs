@@ -11,6 +11,7 @@ pub mod daily_notes;
 pub mod discovery;
 pub mod document_import;
 pub mod document_import_config;
+pub mod editor;
 pub mod mcp_config;
 pub mod obsidian_link;
 pub mod panel_config;
