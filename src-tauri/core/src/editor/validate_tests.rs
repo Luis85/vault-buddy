@@ -296,6 +296,39 @@ fn clip_w_below_minimum_is_rejected() {
 }
 
 #[test]
+fn clip_x_outside_unit_range_is_rejected() {
+    // Asymmetric on purpose (y stays valid, only x goes out of range) —
+    // the converse of `clip_y_outside_unit_range_is_rejected`, so an x/y
+    // bound genuinely swapped in the implementation (checking x against
+    // y's value or vice versa) cannot pass either test.
+    let mut project = base_project();
+    project.clips[0].x = serde_json::Number::from_f64(1.2).unwrap();
+    project.clips[0].y = serde_json::Number::from_f64(0.5).unwrap();
+    let err = validate_project(&project).unwrap_err();
+    assert!(
+        err.message.contains("c1: x 1.2"),
+        "message: {}",
+        err.message
+    );
+}
+
+#[test]
+fn clip_h_below_minimum_is_rejected() {
+    // Asymmetric on purpose (w stays valid, only h goes below 0.1) — the
+    // converse of `clip_w_below_minimum_is_rejected`, so a w/h bound
+    // genuinely swapped in the implementation cannot pass either test.
+    let mut project = base_project();
+    project.clips[0].w = serde_json::Number::from_f64(0.5).unwrap();
+    project.clips[0].h = serde_json::Number::from_f64(0.05).unwrap();
+    let err = validate_project(&project).unwrap_err();
+    assert!(
+        err.message.contains("c1: h 0.05"),
+        "message: {}",
+        err.message
+    );
+}
+
+#[test]
 fn clip_speed_out_of_range_is_rejected() {
     let mut too_slow = base_project();
     too_slow.clips[0].speed = Some(serde_json::Number::from_f64(0.1).unwrap());
@@ -529,6 +562,53 @@ fn transition_side_reused_is_rejected() {
     project.transitions.push(
         serde_json::from_value(serde_json::json!({
             "id": "tr2", "from": "c1", "to": "c3", "duration_ms": 100, "kind": "dissolve"
+        }))
+        .unwrap(),
+    );
+    let err = validate_project(&project).unwrap_err();
+    assert!(
+        err.message.contains("tr2") && err.message.contains("already has a transition"),
+        "message: {}",
+        err.message
+    );
+}
+
+#[test]
+fn transition_to_side_reused_is_rejected() {
+    // The converse of `transition_side_reused_is_rejected`: two different
+    // clips (c1 and c5) each end exactly at 1000ms, so a transition from
+    // EITHER into c6 (which starts at 1000ms) is individually valid — but
+    // c6 cannot be the "to" side of two transitions at once.
+    let mut project = base_project();
+    project.clips.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "c5", "asset_id": "a1", "track_id": "t1", "name": "Clip Five",
+            "start_ms": 500, "in_ms": 0, "out_ms": 500,
+            "fade_in_ms": 0, "fade_out_ms": 0, "fade_curve": "linear",
+            "opacity": 1, "volume": 1, "muted": false,
+            "x": 0, "y": 0, "w": 1, "h": 1
+        }))
+        .unwrap(),
+    );
+    project.clips.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "c6", "asset_id": "a1", "track_id": "t1", "name": "Clip Six",
+            "start_ms": 1000, "in_ms": 0, "out_ms": 500,
+            "fade_in_ms": 0, "fade_out_ms": 0, "fade_curve": "linear",
+            "opacity": 1, "volume": 1, "muted": false,
+            "x": 0, "y": 0, "w": 1, "h": 1
+        }))
+        .unwrap(),
+    );
+    project.transitions.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "tr1", "from": "c1", "to": "c6", "duration_ms": 100, "kind": "dissolve"
+        }))
+        .unwrap(),
+    );
+    project.transitions.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "tr2", "from": "c5", "to": "c6", "duration_ms": 100, "kind": "dissolve"
         }))
         .unwrap(),
     );
