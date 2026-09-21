@@ -1,0 +1,166 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "unit_speed",
+      "clip": { "start_ms": 0, "in_ms": 0, "out_ms": 1000, "speed": 1 },
+      "durationMs": 1000,
+      "sourceAt": [
+        [0, 0],
+        [999, 999],
+        [1000, null]
+      ],
+      "outputAt": [
+        [0, 0],
+        [999, 999],
+        [1000, null]
+      ],
+      "cueSpans": []
+    },
+    {
+      "name": "speed_2",
+      "clip": { "start_ms": 0, "in_ms": 0, "out_ms": 1000, "speed": 2 },
+      "durationMs": 500,
+      "sourceAt": [
+        [0, 0],
+        [499, 998],
+        [500, null]
+      ],
+      "outputAt": [
+        [0, 0],
+        [999, 500],
+        [1000, null]
+      ],
+      "cueSpans": []
+    },
+    {
+      "name": "speed_half",
+      "clip": { "start_ms": 0, "in_ms": 0, "out_ms": 500, "speed": 0.5 },
+      "durationMs": 1000,
+      "sourceAt": [
+        [0, 0],
+        [999, 499],
+        [1000, null]
+      ],
+      "outputAt": [
+        [0, 0],
+        [499, 998],
+        [500, null]
+      ],
+      "cueSpans": []
+    },
+    {
+      "name": "speed_quarter_odd_range",
+      "clip": { "start_ms": 0, "in_ms": 3, "out_ms": 1000, "speed": 0.25 },
+      "durationMs": 3988,
+      "sourceAt": [
+        [0, 3],
+        [3987, 999],
+        [3988, null]
+      ],
+      "outputAt": [
+        [3, 0],
+        [999, 3984],
+        [1000, null]
+      ],
+      "cueSpans": []
+    },
+    {
+      "name": "speed_4",
+      "clip": { "start_ms": 0, "in_ms": 0, "out_ms": 400, "speed": 4 },
+      "durationMs": 100,
+      "sourceAt": [
+        [0, 0],
+        [99, 396],
+        [100, null]
+      ],
+      "outputAt": [
+        [0, 0],
+        [399, 100],
+        [400, null]
+      ],
+      "cueSpans": []
+    },
+    {
+      "name": "rounding_boundary_half",
+      "clip": { "start_ms": 0, "in_ms": 0, "out_ms": 5, "speed": 2 },
+      "durationMs": 3,
+      "sourceAt": [
+        [0, 0],
+        [2, 4],
+        [3, null]
+      ],
+      "outputAt": [
+        [0, 0],
+        [4, 2],
+        [5, null]
+      ],
+      "cueSpans": []
+    },
+    {
+      "name": "start_offset_1500",
+      "clip": { "start_ms": 1500, "in_ms": 0, "out_ms": 1000, "speed": 1 },
+      "durationMs": 1000,
+      "sourceAt": [
+        [1500, 0],
+        [2499, 999],
+        [2500, null],
+        [1499, null]
+      ],
+      "outputAt": [
+        [0, 1500],
+        [999, 2499],
+        [1000, null]
+      ],
+      "cueSpans": []
+    },
+    {
+      "name": "cue_fully_inside",
+      "clip": { "start_ms": 0, "in_ms": 100, "out_ms": 600, "speed": 1 },
+      "durationMs": 500,
+      "sourceAt": [
+        [0, 100],
+        [499, 599],
+        [500, null]
+      ],
+      "outputAt": [
+        [100, 0],
+        [599, 499],
+        [600, null]
+      ],
+      "cueSpans": [[200, 400, [100, 300]]]
+    },
+    {
+      "name": "cue_straddling_out",
+      "clip": { "start_ms": 0, "in_ms": 100, "out_ms": 600, "speed": 2 },
+      "durationMs": 250,
+      "sourceAt": [
+        [0, 100],
+        [249, 598],
+        [250, null]
+      ],
+      "outputAt": [
+        [100, 0],
+        [599, 250],
+        [600, null]
+      ],
+      "cueSpans": [[500, 700, [200, 250]]]
+    },
+    {
+      "name": "cue_ending_at_in",
+      "clip": { "start_ms": 0, "in_ms": 200, "out_ms": 700, "speed": 1 },
+      "durationMs": 500,
+      "sourceAt": [
+        [0, 200],
+        [499, 699],
+        [500, null]
+      ],
+      "outputAt": [
+        [200, 0],
+        [699, 499],
+        [700, null]
+      ],
+      "cueSpans": [[0, 200, null]]
+    }
+  ]
+}

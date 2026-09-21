@@ -16,6 +16,7 @@ pub mod error;
 pub mod ids;
 pub mod model;
 pub mod model_cues;
+pub mod time;
 pub mod validate;
 mod validate_media;
 pub mod workspace;
