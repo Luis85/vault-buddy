@@ -39,6 +39,7 @@ use vault_buddy_screen::export::{export, ExportOutcome, ExportRequest};
 use vault_buddy_screen::ffmpeg_args::{
     ms_to_ffmpeg_seconds, parse_progress_line, EncodeSettings, ProgressTick,
 };
+use vault_buddy_screen::staging;
 use vault_buddy_screen::ScreenError;
 
 /// Print straight to the process's stderr handle rather than through
@@ -368,6 +369,20 @@ fn mid_of(index: u64) -> u64 {
     index * BLOCK_MS + BLOCK_MS / 2
 }
 
+/// The destination an export REALLY writes to.
+///
+/// Not `dir.join("something.mp4")`. Production exports into
+/// `staging::export_part_file_name(base)` -- `.<base>.export.mp4.part` -- and
+/// every test in this file used to invent a plain `.mp4` name instead. ffmpeg
+/// chooses its muxer from the output's EXTENSION unless it is told one, so
+/// every one of these round trips passed against a filename the app never
+/// produces while the real export died at "Unable to choose an output format
+/// for '...export.mp4.part'". The whole point of this file is that the export
+/// is proven against what it actually does, so the filename is part of that.
+fn export_dest(dir: &Path, base: &str) -> PathBuf {
+    dir.join(staging::export_part_file_name(base))
+}
+
 fn run_export(
     ffmpeg: &Path,
     source: &Path,
@@ -422,7 +437,7 @@ fn an_edited_export_produces_a_file_of_the_planned_length_from_the_footage_that_
     let ffmpeg = ffmpeg_or_skip!();
     let dir = tempfile::tempdir().expect("tempdir");
     let src = make_fixture(&ffmpeg, dir.path());
-    let dest = dir.path().join("edited.mp4");
+    let dest = export_dest(dir.path(), "2026-09-21 0848 Edited");
     // Delete the FIRST block: red/300 Hz must be gone, leaving green
     // then blue, 4 s long.
     let timeline = Timeline::whole(6_000).split_at(2_000).delete(0);
@@ -462,7 +477,7 @@ fn an_untouched_export_remuxes_to_the_same_length_without_re_encoding() {
     let ffmpeg = ffmpeg_or_skip!();
     let dir = tempfile::tempdir().expect("tempdir");
     let src = make_fixture(&ffmpeg, dir.path());
-    let dest = dir.path().join("remuxed.mp4");
+    let dest = export_dest(dir.path(), "2026-09-21 0848 Remuxed");
     let timeline = Timeline::whole(6_000);
     let (outcome, seen) = run_export(&ffmpeg, &src, &dest, &timeline, 6_000);
 
@@ -499,7 +514,7 @@ fn a_reordered_export_is_as_long_as_its_spans_with_each_block_still_carrying_its
     let ffmpeg = ffmpeg_or_skip!();
     let dir = tempfile::tempdir().expect("tempdir");
     let src = make_fixture(&ffmpeg, dir.path());
-    let dest = dir.path().join("reordered.mp4");
+    let dest = export_dest(dir.path(), "2026-09-21 0848 Reordered");
     // Move the first block to the end: green, blue, red.
     let timeline = Timeline::whole(6_000)
         .split_at(2_000)
@@ -530,7 +545,7 @@ fn cancelling_an_export_leaves_no_output_behind() {
     let ffmpeg = ffmpeg_or_skip!();
     let dir = tempfile::tempdir().expect("tempdir");
     let src = make_long_fixture(&ffmpeg, dir.path());
-    let dest = dir.path().join("cancelled.mp4");
+    let dest = export_dest(dir.path(), "2026-09-21 0848 Cancelled");
     let timeline = Timeline::whole(20_000).split_at(1_000).delete(0);
     let cancel = AtomicBool::new(false);
     let started = Instant::now();
@@ -582,7 +597,7 @@ fn the_fast_path_keys_on_the_sidecars_duration_not_the_files_own() {
     let ffmpeg = ffmpeg_or_skip!();
     let dir = tempfile::tempdir().expect("tempdir");
     let src = make_fixture(&ffmpeg, dir.path());
-    let dest = dir.path().join("sidecar.mp4");
+    let dest = export_dest(dir.path(), "2026-09-21 0848 Sidecar");
     let timeline = Timeline::whole(6_000);
     let probed = probe_duration_ms(&ffmpeg, &src.to_string_lossy());
     if probed == 6_000 {
@@ -624,7 +639,7 @@ fn the_remux_is_faster_than_re_encoding_the_same_fixture() {
     let dir = tempfile::tempdir().expect("tempdir");
     let src = make_fixture(&ffmpeg, dir.path());
 
-    let remux_dest = dir.path().join("fast.mp4");
+    let remux_dest = export_dest(dir.path(), "2026-09-21 0848 Fast");
     let started = Instant::now();
     run_export(&ffmpeg, &src, &remux_dest, &Timeline::whole(6_000), 6_000);
     let remux_ms = started.elapsed().as_millis();
@@ -633,7 +648,7 @@ fn the_remux_is_faster_than_re_encoding_the_same_fixture() {
     // the whole source but split, so it is not untouched.
     let edited = Timeline::whole(6_000).split_at(2_000);
     assert!(!edited.is_untouched(6_000));
-    let encode_dest = dir.path().join("slow.mp4");
+    let encode_dest = export_dest(dir.path(), "2026-09-21 0848 Slow");
     let started = Instant::now();
     run_export(&ffmpeg, &src, &encode_dest, &edited, 6_000);
     let encode_ms = started.elapsed().as_millis();

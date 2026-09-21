@@ -56,6 +56,26 @@ use vault_buddy_core::screen_capture_config::{bitrate_bps, ScreenQuality};
 /// detail (spec §12).
 const AUDIO_BITRATE: &str = "192k";
 
+/// The output container, named EXPLICITLY rather than inferred.
+///
+/// ffmpeg picks its muxer from the output's file EXTENSION unless `-f` says
+/// otherwise, and the export does not write to a `.mp4`: it writes to
+/// `staging::export_part_file_name(base)` -- `.<base>.export.mp4.part` -- so
+/// that a killed or crashed export can never be mistaken for a finished one.
+/// `.part` names no format, so without this every export died before writing
+/// a byte:
+///
+/// ```text
+/// Unable to choose an output format for '....export.mp4.part';
+/// use a standard extension for the filename or specify the format manually.
+/// ```
+///
+/// That is ffmpeg telling us to do exactly this. The `.part` convention is
+/// load-bearing across both capture domains and is NOT what changes here --
+/// being explicit about the format is correct regardless of what the file is
+/// called, and it is what makes the two facts independent.
+const OUTPUT_FORMAT: [&str; 2] = ["-f", "mp4"];
+
 /// What an edited export needs to know about the file it is producing.
 ///
 /// `Debug` so a failed export can name the settings it ran with in one log
@@ -175,9 +195,9 @@ pub fn remux_args(source: &Path, dest: &Path) -> Vec<String> {
         // fully downloaded/synced — and so Obsidian's preview can seek it.
         "-movflags".into(),
         "+faststart".into(),
-        "-y".into(),
-        dest.to_string_lossy().into_owned(),
     ]);
+    args.extend(OUTPUT_FORMAT.map(String::from));
+    args.extend(["-y".into(), dest.to_string_lossy().into_owned()]);
     args
 }
 
@@ -271,12 +291,9 @@ pub fn reencode_args(
             AUDIO_BITRATE.into(),
         ]);
     }
-    args.extend([
-        "-movflags".into(),
-        "+faststart".into(),
-        "-y".into(),
-        dest.to_string_lossy().into_owned(),
-    ]);
+    args.extend(["-movflags".into(), "+faststart".into()]);
+    args.extend(OUTPUT_FORMAT.map(String::from));
+    args.extend(["-y".into(), dest.to_string_lossy().into_owned()]);
     args
 }
 
@@ -469,6 +486,45 @@ mod tests {
             args.iter().any(|a| a.starts_with("[0:v]trim=")),
             "the filter graph must be its own argv entry: {args:?}"
         );
+    }
+
+    // REGRESSION: the export wrote to `.<base>.export.mp4.part` and named no
+    // format, so ffmpeg -- which infers its muxer from the extension -- died
+    // with "Unable to choose an output format" before writing a byte. EVERY
+    // export failed, on both paths, and it shipped green: every round trip in
+    // `tests/export_roundtrip.rs` invented a plain `.mp4` destination instead
+    // of the one production mints, so the muxer was always inferrable there.
+    //
+    // Those tests now use `staging::export_part_file_name` and would catch a
+    // regression themselves -- but they SKIP when ffmpeg is absent, so this is
+    // the half that runs everywhere. The dest here is deliberately the real
+    // shape rather than "out.mp4".
+    #[test]
+    fn both_paths_name_the_output_format_because_the_dest_is_a_dot_part() {
+        let dest = Path::new("/staging/.2026-09-21 0848 Screen Capture.export.mp4.part");
+        let spans = plan(&Timeline::whole(9_000).split_at(4_000).delete(0));
+
+        for (label, args) in [
+            ("remux", remux_args(Path::new("in.mp4"), dest)),
+            (
+                "reencode",
+                reencode_args(Path::new("in.mp4"), dest, &spans, &settings(true)),
+            ),
+        ] {
+            let f = args
+                .iter()
+                .position(|a| a == "-f")
+                .unwrap_or_else(|| panic!("{label} named no output format: {args:?}"));
+            assert_eq!(args[f + 1], "mp4", "{label} named the wrong format");
+            // -f is an OUTPUT option: after the last -i and before the dest,
+            // or ffmpeg reads it as the INPUT's format and rejects the source.
+            let input = args.iter().position(|a| a == "-i").expect("an input");
+            let dest_at = args.len() - 1;
+            assert!(
+                input < f && f < dest_at,
+                "{label} put -f outside the output options: {args:?}"
+            );
+        }
     }
 
     #[test]
