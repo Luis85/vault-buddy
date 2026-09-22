@@ -223,10 +223,49 @@ function createPersister(
   };
 }
 
+/** Reset every field to `createFields()`'s own defaults — straight-line
+ * assignments, no branches, so this stays cheap on the complexity ratchet
+ * `applyWorkspace`'s data table exists to respect. `createFields()` is the
+ * single source of truth for what a default IS; this just copies its
+ * output into the ALREADY-CREATED refs the store returned, since nothing
+ * downstream can be handed a brand-new set of ref objects mid-session. */
+function applyDefaults(f: WorkspaceFields): void {
+  const d = createFields();
+  f.selectionClipIds.value = d.selectionClipIds.value;
+  f.selected.value = d.selected.value;
+  f.playheadMs.value = d.playheadMs.value;
+  f.libraryTab.value = d.libraryTab.value;
+  f.propertyTab.value = d.propertyTab.value;
+  f.timelineZoom.value = d.timelineZoom.value;
+  f.timelineHeight.value = d.timelineHeight.value;
+  f.timelineScrollLeft.value = d.timelineScrollLeft.value;
+  f.timelineScrollTop.value = d.timelineScrollTop.value;
+  f.snap.value = d.snap.value;
+  f.deleteMode.value = d.deleteMode.value;
+  f.monitorMuted.value = d.monitorMuted.value;
+  f.playbackRate.value = d.playbackRate.value;
+  f.libraryHidden.value = d.libraryHidden.value;
+  f.propertiesHidden.value = d.propertiesHidden.value;
+  f.propertiesOpen.value = d.propertiesOpen.value;
+  f.focusPreview.value = d.focusPreview.value;
+  f.captionSettingsOpen.value = d.captionSettingsOpen.value;
+  f.theme.value = d.theme.value;
+}
+
 /** Reads `editor_get_workspace` back and applies it. `token` guards a
  * slower reply from a session this store has since moved on from — the
  * `editorProject` store's `generation` guard, scoped to this one async
- * operation. */
+ * operation.
+ *
+ * **Resets to defaults FIRST** (Task 18 fix round 1, finding 3): the editor
+ * webview is reused across captures (`EditorRoot.vue`'s own doc), and
+ * `applyWorkspace` only overwrites the keys a reply actually carries — so
+ * without this reset, opening project B right after project A would leave
+ * B reading A's leftover playhead/zoom/tabs/scroll/selection whenever B's
+ * `workspace.json` is missing or only partially populated, and B's very
+ * first edit would then persist A's values into B's own file. The reset
+ * runs synchronously, in the same tick as the `token` bump above it, so it
+ * can never race a guard: nothing else can execute between the two lines. */
 function createHydrator(
   port: Ref<EditorPort>,
   sessionId: Ref<string | null>,
@@ -236,6 +275,7 @@ function createHydrator(
   return async function hydrate(id: string): Promise<void> {
     sessionId.value = id;
     const myToken = ++token;
+    applyDefaults(fields);
     try {
       const ws = await port.value.getWorkspace(id);
       if (myToken !== token || sessionId.value !== id) return;

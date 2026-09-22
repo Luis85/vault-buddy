@@ -55,6 +55,12 @@ impl Fixture {
             .join(id)
             .join("sources.json")
     }
+    fn workspace_json_path(&self, id: &str) -> PathBuf {
+        self.root()
+            .join("editor-projects")
+            .join(id)
+            .join("workspace.json")
+    }
 }
 
 // Asymmetric on purpose (`global-constraints.md`'s fixture-flaw rule): a
@@ -487,6 +493,43 @@ fn save_project_embeds_the_current_workspace() {
         on_disk.workspace,
         serde_json::json!({ "snap": false, "theme": "light" }),
         "editor_save_project must embed the sanitized LIVE workspace.json, not {{}}"
+    );
+}
+
+// Task 18 fix round 1, finding 2: an unreadable `workspace.json` (a
+// transient failure -- permission denied, a Windows sharing violation from
+// a debounced `editor_save_workspace` write racing this read, GAP-169's
+// class) must NOT refuse the user's project save. A directory swapped in
+// for `workspace.json`'s own name is the portable, Windows-honest way to
+// force a non-`NotFound` read error, the `an_unreadable_project_json_...`
+// test's own technique applied to the other file.
+//
+// MUTATION CHECK: reverting `save_project_with` to `read_workspace(...)?`
+// (propagating the error through `?` instead of degrading it) makes this
+// assertion fail -- the save would return `Err(Internal)` instead of
+// succeeding.
+#[test]
+fn an_unreadable_workspace_json_degrades_rather_than_refusing_the_project_save() {
+    let f = Fixture::new();
+    f.stage(&sidecar(BASE, "vaultA"));
+    let state = EditorState::default();
+    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let sid = open.snapshot.session_id.clone();
+    let pid = open.project.id.clone();
+
+    // Occupy `workspace.json`'s own path with a directory, so reading it
+    // fails with something other than `NotFound` on every platform.
+    std::fs::create_dir(f.workspace_json_path(&pid)).unwrap();
+
+    let receipt = save_project_in(&state, f.root(), &sid, 1)
+        .expect("an unreadable workspace.json must degrade, not refuse the save");
+    assert_eq!(receipt.saved_revision, 1);
+
+    let (on_disk, _sources) = load_project(f.root(), &pid).unwrap();
+    assert_eq!(
+        on_disk.workspace,
+        serde_json::json!({}),
+        "the degrade must embed the sanitized empty blob"
     );
 }
 

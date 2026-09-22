@@ -222,7 +222,24 @@ pub(crate) fn save_project_with(
     // forward. `read_workspace` already degrades a missing/malformed file
     // to the sanitized empty blob, so a project with no saved preferences
     // yet still saves cleanly.
-    let workspace = read_workspace(root, &project_id)?;
+    // Task 18 fix round 1, finding 2: a transient `workspace.json` read
+    // failure must not refuse the user's PROJECT save -- only
+    // `editor_get_workspace`'s own path keeps the hard error.
+    // `read_workspace` already degrades a missing/malformed file
+    // internally; this degrades every OTHER failure (permission denied, a
+    // Windows sharing violation -- exactly the class a debounced
+    // `editor_save_workspace` write racing this very read can produce,
+    // GAP-169) the same way: to the sanitized empty blob, logged rather
+    // than swallowed (AGENTS.md's diagnostics invariant), never propagated
+    // through the `?` that used to sit here.
+    let workspace = read_workspace(root, &project_id).unwrap_or_else(|e| {
+        log::warn!(
+            "editor_save_project: could not read workspace.json for project {project_id:?}, \
+             embedding the sanitized empty blob instead of refusing the project save: {}",
+            e.message
+        );
+        serde_json::json!({})
+    });
 
     let envelope = WorkspaceEnvelope {
         schema: editor::WORKSPACE_SCHEMA.to_string(),

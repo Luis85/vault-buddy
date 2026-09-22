@@ -30,6 +30,16 @@
  * with `prevent_close()` + `hide()`), so draining only from `onMounted` would
  * open the first capture and show it forever while every later request sat
  * unread in the stash.
+ *
+ * Task 18 fix round 1: a successful `openStaged` also hydrates
+ * `editorWorkspace` with the session id `editorProject` just opened —
+ * without this call nothing in production ever drove
+ * `editor_get_workspace`/`editor_save_workspace` at all, so the store's
+ * whole reason to exist (persisting selection/playhead/panel layout/theme)
+ * was dead code. A FAILED open does not hydrate anything: there is no
+ * session id to hydrate against, and `editorWorkspace`'s own fields already
+ * reset to defaults the next time a real session opens (its `hydrate`'s own
+ * doc).
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -39,6 +49,7 @@ import LegacyCaptureEditor from "../components/editor/LegacyCaptureEditor.vue";
 import EditorShell from "../components/editor/shell/EditorShell.vue";
 import { logWarning } from "../logging";
 import { useEditorProjectStore } from "../stores/editorProject";
+import { useEditorWorkspaceStore } from "../stores/editorWorkspace";
 
 /** Task 21 replaces this component with the real workspace UI and flips this
  * off; until then the legacy phase-4 surface is the only visible editor. Not
@@ -47,6 +58,7 @@ import { useEditorProjectStore } from "../stores/editorProject";
 const SHOW_LEGACY_EDITOR = true;
 
 const editorProject = useEditorProjectStore();
+const editorWorkspace = useEditorWorkspaceStore();
 
 /** The base the legacy surface is showing. `null` until the first
  * successful drain — see `LegacyCaptureEditor`'s own `stagedBase` prop doc
@@ -123,6 +135,17 @@ async function openRequested() {
   // every one of them — this IS the one caller for which it always is.
   if (editorProject.lastError) {
     logWarning(`editor_open_staged failed for ${base}: ${editorProject.lastError.message}`);
+    return;
+  }
+  // Task 18 fix round 1 (controller ruling): without this call nothing in
+  // production ever invoked `editor_get_workspace`/`editor_save_workspace`
+  // — `editorWorkspace.persist()` early-returns while `sessionId` is null,
+  // so the selection/playhead/theme/etc this store exists to save were
+  // silently never written or read back. `editorProject.sessionId` is the
+  // store's own post-open session id, not the `base` this function was
+  // handed — the same id `editor_save_workspace` keys its file on.
+  if (editorProject.sessionId) {
+    void editorWorkspace.hydrate(editorProject.sessionId);
   }
 }
 

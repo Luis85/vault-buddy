@@ -44,6 +44,7 @@ import type { EditorOpenResult, EditorSnapshot, Project } from "../src/editorTyp
 import { logWarning } from "../src/logging";
 import EditorRoot from "../src/roots/EditorRoot.vue";
 import { useEditorProjectStore } from "../src/stores/editorProject";
+import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
 import {
   type Call,
   DETAIL,
@@ -866,6 +867,63 @@ describe("EditorRoot", () => {
 
     expect(calls).toEqual(["cap one"]);
     expect(store.sessionId).toBe("ses-a");
+  });
+
+  // Task 18 fix round 1 (controller ruling): a successful open must hydrate
+  // `editorWorkspace` with the new session id, or `editor_get_workspace`/
+  // `editor_save_workspace` never get a production caller at all.
+  it("hydrates the workspace store with the new session id after a successful open", async () => {
+    const project = useEditorProjectStore();
+    project.setPort(
+      fakeEditorPort({
+        openStaged: (base) => Promise.resolve(openResultFixture({ sourceBase: base })),
+      }),
+    );
+    const workspace = useEditorWorkspaceStore();
+    const hydrateCalls: string[] = [];
+    workspace.setPort(
+      fakeEditorPort({
+        getWorkspace: (id) => {
+          hydrateCalls.push(id);
+          return Promise.resolve({});
+        },
+      }),
+    );
+
+    await open();
+
+    expect(hydrateCalls).toEqual(["ses-a"]);
+  });
+
+  it("does not hydrate the workspace when the open fails", async () => {
+    const project = useEditorProjectStore();
+    project.setPort(
+      fakeEditorPort({
+        openStaged: () =>
+          Promise.reject(
+            new EditorPortError({
+              code: "sourceMissing",
+              message: "gone",
+              retryable: false,
+              operationId: "op-1",
+            }),
+          ),
+      }),
+    );
+    const workspace = useEditorWorkspaceStore();
+    const hydrateCalls: string[] = [];
+    workspace.setPort(
+      fakeEditorPort({
+        getWorkspace: (id) => {
+          hydrateCalls.push(id);
+          return Promise.resolve({});
+        },
+      }),
+    );
+
+    await open();
+
+    expect(hydrateCalls).toEqual([]);
   });
 
   // A second `editor:open` for the SAME base while that session is open must

@@ -507,6 +507,50 @@ describe("editorWorkspace — hydrate", () => {
     expect(workspace.theme).toBe("light");
   });
 
+  // Task 18 fix round 1, finding 3: the editor webview is reused across
+  // captures, so opening project B after project A must not leak A's
+  // playhead/zoom/tabs/scroll/selection into B when B's workspace.json is
+  // missing or partial -- otherwise B's first edit persists A's leftover
+  // values into B's own file.
+  it("hydrating a new session resets to defaults before applying its own (possibly empty) workspace", async () => {
+    const workspace = useEditorWorkspaceStore();
+    workspace.setPort(
+      fakePort({
+        getWorkspace: (id) =>
+          Promise.resolve(
+            id === "ses-a"
+              ? ({
+                  selection_clip_ids: ["c1", "c2"],
+                  playhead_ms: 8_000,
+                  timeline_zoom: 4,
+                  library_tab: "media",
+                  snap: false,
+                  theme: "light",
+                } as Workspace)
+              : ({} as Workspace),
+          ),
+      }),
+    );
+
+    await workspace.hydrate("ses-a");
+    expect(workspace.selectionClipIds).toEqual(["c1", "c2"]);
+    expect(workspace.playheadMs).toBe(8_000);
+    expect(workspace.timelineZoom).toBe(4);
+    expect(workspace.libraryTab).toBe("media");
+    expect(workspace.snap).toBe(false);
+    expect(workspace.theme).toBe("light");
+
+    // MUTATION CHECK: dropping the reset-to-defaults step at the top of
+    // `hydrate` leaves every one of these reading session A's leftover
+    // values instead of the fresh defaults `createFields()` mints.
+    await workspace.hydrate("ses-b");
+    expect(workspace.selectionClipIds).toEqual([]);
+    expect(workspace.playheadMs).toBe(0);
+    expect(workspace.timelineZoom).toBe(1);
+    expect(workspace.libraryTab).toBeNull();
+    expect(workspace.snap).toBe(true);
+  });
+
   it("a stale hydrate FAILURE (superseded by a second hydrate) is silently dropped", async () => {
     const workspace = useEditorWorkspaceStore();
     let rejectFirst!: (e: unknown) => void;
