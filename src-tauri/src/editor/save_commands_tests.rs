@@ -48,6 +48,12 @@ impl Fixture {
             .join(id)
             .join("project.json")
     }
+    fn sources_json_path(&self, id: &str) -> PathBuf {
+        self.root()
+            .join("editor-projects")
+            .join(id)
+            .join("sources.json")
+    }
 }
 
 // Asymmetric on purpose (`global-constraints.md`'s fixture-flaw rule): a
@@ -640,4 +646,160 @@ fn open_staged_resumes_a_pinned_project_at_its_saved_revision_not_1() {
          revision, not reset to 1"
     );
     assert_eq!(reopened.snapshot.persisted_revision, Some(3));
+}
+
+// Fix round 2, finding 1: fix round 1's `InvalidProject`-only refusal left
+// every OTHER `load_project` failure -- a `project.json` that exists but
+// cannot be READ (permission denied, a Windows sharing violation), or a
+// missing/unreadable/corrupt `sources.json` beside a perfectly valid
+// `project.json` -- still degrading to a fresh `{}` workspace and
+// silently overwriting a file that IS there and IS meaningful. Only a
+// `project.json` that is GENUINELY ABSENT may degrade.
+//
+// A directory swapped in for `project.json`'s own name is the portable,
+// Windows-honest way to force this: `std::fs::metadata`/`is_file` behave
+// exactly as they would for a permission-denied or sharing-violation file
+// (the path exists, `read` on it still fails), without needing real ACL
+// manipulation this test suite cannot rely on across platforms.
+#[test]
+fn an_unreadable_project_json_refuses_the_save_rather_than_overwriting_it() {
+    let f = Fixture::new();
+    f.stage(&sidecar(BASE, "vaultA"));
+    let state = EditorState::default();
+    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let sid = open.snapshot.session_id.clone();
+    let pid = open.project.id.clone();
+    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "Renamed")).unwrap();
+
+    let path = f.project_json_path(&pid);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+
+    // MUTATION CHECK: degrading on every non-`invalidProject` error
+    // (rather than checking `project_file_exists` first) makes this
+    // assertion fail -- the save would succeed, silently treating an
+    // existing-but-unreadable path as though nothing were there.
+    let err = save_project_in(&state, f.root(), &sid, 2).unwrap_err();
+    assert_eq!(err.code, EditorErrorCode::Internal);
+
+    assert!(
+        path.is_dir(),
+        "a refused save must never touch the unreadable path"
+    );
+}
+
+#[test]
+fn a_corrupt_sources_json_refuses_the_save_rather_than_overwriting_the_valid_project_json() {
+    let f = Fixture::new();
+    f.stage(&sidecar(BASE, "vaultA"));
+    let state = EditorState::default();
+    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let sid = open.snapshot.session_id.clone();
+    let pid = open.project.id.clone();
+    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "Renamed")).unwrap();
+
+    let project_path = f.project_json_path(&pid);
+    let before = std::fs::read(&project_path).unwrap();
+    std::fs::write(f.sources_json_path(&pid), b"{ not actually json").unwrap();
+
+    let err = save_project_in(&state, f.root(), &sid, 2).unwrap_err();
+    assert_eq!(err.code, EditorErrorCode::Internal);
+
+    let after = std::fs::read(&project_path).unwrap();
+    assert_eq!(
+        before, after,
+        "a refused save must never overwrite the still-valid project.json"
+    );
+}
+
+// Fix round 2, finding 2 (controller ruling): `close_in`'s `discardProject`
+// must not remove the project directory while a save is mid-write. Forces
+// the exact interleaving with the same `GatedWriter` technique as the
+// concurrent-saves test above: a save is held mid-write (holding the
+// per-session save lock), and `discardProject` -- racing it on another
+// thread -- must block behind that same lock rather than deleting the
+// directory out from under the in-flight write.
+#[test]
+fn discard_project_waits_for_an_in_flight_save_rather_than_racing_it() {
+    let f = Fixture::new();
+    f.stage(&sidecar(BASE, "vaultA"));
+    let state = EditorState::default();
+    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let sid = open.snapshot.session_id.clone();
+    let pid = open.project.id.clone();
+
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+    let (proceed_tx, proceed_rx) = std::sync::mpsc::channel::<()>();
+    let gated = GatedWriter {
+        entered: entered_tx,
+        proceed: std::sync::Mutex::new(proceed_rx),
+    };
+
+    std::thread::scope(|scope| {
+        let save = std::thread::Builder::new()
+            .name("editor-save-gated".into())
+            .spawn_scoped(scope, || {
+                save_project_with(&gated, &state, f.root(), &sid, 1)
+            })
+            .unwrap();
+
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the save must enter its write");
+
+        let close = std::thread::Builder::new()
+            .name("editor-close-race".into())
+            .spawn_scoped(scope, || {
+                close_in(
+                    &state,
+                    f.root(),
+                    &f.staging(),
+                    &sid,
+                    CloseDisposition::DiscardProject,
+                )
+            })
+            .unwrap();
+
+        // Read the flag BEFORE unblocking the save, assert only AFTER both
+        // threads are joined -- the same deadlock-avoidance ordering as the
+        // concurrent-saves test above.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let close_was_still_blocked = !close.is_finished();
+
+        proceed_tx.send(()).unwrap();
+        let save_result = save.join().unwrap();
+        let close_result = close.join().unwrap();
+        assert!(
+            close_was_still_blocked,
+            "discardProject must block behind an in-flight save's per-session lock, not race it"
+        );
+        save_result.expect("the save");
+        close_result.expect("the close");
+    });
+
+    assert!(
+        !f.root().join("editor-projects").join(&pid).is_dir(),
+        "discardProject must still have removed the project once the save released the lock"
+    );
+}
+
+// Fix round 2, finding 4: a save (or a discard) on a session that does not
+// exist must never mint a `save_locks` entry -- nothing would ever prune
+// an entry for a session id this process never actually registered.
+#[test]
+fn saving_a_closed_session_leaves_the_save_lock_map_unchanged() {
+    let f = Fixture::new();
+    f.stage(&sidecar(BASE, "vaultA"));
+    let state = EditorState::default();
+    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let sid = open.snapshot.session_id.clone();
+    close_in(&state, f.root(), &f.staging(), &sid, CloseDisposition::Keep).unwrap();
+
+    let err = save_project_in(&state, f.root(), &sid, 1).unwrap_err();
+    assert_eq!(err.code, EditorErrorCode::SessionGone);
+
+    assert!(
+        lock_ignoring_poison(&state.save_locks).is_empty(),
+        "a save on a closed/unknown session must never mint a save-lock entry"
+    );
 }

@@ -41,20 +41,35 @@ use vault_buddy_core::editor::EditorSession;
 /// wait on it; execute/snapshot/close never take it. The maps are never held
 /// across disk I/O.
 ///
-/// `save_locks` (Task 12 fix round 1) is a SEPARATE, per-session mutex,
-/// keyed by session id: `save_commands::save_project_with` holds it across
-/// its whole read-the-revision → commit → `mark_saved` sequence, so two
-/// concurrent `editor_save_project` calls on the SAME session can never
-/// interleave — without it, one save's `mark_saved` can land after a
-/// second, newer save's and regress `persistedRevision` below what is
-/// actually on disk. It is NEVER taken while holding `by_project` or
-/// `sessions` (it sits outside that trio entirely — `open` covers
-/// minting/registering a session, this covers saving an already-registered
-/// one, and the two never overlap for the same session); `sessions` is
-/// taken only BRIEFLY inside it, the same posture `open` has toward the
-/// maps. Entries are pruned when their session closes
-/// (`session_commands::drop_session`), so the map only grows with sessions
-/// currently open.
+/// `save_locks` (Task 12) is TWO DIFFERENT LOCKS wearing one field, and the
+/// lock-order rule is different for each:
+/// - **The per-session lock** — each `Arc<Mutex<()>>` the map's values
+///   hold — is what `save_commands::session_save_lock`'s callers actually
+///   care about: `save_project_with` holds it across its whole
+///   read-the-revision → commit → `mark_saved` sequence, and
+///   `session_commands::close_in`'s `discardProject` holds the SAME one
+///   across its unpin-then-remove sequence (fix round 2), so a save and a
+///   discard on the SAME session can never interleave either. This lock is
+///   NEVER taken while holding `by_project` or `sessions` — it sits outside
+///   that trio entirely (`open` covers minting/registering a session, this
+///   covers saving or discarding an already-registered one, and the two
+///   never overlap for the same session); `sessions` is taken only BRIEFLY
+///   *inside* it, the same posture `open` has toward the maps.
+/// - **The map's OWN outer `Mutex` — `Mutex<HashMap<String,
+///   Arc<Mutex<()>>>>` itself** — is a plain LEAF lock: `session_save_lock`
+///   takes it only to look up or insert one entry and clone the `Arc` out,
+///   and `session_commands::drop_session` takes it (after `by_project` and
+///   `sessions`) only to remove one entry, so the map only grows with
+///   sessions currently open. Neither ever does I/O or waits on another
+///   lock while holding it, so it MAY be taken while `by_project`/`sessions`
+///   are already held (as `drop_session` does) without violating the rule
+///   above — that rule is about the per-session `Arc<Mutex<()>>`, not the
+///   container around it.
+///
+/// `session_save_lock` also refuses `sessionGone` before ever touching
+/// `save_locks` at all (fix round 2), so a save or discard on an unknown
+/// session id leaves the map untouched rather than minting an entry
+/// nothing would ever prune.
 #[derive(Default)]
 pub struct EditorState {
     pub open: Mutex<()>,

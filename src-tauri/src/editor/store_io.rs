@@ -178,6 +178,31 @@ fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, EditorError> {
     })
 }
 
+/// Whether SOMETHING already occupies `id`'s `project.json` path — the ONE
+/// condition `editor_save_project` (`save_commands.rs`) may degrade its
+/// read of the last-saved envelope for (Task 12 fix round 2, finding 1).
+/// Checked BEFORE `load_project` is ever called: every other read failure
+/// — a corrupt or oversized `project.json`, `PermissionDenied`, a Windows
+/// sharing violation, a missing/unreadable/corrupt `sources.json` beside a
+/// perfectly valid `project.json` — means something IS there and IS
+/// meaningful, so the save must refuse rather than silently overwrite it
+/// with a fresh `{}` workspace.
+///
+/// Deliberately `Path::exists` (a `metadata`-based presence check), never
+/// `is_file`: an unreadable path is not necessarily an ordinary file
+/// a caller could tell apart from a permission-denied one without trying
+/// to read it — and this module's own tests simulate exactly that
+/// (`PermissionDenied`/a sharing violation) the portable, Windows-honest
+/// way, by swapping a DIRECTORY in for `project.json`'s own name. `exists`
+/// reports that as present (refuse, correctly); `is_file` would have
+/// reported it as absent (wrongly degrade, exactly the bug this function
+/// exists to close).
+pub fn project_file_exists(root: &Path, id: &str) -> bool {
+    project_dir(root, id)
+        .map(|dir| dir.join(PROJECT_FILE).exists())
+        .unwrap_or(false)
+}
+
 /// Load a project's saved envelope and its sources, refusing anything that
 /// does not validate.
 ///

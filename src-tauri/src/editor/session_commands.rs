@@ -349,6 +349,18 @@ fn drop_session(state: &EditorState, session_id: &str) {
 /// reverse order would leave a pin naming a deleted project, and a pinned
 /// capture refuses Discard. The recording itself is never touched (R6).
 /// On any failure the session stays open so the user can retry.
+///
+/// **`discardProject` holds the per-session SAVE lock** (Task 12 fix round
+/// 2, finding 2 — `save_commands::session_save_lock`, the same lock
+/// `editor_save_project` holds for its own whole read-through-write
+/// sequence) across its unpin-then-remove sequence: without it, a save
+/// that is mid-write when a discard runs could have `remove_project` walk
+/// and delete the directory while the write is still in flight, or the
+/// write's temp-file rename could land into a directory that no longer
+/// exists. Taking the lock here blocks a concurrent discard behind an
+/// in-flight save (never the reverse — a save cannot start once discard
+/// already holds it and the session is about to vanish) rather than racing
+/// either one against the other.
 pub(crate) fn close_in(
     state: &EditorState,
     root: &Path,
@@ -372,6 +384,9 @@ pub(crate) fn close_in(
             ));
         }
         CloseDisposition::DiscardProject => {
+            let session_lock = super::save_commands::session_save_lock(state, session_id)?;
+            let _save_guard = lock_ignoring_poison(&session_lock);
+
             let sources = load_sources(root, &project_id)?;
             for record in sources.values() {
                 if let SourceLocator::Staging { base } = &record.locator {

@@ -27,8 +27,8 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use super::authz::{require_editor_window, require_session};
 use super::session_commands::{missing_media, register_session};
 use super::store_io::{
-    self, commit_project, load_project, source_base_of, ProjectSummaryDto, ProjectWriter,
-    RealWriter,
+    self, commit_project, load_project, project_file_exists, source_base_of, ProjectSummaryDto,
+    ProjectWriter, RealWriter,
 };
 use super::EditorState;
 
@@ -104,13 +104,32 @@ fn map_write_error(e: io::Error) -> EditorError {
 /// `session_id`. The map mutex is held only for this lookup/insert, never
 /// across the save itself; the returned `Arc` is what the caller then locks
 /// and holds for its whole read-revision-through-commit-through-mark_saved
-/// sequence.
-fn session_save_lock(state: &EditorState, session_id: &str) -> Arc<Mutex<()>> {
+/// sequence. `close_in`'s `discardProject` (`session_commands.rs`) takes
+/// the SAME lock for the same reason — it must not remove the project
+/// directory out from under an in-flight save (Task 12 fix round 2,
+/// finding 2).
+///
+/// **Refuses `sessionGone` BEFORE minting anything** (fix round 2, finding
+/// 4): a lock entry created for a session id that turns out not to exist
+/// would never be pruned by `drop_session` (which only removes an entry for
+/// a session it is ACTUALLY closing), so the map would grow with every
+/// stale/bogus/already-closed id a caller ever passes. Checking first, via
+/// the same `require_session` every other caller uses, means a save (or a
+/// discard) on an unknown session leaves `save_locks` untouched.
+pub(crate) fn session_save_lock(
+    state: &EditorState,
+    session_id: &str,
+) -> Result<Arc<Mutex<()>>, EditorError> {
+    {
+        // Existence only -- the guard is dropped at the end of this block,
+        // well before anything here touches `save_locks`.
+        let _existence_guard = require_session(state, session_id)?;
+    }
     let mut locks = lock_ignoring_poison(&state.save_locks);
-    locks
+    Ok(locks
         .entry(session_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone()
+        .clone())
 }
 
 /// The `AppHandle`-free half of `editor_save_project`, injectable with a
@@ -142,7 +161,7 @@ pub(crate) fn save_project_with(
     session_id: &str,
     expected_revision: u64,
 ) -> Result<SaveReceipt, EditorError> {
-    let session_lock = session_save_lock(state, session_id);
+    let session_lock = session_save_lock(state, session_id)?;
     let _save_guard = lock_ignoring_poison(&session_lock);
 
     let (project, revision) = {
@@ -171,28 +190,31 @@ pub(crate) fn save_project_with(
     // sanitized LIVE workspace once a command exists to change it; until
     // then, carrying the on-disk value forward is the only honest choice.
     //
-    // Fix round 1, finding 1: a `load_project` failure is NOT one thing --
-    // `invalidProject` (a corrupt or oversized `project.json`) must REFUSE
-    // the save rather than silently overwrite the very file a human might
-    // still be able to recover by hand, so that error propagates as-is,
-    // BEFORE anything is written. Only a genuinely absent envelope (the
-    // project directory vanished out from under a live session -- not
-    // something any path in this codebase currently does, but not provably
-    // impossible either) may still degrade to a fresh `{}` workspace and
-    // `now` as `createdAt`, and even that degrade is logged rather than
+    // Fix round 1, finding 1 (narrowed further in fix round 2, finding 1):
+    // a `load_project` failure is NOT one thing. Round 1 only special-cased
+    // `invalidProject`, which still left every OTHER failure -- a
+    // `project.json` that exists but cannot be READ (`PermissionDenied`, a
+    // Windows sharing violation), or a missing/unreadable/corrupt
+    // `sources.json` beside a perfectly valid `project.json` -- degrading
+    // and silently overwriting a file that IS there. The only condition
+    // that may still degrade is `project.json` being GENUINELY ABSENT,
+    // checked EXPLICITLY and FIRST via `project_file_exists` rather than
+    // inferred from `load_project`'s error shape: every other failure
+    // refuses the save with that error, unmodified, before anything is
+    // written. The one remaining degrade is still logged rather than
     // swallowed (AGENTS.md's "no swallowed error" diagnostics invariant).
     let now = chrono::Local::now().to_rfc3339();
-    let (workspace, created_at) = match load_project(root, &project_id) {
-        Ok((envelope, _sources)) => (envelope.workspace, envelope.record.created_at),
-        Err(e) if e.code == EditorErrorCode::InvalidProject => return Err(e),
-        Err(e) => {
-            log::warn!(
-                "editor_save_project: could not read the last saved envelope for project \
-                 {project_id:?}, degrading to a fresh workspace: {}",
-                e.message
-            );
-            (serde_json::json!({}), now.clone())
+    let (workspace, created_at) = if project_file_exists(root, &project_id) {
+        match load_project(root, &project_id) {
+            Ok((envelope, _sources)) => (envelope.workspace, envelope.record.created_at),
+            Err(e) => return Err(e),
         }
+    } else {
+        log::warn!(
+            "editor_save_project: no last-saved envelope for project {project_id:?} \
+             (project.json is absent), degrading to a fresh workspace"
+        );
+        (serde_json::json!({}), now.clone())
     };
 
     let envelope = WorkspaceEnvelope {
