@@ -85,6 +85,16 @@ const onDiscardClick = (base: string) => {
 
 const discardLabel = (base: string) => (isArmed(base) ? "Delete it" : "Discard");
 
+/**
+ * A capture pinned to a tutorial project (R6) opens the same editor as an
+ * ordinary Resume — `emit("resume", base)` is unchanged — but "Edit" is the
+ * honest verb once a project is already open on it, and Discard is not
+ * offered at all: `staged_commands::discard_conflict` refuses it server-side
+ * ("discard the project first"), so a button that always failed would be
+ * worse than none.
+ */
+const primaryActionLabel = (c: StagedCaptureSummary) => (c.projectId ? "Edit" : "Resume editing");
+
 /** The chip is accent-toned only for an edit — a recovered capture carries
  * no edit to highlight. */
 const lengthVariant = (c: StagedCaptureSummary) => (c.edited ? "accent" : "neutral");
@@ -137,6 +147,10 @@ const subLabel = (c: StagedCaptureSummary) =>
   [
     c.edited ? `${formatDuration(c.durationMs)} recorded` : "",
     relativeAgeLabel(c.recordedAt, Date.now()),
+    // R6: folded in here rather than a separate template branch — one more
+    // `v-if` in `<template>` pushed its own cognitive complexity over the
+    // ratchet, and this says the same thing with no extra control flow.
+    c.projectId ? "In a tutorial project" : "",
   ]
     .filter((part) => part !== "")
     .join(" · ");
@@ -171,13 +185,11 @@ const subLabel = (c: StagedCaptureSummary) =>
           <span class="min-w-0 flex-1 truncate text-micro text-fg-subtle">
             {{ subLabel(c) }}
           </span>
-          <!-- Resume is offered only where it leads somewhere. A recovered
-               capture carries no vault id, so `export_worker::prepare`
-               refuses its Save outright and the editor would open on a
-               zero-length timeline. That leaves Discard as the only button
-               on a real recording, which is why the row also states, below,
-               that the video survived and where it is — Discard must never
-               be the only thing this row tells the user. -->
+          <!-- The primary action is offered only where it leads somewhere.
+               A recovered capture carries no vault id, so
+               `export_worker::prepare` refuses its Save outright and the
+               editor would open on a zero-length timeline — true whether or
+               not it also carries a pin. -->
           <AppButton
             v-if="!c.recovered"
             :data-testid="`staged-resume-${c.base}`"
@@ -186,9 +198,14 @@ const subLabel = (c: StagedCaptureSummary) =>
             :disabled="busyBase === c.base"
             @click="emit('resume', c.base)"
           >
-            Resume editing
+            {{ primaryActionLabel(c) }}
           </AppButton>
+          <!-- Pinned rows say so in `subLabel` above instead of offering
+               Discard (R6): the server refuses that discard anyway
+               ("discard the project first"), so a button here would only
+               ever fail. -->
           <AppButton
+            v-if="!c.projectId"
             :data-testid="`staged-discard-${c.base}`"
             size="sm"
             variant="danger"

@@ -176,7 +176,12 @@ export interface ExportFailure {
  * `recovered` means `screen_recovery` rebuilt this capture's sidecar after
  * an interrupted session. It therefore records neither the vault it belongs
  * to nor its duration — nothing on disk remembers either — so Save refuses
- * it outright (`export_worker::prepare`) and the row must not offer one. */
+ * it outright (`export_worker::prepare`) and the row must not offer one.
+ *
+ * `projectId` is the tutorial project this capture is PINNED to (R6), when
+ * one has adopted it by reference — `null` for an ordinary staged capture.
+ * A pinned row must not offer Discard (`staged_commands::discard_conflict`
+ * refuses it server-side too — this is the UI half, not the only guard). */
 export interface StagedCaptureSummary {
   base: string;
   vaultId: string;
@@ -188,6 +193,7 @@ export interface StagedCaptureSummary {
   height: number;
   edited: boolean;
   recovered: boolean;
+  projectId: string | null;
 }
 
 /** Per-vault screen-capture settings — get_screen_capture_config /

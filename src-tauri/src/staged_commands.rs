@@ -26,6 +26,7 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::uri;
 use vault_buddy_screen::{staging, staging_files};
 
+use crate::editor::project_store::pinned_project;
 use crate::export_commands::{emit_discarded, timeline_from_sidecar, ExportState};
 
 /// One resume-or-discard row (spec §10) — a staged capture as the UI sees it.
@@ -50,6 +51,13 @@ pub struct StagedCaptureSummaryDto {
     /// into the sidecar's flattened catch-all; surfacing it is what stops
     /// this list offering a save that provably cannot succeed.
     pub recovered: bool,
+    /// The tutorial project this capture is PINNED to (R6), if any —
+    /// `crate::editor::project_store::pinned_project`. `Some` means a
+    /// tutorial project has adopted this staged capture by reference: it
+    /// must not be discarded (`discard_conflict`) until that project is
+    /// discarded first, and `StagedCaptureList` labels the row instead of
+    /// offering Discard.
+    pub project_id: Option<String>,
 }
 
 /// Is this sidecar one `screen_recovery` rebuilt? A `true` BOOLEAN, never a
@@ -105,13 +113,29 @@ pub(crate) fn summary_output_duration_ms(
 /// re-encode reading a handle to an unlinked file on Windows and produce a
 /// truncated export with no error anywhere. Only the base being exported is
 /// refused: a second staged capture is nobody's business but its own.
-pub(crate) fn discard_conflict(exporting: Option<&str>, base: &str) -> Option<String> {
-    match exporting {
-        Some(active) if active == base => Some(format!(
+///
+/// `pinned` is `crate::editor::project_store::pinned_project`'s answer for
+/// this capture (R6): a tutorial project has adopted this exact staged
+/// capture by reference, so deleting it out from under the project would
+/// orphan the project's own source record. The export conflict is checked
+/// first — a save in progress is the more urgent reason, and either reason
+/// alone is enough to refuse.
+pub(crate) fn discard_conflict(
+    exporting: Option<&str>,
+    base: &str,
+    pinned: Option<&str>,
+) -> Option<String> {
+    if exporting == Some(base) {
+        return Some(format!(
             "{base} is being saved right now. Cancel the save first, or wait for it to finish."
-        )),
-        _ => None,
+        ));
     }
+    if pinned.is_some() {
+        return Some(
+            "This capture is used by a tutorial project. Discard the project first.".to_string(),
+        );
+    }
+    None
 }
 
 /// The `file` parameter of the `obsidian://open` URI for a saved capture.
@@ -198,6 +222,7 @@ fn summary_from_sidecar(s: &staging::StagedSidecar) -> StagedCaptureSummaryDto {
         height: s.height,
         edited: summary_is_edited(s.timeline.clone(), s.duration_ms),
         recovered: summary_is_recovered(&s.extra),
+        project_id: pinned_project(s),
     }
 }
 
@@ -261,17 +286,32 @@ pub async fn discard_staged_capture(app: AppHandle, base: String) -> Result<(), 
     let exporting = lock_ignoring_poison(&app.state::<ExportState>().0)
         .as_ref()
         .map(|active| active.base.clone());
-    if let Some(message) = discard_conflict(exporting.as_deref(), &base) {
-        return Err(message);
-    }
     let dir = staging_dir_for(&app)?;
     let target = base.clone();
-    tauri::async_runtime::spawn_blocking(move || discard_staged_files(&dir, &target))
-        .await
-        .map_err(|e| format!("That capture could not be discarded: {e}"))??;
+    // The pin check reads the sidecar, so it rides the same spawn_blocking
+    // as the discard itself — a sync command must not touch disk on the
+    // async runtime thread, and this is one more small file read joining
+    // the three unlinks that already needed the blocking pool.
+    tauri::async_runtime::spawn_blocking(move || {
+        let pinned = pinned_project_of(&dir, &target);
+        if let Some(message) = discard_conflict(exporting.as_deref(), &target, pinned.as_deref()) {
+            return Err(message);
+        }
+        discard_staged_files(&dir, &target)
+    })
+    .await
+    .map_err(|e| format!("That capture could not be discarded: {e}"))??;
     log::info!("screen discard: forgot the staged capture {base}");
     emit_discarded(&app, &base);
     Ok(())
+}
+
+/// The tutorial-project id pinning this staged capture, or `None` — both
+/// when the sidecar carries no pin and when it cannot be read at all, the
+/// same defensive-read posture as everywhere else a sidecar is consulted.
+fn pinned_project_of(dir: &Path, base: &str) -> Option<String> {
+    let sidecar = staging::read_sidecar(&dir.join(staging::sidecar_file_name(base)))?;
+    pinned_project(&sidecar)
 }
 
 /// Every staged capture waiting to be resumed or discarded.
@@ -445,9 +485,41 @@ mod tests {
 
     #[test]
     fn discard_refuses_while_that_capture_is_being_exported() {
-        assert!(discard_conflict(Some("2026-09-20 1432 Demo"), "2026-09-20 1432 Demo").is_some());
-        assert!(discard_conflict(Some("2026-09-20 1432 Other"), "2026-09-20 1432 Demo").is_none());
-        assert!(discard_conflict(None, "2026-09-20 1432 Demo").is_none());
+        assert!(
+            discard_conflict(Some("2026-09-20 1432 Demo"), "2026-09-20 1432 Demo", None).is_some()
+        );
+        assert!(
+            discard_conflict(Some("2026-09-20 1432 Other"), "2026-09-20 1432 Demo", None).is_none()
+        );
+        assert!(discard_conflict(None, "2026-09-20 1432 Demo", None).is_none());
+    }
+
+    // R6, mutation check: drop the pin arm in `discard_conflict` and this
+    // test goes red because a pinned capture with no export in progress
+    // stops being refused.
+    #[test]
+    fn pinned_capture_cannot_be_discarded() {
+        let msg = discard_conflict(None, "2026-09-20 1432 Demo", Some("proj1"))
+            .expect("a pinned capture must refuse discard");
+        assert_eq!(
+            msg,
+            "This capture is used by a tutorial project. Discard the project first."
+        );
+        assert!(discard_conflict(None, "2026-09-20 1432 Demo", None).is_none());
+    }
+
+    #[test]
+    fn a_pinned_captures_summary_carries_its_project_id_camel_case() {
+        let mut s = sidecar_fixture();
+        s.extra.insert(
+            "editorProjectId".into(),
+            serde_json::Value::String("proj1".into()),
+        );
+        let dto = summary_from_sidecar(&s);
+        assert_eq!(dto.project_id.as_deref(), Some("proj1"));
+        let json = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["projectId"], serde_json::json!("proj1"));
+        assert_eq!(summary_from_sidecar(&sidecar_fixture()).project_id, None);
     }
 
     // A video is an ATTACHMENT and a note is a note, and Obsidian's `file`

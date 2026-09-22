@@ -61,6 +61,7 @@ use vault_buddy_screen::export::{export, export_refusal, ExportOutcome, ExportRe
 use vault_buddy_screen::ffmpeg_args::EncodeSettings;
 use vault_buddy_screen::{staging, ScreenError};
 
+use crate::editor::project_store::pinned_project;
 use crate::export_commands::{cancel_flag, emit_export_progress, timeline_from_sidecar};
 
 mod vault_dir;
@@ -384,14 +385,26 @@ fn commit_into_vault(inputs: CommitInputs<'_>) -> Result<Committed, String> {
     })
 }
 
-/// Delete the staged `.mp4` and its sidecar, AFTER the vault write landed.
+/// Delete the staged `.mp4` and its sidecar, AFTER the vault write landed —
+/// unless a tutorial project has PINNED this capture (R6, F2): its
+/// `sources.json` still points at this exact staged file (adopted by
+/// reference, never moved), so deleting it would orphan that project while
+/// the legacy Save and the new editor coexist through Task 59. The legacy
+/// export still saves; only the staging cleanup is skipped, pin included.
 ///
-/// The one removal site (a structural test pins that). Both failures are
-/// warnings: the user's capture is in their vault by this point, so a
-/// leftover staged file is litter rather than loss, and `screen_recovery`
-/// will not delete it — but a duplicate in the resume list is a far smaller
-/// harm than a removal that ran too early.
+/// The one removal site (a structural test pins that). Both failures below
+/// are warnings, not errors: the capture is in the vault by this point, so
+/// a leftover staged file is litter, not loss.
 fn remove_staged_capture(staging_dir: &Path, base: &str) {
+    let sidecar = staging_dir.join(staging::sidecar_file_name(base));
+    let pin = staging::read_sidecar(&sidecar).and_then(|s| pinned_project(&s));
+    if let Some(project_id) = pin {
+        log::info!(
+            "screen export: keeping the staged capture {base} — it is pinned to tutorial \
+             project {project_id}"
+        );
+        return;
+    }
     for path in [
         staging_dir.join(staging::mp4_file_name(base)),
         staging_dir.join(staging::sidecar_file_name(base)),
@@ -592,6 +605,54 @@ mod tests {
         assert_eq!(out.note, None);
         assert!(!vault.path().join(format!("{BASE}.md")).exists());
         assert!(out.video.is_file());
+    }
+
+    /// Like `staged`, but with a parseable sidecar carrying a real pin.
+    fn staged_pinned(dir: &Path, base: &str, project_id: &str) -> PathBuf {
+        let mut s = sidecar(base);
+        s.extra.insert(
+            "editorProjectId".into(),
+            serde_json::Value::String(project_id.to_string()),
+        );
+        staging::write_sidecar(dir, base, &s).unwrap();
+        fs::write(dir.join(staging::mp4_file_name(base)), b"staged").unwrap();
+        let temp = dir.join(staging::export_part_file_name(base));
+        fs::write(&temp, b"footage").unwrap();
+        temp
+    }
+
+    // F2: a pinned capture survives the legacy Save while both paths
+    // coexist through Task 59. Mutation: drop the pinned skip and this
+    // goes red (the staged video/sidecar are gone afterward).
+    #[test]
+    fn legacy_export_of_a_pinned_capture_keeps_the_project_and_still_saves() {
+        let stage = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let temp = staged_pinned(stage.path(), BASE, "proj1");
+
+        let out = commit_into_vault(CommitInputs {
+            temp: &temp,
+            dir: vault.path(),
+            base: BASE,
+            staging: stage.path(),
+            note: Some(meta()),
+        })
+        .expect("the legacy export still saves");
+
+        assert_eq!(fs::read(&out.video).unwrap(), b"footage");
+        assert!(out.note.is_some());
+        assert!(
+            stage.path().join(staging::mp4_file_name(BASE)).is_file(),
+            "video deleted"
+        );
+        let sidecar_path = stage.path().join(staging::sidecar_file_name(BASE));
+        assert!(sidecar_path.is_file(), "sidecar deleted");
+        let back = staging::read_sidecar(&sidecar_path).unwrap();
+        assert_eq!(
+            pinned_project(&back).as_deref(),
+            Some("proj1"),
+            "the pin must survive too"
+        );
     }
 
     // The note records what the EXPORT produced, not what was recorded. A

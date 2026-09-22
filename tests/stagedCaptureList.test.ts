@@ -30,6 +30,7 @@ function capture(over: Partial<StagedCaptureSummary> = {}): StagedCaptureSummary
     height: 1080,
     edited: false,
     recovered: false,
+    projectId: null,
     ...over,
   };
 }
@@ -186,6 +187,38 @@ describe("StagedCaptureList", () => {
     const w = list([capture()]);
     expect(w.find(resume("2026-09-20 1000 Figma")).exists()).toBe(true);
     expect(w.get(row("2026-09-20 1000 Figma")).text()).not.toContain("recovered");
+  });
+
+  // R6: a capture pinned to a tutorial project must not offer Discard at
+  // all — the server refuses that discard ("discard the project first"),
+  // so a button here would only ever fail — and its primary action reads
+  // "Edit" rather than "Resume editing", since a project is already open
+  // on it.
+  it("a pinned staged capture offers Edit but not Discard", () => {
+    const w = list([capture({ projectId: "proj1" })]);
+    const r = w.get(row("2026-09-20 1000 Figma"));
+    expect(r.text()).toContain("In a tutorial project");
+    expect(w.get(resume("2026-09-20 1000 Figma")).text()).toBe("Edit");
+    expect(w.find(discard("2026-09-20 1000 Figma")).exists()).toBe(false);
+  });
+
+  // F7 (partial): a recovered capture never offers Resume/Edit regardless
+  // of a pin (`export_worker::prepare` refuses a recovered capture's Save
+  // outright), and a pin still refuses Discard — so a pinned recovered row
+  // is left with neither action rendered. Task 10 is the enforcement point
+  // that stops one from ever being created; this only pins the RENDERING.
+  it("a pinned recovered row offers neither Edit nor Discard", () => {
+    const w = list([capture({ projectId: "proj1", recovered: true, durationMs: 0, outputDurationMs: 0 })]);
+    expect(w.find(resume("2026-09-20 1000 Figma")).exists()).toBe(false);
+    expect(w.find(discard("2026-09-20 1000 Figma")).exists()).toBe(false);
+  });
+
+  // The paired negative: an ordinary (unpinned) capture keeps its old
+  // "Resume editing" label and says nothing about a tutorial project.
+  it("an unpinned capture keeps the resume-editing label and says nothing about a project", () => {
+    const w = list([capture()]);
+    expect(w.get(resume("2026-09-20 1000 Figma")).text()).toBe("Resume editing");
+    expect(w.get(row("2026-09-20 1000 Figma")).text()).not.toContain("tutorial project");
   });
 
   // FIX (recovered-capture honesty): a crash-recovered capture is a REAL

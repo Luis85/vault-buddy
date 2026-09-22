@@ -1,0 +1,437 @@
+//! Pure paths and ownership for the tutorial-editor project store —
+//! tempdir-testable, no Tauri types.
+//!
+//! On-disk layout (`global-constraints.md`'s Contract reference):
+//! `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\
+//! {project.json, sources.json, products.json, recovery.json,
+//! workspace.json, media\, takes\, products\, cache\, jobs\<jobId>\}`. This
+//! module owns the LEAF path (`project_dir`) and a source's reference
+//! (`SourceLocator`/`SourceRecord`/`resolve_source`); `store_io` owns the
+//! files themselves.
+//!
+//! Also owns the pin (R6): the `extra["editorProjectId"]` key a project
+//! writes into a staged capture's sidecar so it is ADOPTED by reference
+//! rather than moved — staging and the project store stay two directories,
+//! and the pin is the only thing that connects them.
+
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use vault_buddy_core::editor::is_valid_id;
+use vault_buddy_screen::staging::{self, StagedSidecar};
+
+/// The store's own directory name under the app's local data dir — a
+/// sibling of `staging::STAGING_DIR_NAME`, never inside it: a project and
+/// the staged capture it is pinned to are two directories on purpose (see
+/// the module doc's "why not move").
+pub const STORE_DIR: &str = "editor-projects";
+
+/// `<root>/editor-projects`, the store's own root.
+pub fn store_dir(root: &Path) -> PathBuf {
+    root.join(STORE_DIR)
+}
+
+/// A project's own directory, `<root>/editor-projects/<id>`.
+///
+/// Refuses an invalid id (`vault_buddy_core::editor::is_valid_id`'s
+/// `^[a-zA-Z0-9_-]{1,100}$`) rather than joining it onto a path: that
+/// charset excludes `/`, `\` and `.`, so a valid id can never escape this
+/// directory or address `..` — the property is structural, not a separate
+/// containment check bolted on afterward.
+pub fn project_dir(root: &Path, id: &str) -> Option<PathBuf> {
+    if !is_valid_id(id) {
+        return None;
+    }
+    Some(store_dir(root).join(id))
+}
+
+/// Where a source's bytes actually live within a project, as a raw string
+/// tag (`{"store": "...", ...}`) so `sources.json` reads exactly like the
+/// ADR's own example, `{"store":"staging","base":"<base>"}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "store", rename_all = "lowercase")]
+pub enum SourceLocator {
+    /// A staged screen capture, adopted by reference (R6) — never copied
+    /// into the project directory.
+    Staging { base: String },
+    /// An imported original, copied into this project's own `media/`.
+    Media { file: String },
+    /// A recorded webcam take, in this project's own `takes/`.
+    Takes { file: String },
+    /// A procedurally-supplied asset with no file on disk at all (a
+    /// synthesized card, a generated cue track).
+    Builtin,
+}
+
+/// What kind of media a source is — the same refinement
+/// `vault_buddy_core::editor::model::AssetKind`/`MediaType` draws for an
+/// `Asset`, applied one layer down to the raw file a source record
+/// describes before it becomes one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceMediaKind {
+    Video,
+    Audio,
+    Image,
+}
+
+/// One entry of a project's `sources.json` — everything the project needs
+/// to know about a source WITHOUT re-probing the file on every open.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceRecord {
+    pub locator: SourceLocator,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    pub size: u64,
+    pub duration_ms: u64,
+    pub width: u32,
+    pub height: u32,
+    pub has_audio: bool,
+    pub has_video: bool,
+    pub media_kind: SourceMediaKind,
+}
+
+/// A joined path, but only when it stays INSIDE `dir` — the
+/// `staging::write_sidecar` discipline (comparing the joined path's parent
+/// rather than re-deriving every escape shape a file name could take): a
+/// name carrying a separator, a `..` component, or (on Windows) a drive
+/// prefix moves `dir.join(name)` out of `dir`, and for the drive-prefix
+/// case `join` REPLACES the base outright.
+fn join_contained(dir: &Path, name: &str) -> Option<PathBuf> {
+    let joined = dir.join(name);
+    if joined.parent() == Some(dir) {
+        Some(joined)
+    } else {
+        None
+    }
+}
+
+/// Resolve a source record to the file it actually names on disk, or
+/// `None` when it has no file (`Builtin`) or the recorded name would
+/// escape the directory it is supposed to live in.
+///
+/// `root_local_app_data` is the SAME root every other store/staging path is
+/// rooted at (`app_local_data_dir()`), never a project-relative path — a
+/// source record on its own does not know where the app's data lives.
+pub fn resolve_source(
+    root_local_app_data: &Path,
+    project_id: &str,
+    record: &SourceRecord,
+) -> Option<PathBuf> {
+    match &record.locator {
+        SourceLocator::Staging { base } => {
+            let dir = staging::staging_dir(root_local_app_data);
+            join_contained(&dir, &staging::mp4_file_name(base))
+        }
+        SourceLocator::Media { file } => {
+            let dir = project_dir(root_local_app_data, project_id)?.join("media");
+            join_contained(&dir, file)
+        }
+        SourceLocator::Takes { file } => {
+            let dir = project_dir(root_local_app_data, project_id)?.join("takes");
+            join_contained(&dir, file)
+        }
+        SourceLocator::Builtin => None,
+    }
+}
+
+/// The sidecar key a tutorial project writes to ADOPT a staged capture by
+/// reference (R6) — a project's `sources.json` still names the capture by
+/// its `base`, but the capture's own sidecar carries this key back so
+/// `staged_commands`/`staging_commands` can tell a pinned capture apart
+/// from an ordinary one without opening the project store at all.
+const PIN_KEY: &str = "editorProjectId";
+
+/// Is this staged capture pinned to a tutorial project, and if so which
+/// one? Reads the sidecar's flattened `extra` map — the same forward-
+/// compatible catch-all every other sidecar field beyond this build's own
+/// uses — so a non-string value (the sidecar is hand-editable) is not a
+/// claim in either direction, `staged_commands::summary_is_recovered`'s
+/// posture applied to a string key instead of a bool one.
+pub fn pinned_project(sidecar: &StagedSidecar) -> Option<String> {
+    sidecar.extra.get(PIN_KEY)?.as_str().map(str::to_string)
+}
+
+/// Write the pin into a staged capture's sidecar (R6: adopted by
+/// reference, not moved). A read-modify-write through
+/// `staging::write_sidecar`, so it inherits that writer's atomic
+/// temp+fsync+rename and its containment refusal — this function never
+/// touches the file system directly.
+///
+/// Errs when the capture has no sidecar to pin at all (`NotFound`-shaped):
+/// pinning is meaningless without a capture on the other end.
+pub fn pin_staged(staging_dir: &Path, base: &str, project_id: &str) -> std::io::Result<()> {
+    let path = staging_dir.join(staging::sidecar_file_name(base));
+    let mut sidecar = staging::read_sidecar(&path).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("no staged capture named {base:?} to pin"),
+        )
+    })?;
+    sidecar.extra.insert(
+        PIN_KEY.to_string(),
+        serde_json::Value::String(project_id.to_string()),
+    );
+    staging::write_sidecar(staging_dir, base, &sidecar).map(|_| ())
+}
+
+/// Clear the pin, but only when it is OURS — a project id this call was not
+/// asked to clear must never erase a different project's pin. A capture
+/// with no sidecar, or no pin at all, is already unpinned: both degrade to
+/// `Ok(())` rather than an error, the same "the path is clear" posture
+/// `discard_staged_files` uses for an already-gone file.
+pub fn unpin_staged(staging_dir: &Path, base: &str, project_id: &str) -> std::io::Result<()> {
+    let path = staging_dir.join(staging::sidecar_file_name(base));
+    let Some(mut sidecar) = staging::read_sidecar(&path) else {
+        return Ok(());
+    };
+    if pinned_project(&sidecar).as_deref() != Some(project_id) {
+        return Ok(());
+    }
+    sidecar.extra.remove(PIN_KEY);
+    staging::write_sidecar(staging_dir, base, &sidecar).map(|_| ())
+}
+
+/// Shared test fixture: `test_support::minimal_project`'s counterpart for
+/// the shell's own tests, since `core::editor::test_support` is
+/// `#[cfg(test)] pub(crate)` to `core` alone and cannot cross the crate
+/// boundary. `pub(crate)` so `store_io`'s sibling test module can reuse it
+/// too, the same reason `core`'s own fixture module exists.
+#[cfg(test)]
+pub(crate) fn minimal_project(id: &str) -> vault_buddy_core::editor::Project {
+    vault_buddy_core::editor::Project {
+        schema: vault_buddy_core::editor::PROJECT_SCHEMA.to_string(),
+        id: id.to_string(),
+        title: "Untitled".to_string(),
+        canvas: vault_buddy_core::editor::Canvas {
+            width: 1280,
+            height: 720,
+            fps: 30,
+            extra: vault_buddy_core::editor::Map::new(),
+        },
+        master_gain: 1.0,
+        assets: Vec::new(),
+        tracks: Vec::new(),
+        clips: Vec::new(),
+        effects: Vec::new(),
+        markers: Vec::new(),
+        transitions: Vec::new(),
+        captions: None,
+        destination: vault_buddy_core::editor::Destination {
+            vault: String::new(),
+            folder: String::new(),
+            dated: false,
+            extra: vault_buddy_core::editor::Map::new(),
+        },
+        extra: vault_buddy_core::editor::Map::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sidecar_fixture(base: &str) -> StagedSidecar {
+        StagedSidecar {
+            base: base.to_string(),
+            vault_id: "v1".into(),
+            source_title: "Demo".into(),
+            source_kind: "screen".into(),
+            inputs: Vec::new(),
+            duration_ms: 5_000,
+            paused_ms: 0,
+            width: 1920,
+            height: 1080,
+            recorded_at: "2026-09-20T14:32:00Z".into(),
+            timeline: None,
+            extra: serde_json::Map::new(),
+        }
+    }
+
+    #[test]
+    fn project_dir_refuses_an_invalid_id() {
+        let root = Path::new("/lad");
+        assert_eq!(
+            project_dir(root, "abc-123_XY"),
+            Some(PathBuf::from("/lad/editor-projects/abc-123_XY"))
+        );
+        assert_eq!(project_dir(root, ""), None);
+        assert_eq!(
+            project_dir(root, "a/b"),
+            None,
+            "a separator must be refused"
+        );
+        assert_eq!(
+            project_dir(root, "../evil"),
+            None,
+            "a traversal must be refused"
+        );
+    }
+
+    // A malicious file NAME (never the project's own id, which is already
+    // charset-restricted) is the escape vector `resolve_source` guards:
+    // media/takes file names come from a project's own `sources.json`,
+    // which — unlike a project id — carries no charset restriction at all.
+    #[test]
+    fn resolve_source_refuses_escaping_file_names() {
+        let root = tempfile::tempdir().unwrap();
+        let record = |locator: SourceLocator| SourceRecord {
+            locator,
+            sha256: None,
+            size: 0,
+            duration_ms: 0,
+            width: 0,
+            height: 0,
+            has_audio: false,
+            has_video: false,
+            media_kind: SourceMediaKind::Video,
+        };
+        assert_eq!(
+            resolve_source(
+                root.path(),
+                "proj1",
+                &record(SourceLocator::Media {
+                    file: "../x".to_string()
+                })
+            ),
+            None,
+            "a parent-directory escape must be refused"
+        );
+        assert_eq!(
+            resolve_source(
+                root.path(),
+                "proj1",
+                &record(SourceLocator::Takes {
+                    file: "C:x".to_string()
+                })
+            ),
+            None,
+            "a drive-relative escape must be refused"
+        );
+    }
+
+    #[test]
+    fn resolve_source_joins_an_ordinary_file_name_under_the_right_subdirectory() {
+        let root = tempfile::tempdir().unwrap();
+        let record = |locator: SourceLocator| SourceRecord {
+            locator,
+            sha256: None,
+            size: 0,
+            duration_ms: 0,
+            width: 0,
+            height: 0,
+            has_audio: false,
+            has_video: false,
+            media_kind: SourceMediaKind::Video,
+        };
+        assert_eq!(
+            resolve_source(
+                root.path(),
+                "proj1",
+                &record(SourceLocator::Media {
+                    file: "clip.mp4".to_string()
+                })
+            ),
+            Some(
+                root.path()
+                    .join("editor-projects")
+                    .join("proj1")
+                    .join("media")
+                    .join("clip.mp4")
+            )
+        );
+        assert_eq!(
+            resolve_source(
+                root.path(),
+                "proj1",
+                &record(SourceLocator::Staging {
+                    base: "2026-09-20 1432 Demo".to_string()
+                })
+            ),
+            Some(
+                root.path()
+                    .join("screen-captures")
+                    .join("2026-09-20 1432 Demo.mp4")
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_source_answers_nothing_for_a_builtin_source() {
+        let root = tempfile::tempdir().unwrap();
+        let record = SourceRecord {
+            locator: SourceLocator::Builtin,
+            sha256: None,
+            size: 0,
+            duration_ms: 0,
+            width: 0,
+            height: 0,
+            has_audio: false,
+            has_video: false,
+            media_kind: SourceMediaKind::Video,
+        };
+        assert_eq!(resolve_source(root.path(), "proj1", &record), None);
+    }
+
+    #[test]
+    fn a_staging_locator_round_trips_the_adr_example_shape() {
+        let v = serde_json::to_value(SourceLocator::Staging {
+            base: "2026-09-20 1432 Demo".to_string(),
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"store": "staging", "base": "2026-09-20 1432 Demo"})
+        );
+    }
+
+    #[test]
+    fn pin_round_trips_through_the_sidecar_extra() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = "2026-09-20 1432 Demo";
+        staging::write_sidecar(dir.path(), base, &sidecar_fixture(base)).unwrap();
+        assert_eq!(
+            pinned_project(
+                &staging::read_sidecar(&dir.path().join(staging::sidecar_file_name(base))).unwrap()
+            ),
+            None,
+            "an unpinned capture must not already report a project"
+        );
+
+        pin_staged(dir.path(), base, "proj1").unwrap();
+        let pinned =
+            staging::read_sidecar(&dir.path().join(staging::sidecar_file_name(base))).unwrap();
+        assert_eq!(pinned_project(&pinned).as_deref(), Some("proj1"));
+
+        unpin_staged(dir.path(), base, "proj1").unwrap();
+        let unpinned =
+            staging::read_sidecar(&dir.path().join(staging::sidecar_file_name(base))).unwrap();
+        assert_eq!(pinned_project(&unpinned), None);
+    }
+
+    #[test]
+    fn unpin_never_clears_a_different_projects_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = "2026-09-20 1432 Demo";
+        staging::write_sidecar(dir.path(), base, &sidecar_fixture(base)).unwrap();
+        pin_staged(dir.path(), base, "proj1").unwrap();
+
+        unpin_staged(dir.path(), base, "some-other-project").unwrap();
+
+        let s = staging::read_sidecar(&dir.path().join(staging::sidecar_file_name(base))).unwrap();
+        assert_eq!(pinned_project(&s).as_deref(), Some("proj1"));
+    }
+
+    #[test]
+    fn pin_staged_refuses_a_capture_with_no_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(pin_staged(dir.path(), "nowhere", "proj1").is_err());
+    }
+
+    #[test]
+    fn unpin_staged_of_an_already_gone_capture_is_success() {
+        let dir = tempfile::tempdir().unwrap();
+        unpin_staged(dir.path(), "nowhere", "proj1").expect("nothing to do is success");
+    }
+}

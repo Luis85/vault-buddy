@@ -15,6 +15,14 @@ mod commands;
 mod config_lock_guard;
 mod diagnostics;
 mod document_commands;
+// Task 9 (tutorial editor, R6): the owned project store outside every
+// vault. No production caller until Task 10 wires `editor_open_staged` and
+// the session commands — the new modules are exercised only by their own
+// `#[cfg(test)]` code until then, and workspace `clippy -D warnings` would
+// otherwise fail on a lib crate with no external caller. Task 10 removes
+// this allow once it adds one.
+#[allow(dead_code)]
+mod editor;
 mod editor_commands;
 mod export_commands;
 mod export_shutdown;
