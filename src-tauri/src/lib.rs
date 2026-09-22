@@ -15,13 +15,8 @@ mod commands;
 mod config_lock_guard;
 mod diagnostics;
 mod document_commands;
-// Task 9 (tutorial editor, R6): the owned project store outside every
-// vault. No production caller until Task 10 wires `editor_open_staged` and
-// the session commands — the new modules are exercised only by their own
-// `#[cfg(test)]` code until then, and workspace `clippy -D warnings` would
-// otherwise fail on a lib crate with no external caller. Task 10 removes
-// this allow once it adds one.
-#[allow(dead_code)]
+// The tutorial editor's shell surface: the owned project store (R5/R6) and
+// the `editor_*` session commands behind R8's caller-window check.
 mod editor;
 mod editor_commands;
 mod export_commands;
@@ -66,6 +61,9 @@ use std::time::Instant;
 use tauri::{Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use vault_buddy_core::sync_util::lock_ignoring_poison;
+// Imported so the editor commands register as two-segment paths, like
+// every other command (the handler count's one-liner counts exactly those).
+use editor::session_commands;
 
 /// Stamped by a Ctrl-open (`open_search_result` with `keep_open`): Obsidian
 /// grabs foreground focus while handling the `obsidian://` URI, which blurs
@@ -358,6 +356,7 @@ pub fn run() {
         .manage(document_commands::DocumentImportPending::default())
         .manage(document_commands::AddDocumentPending::default())
         .manage(editor_commands::EditorRequest::default())
+        .manage(editor::EditorState::default())
         .manage(export_commands::ExportState::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
@@ -496,6 +495,11 @@ pub fn run() {
             staging_commands::staging_usage,
             staging_commands::clear_staged_captures,
             staged_commands::open_screen_capture,
+            session_commands::editor_open_staged,
+            session_commands::editor_get_snapshot,
+            session_commands::editor_execute,
+            session_commands::editor_close_session,
+            session_commands::editor_hide_window,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to

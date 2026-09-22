@@ -106,6 +106,10 @@ pub fn create_project(
 /// one-time mint. Only `project.json` is rewritten: `sources.json` changes
 /// far less often (only when a source is added/relinked) and is written by
 /// whatever operation actually changes it, not on every ordinary save.
+// Test-only until `editor_save_project` (a later task) gives it a
+// production caller — `clippy -D warnings` refuses an uncalled `pub fn` in
+// a lib crate, and a blanket `allow(dead_code)` would hide real dead code.
+#[cfg(test)]
 pub fn commit_project(root: &Path, id: &str, envelope: &WorkspaceEnvelope) -> io::Result<()> {
     let dir = project_dir(root, id).ok_or_else(|| invalid_id(id))?;
     write_json(&dir.join(PROJECT_FILE), envelope)
@@ -166,6 +170,14 @@ pub fn load_project(
     validate_envelope(&envelope)?;
     let sources = read_sources(&dir)?;
     Ok((envelope, sources))
+}
+
+/// A project's `sources.json` alone — what discarding a project needs to
+/// know (which staged capture it pinned) without trusting or validating the
+/// graph it is about to delete.
+pub fn load_sources(root: &Path, id: &str) -> Result<BTreeMap<String, SourceRecord>, EditorError> {
+    let dir = project_dir(root, id).ok_or_else(|| invalid_id_err(id))?;
+    read_sources(&dir)
 }
 
 fn read_sources(dir: &Path) -> Result<BTreeMap<String, SourceRecord>, EditorError> {

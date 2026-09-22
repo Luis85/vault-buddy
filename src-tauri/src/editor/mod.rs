@@ -1,25 +1,35 @@
-//! The tutorial editor's SHELL-side surface (P02, Task 9 onward): the owned
-//! project store on disk, pin-aware staging integration, and — once Task 10
-//! wires the IPC commands — the `editor_*` session surface.
+//! The tutorial editor's SHELL-side surface: the owned project store on
+//! disk (`project_store`, `store_io`, Task 9), pin-aware staging
+//! integration, and the `editor_*` session commands (`session_commands`,
+//! Task 10) behind R8's caller-window check (`authz`).
 //!
-//! Task 9 is the first shell-crate task in the tutorial-editor plan: the
-//! project store (`project_store`, `store_io`) and the pin that connects a
-//! staged screen capture to the tutorial project editing it
-//! (`docs/superpowers/specs/2026-09-21-tutorial-editor-integration-design.md`
-//! R6). Nothing outside this module's own `#[cfg(test)]` code calls into it
-//! yet — `lib.rs`'s `mod editor;` declaration carries a temporary
-//! `#[allow(dead_code)]` for exactly that reason (workspace
-//! `clippy -D warnings` would otherwise fail on a lib crate with no external
-//! caller). Task 10 wires `editor_open_staged` and the session commands that
-//! give this module a real caller, and removes the allow then.
+//! Every `#[tauri::command]` in ANY file under this directory must take
+//! `window: WebviewWindow` and call `authz::require_editor_window(&window)`
+//! first — `authz_guard.rs` scans the whole directory, whatever a file is
+//! named, and fails naming the command that does not.
 
+pub mod authz;
+#[cfg(test)]
+mod authz_guard;
 pub mod project_store;
+pub mod session_commands;
 pub mod store_io;
 
-/// Placeholder for the session/authorization state Task 10 introduces
-/// (`editor::authz::require_editor_window`, the per-window session map,
-/// R8). Exists now only so this module has a public item beyond its two
-/// sibling sub-modules; later tasks grow it into the real thing rather than
-/// this file staying a bare pair of `pub mod` lines.
-#[derive(Debug, Default)]
-pub struct EditorState;
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use vault_buddy_core::editor::EditorSession;
+
+/// The live editing sessions (managed in `lib.rs`).
+///
+/// `sessions` maps a session id to its session; `by_project` maps a project
+/// id to the one session open on it, so a second open of the same project
+/// reuses that session instead of forking a second, racing one.
+///
+/// **Lock order: `by_project` before `sessions`** whenever both are held
+/// (`session_commands`' module doc). Neither is held across disk I/O.
+#[derive(Default)]
+pub struct EditorState {
+    pub sessions: Mutex<HashMap<String, EditorSession>>,
+    pub by_project: Mutex<HashMap<String, String>>,
+}

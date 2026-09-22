@@ -20,6 +20,7 @@ pub mod ids;
 pub mod migrate;
 pub mod model;
 pub mod model_cues;
+pub mod projection;
 pub mod session;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -35,6 +36,7 @@ pub use history::History;
 pub use ids::{is_valid_id, new_entity_id, new_project_id};
 pub use model::*;
 pub use model_cues::*;
+pub use projection::{EditorOpenResult, EditorProjection, MissingMedia};
 pub use session::{EditorSession, EditorSnapshot, ExecuteRequest};
 pub use validate::{validate_envelope, validate_project};
 pub use workspace::{sanitize, DeleteMode, Selected, Workspace};

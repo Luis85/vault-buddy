@@ -189,6 +189,12 @@ impl EditorSession {
         }
     }
 
+    /// The project graph at the session's current revision — read-only; the
+    /// only way to change it is `execute`/`execute_internal`.
+    pub fn project(&self) -> &Project {
+        &self.project
+    }
+
     /// Marks `r` as persisted, but only if it is not AHEAD of the session's
     /// own revision -- a save receipt racing a later edit must not claim a
     /// revision the session has not actually reached yet.
