@@ -196,6 +196,37 @@ describe("useInspectorDraft", () => {
     expect(commits).toEqual([3]);
   });
 
+  // Fix round 1 (review Minor): a value Rust REFUSES (commit resolves
+  // false) must not stay in the field looking committed -- the inspector
+  // would then disagree with the timeline (R14). Re-seed from the committed
+  // value, unless the user has already typed something else since.
+  it("reverts to the committed value when the commit is refused", async () => {
+    const d = useInspectorDraft(speedField(() => 1), () => Promise.resolve(false));
+
+    d.draft.value = "2";
+    d.submit();
+    expect(d.draft.value).toBe("2");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(d.draft.value).toBe("1");
+    expect(d.error.value).toBeNull();
+  });
+
+  it("does not clobber a newer edit when an older commit is refused", async () => {
+    let refuse!: (ok: boolean) => void;
+    const d = useInspectorDraft(speedField(() => 1), () => new Promise<boolean>((r) => (refuse = r)));
+
+    d.draft.value = "2";
+    d.submit();
+    d.draft.value = "3"; // typed again while the first commit was in flight
+    refuse(false);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(d.draft.value).toBe("3");
+  });
+
   it("an integer field refuses a fractional value inline", () => {
     const commits: number[] = [];
     const d = useInspectorDraft(

@@ -157,6 +157,7 @@ describe("useTimelineDrag — body drag", () => {
       moveTargetClipIds: () => ["c1"],
       trackOrder: () => ["v1", "v2"] as const,
       trackIndex: () => 0,
+      trackAccepts: () => true,
       execute,
     };
   }
@@ -224,6 +225,31 @@ describe("useTimelineDrag — body drag", () => {
     expect(execute).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "moveClips", trackId: "v2" }),
     );
+  });
+
+  // Fix round 1 (review Important 1; brief: "trackId when dropped on another
+  // COMPATIBLE lane"). Rust refuses the WHOLE moveClips for a destination
+  // of the wrong kind or a locked one -- horizontal delta included -- so a
+  // slightly diagonal drag across such a lane used to lose the entire move.
+  // The drop now stays on the clip's own track and keeps the delta.
+  it("a drop on a lane that does not accept the clip keeps its own track and the delta", async () => {
+    const execute = vi.fn();
+    const refused: string[] = [];
+    const drag = useTimelineDrag({
+      ...deps(execute),
+      trackOrder: () => ["v1", "a1"],
+      trackAccepts: (id: string) => {
+        refused.push(id);
+        return id !== "a1";
+      },
+    });
+
+    drag.beginBodyDrag(0, 0);
+    drag.updateBodyDrag(200 * PPM);
+    await drag.endBodyDrag(56); // one lane down: a1, which refuses the clip
+
+    expect(refused).toEqual(["a1"]);
+    expect(execute).toHaveBeenCalledWith({ kind: "moveClips", clipIds: ["c1"], deltaMs: 200, trackId: null });
   });
 
   it("never sends trackId when the drag moves more than one clip", async () => {
@@ -294,6 +320,7 @@ describe("useTimelineDrag — trim", () => {
       moveTargetClipIds: () => ["c1"],
       trackOrder: () => ["v1"] as const,
       trackIndex: () => 0,
+      trackAccepts: () => true,
       execute,
     };
   }
@@ -371,6 +398,7 @@ describe("useTimelineDrag — degenerate input", () => {
       moveTargetClipIds: () => ["c1"],
       trackOrder: () => [] as string[],
       trackIndex: () => 0,
+      trackAccepts: () => true,
       execute,
     };
   }
@@ -428,6 +456,7 @@ describe("useTimelineDrag — nudge", () => {
       moveTargetClipIds: () => ["c1"],
       trackOrder: () => ["v1"] as const,
       trackIndex: () => 0,
+      trackAccepts: () => true,
       execute,
     });
 

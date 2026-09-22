@@ -23,11 +23,13 @@
  * is the "later task" this doc used to point at — both fields now read the
  * real window-local clipboard ref instead of the honest "nothing to paste
  * yet" literals every caller used before it existed, and every existing
- * caller needed no change at all to pick that up.
+ * caller needed no change at all to pick that up. The fragment is scoped
+ * to the project it was copied from: another project sees an empty
+ * clipboard.
  */
 import type { EditorSnapshot, Project } from "../editorTypes";
 import type { ActionContext, PointerTarget } from "./actions";
-import { clipboardFragment } from "./clipboard";
+import { clipboardFor } from "./clipboard";
 
 export function baseActionContext(
   project: Project | null,
@@ -36,13 +38,16 @@ export function baseActionContext(
   selectedClipIds: string[],
   pointerTarget: PointerTarget | null = null,
 ): ActionContext {
+  // Only a fragment copied from THIS project is offered (fix round 1 —
+  // `clipboard.ts`'s own doc says why a cross-project paste is dangerous).
+  const fragment = clipboardFor(project?.id);
   return {
     project,
     snapshot,
     playheadMs,
     selectedClipIds,
     pointerTarget,
-    hasClipboard: clipboardFragment.value !== null,
-    clipboardFragment: clipboardFragment.value,
+    hasClipboard: fragment !== null,
+    clipboardFragment: fragment,
   };
 }

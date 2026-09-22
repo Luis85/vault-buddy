@@ -12,9 +12,11 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import EditorShell from "../src/components/editor/shell/EditorShell.vue";
+import { clearClipboardForTest } from "../src/editor/clipboard";
 import type { EditorPort } from "../src/editor/port";
-import type { EditorOpenResult, EditorSnapshot, Project, SaveReceipt } from "../src/editorTypes";
+import type { Clip, EditorOpenResult, EditorSnapshot, Project, SaveReceipt } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
+import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
 
 enableAutoUnmount(afterEach);
 
@@ -24,6 +26,7 @@ function setViewportWidth(width: number) {
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  clearClipboardForTest();
   // A wide default so a test that doesn't care about the responsive collapse
   // never accidentally lands in compact mode (the "fixture flaw" rule: a
   // test that only incidentally passes at the shared-document's leftover
@@ -382,6 +385,65 @@ describe("EditorShell — dispatcher ownership (Task 21)", () => {
 
     keydown(w.get('[data-testid="in-menu"]').element, { key: "z", ctrlKey: true });
     keydown(w.get('[data-testid="in-dialog"]').element, { key: "z", ctrlKey: true });
+    await flushPromises();
+
+    expect(executed).toEqual([]);
+  });
+});
+
+describe("EditorShell — the clipboard across a session change (fix round 1)", () => {
+  function capture(projectId: string, clipId: string): Project {
+    const c: Clip = {
+      id: clipId, asset_id: "src", track_id: "v1", name: clipId, start_ms: 0, in_ms: 2_000, out_ms: 3_000,
+      fade_in_ms: 0, fade_out_ms: 0, fade_curve: "linear", opacity: 1, volume: 1, muted: false, x: 0, y: 0, w: 1, h: 1,
+    };
+    return project({
+      id: projectId,
+      // Every migrated project names its capture asset "src" -- which is
+      // why Rust's asset check cannot catch a cross-project paste.
+      assets: [{ id: "src", kind: "video", name: "capture", duration_ms: 60_000 }],
+      tracks: [{ id: "v1", kind: "video", name: "Video", visible: true, locked: false, muted: false, solo: false, volume: 1 }],
+      clips: [c],
+    });
+  }
+
+  it("a clip copied in capture A cannot be pasted into capture B; in A it still can", async () => {
+    const store = useEditorProjectStore();
+    const executed: unknown[] = [];
+    store.setPort(
+      fakePort({
+        openStaged: (base) => {
+          const id = base === "cap A" ? "project-a" : "project-b";
+          return Promise.resolve(
+            openResult({
+              snapshot: snapshot({ projectId: id, sessionId: `ses-${id}`, durationMs: 3_000 }),
+              project: capture(id, base === "cap A" ? "clip-a" : "clip-b"),
+              sourceBase: base,
+            }),
+          );
+        },
+        execute: (req) => {
+          executed.push(req.command);
+          return Promise.resolve({ snapshot: snapshot({ revision: 2 }), project: store.project as Project });
+        },
+      }),
+    );
+    const workspace = useEditorWorkspaceStore();
+    const w = mount(EditorShell, { attachTo: document.body });
+    const shell = () => w.get('[data-testid="editor-shell"]');
+
+    await store.openStaged("cap A");
+    workspace.select(["clip-a"]);
+    await shell().trigger("keydown", { key: "c", ctrlKey: true });
+    await shell().trigger("keydown", { key: "v", ctrlKey: true }); // positive control: same project
+    await flushPromises();
+    expect(executed).toEqual([expect.objectContaining({ kind: "pasteFragment", trackId: "v1" })]);
+
+    executed.length = 0;
+    await store.openStaged("cap B");
+    await flushPromises();
+    workspace.select(["clip-b"]);
+    await shell().trigger("keydown", { key: "v", ctrlKey: true });
     await flushPromises();
 
     expect(executed).toEqual([]);

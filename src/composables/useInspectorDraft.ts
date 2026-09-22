@@ -129,9 +129,14 @@ export function textField(opts: {
   };
 }
 
+/** A commit may report its outcome: returning or resolving to exactly
+ * `false` means the command was REFUSED, and the draft falls back to the
+ * committed value (see `submit`). Any other result is trusted as sent. */
+export type InspectorCommit<T> = (value: T) => unknown;
+
 export function useInspectorDraft<T>(
   field: InspectorField<T>,
-  commit: (value: T) => void,
+  commit: InspectorCommit<T>,
 ): InspectorDraft {
   const draft = ref(field.format(field.value()));
   const error = ref<string | null>(null);
@@ -158,7 +163,14 @@ export function useInspectorDraft<T>(
     error.value = null;
     draft.value = field.format(result.value);
     lastCommittedRaw = draft.value;
-    commit(result.value);
+    const submitted = draft.value;
+    // A refused commit (Rust said no — e.g. F14's minimum) must not leave
+    // the refused text sitting in the field as if it were committed: the
+    // inspector would then disagree with the timeline (R14). Re-seed from
+    // the committed value, unless the user has typed something newer since.
+    void Promise.resolve(commit(result.value)).then((ok) => {
+      if (ok === false && draft.value === submitted) revert();
+    });
   }
 
   function revert(): void {

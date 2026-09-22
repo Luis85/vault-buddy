@@ -136,6 +136,10 @@ const drag = useTimelineDrag({
   moveTargetClipIds,
   trackOrder: () => props.trackOrder,
   trackIndex: () => props.trackIndex,
+  trackAccepts: (trackId) => {
+    const track = editorProject.trackById(trackId);
+    return track !== undefined && !track.locked && track.kind === props.assetKind;
+  },
   execute: (command) => editorProject.execute(command),
 });
 

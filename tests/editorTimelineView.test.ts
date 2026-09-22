@@ -766,6 +766,44 @@ describe("ClipItem — drag (Task 21)", () => {
     expect(executed).toEqual([{ kind: "moveClips", clipIds: ["c3"], deltaMs: 100, trackId: null }]);
   });
 
+  // Fix round 1 (review Important 1), through the REAL predicate ClipItem
+  // passes: the lane below c2 (v1) is a1, an AUDIO track, and c2 is a video
+  // clip. Rust would refuse moveClips{trackId:"a1"} outright and drop the
+  // horizontal move with it; the drop stays on v1 and keeps the delta.
+  it("a vertical drop onto an incompatible (audio) lane keeps the clip's track and its move", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    const c2 = w.get('[data-testid="clip-c2"]'); // 0..1000 on v1 (lane 2 of 3)
+    await c2.trigger("pointerdown", { clientX: 20, clientY: 100, pointerId: 1 });
+    await c2.trigger("pointermove", { clientX: 30, clientY: 156, pointerId: 1 }); // +200ms, one lane down
+    await c2.trigger("pointerup", { clientX: 30, clientY: 156, pointerId: 1 });
+    await flushPromises();
+
+    expect(executed).toEqual([{ kind: "moveClips", clipIds: ["c2"], deltaMs: 200, trackId: null }]);
+  });
+
+  it("a vertical drop onto a LOCKED lane keeps the clip's track; an unlocked one is targeted", async () => {
+    for (const locked of [true, false]) {
+      executed = [];
+      setActivePinia(createPinia());
+      await openProject({ tracks: [track("v2", { locked }), track("v1"), track("a1", { kind: "audio" })] });
+      const w = mount(TimelineView, { attachTo: document.body });
+      await flushPromises();
+
+      const c2 = w.get('[data-testid="clip-c2"]'); // on v1; v2 is the lane ABOVE
+      await c2.trigger("pointerdown", { clientX: 20, clientY: 100, pointerId: 1 });
+      await c2.trigger("pointermove", { clientX: 30, clientY: 44, pointerId: 1 }); // +200ms, one lane up
+      await c2.trigger("pointerup", { clientX: 30, clientY: 44, pointerId: 1 });
+      await flushPromises();
+
+      expect(executed).toEqual([{ kind: "moveClips", clipIds: ["c2"], deltaMs: 200, trackId: locked ? null : "v2" }]);
+      w.unmount();
+    }
+  });
+
   it("a secondary-button press never starts a drag", async () => {
     executed = [];
     await openProject();

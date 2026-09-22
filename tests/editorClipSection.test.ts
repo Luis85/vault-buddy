@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import ClipSection from "../src/components/editor/inspector/ClipSection.vue";
 import type { EditorPort } from "../src/editor/port";
+import { EditorPortError } from "../src/editor/port";
 import type { Asset, Clip, EditorOpenResult, EditorSnapshot, Project, Track } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
@@ -284,6 +285,47 @@ describe("ClipSection — fields", () => {
 
     expect(executed).toEqual([]);
     expect(w.get('[data-testid="clip-section-name-error"]').text()).toBe("Name must not be empty.");
+  });
+
+  // Fix round 1 (review Minor, F14's own case): Out below In + 100 passes the
+  // field's own range check but Rust refuses the trimClip. The field must
+  // fall back to the committed value, not keep showing the refused one as
+  // if the timeline had taken it.
+  it("a value Rust refuses (Out below the 100 ms minimum) reverts to the committed value", async () => {
+    executed = [];
+    const store = useEditorProjectStore();
+    const s = snapshot();
+    store.setPort(
+      fakePort({
+        openStaged: () =>
+          Promise.resolve<EditorOpenResult>({
+            snapshot: s, project: project(), workspace: {}, missing: [], sourceBase: "base", recovered: false,
+          }),
+        execute: (req) => {
+          executed.push(req.command);
+          return Promise.reject(
+            new EditorPortError({
+              code: "invalidRequest",
+              message: "trimClip would produce a 50 ms clip, below the 100 ms minimum",
+              retryable: false,
+              operationId: "op-1",
+            }),
+          );
+        },
+      }),
+    );
+    await store.openStaged("base");
+    const w = mount(ClipSection, { props: { clipIds: ["c1"] } });
+    await flushPromises();
+
+    const out = w.get('[data-testid="clip-section-out"]');
+    await out.setValue("350"); // in is 300
+    await out.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+
+    expect(executed).toEqual([{ kind: "trimClip", clipId: "c1", startMs: 2_000, inMs: 300, outMs: 350 }]);
+    expect(store.lastError?.message).toContain("100 ms minimum");
+    expect((out.element as HTMLInputElement).value).toBe("1300");
   });
 
   it("Escape reverts the draft to the last committed value", async () => {

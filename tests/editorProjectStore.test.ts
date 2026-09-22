@@ -321,11 +321,26 @@ describe("editorProject store", () => {
       }),
     );
     await store.openStaged("A");
-    await store.execute({ kind: "undo" });
+    // Task 21 fix round 1: execute reports the refusal to its caller too, so
+    // a provisional value (an inspector draft) can be dropped.
+    await expect(store.execute({ kind: "undo" })).resolves.toBe(false);
 
     expect(store.project?.title).toBe("Keep me");
     expect(store.snapshot?.revision).toBe(2);
     expect(store.lastError).toEqual(err);
+  });
+
+  it("execute resolves true for an acknowledged command and false with no session", async () => {
+    const store = useEditorProjectStore();
+    await expect(store.execute({ kind: "undo" })).resolves.toBe(false); // nothing open
+    store.setPort(
+      fakePort({
+        openStaged: () => Promise.resolve(openResult({ snapshot: snapshot({ revision: 2 }) })),
+        execute: () => Promise.resolve({ snapshot: snapshot({ revision: 3 }), project: project() }),
+      }),
+    );
+    await store.openStaged("A");
+    await expect(store.execute({ kind: "undo" })).resolves.toBe(true);
   });
 });
 

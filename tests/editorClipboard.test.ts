@@ -54,16 +54,35 @@ function project(clips: Clip[]): Project {
 describe("baseActionContext — clipboard wiring", () => {
   it("reflects the real clipboard, not a hardcoded empty default", () => {
     clearClipboardForTest();
-    let ctx = baseActionContext(null, null, 0, []);
+    const p1 = project([clip("c1")]);
+    let ctx = baseActionContext(p1, null, 0, []);
     expect(ctx.hasClipboard).toBe(false);
     expect(ctx.clipboardFragment).toBeNull();
 
     const fragment = { clips: [clip("c1")], effects: [], captions: [], markers: [], originMs: 0 };
-    setClipboard(fragment);
-    ctx = baseActionContext(null, null, 0, []);
+    setClipboard(fragment, "p1");
+    ctx = baseActionContext(p1, null, 0, []);
     expect(ctx.hasClipboard).toBe(true);
     expect(ctx.clipboardFragment).toEqual(fragment);
-    expect(clipboardFragment.value).toEqual(fragment);
+    expect(clipboardFragment.value).toEqual({ projectId: "p1", fragment });
+  });
+
+  // Fix round 1 (review Important 2): the editor window is hidden and
+  // REUSED, so this module outlives every session. Every migrated project
+  // names its capture asset "src", so a fragment copied in capture A passes
+  // Rust's asset-existence check in capture B and silently pastes a clip
+  // playing B's footage over A's in/out range. A fragment belongs to the
+  // project it was copied from.
+  it("a fragment copied in one project is not offered in another", () => {
+    clearClipboardForTest();
+    const fragment = { clips: [clip("c1")], effects: [], captions: [], markers: [], originMs: 0 };
+    setClipboard(fragment, "p1");
+
+    const other = { ...project([clip("c9")]), id: "p2" };
+    const ctx = baseActionContext(other, null, 0, ["c9"]);
+    expect(ctx.hasClipboard).toBe(false);
+    expect(ctx.clipboardFragment).toBeNull();
+    expect(baseActionContext(null, null, 0, []).hasClipboard).toBe(false);
   });
 });
 
@@ -77,7 +96,8 @@ describe("activateEditorAction — copy", () => {
     expect(activateEditorAction("copy", ctx, execute)).toBe(true);
 
     expect(execute).not.toHaveBeenCalled();
-    expect(clipboardFragment.value?.clips.map((c) => c.id)).toEqual(["c1"]);
+    expect(clipboardFragment.value?.fragment.clips.map((c) => c.id)).toEqual(["c1"]);
+    expect(clipboardFragment.value?.projectId).toBe("p1");
   });
 });
 
@@ -103,7 +123,8 @@ describe("activateEditorAction — cut", () => {
     expect(activateEditorAction("cut", ctx, execute)).toBe(true);
 
     // The copy half: the clipboard now holds the cut clip, entirely local.
-    expect(clipboardFragment.value?.clips.map((c) => c.id)).toEqual(["c1"]);
+    expect(clipboardFragment.value?.fragment.clips.map((c) => c.id)).toEqual(["c1"]);
+    expect(clipboardFragment.value?.projectId).toBe("p1");
     // The delete half: exactly ONE command reaches Rust -- one undo step,
     // not two (a separate "copy" commit followed by a "delete" commit).
     expect(execute).toHaveBeenCalledTimes(1);

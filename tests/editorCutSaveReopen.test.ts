@@ -175,7 +175,7 @@ describe("capture -> cut -> save -> reopen (Task 21 acceptance)", () => {
     // ONE command reached the fake -- the cut, one undo step -- and the
     // clipboard (window-local, never sent) holds the intro.
     expect(fake.sent).toEqual([{ kind: "cutClips", clipIds: ["intro"], closeGap: true }]);
-    expect(clipboardFragment.value?.clips.map((c) => c.id)).toEqual(["intro"]);
+    expect(clipboardFragment.value?.fragment.clips.map((c) => c.id)).toEqual(["intro"]);
     // The timeline renders Rust's canned reply, not a local edit.
     expect(w.find('[data-testid="clip-intro"]').exists()).toBe(false);
     expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Unsaved changes");

@@ -67,19 +67,21 @@ const MAX_DURATION_MS = 7_200_000;
 const assetDurationMs =
   editorProject.project?.assets.find((a) => a.id === clip.value?.asset_id)?.duration_ms ?? MAX_DURATION_MS;
 
-function commitRename(name: string) {
+/** Both commits return `execute`'s outcome, so `useInspectorDraft` can drop
+ * a value Rust refused instead of showing it as committed (fix round 1). */
+function commitRename(name: string): Promise<boolean> {
   const c = clip.value;
-  if (c) void editorProject.execute({ kind: "updateClip", clipId: c.id, name });
+  return c ? editorProject.execute({ kind: "updateClip", clipId: c.id, name }) : Promise.resolve(false);
 }
 /** Every numeric field sends the SAME `trimClip` shape carrying `startMs`/
  * `inMs`/`outMs`, changing only the one field the user actually edited —
  * `trimClip`'s own contract ("sets the clip's placement and source range
  * directly, never a delta") takes all three every time, so an untouched
  * field is sent back at its own current committed value. */
-function commitTrim(overrides: { startMs?: number; inMs?: number; outMs?: number }) {
+function commitTrim(overrides: { startMs?: number; inMs?: number; outMs?: number }): Promise<boolean> {
   const c = clip.value;
-  if (!c) return;
-  void editorProject.execute({
+  if (!c) return Promise.resolve(false);
+  return editorProject.execute({
     kind: "trimClip",
     clipId: c.id,
     startMs: overrides.startMs ?? c.start_ms,
@@ -92,7 +94,7 @@ type LiveClip = NonNullable<typeof clip.value>;
 
 /** One integer-millisecond field over the live clip. `in`/`out` are bounded
  * by the asset's own duration, `start` by the project maximum. */
-function msDraft(label: string, read: (c: LiveClip) => number, max: number, commit: (v: number) => void) {
+function msDraft(label: string, read: (c: LiveClip) => number, max: number, commit: (v: number) => Promise<boolean>) {
   const value = () => (clip.value ? read(clip.value) : 0);
   return useInspectorDraft(
     numberField({ value, label, min: 0, max, rangeLabel: `0 and ${max} ms`, integer: true }),

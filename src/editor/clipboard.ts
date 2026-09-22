@@ -27,12 +27,30 @@ import { commandFor, resolveActions, targetClipIds } from "./actions";
 import type { EditorCommand } from "./editorCommandTypes";
 import { buildFragment } from "./fragment";
 
-/** The current clipboard contents, or `null` when nothing has been copied
- * yet this session. Read directly by `actionContext.ts`. */
-export const clipboardFragment = ref<ClipboardFragment | null>(null);
+/** A copied fragment and the project it was copied FROM. */
+interface ScopedFragment {
+  projectId: string;
+  fragment: ClipboardFragment;
+}
 
-export function setClipboard(fragment: ClipboardFragment): void {
-  clipboardFragment.value = fragment;
+/** The current clipboard contents, or `null` when nothing has been copied
+ * yet. Scoped to its project (fix round 1): this module outlives every
+ * session — the editor window is hidden and reused, never remounted — and
+ * every migrated project names its capture asset `"src"`, so a fragment
+ * from capture A would pass Rust's asset-existence check in capture B and
+ * paste a clip playing B's footage over A's in/out range, silently. Read
+ * it through `clipboardFor`, never directly. */
+export const clipboardFragment = ref<ScopedFragment | null>(null);
+
+export function setClipboard(fragment: ClipboardFragment, projectId: string): void {
+  clipboardFragment.value = { projectId, fragment };
+}
+
+/** The fragment pasteable into `projectId`, or `null` when the clipboard
+ * is empty or holds another project's copy. */
+export function clipboardFor(projectId: string | null | undefined): ClipboardFragment | null {
+  const held = clipboardFragment.value;
+  return held !== null && held.projectId === projectId ? held.fragment : null;
 }
 
 /** Test-only reset — production code has no reason to ever clear the
@@ -74,14 +92,14 @@ export function clearClipboardForTest(): void {
 export function activateEditorAction(
   actionId: ActionId,
   ctx: ActionContext,
-  execute: (command: EditorCommand) => void | Promise<void>,
+  execute: (command: EditorCommand) => unknown,
 ): boolean {
   if (!resolveActions(ctx)[actionId].enabled) return false;
   let acted = false;
   if ((actionId === "copy" || actionId === "cut") && ctx.project) {
     const ids = targetClipIds(ctx);
     if (ids.length > 0) {
-      setClipboard(buildFragment(ctx.project, ids));
+      setClipboard(buildFragment(ctx.project, ids), ctx.project.id);
       acted = true;
     }
   }

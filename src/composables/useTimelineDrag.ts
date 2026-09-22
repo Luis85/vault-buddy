@@ -154,7 +154,12 @@ export interface TimelineDragDeps {
   trackOrder: () => readonly string[];
   /** This clip's own index into `trackOrder()`. */
   trackIndex: () => number;
-  execute: (command: EditorCommand) => void | Promise<void>;
+  /** Whether a lane may receive THIS clip on a cross-lane drop: the same
+   * track kind as the clip's asset, and unlocked — the two rules Rust's
+   * `moveClips` enforces on a `trackId` (`clips.rs`), refusing the WHOLE
+   * move, horizontal delta included, when either fails. */
+  trackAccepts: (trackId: string) => boolean;
+  execute: (command: EditorCommand) => unknown;
 }
 
 export interface UseTimelineDrag {
@@ -205,7 +210,11 @@ export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
    * pixel distance (rounded, then clamped into `trackOrder()`'s bounds) —
    * no DOM hit-test against every OTHER `TrackLane`'s own rect is needed,
    * because lanes are laid out in one fixed-height column
-   * (`LANE_HEIGHT_PX`) in `trackOrder()`'s own order.
+   * (`LANE_HEIGHT_PX`) in `trackOrder()`'s own order. A lane that does not
+   * accept the clip (`deps.trackAccepts` — wrong kind, or locked) is not a
+   * drop target: the clip stays on its own track and the horizontal delta
+   * still lands, rather than sending a `trackId` Rust would refuse together
+   * with the whole move (fix round 1).
    */
   function targetTrackFor(clip: Clip, clientY: number): string | null {
     const order = deps.trackOrder();
@@ -213,7 +222,8 @@ export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
     const laneDelta = Math.round((clientY - moveAnchor.clientY) / LANE_HEIGHT_PX);
     const targetIndex = Math.min(Math.max(deps.trackIndex() + laneDelta, 0), order.length - 1);
     const targetId = order[targetIndex];
-    return targetId && targetId !== clip.track_id ? targetId : null;
+    if (!targetId || targetId === clip.track_id) return null;
+    return deps.trackAccepts(targetId) ? targetId : null;
   }
 
   async function endBodyDrag(clientY: number): Promise<void> {

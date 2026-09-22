@@ -293,10 +293,15 @@ export const useEditorProjectStore = defineStore("editorProject", {
      * Send one edit. `applyExecuteResult`/`handleExecuteError` carry the
      * actual guard logic (see their own docs); this is only the request/
      * response plumbing — mint a `commandId`, track it in `pending` while
-     * the round trip is outstanding, and dispatch the reply.
+     * the round trip is outstanding, and dispatch the reply. Resolves
+     * `true` when Rust acknowledged the command and `false` when it was
+     * refused (or there was no session to send it to) — the refusal itself
+     * still surfaces through `lastError`; the boolean only lets a caller
+     * holding a provisional value (an inspector draft) drop it (Task 21 fix
+     * round 1).
      */
-    async execute(command: EditorCommand): Promise<void> {
-      if (!this.snapshot || !this.sessionId) return;
+    async execute(command: EditorCommand): Promise<boolean> {
+      if (!this.snapshot || !this.sessionId) return false;
       const generation = this.generation;
       const sessionId = this.sessionId;
       const expectedRevision = this.snapshot.revision;
@@ -305,8 +310,10 @@ export const useEditorProjectStore = defineStore("editorProject", {
       try {
         const result = await this.port.execute({ sessionId, expectedRevision, commandId, command });
         this.applyExecuteResult(generation, result);
+        return true;
       } catch (e) {
         await this.handleExecuteError(generation, sessionId, command, e);
+        return false;
       } finally {
         this.pending.delete(commandId);
       }
