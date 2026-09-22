@@ -10,6 +10,14 @@
 //! shared helpers below (`ensure_unlocked`, `find_clip`/`find_track`/
 //! `find_asset`, `clip_span`/`clip_end`/`clip_duration`, `overlaps`) are
 //! deliberately free functions any later arm in this file can reuse.
+//!
+//! `pub(super)` on `invalid_request`/`ensure_unlocked`/`find_clip`/
+//! `find_track`/`find_asset`/`overlaps`/`clip_end`/`checked_output_end`
+//! (Task 8): the sibling `groups.rs` reuses these directly instead of a
+//! second copy of the same overlap/locked-track/checked-arithmetic rules
+//! (the task brief's own instruction). `clip_span`/`clip_duration`/
+//! `apply_delta`/`num` stay private -- nothing outside this file needs
+//! them yet.
 
 use std::collections::HashSet;
 
@@ -28,7 +36,7 @@ use crate::editor::time::{self, ClipSpan};
 use crate::editor::validate::speed_or_default;
 use crate::editor::{Map, Num};
 
-fn invalid_request(message: impl Into<String>) -> EditorError {
+pub(super) fn invalid_request(message: impl Into<String>) -> EditorError {
     EditorError::new(EditorErrorCode::InvalidRequest, message)
 }
 
@@ -38,7 +46,7 @@ fn num(v: i64) -> Num {
 
 /// Half-open interval overlap: `[s1,e1)` and `[s2,e2)` overlap iff each
 /// starts strictly before the other ends.
-fn overlaps(s1: u64, e1: u64, s2: u64, e2: u64) -> bool {
+pub(super) fn overlaps(s1: u64, e1: u64, s2: u64, e2: u64) -> bool {
     s1 < e2 && s2 < e1
 }
 
@@ -51,7 +59,7 @@ fn clip_span(clip: &Clip) -> ClipSpan {
     }
 }
 
-fn clip_end(clip: &Clip) -> u64 {
+pub(super) fn clip_end(clip: &Clip) -> u64 {
     time::clip_output_end(&clip_span(clip))
 }
 
@@ -73,7 +81,7 @@ fn clip_duration(clip: &Clip) -> u64 {
 /// (release) before `validate_project` ever gets a chance to reject it.
 /// Mirrors `validate::check_clip`'s own `checked_add` guard for an
 /// INSTALLED clip's `start_ms + output_duration`.
-fn checked_output_end(span: &ClipSpan) -> Result<u64, EditorError> {
+pub(super) fn checked_output_end(span: &ClipSpan) -> Result<u64, EditorError> {
     let duration = time::clip_output_duration(span.in_ms, span.out_ms, span.speed);
     span.start_ms
         .checked_add(duration)
@@ -94,7 +102,7 @@ fn apply_delta(start_ms: u64, delta_ms: i64) -> Result<u64, EditorError> {
         .ok_or_else(|| invalid_request("deltaMs overflows the clip's new position"))
 }
 
-fn find_clip<'a>(project: &'a Project, id: &str) -> Result<&'a Clip, EditorError> {
+pub(super) fn find_clip<'a>(project: &'a Project, id: &str) -> Result<&'a Clip, EditorError> {
     project
         .clips
         .iter()
@@ -102,7 +110,7 @@ fn find_clip<'a>(project: &'a Project, id: &str) -> Result<&'a Clip, EditorError
         .ok_or_else(|| invalid_request(format!("clip {id} does not resolve")))
 }
 
-fn find_track<'a>(project: &'a Project, id: &str) -> Result<&'a Track, EditorError> {
+pub(super) fn find_track<'a>(project: &'a Project, id: &str) -> Result<&'a Track, EditorError> {
     project
         .tracks
         .iter()
@@ -110,7 +118,7 @@ fn find_track<'a>(project: &'a Project, id: &str) -> Result<&'a Track, EditorErr
         .ok_or_else(|| invalid_request(format!("track {id} does not resolve")))
 }
 
-fn find_asset<'a>(project: &'a Project, id: &str) -> Result<&'a Asset, EditorError> {
+pub(super) fn find_asset<'a>(project: &'a Project, id: &str) -> Result<&'a Asset, EditorError> {
     project
         .assets
         .iter()
@@ -123,7 +131,7 @@ fn find_asset<'a>(project: &'a Project, id: &str) -> Result<&'a Asset, EditorErr
 /// this before touching the track's clips. A track id that does not
 /// resolve is not this guard's job -- the caller's own `find_track`/
 /// `find_clip` lookups catch that with their own message.
-fn ensure_unlocked(project: &Project, track_id: &str) -> Result<(), EditorError> {
+pub(super) fn ensure_unlocked(project: &Project, track_id: &str) -> Result<(), EditorError> {
     if let Some(track) = project.tracks.iter().find(|t| t.id == track_id) {
         if track.locked {
             return Err(invalid_request(format!("Track {} is locked", track.name)));
@@ -504,6 +512,18 @@ pub(super) fn delete_clips(
 /// and kind-compatible with the moved clip's asset. Overlapping ANY
 /// destination clip rejects the WHOLE group atomically -- checked in a
 /// read-only pass over `project` before `candidate` is ever built.
+///
+/// **Group expansion (Task 8, F13)**: before any of the above, the
+/// explicit `clipIds` selection widens to every clip sharing a `group_id`
+/// with a named clip -- a grouped partner moves too even when the caller
+/// only named one member, which is what keeps the group's relative
+/// offsets intact (they all receive the SAME clamped delta, computed
+/// below over the EXPANDED set). Task 7 shipped this command before any
+/// group could exist to expand into, so this behaviour could only land in
+/// the task that introduces `groupClips` at all. `trackId`'s
+/// single-clip-only rule is checked against the EXPANDED count, not the
+/// caller's raw `clipIds` -- retargeting a whole group to one track is
+/// still not this command's job even when the group was only implied.
 pub(super) fn move_clips(
     project: &Project,
     payload: &MoveClipsPayload,
@@ -511,17 +531,46 @@ pub(super) fn move_clips(
     if payload.clip_ids.is_empty() {
         return Err(invalid_request("clipIds must not be empty"));
     }
-    if payload.track_id.is_some() && payload.clip_ids.len() != 1 {
+
+    // Expand the explicit selection to whole groups: a clip's grouped
+    // partners move together even when the caller only named one member.
+    // Expansion is transitive (a partner pulled in this pass can itself
+    // pull in a third) though in practice every member of one group
+    // shares the identical `group_id`, so a single pass already reaches
+    // all of them.
+    let mut expanded: Vec<String> = payload.clip_ids.clone();
+    let mut seen: HashSet<String> = expanded.iter().cloned().collect();
+    let mut idx = 0;
+    while idx < expanded.len() {
+        let clip = find_clip(project, &expanded[idx])?;
+        if let Some(group_id) = clip.group_id.clone() {
+            for partner in project
+                .clips
+                .iter()
+                .filter(|c| c.group_id.as_deref() == Some(group_id.as_str()))
+            {
+                if seen.insert(partner.id.clone()) {
+                    expanded.push(partner.id.clone());
+                }
+            }
+        }
+        idx += 1;
+    }
+
+    if payload.track_id.is_some() && expanded.len() != 1 {
         return Err(invalid_request(
             "trackId is only valid when moving a single clip",
         ));
     }
-    let ids: HashSet<&str> = payload.clip_ids.iter().map(String::as_str).collect();
+    let ids: HashSet<&str> = expanded.iter().map(String::as_str).collect();
 
-    let mut clips: Vec<&Clip> = Vec::with_capacity(payload.clip_ids.len());
-    for id in &payload.clip_ids {
+    let mut clips: Vec<&Clip> = Vec::with_capacity(expanded.len());
+    for id in &expanded {
         clips.push(find_clip(project, id)?);
     }
+    // Any locked member -- including a partner pulled in only by group
+    // expansion, never explicitly named by the caller -- rejects the
+    // WHOLE move.
     for clip in &clips {
         ensure_unlocked(project, &clip.track_id)?;
     }

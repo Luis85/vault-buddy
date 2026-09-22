@@ -207,84 +207,28 @@ mod tests {
 
     #[test]
     fn project_duration_is_the_max_clip_output_end_including_hidden_tracks() {
-        use super::super::model::{AssetKind, Clip, FadeCurve, Track, TrackKind};
+        use super::super::model::{AssetKind, TrackKind};
+        use super::super::test_support::{asset, clip, track};
 
         let mut project = empty_project();
-        project.tracks.push(track("hidden", false));
-        project.tracks.push(track("visible", true));
-        project.assets.push(asset());
+        let mut hidden = track("hidden", TrackKind::Video, false);
+        hidden.visible = false;
+        project.tracks.push(hidden);
+        project
+            .tracks
+            .push(track("visible", TrackKind::Video, false));
+        project.assets.push(asset("a1", AssetKind::Video, 10_000));
         // The shorter clip sits on the VISIBLE track; the longer one on the
         // HIDDEN track. If hidden tracks were excluded, project_duration
         // would report the visible clip's shorter end instead.
-        project.clips.push(clip("c-short", "visible", 0, 0, 1_000));
-        project.clips.push(clip("c-long", "hidden", 0, 0, 5_000));
+        project
+            .clips
+            .push(clip("c-short", "visible", "a1", 0, 0, 1_000));
+        project
+            .clips
+            .push(clip("c-long", "hidden", "a1", 0, 0, 5_000));
 
         assert_eq!(project_duration(&project), 5_000);
-
-        fn track(id: &str, visible: bool) -> Track {
-            Track {
-                id: id.into(),
-                kind: TrackKind::Video,
-                name: id.into(),
-                visible,
-                locked: false,
-                muted: false,
-                solo: false,
-                volume: serde_json::Number::from(1),
-                extra: Default::default(),
-            }
-        }
-        fn asset() -> super::super::model::Asset {
-            super::super::model::Asset {
-                id: "a1".into(),
-                kind: AssetKind::Video,
-                name: "a1".into(),
-                duration_ms: 10_000,
-                width: None,
-                height: None,
-                size: None,
-                builtin: None,
-                media_type: None,
-                linked_asset: None,
-                original_name: None,
-                extra: Default::default(),
-            }
-        }
-        fn clip(id: &str, track_id: &str, start_ms: u64, in_ms: u64, out_ms: u64) -> Clip {
-            Clip {
-                id: id.into(),
-                asset_id: "a1".into(),
-                track_id: track_id.into(),
-                name: id.into(),
-                start_ms,
-                in_ms,
-                out_ms,
-                fade_in_ms: 0,
-                fade_out_ms: 0,
-                fade_curve: FadeCurve::Linear,
-                opacity: serde_json::Number::from(1),
-                volume: serde_json::Number::from(1),
-                muted: false,
-                x: serde_json::Number::from(0),
-                y: serde_json::Number::from(0),
-                w: serde_json::Number::from(1),
-                h: serde_json::Number::from(1),
-                speed: None,
-                rotation: None,
-                frame_shape: None,
-                fit: None,
-                mirror: None,
-                flip_y: None,
-                preserve_pitch: None,
-                group_id: None,
-                crop_zoom: None,
-                crop_x: None,
-                crop_y: None,
-                adjustments: None,
-                card: None,
-                extra: Default::default(),
-            }
-        }
     }
 
     fn empty_project() -> Project {

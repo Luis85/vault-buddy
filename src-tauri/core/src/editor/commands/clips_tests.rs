@@ -10,7 +10,7 @@ use crate::editor::model_cues::{
     CaptionCue, CaptionPosition, CaptionSettings, Effect, EffectKind, Marker, Transition,
     TransitionKind,
 };
-use crate::editor::test_support::minimal_project;
+use crate::editor::test_support::{asset, clip, minimal_project, track};
 
 fn num_f(v: f64) -> Num {
     Num::from_f64(v).expect("finite test fixture value")
@@ -18,73 +18,6 @@ fn num_f(v: f64) -> Num {
 
 fn base_project() -> Project {
     minimal_project()
-}
-
-fn track(id: &str, kind: TrackKind, locked: bool) -> Track {
-    Track {
-        id: id.to_string(),
-        kind,
-        name: id.to_string(),
-        visible: true,
-        locked,
-        muted: false,
-        solo: false,
-        volume: num(1),
-        extra: Map::new(),
-    }
-}
-
-fn asset(id: &str, kind: AssetKind, duration_ms: u64) -> Asset {
-    Asset {
-        id: id.to_string(),
-        kind,
-        name: format!("Asset {id}"),
-        duration_ms,
-        width: None,
-        height: None,
-        size: None,
-        builtin: None,
-        media_type: None,
-        linked_asset: None,
-        original_name: None,
-        extra: Map::new(),
-    }
-}
-
-fn clip(id: &str, track_id: &str, asset_id: &str, start_ms: u64, in_ms: u64, out_ms: u64) -> Clip {
-    Clip {
-        id: id.to_string(),
-        asset_id: asset_id.to_string(),
-        track_id: track_id.to_string(),
-        name: id.to_string(),
-        start_ms,
-        in_ms,
-        out_ms,
-        fade_in_ms: 0,
-        fade_out_ms: 0,
-        fade_curve: FadeCurve::Linear,
-        opacity: num(1),
-        volume: num(1),
-        muted: false,
-        x: num(0),
-        y: num(0),
-        w: num(1),
-        h: num(1),
-        speed: None,
-        rotation: None,
-        frame_shape: None,
-        fit: None,
-        mirror: None,
-        flip_y: None,
-        preserve_pitch: None,
-        group_id: None,
-        crop_zoom: None,
-        crop_x: None,
-        crop_y: None,
-        adjustments: None,
-        card: None,
-        extra: Map::new(),
-    }
 }
 
 fn effect(id: &str, clip_id: &str, start_ms: u64, end_ms: u64) -> Effect {

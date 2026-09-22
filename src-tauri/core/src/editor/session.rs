@@ -391,6 +391,67 @@ mod tests {
     }
 
     #[test]
+    fn undo_of_paste_restores_the_whole_operation() {
+        // Proves the session-level integration, not just `paste_fragment`'s
+        // own pure function: a pasted clip (plus everything it added) must
+        // vanish on undo exactly like any other command's candidate, via
+        // the SAME `history.push`/`history.undo` machinery every other
+        // command already goes through -- nothing about wiring a new
+        // command family into `apply`'s dispatch bypasses that.
+        use crate::editor::commands::payloads::{ClipboardFragment, PasteFragmentPayload};
+        use crate::editor::model::{AssetKind, TrackKind};
+        use crate::editor::test_support::{asset, clip, track};
+
+        let mut project = minimal_project();
+        project.tracks.push(track("v1", TrackKind::Video, false));
+        project.assets.push(asset("a1", AssetKind::Video, 5_000));
+        project.clips.push(clip("c1", "v1", "a1", 0, 0, 200));
+        let before = project.clone();
+
+        let mut session = EditorSession::new("s1", project);
+        assert_eq!(session.project.clips.len(), 1);
+
+        let fragment = ClipboardFragment {
+            clips: vec![clip("c1", "v1", "a1", 0, 0, 200)],
+            effects: Vec::new(),
+            captions: Vec::new(),
+            markers: Vec::new(),
+            origin_ms: 0,
+        };
+        let paste_req = ExecuteRequest {
+            session_id: "s1".to_string(),
+            expected_revision: 1,
+            command_id: "cmd-paste".to_string(),
+            command: EditorCommand::PasteFragment(PasteFragmentPayload {
+                fragment,
+                track_id: "v1".to_string(),
+                at_ms: 1_000,
+            }),
+        };
+        let snap = session.execute(&paste_req).unwrap();
+        assert_eq!(
+            session.project.clips.len(),
+            2,
+            "paste must add exactly one clip"
+        );
+        assert_eq!(snap.undo_label.as_deref(), Some("Paste"));
+
+        let undo_req = ExecuteRequest {
+            session_id: "s1".to_string(),
+            expected_revision: snap.revision,
+            command_id: "cmd-undo".to_string(),
+            command: EditorCommand::Undo,
+        };
+        session.execute(&undo_req).unwrap();
+        assert_eq!(
+            session.project, before,
+            "undo must restore the WHOLE operation -- the project must be \
+             byte-for-byte what it was before the paste, not merely down \
+             to the same clip count"
+        );
+    }
+
+    #[test]
     fn execute_request_wire_literal() {
         let json = serde_json::json!({
             "sessionId": "s",

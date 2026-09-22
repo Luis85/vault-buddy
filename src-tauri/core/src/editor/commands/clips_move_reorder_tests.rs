@@ -133,6 +133,80 @@ fn move_clips_refuses_track_id_with_multiple_clips_and_a_kind_incompatible_track
     assert_eq!(mismatched.code, EditorErrorCode::InvalidRequest);
 }
 
+// ---- moveClips group expansion (Task 8, F13) ------------------------------
+
+#[test]
+fn group_move_preserves_relative_offsets() {
+    let mut project = base_project();
+    project.tracks.push(track("v1", TrackKind::Video, false));
+    project.assets.push(asset("a1", AssetKind::Video, 5_000));
+    let mut c1 = clip("c1", "v1", "a1", 100, 0, 200);
+    c1.group_id = Some("g1".into());
+    project.clips.push(c1);
+    let mut c2 = clip("c2", "v1", "a1", 500, 0, 200);
+    c2.group_id = Some("g1".into());
+    project.clips.push(c2);
+
+    // Only c1 is named in the request -- c2 must move too (a grouped
+    // partner pulled in only by expansion), by the SAME delta, so their
+    // 400ms relative offset survives unchanged.
+    let (candidate, _) = move_clips(
+        &project,
+        &MoveClipsPayload {
+            clip_ids: vec!["c1".into()],
+            delta_ms: 50,
+            track_id: None,
+        },
+    )
+    .unwrap();
+
+    let c1 = candidate.clips.iter().find(|c| c.id == "c1").unwrap();
+    let c2 = candidate.clips.iter().find(|c| c.id == "c2").unwrap();
+    assert_eq!(c1.start_ms, 150);
+    assert_eq!(
+        c2.start_ms, 550,
+        "the grouped partner must move by the SAME delta even though it \
+         was never named in clipIds"
+    );
+}
+
+#[test]
+fn group_move_with_a_locked_member_changes_nothing() {
+    let mut project = base_project();
+    project.tracks.push(track("v1", TrackKind::Video, false));
+    project.tracks.push(track("v2", TrackKind::Video, true)); // locked
+    project.assets.push(asset("a1", AssetKind::Video, 5_000));
+    let mut c1 = clip("c1", "v1", "a1", 100, 0, 200);
+    c1.group_id = Some("g1".into());
+    project.clips.push(c1);
+    // c2 is on the LOCKED track but is NOT named in the request -- it is
+    // only reachable via group expansion.
+    let mut c2 = clip("c2", "v2", "a1", 500, 0, 200);
+    c2.group_id = Some("g1".into());
+    project.clips.push(c2);
+
+    let err = move_clips(
+        &project,
+        &MoveClipsPayload {
+            clip_ids: vec!["c1".into()],
+            delta_ms: 50,
+            track_id: None,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code, EditorErrorCode::InvalidRequest);
+    assert!(err.message.contains("locked"), "{}", err.message);
+
+    let c1 = project.clips.iter().find(|c| c.id == "c1").unwrap();
+    let c2 = project.clips.iter().find(|c| c.id == "c2").unwrap();
+    assert_eq!(
+        (c1.start_ms, c2.start_ms),
+        (100, 500),
+        "ANY locked member -- even one only reachable through group \
+         expansion -- must reject the WHOLE move and change nothing"
+    );
+}
+
 // ---- locked-track table test (split/trim/delete/move) --------------------
 
 #[test]

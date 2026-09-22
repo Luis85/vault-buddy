@@ -2,22 +2,26 @@
 //! `InternalCommand` (native-only, never `Deserialize`), plus their
 //! dispatch (`apply`/`apply_internal`) into family modules (R14, F-13, F31).
 //!
-//! ELEVEN kinds are implemented so far: `rename`/`setDestination` (Task 6,
+//! SIXTEEN kinds are implemented so far: `rename`/`setDestination` (Task 6,
 //! `meta.rs`), the two `EditorSession` intercepts before ever calling
-//! `apply` at all, `undo`/`redo` (see `session.rs`'s `execute`), and the
-//! seven core clip commands `insertClip`/`updateClip`/`splitClip`/
-//! `trimClip`/`deleteClips`/`moveClips`/`reorderClip` (Task 7, `clips.rs`;
-//! cue reassignment for `splitClip` lives in the sibling `cue_follow.rs`).
-//! Every other kind falls through to the shared "not available yet" arm
-//! below -- each later task adds its own explicit arm ABOVE the fallback
-//! and deletes that kind's row from
-//! `unimplemented_kinds_are_invalid_request_not_panic`'s table (this
-//! module's own tests), so the table shrinks monotonically task by task;
-//! say so explicitly in that task's own report rather than re-verifying the
-//! whole table at the end.
+//! `apply` at all, `undo`/`redo` (see `session.rs`'s `execute`), the seven
+//! core clip commands `insertClip`/`updateClip`/`splitClip`/`trimClip`/
+//! `deleteClips`/`moveClips`/`reorderClip` (Task 7, `clips.rs`; cue
+//! reassignment for `splitClip` lives in the sibling `cue_follow.rs`), and
+//! `groupClips`/`ungroupClips`/`duplicateClips`/`pasteFragment`/`cutClips`
+//! (Task 8, `groups.rs`). `moveClips`'s own group-EXPANSION behaviour also
+//! landed this task, but stays in `clips.rs` (F13: Task 7 shipped
+//! `moveClips` before any group could exist to expand into). Every other
+//! kind falls through to the shared "not available yet" arm below -- each
+//! later task adds its own explicit arm ABOVE the fallback and deletes
+//! that kind's row from `unimplemented_kinds_are_invalid_request_not_panic`'s
+//! table (this module's own tests), so the table shrinks monotonically
+//! task by task; say so explicitly in that task's own report rather than
+//! re-verifying the whole table at the end.
 
 mod clips;
 mod cue_follow;
+mod groups;
 mod meta;
 pub mod payloads;
 
@@ -137,6 +141,11 @@ pub fn apply(project: &Project, cmd: &EditorCommand) -> Result<(Project, String)
         EditorCommand::DeleteClips(p) => clips::delete_clips(project, p),
         EditorCommand::MoveClips(p) => clips::move_clips(project, p),
         EditorCommand::ReorderClip(p) => clips::reorder_clip(project, p),
+        EditorCommand::GroupClips(p) => groups::group_clips(project, p),
+        EditorCommand::UngroupClips(p) => groups::ungroup_clips(project, p),
+        EditorCommand::DuplicateClips(p) => groups::duplicate_clips(project, p),
+        EditorCommand::PasteFragment(p) => groups::paste_fragment(project, p),
+        EditorCommand::CutClips(p) => groups::cut_clips(project, p),
         EditorCommand::Undo | EditorCommand::Redo => Err(EditorError::new(
             EditorErrorCode::InvalidRequest,
             "undo/redo are dispatched by EditorSession::execute, never by apply",
@@ -180,46 +189,6 @@ mod tests {
     /// whole table at once.
     fn unimplemented_commands() -> Vec<(&'static str, EditorCommand)> {
         vec![
-            (
-                "groupClips",
-                EditorCommand::GroupClips(GroupClipsPayload {
-                    clip_ids: vec!["c1".into(), "c2".into()],
-                }),
-            ),
-            (
-                "ungroupClips",
-                EditorCommand::UngroupClips(UngroupClipsPayload {
-                    group_id: "g1".into(),
-                }),
-            ),
-            (
-                "duplicateClips",
-                EditorCommand::DuplicateClips(DuplicateClipsPayload {
-                    clip_ids: vec!["c1".into()],
-                    offset_ms: 100,
-                }),
-            ),
-            (
-                "pasteFragment",
-                EditorCommand::PasteFragment(PasteFragmentPayload {
-                    fragment: ClipboardFragment {
-                        clips: Vec::new(),
-                        effects: Vec::new(),
-                        captions: Vec::new(),
-                        markers: Vec::new(),
-                        origin_ms: 0,
-                    },
-                    track_id: "t1".into(),
-                    at_ms: 0,
-                }),
-            ),
-            (
-                "cutClips",
-                EditorCommand::CutClips(CutClipsPayload {
-                    clip_ids: vec!["c1".into()],
-                    close_gap: false,
-                }),
-            ),
             (
                 "addTrack",
                 EditorCommand::AddTrack(AddTrackPayload {
@@ -476,13 +445,14 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_commands_table_has_thirty_five_rows() {
+    fn unimplemented_commands_table_has_thirty_rows() {
         // A vacuity guard, the `shared_fixture_table_has_ten_cases`
         // precedent (`time.rs`): 46 total EditorCommand kinds minus the
-        // eleven implemented so far (rename, undo, redo, setDestination,
+        // sixteen implemented so far (rename, undo, redo, setDestination,
         // insertClip, updateClip, splitClip, trimClip, deleteClips,
-        // moveClips, reorderClip).
-        assert_eq!(unimplemented_commands().len(), 35);
+        // moveClips, reorderClip, groupClips, ungroupClips,
+        // duplicateClips, pasteFragment, cutClips).
+        assert_eq!(unimplemented_commands().len(), 30);
     }
 
     #[test]
