@@ -194,8 +194,36 @@ describe("resolveActions — disabled actions carry a reason", () => {
     const resolved = resolveActions(context);
     for (const id of ["addText", "addCaption", "addMarker", "addTrackVideo", "fadeIn", "transition", "detachAudio", "ratio"] as const) {
       expect(resolved[id].enabled).toBe(false);
-      expect(resolved[id].reason).toMatch(/is not available yet$/);
       expect(commandFor(id, context)).toBeNull();
+    }
+  });
+
+  it("fix round 1, finding 1: a gated action's reason is human copy, never the raw Rust wire kind", () => {
+    // A button labelled "Text" must never show the literal string
+    // "addEffect" -- that is Rust's own error vocabulary
+    // (core::editor::commands::mod.rs), not a word the person reading a
+    // teaching-tool button typed or clicked. The expected sentence is
+    // built from each action's OWN label, in the same register as
+    // EditorHeader's "Rendering a video arrives in a later update."
+    const context = ctx({ project: project(), snapshot: snapshot() });
+    const resolved = resolveActions(context);
+    const expectedReasons: Partial<Record<string, string>> = {
+      addText: "Text arrives in a later update.",
+      addArrow: "Arrow arrives in a later update.",
+      addCaption: "Add caption arrives in a later update.",
+      addMarker: "Add marker arrives in a later update.",
+      addTrackVideo: "Add video track arrives in a later update.",
+      fadeIn: "Fade in arrives in a later update.",
+      transition: "Add transition arrives in a later update.",
+      detachAudio: "Detach audio arrives in a later update.",
+      ratio: "Aspect ratio arrives in a later update.",
+    };
+    for (const [id, expected] of Object.entries(expectedReasons)) {
+      expect(resolved[id as keyof typeof resolved].reason).toBe(expected);
+      // The raw wire kind never leaks into the sentence at all.
+      expect(resolved[id as keyof typeof resolved].reason).not.toMatch(
+        /addEffect|addCaption|addMarker|addTrack\b|setFades|addTransition|is not available yet/,
+      );
     }
   });
 });
@@ -301,7 +329,17 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
     expect(commandFor("ungroup", multiSelected)).toEqual({ kind: "ungroupClips", groupId: "g1" });
   });
 
-  it("duplicate offsets by the longest target clip's own output duration", () => {
+  it("duplicate offsets by the SELECTION's own span, not any one clip's duration (fix round 1, finding 2)", () => {
+    // c1 ends at 2000, c2 spans 3000..3500 -- the OLD (buggy) offset was
+    // the longest target clip's own duration (2000), which would shift
+    // c1's duplicate to 2000..4000 and overlap c2's UNTOUCHED original at
+    // 3000..3500. Rust's `duplicateClips` adds this ONE offsetMs to every
+    // selected clip's start_ms uniformly and then refuses the whole
+    // command on any resulting overlap (`check_no_overlap`) -- so that
+    // offset would have been refused. The correct offset is the
+    // selection's own span: max(every target's output end) - min(every
+    // target's start) = 3500 - 0 = 3500, which clears every original in
+    // the selection regardless of the gap between them.
     const proj = project({
       tracks: [track("v1")],
       clips: [
@@ -313,7 +351,30 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
     expect(commandFor("duplicate", context)).toEqual({
       kind: "duplicateClips",
       clipIds: ["c1", "c2"],
-      offsetMs: 2_000,
+      offsetMs: 3_500,
+    });
+  });
+
+  it("duplicate's span offset still holds with a wide gap between the selected clips", () => {
+    // A clip's own output end is start_ms + (out_ms - in_ms), NOT out_ms
+    // alone -- this fixture deliberately gives c1 a nonzero start_ms so a
+    // formula that forgot to add it back in (or that used out_ms as if it
+    // were already an absolute end) would fail here even though the
+    // task's OTHER duplicate test (start_ms: 0) could not catch it.
+    const proj = project({
+      tracks: [track("v1")],
+      clips: [
+        clip("c1", "v1", { start_ms: 100, in_ms: 0, out_ms: 200 }), // ends 100+200=300
+        clip("c2", "v1", { start_ms: 900, in_ms: 0, out_ms: 500 }), // ends 900+500=1400, gap 300..900
+      ],
+    });
+    const context = ctx({ project: proj, snapshot: snapshot(), selectedClipIds: ["c1", "c2"] });
+    // minStart(100) .. maxEnd(1400) => span 1300, regardless of the 600ms
+    // gap sitting inside the selection.
+    expect(commandFor("duplicate", context)).toEqual({
+      kind: "duplicateClips",
+      clipIds: ["c1", "c2"],
+      offsetMs: 1_300,
     });
   });
 

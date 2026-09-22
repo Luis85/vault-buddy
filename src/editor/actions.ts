@@ -10,22 +10,25 @@
  * `Date.now()` — so a caller (a Vue component today, a future keyboard
  * dispatcher) can call them synchronously from a computed property.
  *
+ * Static reference data (every `ActionId`, labels, reasons, the wire-kind
+ * lookup, `UNIMPLEMENTED_KINDS`) lives in `./actionMeta` (fix round 1, split
+ * at this file's own 500-line cap) and is re-exported below, so nothing
+ * outside these two files needs to know the split exists.
+ *
  * **Which commands this task can send.** Sixteen `EditorCommand` kinds are
  * implemented in Rust today (`core::editor::commands::mod.rs`'s own count);
  * the other thirty are rejected with `invalidRequest` and a message of the
  * shape `"<kind> is not available yet"`
  * (`unimplemented_kinds_are_invalid_request_not_panic`, that module's own
- * test). `UNIMPLEMENTED_KINDS` below is the SAME thirty kind strings,
- * gathered in one place so a later task that implements e.g. `addEffect` in
- * Rust only has to delete one entry here — every action that maps to that
- * kind (all seven teaching-tool `add*` actions) flips from disabled to live
- * in the same edit, with no per-action logic to hunt down (this task's own
- * brief: "centralize that list … so later tasks flip entries as they
- * land").
+ * test — its own module doc names `UNIMPLEMENTED_KINDS` back as the
+ * frontend twin a task implementing a kind must also update). That message
+ * shape is Rust's OWN wire-level text, read by nothing user-facing here —
+ * `actionMeta.ts`'s `unavailableReason` builds the actual UI copy from the
+ * action's own label instead (fix round 1, finding 1).
  *
  * **Actions with no wire command.** `copy`/`save`/`render`/`checks`/`help`/
  * `importMedia`/`webcam`/`toggleLibrary`/`toggleInspector`/`focusPreview`/
- * `ratio` never appear in `ACTION_KIND` below — `save` goes through
+ * `ratio` never appear in `ACTION_KIND` — `save` goes through
  * `editorProject.save()` (a distinct IPC call, not `editor_execute`), the
  * `render`/`checks`/`help`/`importMedia`/`webcam` surfaces and the panel/
  * focus toggles are a later task's job or local view state, and `ratio`
@@ -47,65 +50,33 @@
  * uncommitted read via `fragment.ts`'s `buildFragment`, never sent to
  * Rust) — so `commandFor("copy", ctx)` always returns `null`; a caller
  * reads `resolveActions(ctx).copy.enabled` and builds the fragment itself.
+ *
+ * **The keyboard dispatcher and the Shift+F10 invoker are NOT this task's
+ * job** (controller ruling): `shortcuts.ts` exports the pure map/predicates
+ * this task's brief asks for, but wiring a `window` keydown listener and
+ * wiring a focused clip's Shift+F10/Menu-key handler are carried to Tasks
+ * 20/21, once there is a real timeline/canvas to bind either to.
  */
 import type { Clip, ClipboardFragment, ClipSpan, EditorSnapshot, Project } from "../editorTypes";
+import type { ActionId } from "./actionMeta";
+import {
+  ACTION_IDS,
+  ACTION_KIND,
+  ACTION_LABELS,
+  CLIP_BOUNDARY,
+  lockedReason,
+  NO_CLIP,
+  NO_PROJECT,
+  RENDER_REASON,
+  SHORTCUT_DISPLAY,
+  unavailableReason,
+  UNIMPLEMENTED_KINDS,
+} from "./actionMeta";
 import type { EditorCommand } from "./editorCommandTypes";
-import { clipOutputDuration, clipOutputEnd } from "./timeMap";
+import { clipOutputEnd } from "./timeMap";
 
-/** Every action id a caller can resolve/execute (this task's own brief —
- * the exact 38-member list, in the order it lists them). */
-export type ActionId =
-  | "split"
-  | "delete"
-  | "deleteClose"
-  | "undo"
-  | "redo"
-  | "copy"
-  | "cut"
-  | "paste"
-  | "duplicate"
-  | "group"
-  | "ungroup"
-  | "earlier"
-  | "later"
-  | "addText"
-  | "addArrow"
-  | "addHighlight"
-  | "addSpotlight"
-  | "addZoom"
-  | "addStep"
-  | "addMask"
-  | "addCaption"
-  | "addMarker"
-  | "addTrackVideo"
-  | "addTrackAudio"
-  | "fadeIn"
-  | "fadeOut"
-  | "transition"
-  | "detachAudio"
-  | "save"
-  | "render"
-  | "checks"
-  | "help"
-  | "importMedia"
-  | "webcam"
-  | "toggleLibrary"
-  | "toggleInspector"
-  | "focusPreview"
-  | "ratio";
-
-/** Every `ActionId`, once, in the union's own declared order — the one
- * place `resolveActions` iterates from, and what `editorActions.test.ts`
- * checks every action id resolves against. */
-export const ACTION_IDS: readonly ActionId[] = [
-  "split", "delete", "deleteClose", "undo", "redo", "copy", "cut", "paste",
-  "duplicate", "group", "ungroup", "earlier", "later",
-  "addText", "addArrow", "addHighlight", "addSpotlight", "addZoom", "addStep", "addMask",
-  "addCaption", "addMarker", "addTrackVideo", "addTrackAudio",
-  "fadeIn", "fadeOut", "transition", "detachAudio",
-  "save", "render", "checks", "help", "importMedia", "webcam",
-  "toggleLibrary", "toggleInspector", "focusPreview", "ratio",
-];
+export type { ActionId } from "./actionMeta";
+export { ACTION_IDS, SHORTCUT_DISPLAY, UNIMPLEMENTED_KINDS } from "./actionMeta";
 
 /** The right-clicked/keyboard-focused thing an edit acts on
  * (SCREENS-AND-INTERACTIONS.md §03: "Context targets include clip(s),
@@ -137,82 +108,6 @@ export interface ResolvedAction {
   label: string;
   shortcut: string | null;
 }
-
-// ---- human-text reasons (Behavior section's own literal values) -----------
-
-const NO_CLIP = "Select a clip first";
-const CLIP_BOUNDARY = "The playhead is at a clip boundary";
-const NO_PROJECT = "No project is open.";
-const RENDER_REASON = "Rendering a video arrives in a later update.";
-
-function lockedReason(trackName: string): string {
-  return `Track ${trackName} is locked`;
-}
-
-// ---- static labels/wire kinds ----------------------------------------------
-
-const ACTION_LABELS: Record<ActionId, string> = {
-  split: "Split", delete: "Delete", deleteClose: "Delete (close gap)",
-  undo: "Undo", redo: "Redo", copy: "Copy", cut: "Cut", paste: "Paste",
-  duplicate: "Duplicate", group: "Group", ungroup: "Ungroup",
-  earlier: "Move earlier", later: "Move later",
-  addText: "Text", addArrow: "Arrow", addHighlight: "Highlight",
-  addSpotlight: "Spotlight", addZoom: "Zoom", addStep: "Step", addMask: "Privacy cover",
-  addCaption: "Add caption", addMarker: "Add marker",
-  addTrackVideo: "Add video track", addTrackAudio: "Add audio track",
-  fadeIn: "Fade in", fadeOut: "Fade out", transition: "Add transition",
-  detachAudio: "Detach audio",
-  save: "Save project", render: "Review", checks: "Checks", help: "Help",
-  importMedia: "Import media", webcam: "Webcam",
-  toggleLibrary: "Library", toggleInspector: "Inspector", focusPreview: "Focus preview",
-  ratio: "Aspect ratio",
-};
-
-/** The one `EditorCommand` wire `kind` each action maps to, when it maps to
- * exactly one — see the module doc for the actions deliberately absent. */
-const ACTION_KIND: Partial<Record<ActionId, string>> = {
-  split: "splitClip", delete: "deleteClips", deleteClose: "deleteClips",
-  undo: "undo", redo: "redo", cut: "cutClips", paste: "pasteFragment",
-  duplicate: "duplicateClips", group: "groupClips", ungroup: "ungroupClips",
-  earlier: "reorderClip", later: "reorderClip",
-  addText: "addEffect", addArrow: "addEffect", addHighlight: "addEffect",
-  addSpotlight: "addEffect", addZoom: "addEffect", addStep: "addEffect", addMask: "addEffect",
-  addCaption: "addCaption", addMarker: "addMarker",
-  addTrackVideo: "addTrack", addTrackAudio: "addTrack",
-  fadeIn: "setFades", fadeOut: "setFades", transition: "addTransition",
-  detachAudio: "detachAudio", ratio: "setCanvas",
-};
-
-/** The human-readable shortcut shown beside an action's label/tooltip —
- * `shortcuts.ts`'s `SHORTCUTS` map's DISPLAY twin (both `ctrl+shift+z` and
- * `ctrl+y` resolve to `redo`, but `redo` shows only one). Lives here, not in
- * `shortcuts.ts`, because `resolveActions` needs it synchronously and this
- * file must not import from `shortcuts.ts` (the reverse import already runs
- * the other way, and a back-edge is the cycle `circularDependencies 0`
- * exists to catch); `shortcuts.ts` re-exports it for a caller that wants
- * both from one import. */
-export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
-  split: "S", delete: "Delete", deleteClose: "Shift+Delete",
-  undo: "Ctrl+Z", redo: "Ctrl+Shift+Z", copy: "Ctrl+C", cut: "Ctrl+X",
-  paste: "Ctrl+V", duplicate: "Ctrl+D", group: "Ctrl+G", ungroup: "Ctrl+Shift+G",
-  save: "Ctrl+S", render: "Ctrl+E", help: "F1", focusPreview: "F6",
-};
-
-/** The exact thirty wire kinds `apply()` still rejects — see module doc.
- * `undo`/`redo`/`splitClip`/`deleteClips`/`cutClips`/`pasteFragment`/
- * `duplicateClips`/`groupClips`/`ungroupClips`/`reorderClip` are
- * deliberately absent: those ten (of the sixteen implemented kinds) are the
- * ones an action in `ACTION_KIND` maps to. */
-export const UNIMPLEMENTED_KINDS: ReadonlySet<string> = new Set([
-  "addTrack", "renameTrack", "moveTrack", "setTrackFlags", "deleteTrack",
-  "setClipMix", "setMasterGain", "detachAudio", "setFades",
-  "addTransition", "setTransitionDuration", "removeTransition",
-  "setSpeed", "setLayout", "setAdjustments", "setCanvas",
-  "addCard", "updateCard", "insertIntro",
-  "addEffect", "updateEffect", "removeEffect",
-  "setCaptionSettings", "addCaption", "updateCaption", "splitCaption", "removeCaptions",
-  "addMarker", "updateMarker", "removeMarker",
-]);
 
 // ---- read-side helpers over the projection --------------------------------
 
@@ -424,7 +319,11 @@ export function resolveActions(ctx: ActionContext): Record<ActionId, ResolvedAct
   const out = {} as Record<ActionId, ResolvedAction>;
   for (const actionId of ACTION_IDS) {
     const kind = ACTION_KIND[actionId];
-    const gateReason = kind && UNIMPLEMENTED_KINDS.has(kind) ? `${kind} is not available yet` : null;
+    // `kind` (Rust's own wire vocabulary, e.g. "addEffect") is diagnostic
+    // only — `unavailableReason` builds the user-facing sentence from the
+    // action's own label instead (fix round 1, finding 1: a button
+    // labelled "Text" must never show the raw string "addEffect").
+    const gateReason = kind && UNIMPLEMENTED_KINDS.has(kind) ? unavailableReason(actionId) : null;
     const verdict = gateReason
       ? { enabled: false, reason: gateReason }
       : (RESOLVERS[actionId]?.(ctx) ?? { enabled: false, reason: null });
@@ -471,18 +370,34 @@ function buildCut(ctx: ActionContext): EditorCommand {
   return { kind: "cutClips", clipIds: targetClipIds(ctx), closeGap: true };
 }
 
+/**
+ * `duplicate`'s `offsetMs`. **Fix round 1, finding 2**: the first cut used
+ * the LONGEST target clip's own output duration, but Rust's
+ * `duplicateClips` adds ONE uniform `offsetMs` to every selected clip's
+ * `start_ms` and then refuses the whole command if any duplicate overlaps
+ * ANY existing clip on its track (`check_no_overlap`) — including the
+ * other UNTOUCHED originals in the selection. A per-clip duration can be
+ * smaller than the gap one target clip needs to clear another target
+ * clip's own original span (this task's fixture: c1 `0..2000`, c2
+ * `3000..3500` — offsetting by c1's own 2000ms duration lands c1's
+ * duplicate at `2000..4000`, which overlaps c2's UNTOUCHED original at
+ * `3000..3500`; Rust would reject it).
+ *
+ * The correct offset is the SELECTION's own span — `max(every target
+ * clip's output end) - min(every target clip's start)` — so the entire
+ * duplicated block lands immediately after the last originally-occupied
+ * instant across the WHOLE selection, never overlapping any original
+ * clip regardless of gaps between the selected clips.
+ */
 function buildDuplicate(ctx: ActionContext): EditorCommand {
   const ids = targetClipIds(ctx);
   const project = ctx.project as Project;
-  // Offset by the LONGEST target clip's own output duration, so every
-  // duplicate lands clear of its own original regardless of which target
-  // clip is longest -- Rust's own `duplicateClips` adds this one offsetMs
-  // to every selected clip's start_ms uniformly and then refuses on any
-  // resulting overlap (`check_no_overlap`).
-  const offsetMs = ids.reduce((max, id) => {
-    const clip = project.clips.find((c) => c.id === id);
-    return clip ? Math.max(max, clipOutputDuration(clip.in_ms, clip.out_ms, clip.speed ?? 1)) : max;
-  }, 0);
+  const targetClips = ids
+    .map((id) => project.clips.find((c) => c.id === id))
+    .filter((c): c is Clip => c !== undefined);
+  const minStart = Math.min(...targetClips.map((c) => c.start_ms));
+  const maxEnd = Math.max(...targetClips.map((c) => clipOutputEnd(clipSpanOf(c))));
+  const offsetMs = maxEnd - minStart;
   return { kind: "duplicateClips", clipIds: ids, offsetMs };
 }
 

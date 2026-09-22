@@ -6,11 +6,13 @@
  * timeline, unobtrusive status footer").
  *
  * A CSS grid: header row; library | preview | inspector row; timeline row.
- * Later tasks fill the four region slots (`library`, `preview-toolbar`,
- * `preview`, `inspector`, `timeline`) with real content — this task ships
- * the frame and lightweight placeholders so the grid, the responsive
- * collapse and the header are all real and testable before there is
- * anything to put in them.
+ * This task shipped the frame and lightweight placeholders for all five
+ * named regions (`library`, `preview-toolbar`, `preview`, `inspector`,
+ * `timeline`) so the grid, the responsive collapse and the header were all
+ * real and testable before there was anything to put in them. Task 17
+ * filled `preview-toolbar` with a real `PreviewToolbar` (below); later
+ * tasks fill the four REMAINING region slots (`library`, `preview`,
+ * `inspector`, `timeline`) with real content.
  *
  * Below 1180px (§12: "At 960×640 retain one preview toolbar and accessible
  * primary actions ... Side panels can use drawers; opening one must not

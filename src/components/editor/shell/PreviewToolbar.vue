@@ -31,7 +31,7 @@
  * directly, production leaves it unset and the observer computes it.
  */
 import type { ComponentPublicInstance } from "vue";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import type { ActionContext, ActionId } from "../../../editor/actions";
 import { commandFor, resolveActions } from "../../../editor/actions";
@@ -84,8 +84,19 @@ const ITEM_WIDTH = 84;
 const rowRef = ref<HTMLElement | null>(null);
 const measuredOverflow = ref(0);
 let observer: ResizeObserver | null = null;
+/**
+ * Fix round 1, finding 4b: this used to subtract one for "More" UNCONDITIONALLY,
+ * so a row wide enough to fit every item still reserved a slot and showed a
+ * "More" menu holding nothing anyone needed to see. The reservation is only
+ * correct once something is actually going to overflow.
+ */
 function recomputeOverflow(width: number) {
-  const maxFit = Math.max(0, Math.floor(width / ITEM_WIDTH) - 1); // reserve space for "More"
+  const totalFit = Math.floor(width / ITEM_WIDTH);
+  if (totalFit >= TOOLBAR_ITEMS.length) {
+    measuredOverflow.value = 0;
+    return;
+  }
+  const maxFit = Math.max(0, totalFit - 1); // reserve one slot for "More" itself
   measuredOverflow.value = Math.max(0, TOOLBAR_ITEMS.length - maxFit);
 }
 onMounted(() => {
@@ -121,9 +132,25 @@ onBeforeUnmount(() => window.removeEventListener("pointerdown", onWindowPointerD
 // ---- activation + roving tabindex over the visible row ----------------------
 
 function onActivate(id: ActionId) {
-  if (id === "toggleLibrary") return emit("toggle-library");
-  if (id === "toggleInspector") return emit("toggle-inspector");
-  if (id === "focusPreview") return emit("focus-preview");
+  // Fix round 1, finding 4a: the three panel/focus toggles are the FIRST
+  // items to overflow (`TOOLBAR_ITEMS`' own trailing order), so clicking
+  // one from inside the open More menu used to leave the menu open —
+  // these `return`s skipped the `closeMore()` at the bottom entirely.
+  if (id === "toggleLibrary") {
+    emit("toggle-library");
+    closeMore();
+    return;
+  }
+  if (id === "toggleInspector") {
+    emit("toggle-inspector");
+    closeMore();
+    return;
+  }
+  if (id === "focusPreview") {
+    emit("focus-preview");
+    closeMore();
+    return;
+  }
   if (!resolved.value[id].enabled) return;
   const command = commandFor(id, context.value);
   if (command) void editorProject.execute(command);
@@ -138,8 +165,27 @@ function setItemRef(i: number, el: Element | ComponentPublicInstance | null) {
   // callback type only applies to component refs, never a plain DOM node.
   itemEls.value[i] = el as HTMLElement | null;
 }
+
+/** Every currently-tabbable slot: the visible row plus the "More" button
+ * when one is rendered. */
+const focusableCount = computed(() => visibleItems.value.length + (overflowCount.value > 0 ? 1 : 0));
+
+/**
+ * Fix round 1, finding 3: a narrowing resize can shrink `focusableCount`
+ * out from under an `activeIndex` an ArrowRight/End press had moved
+ * further out — every `:tabindex` binding compares its own position
+ * against `activeIndex`, so a stale, now-out-of-range value matched NONE
+ * of them and the roving-tabindex row lost every stop on the Tab order at
+ * once. Clamping here, not in the template, keeps the template's own
+ * bindings simple equality checks (`i === activeIndex`) rather than each
+ * one repeating a clamp.
+ */
+watch(focusableCount, (n) => {
+  if (activeIndex.value > n - 1) activeIndex.value = Math.max(0, n - 1);
+});
+
 async function onRowKeydown(event: KeyboardEvent) {
-  const n = visibleItems.value.length + (overflowCount.value > 0 ? 1 : 0);
+  const n = focusableCount.value;
   if (n === 0) return;
   let target: number;
   if (event.key === "ArrowRight") target = (activeIndex.value + 1) % n;

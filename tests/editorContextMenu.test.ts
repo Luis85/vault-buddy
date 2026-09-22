@@ -259,6 +259,10 @@ describe("PreviewToolbar — overflow moves into More, never a second toolbar", 
     // visible one -- clicking it inside the open More menu.
     await w.get('[data-testid="preview-toolbar-toggleLibrary"]').trigger("click");
     expect(w.emitted("toggle-library")).toHaveLength(1);
+    // Fix round 1, finding 4a: toggleLibrary/toggleInspector/focusPreview
+    // are the FIRST items to overflow, and clicking one used to leave the
+    // More menu open (their early `return`s skipped `closeMore()`).
+    expect(w.find('[data-testid="preview-toolbar-more-menu"]').exists()).toBe(false);
   });
 
   it("emits toggle-library/toggle-inspector/focus-preview instead of sending a command", async () => {
@@ -275,7 +279,8 @@ describe("PreviewToolbar — overflow moves into More, never a second toolbar", 
     const w = mount(PreviewToolbar, { props: { overflowCount: 0 } });
     const addText = w.get('[data-testid="preview-toolbar-addText"]');
     expect(addText.attributes("aria-disabled")).toBe("true");
-    expect(addText.attributes("title")).toBe("addEffect is not available yet");
+    // Fix round 1, finding 1: human copy, never the raw Rust wire kind.
+    expect(addText.attributes("title")).toBe("Text arrives in a later update.");
   });
 
   it("reflects libraryOpen/inspectorOpen as aria-pressed on their own toggle buttons only", () => {
@@ -308,6 +313,24 @@ describe("PreviewToolbar — overflow moves into More, never a second toolbar", 
     // An unrelated key is a no-op.
     await row.trigger("keydown", { key: "a" });
     expect(document.activeElement?.getAttribute("data-testid")).toBe(firstVisible);
+  });
+
+  it("clamps the active index when a narrowing resize shrinks the focusable count (fix round 1, finding 3)", async () => {
+    // At overflowCount 0 there are 12 focusable buttons (no More); End
+    // moves activeIndex to 11. Shrinking to overflowCount 5 leaves only 7
+    // visible + 1 More = 8 focusable slots -- an unclamped activeIndex of
+    // 11 would match NEITHER the visible row's own indices (0..6) NOR the
+    // More button's check (`activeIndex === visibleItems.length`, 7),
+    // leaving zero controls with tabindex="0" and nothing in the Tab order.
+    const w = mount(PreviewToolbar, { attachTo: document.body, props: { overflowCount: 0 } });
+    const row = w.get('[data-testid="preview-toolbar"]');
+    await row.trigger("keydown", { key: "End" });
+    expect(w.findAll('button[tabindex="0"]')).toHaveLength(1);
+
+    await w.setProps({ overflowCount: 5 });
+    await flushPromises();
+
+    expect(w.findAll('button[tabindex="0"]')).toHaveLength(1);
   });
 
   it("a click outside closes the open More menu", async () => {
@@ -361,6 +384,44 @@ describe("PreviewToolbar — overflow moves into More, never a second toolbar", 
       captured.cb?.([{ contentRect: { width: 10 } }]);
       await flushPromises();
       expect(w.find('[data-testid="preview-toolbar-more"]').exists()).toBe(true);
+      w.unmount();
+    } finally {
+      (globalThis as { ResizeObserver?: unknown }).ResizeObserver = original;
+    }
+  });
+
+  it("does not reserve a More slot when the measured width fits every item (fix round 1, finding 4b)", async () => {
+    // Fix round 1, finding 4b: the overflow math used to subtract one item
+    // width for "More" UNCONDITIONALLY, so even a row wide enough to fit
+    // every item still reserved a slot and showed an empty More menu. The
+    // width here is deliberately EXACTLY 12 * ITEM_WIDTH (84): a naive
+    // "always subtract one" formula computes maxFit = 12 - 1 = 11 and
+    // wrongly overflows the 12th item, while the correct one recognizes
+    // all 12 already fit and reserves nothing. A generously wide fixture
+    // (e.g. 1100px) would pass under BOTH the old and the new formula and
+    // prove nothing -- this exact width is what actually distinguishes them.
+    type Callback = (entries: { contentRect: { width: number } }[]) => void;
+    const captured: { cb: Callback | null } = { cb: null };
+    class FakeResizeObserver {
+      constructor(cb: Callback) {
+        captured.cb = cb;
+      }
+      observe() {
+        /* no-op */
+      }
+      disconnect() {
+        /* no-op */
+      }
+    }
+    const original = (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = FakeResizeObserver;
+
+    try {
+      const w = mount(PreviewToolbar, { attachTo: document.body });
+      captured.cb?.([{ contentRect: { width: 1_008 } }]);
+      await flushPromises();
+      expect(w.find('[data-testid="preview-toolbar-more"]').exists()).toBe(false);
+      expect(w.find('[data-testid="preview-toolbar-toggleInspector"]').exists()).toBe(true);
       w.unmount();
     } finally {
       (globalThis as { ResizeObserver?: unknown }).ResizeObserver = original;

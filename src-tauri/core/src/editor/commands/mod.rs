@@ -18,6 +18,18 @@
 //! table (this module's own tests), so the table shrinks monotonically
 //! task by task; say so explicitly in that task's own report rather than
 //! re-verifying the whole table at the end.
+//!
+//! **The frontend keeps its own copy of this table, and nothing enforces
+//! they agree.** `src/editor/actionMeta.ts`'s `UNIMPLEMENTED_KINDS`
+//! (re-exported from `src/editor/actions.ts`, Task 17) is a hand-copy of
+//! the SAME thirty kind strings `unimplemented_commands()` below lists --
+//! it gates every teaching-tool/track/fade/transition/detachAudio/ratio
+//! action in the preview toolbar and context menu so none of them ever
+//! sends a command this file would reject. There is no build-time or
+//! test-time link between the two lists: a task that adds an arm here and
+//! deletes the row from `unimplemented_commands()` below MUST ALSO delete
+//! the matching entry from `UNIMPLEMENTED_KINDS` in the same commit, or the
+//! frontend keeps refusing an action Rust would now accept.
 
 mod clips;
 mod cue_follow;
