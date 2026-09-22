@@ -2243,6 +2243,13 @@ column fits with 0px overflow (measured), so the 1px tolerance there is
 unchanged. Same fix, same trigger: tighten back to 1 when the legacy surface
 retires.
 
+The user-visible cost of the same trade: at the 960x640 floor the new
+preview STAGE is 0px tall (measured) — the new shell shows its transport row
+but no picture at all, and the only visible preview at that size is the
+legacy one below it. It gets height back as the window grows (77px at
+1280x820, 207px at 1920x1080, measured, split with the legacy preview), and
+the whole leftover height once the legacy surface retires (Task 59).
+
 ### GAP-173 · Medium (by design, until parity is proven) · The editor's preview approximates the render
 `src/editor/previewLayers.ts` + `src/editor/previewController.ts` +
 `src/components/editor/preview/PreviewSurface.vue` (tutorial-editor Task 22;

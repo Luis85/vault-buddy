@@ -298,6 +298,27 @@ describe("PreviewSurface", () => {
     expect(w.findAll('[data-testid="preview-layers"] video')).toHaveLength(1);
   });
 
+  // Fix round 1: a lookup from the PREVIOUS session that fails late must not
+  // put a stale name into the new session's status line.
+  it("a late failure from the previous session does not reach the new session's status line", async () => {
+    let failOld!: (e: unknown) => void;
+    const oldLookup = vi.fn(() => new Promise<string>((_resolve, reject) => (failOld = reject)));
+    const { w } = await mountSurface(oldLookup);
+    const store = useEditorProjectStore();
+    const second = openResult();
+    second.snapshot = { ...second.snapshot, sessionId: "ses-b", projectId: "project-b" };
+    second.project = { ...PROJECT, id: "project-b" };
+    second.sourceBase = "other";
+    store.setPort(
+      fakePort({ openStaged: () => Promise.resolve(second), mediaUrl: () => Promise.resolve("C:\\x\\cap.mp4"), execute }),
+    );
+    await store.openStaged("other");
+    await flushPromises();
+    failOld(new EditorPortError({ code: "sourceMissing", message: "gone", retryable: false, operationId: "op" }));
+    await flushPromises();
+    expect(w.find('[data-testid="preview-unavailable"]').exists()).toBe(false);
+  });
+
   it("a playhead moved elsewhere (the timeline) seeks the preview", async () => {
     const { w } = await mountSurface(() => Promise.resolve("C:\\x\\cap.mp4"));
     useEditorWorkspaceStore().setPlayhead(3_000);

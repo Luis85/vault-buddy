@@ -65,6 +65,10 @@ const volume = ref(1);
 const unavailable = ref<string[]>([]);
 
 let controller: PreviewController | null = null;
+/** Bumped every time the controller is rebuilt (a new session). A lookup
+ * started under an older generation that settles late must not write its
+ * failure into the NEW session's status line. */
+let generation = 0;
 let observer: ResizeObserver | null = null;
 
 const canvas = computed(() => editorProject.project?.canvas ?? { width: 16, height: 9 });
@@ -78,12 +82,14 @@ function assetName(assetId: string): string {
  * line) when Rust refuses or the file is gone. */
 async function resolveUrl(assetId: string): Promise<string | null> {
   const sessionId = editorProject.sessionId;
+  const mine = generation;
   if (!sessionId) return null;
   try {
     return convertFileSrc(await editorProject.port.mediaUrl(sessionId, { assetId }), "asset");
   } catch (e) {
     const reason = e instanceof EditorPortError ? e.error.code : String(e);
-    logWarning(`preview: no media for asset ${assetId} (${reason})`);
+    logWarning(`preview: no media for asset ${assetId} in session ${sessionId} (${reason})`);
+    if (mine !== generation) return null;
     const name = assetName(assetId);
     if (!unavailable.value.includes(name)) unavailable.value = [...unavailable.value, name];
     return null;
@@ -92,6 +98,7 @@ async function resolveUrl(assetId: string): Promise<string | null> {
 
 function createController(): void {
   controller?.destroy();
+  generation += 1;
   unavailable.value = [];
   if (!layerHostRef.value) return;
   controller = new PreviewController({

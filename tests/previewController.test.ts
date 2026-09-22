@@ -386,6 +386,52 @@ describe("pooling and fallbacks", () => {
   });
 });
 
+describe("teardown and failure paths (fix round 1)", () => {
+  // A lookup still in flight when the controller is destroyed (a session
+  // switch) must not point the now-detached, preload="auto" element at
+  // media: it would start loading a file nobody can see.
+  it("a URL lookup that settles after destroy() does not arm the detached element", async () => {
+    let settle!: (url: string) => void;
+    const resolveUrl = () => new Promise<string | null>((r) => (settle = r));
+    const { c, container } = controller({ resolveUrl });
+    c.layout(project([track("v")], [clip("a", "v")]), 0);
+    const video = container.querySelector("video")!;
+    c.destroy();
+    settle("asset://late");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(video.getAttribute("src")).toBeNull();
+  });
+
+  // A resolver that REJECTS (rather than answering null) is logged, never
+  // an unhandled rejection — vitest fails the run on one.
+  it("a rejecting resolver is logged, not left unhandled", async () => {
+    const warn = vi.spyOn(logging, "logWarning").mockImplementation(() => undefined);
+    const { c, container } = controller({ resolveUrl: () => Promise.reject(new Error("ipc gone")) });
+    c.layout(project([track("v")], [clip("a", "v")]), 0);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("ipc gone"));
+    expect(container.querySelector("video")!.getAttribute("src")).toBeNull();
+    warn.mockRestore();
+  });
+
+  it("an AudioContext whose close() rejects is logged on destroy, not left unhandled", async () => {
+    const warn = vi.spyOn(logging, "logWarning").mockImplementation(() => undefined);
+    const { ctx } = fakeAudio();
+    ctx.close = () => Promise.reject(new Error("InvalidStateError"));
+    const { c } = controller({ createAudioContext: () => ctx });
+    c.layout(project([track("v")], [clip("a", "v")]), 0);
+    c.destroy();
+    c.destroy();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("InvalidStateError"));
+    warn.mockRestore();
+  });
+});
+
 describe("seeking", () => {
   it("seek cancels an older pending seek", async () => {
     const { c, container } = controller();

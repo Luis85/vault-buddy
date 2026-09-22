@@ -193,7 +193,9 @@ export class PreviewController {
     if (this.isPlaying || !this.project) return;
     this.anchorAt(this.time >= this.duration() ? 0 : this.time);
     this.isPlaying = true;
-    void this.audioContext()?.resume?.();
+    this.audioContext()
+      ?.resume?.()
+      ?.catch((e: unknown) => logWarning(`preview: the AudioContext would not resume (${String(e)})`));
     this.apply(true);
     this.deps.onPlayingChange?.(true);
     this.schedule();
@@ -216,7 +218,12 @@ export class PreviewController {
     for (const slot of [...this.active.values(), ...this.free]) this.teardown(slot);
     this.active.clear();
     this.free.length = 0;
-    void this.audio?.close?.();
+    // `close()` rejects (InvalidStateError) on an already-closed context:
+    // logged, never an unhandled rejection.
+    this.audio
+      ?.close?.()
+      ?.catch((e: unknown) => logWarning(`preview: closing the AudioContext failed (${String(e)})`));
+    this.audio = null;
   }
 
   // ---- internals -----------------------------------------------------------
@@ -343,6 +350,11 @@ export class PreviewController {
   }
 
   private teardown(slot: Slot): void {
+    // No asset any more: a lookup still in flight for it (a session switch
+    // destroys the controller mid-lookup, a full pool tears a slot down)
+    // must not point this detached, preload="auto" element at media —
+    // `bindSource`'s `slot.assetId === assetId` check then drops it.
+    slot.assetId = null;
     if (isMedia(slot.el)) {
       slot.el.pause();
       slot.el.removeAttribute("src");
@@ -385,10 +397,16 @@ export class PreviewController {
       if (known) slot.el.src = known;
       return;
     }
-    void this.deps.resolveUrl(assetId).then((url) => {
-      this.urls.set(assetId, url);
-      if (url && slot.assetId === assetId) slot.el.src = url;
-    });
+    // A `null` answer (the caller could not resolve it) is cached for this
+    // controller's life — it is rebuilt per session; a REJECTION is logged
+    // and not cached, so the next bind of that asset asks again.
+    this.deps.resolveUrl(assetId).then(
+      (url) => {
+        this.urls.set(assetId, url);
+        if (url && slot.assetId === assetId) slot.el.src = url;
+      },
+      (e: unknown) => logWarning(`preview: resolving media for ${assetId} failed (${String(e)})`),
+    );
   }
 
   private place(el: MediaEl, layer: PreviewLayer): void {
