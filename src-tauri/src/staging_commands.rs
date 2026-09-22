@@ -230,4 +230,29 @@ mod tests {
         assert_eq!(result.skipped, 1, "the exporting capture");
         assert!(cleared.is_empty());
     }
+
+    // The frontend reads `skippedPinned` off this exact spelling
+    // (`StagedCapturesCard.vue`'s `describe`); a struct-re-serialized-
+    // against-itself test cannot catch a field that silently renamed
+    // itself, so this pins the literal wire shape.
+    #[test]
+    fn clear_staged_result_dto_serializes_camel_case_literal() {
+        let dto = ClearStagedResultDto {
+            cleared: 2,
+            bytes_freed: 2_000_000,
+            skipped: 1,
+            skipped_pinned: 1,
+            failed: 0,
+        };
+        assert_eq!(
+            serde_json::to_value(dto).unwrap(),
+            serde_json::json!({
+                "cleared": 2,
+                "bytesFreed": 2_000_000,
+                "skipped": 1,
+                "skippedPinned": 1,
+                "failed": 0,
+            }),
+        );
+    }
 }

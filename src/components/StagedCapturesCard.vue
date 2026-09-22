@@ -61,6 +61,7 @@ async function refresh() {
 function describe(r: ClearStagedResult): string {
   const parts = [`Cleared ${r.cleared} · freed ${formatBytes(r.bytesFreed)}`];
   if (r.skipped > 0) parts.push(`${r.skipped} left alone (being saved)`);
+  if (r.skippedPinned > 0) parts.push(`${r.skippedPinned} kept (used by a tutorial project)`);
   if (r.failed > 0) parts.push(`${r.failed} could not be removed`);
   return parts.join(" · ");
 }

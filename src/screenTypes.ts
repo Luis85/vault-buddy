@@ -240,13 +240,15 @@ export interface StagingUsage {
   bytes: number;
 }
 
-/** The outcome of `clear_staged_captures`. Four numbers, not a bare
+/** The outcome of `clear_staged_captures`. Five numbers, not a bare
  * success: a capture can be removed, left alone because an export is
- * writing it, or refused (a symlinked leaf), and reporting only "done"
- * would claim the skipped ones were deleted. */
+ * writing it, left alone because a tutorial project has PINNED it (R6),
+ * or refused (a symlinked leaf), and reporting only "done" would claim
+ * the skipped ones were deleted. */
 export interface ClearStagedResult {
   cleared: number;
   bytesFreed: number;
   skipped: number;
+  skippedPinned: number;
   failed: number;
 }

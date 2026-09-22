@@ -243,6 +243,14 @@ pub fn list_projects(root: &Path) -> Vec<ProjectSummaryDto> {
         if envelope.project.id != id {
             continue;
         }
+        if let Err(e) = validate_envelope(&envelope) {
+            log::warn!(
+                "editor project store: {} parses but does not validate, skipping: {}",
+                id,
+                e.message
+            );
+            continue;
+        }
         let sources = read_sources(&entry.path()).unwrap_or_default();
         out.push(ProjectSummaryDto {
             project_file_id: id,
@@ -280,8 +288,31 @@ pub fn list_projects(root: &Path) -> Vec<ProjectSummaryDto> {
 /// removed, then directories deepest-first via `remove_dir` (never
 /// `remove_dir_all`, which would recurse without this module's own
 /// symlink check at every level).
+///
+/// **The project directory itself is checked first, before its
+/// `project.json` is ever read.** `walk_no_follow` only inspects what is
+/// INSIDE `dir` — if `dir` were itself a symlink or (on Windows) a
+/// junction, `read_dir`/`read` on it transparently follow it to whatever it
+/// points at, so both the ownership check and the walk would operate on a
+/// directory this function never created. Rust reports an NTFS junction as
+/// a symlink too, so one `is_symlink()` check here covers both.
 pub fn remove_project(root: &Path, id: &str) -> Result<(), EditorError> {
     let dir = project_dir(root, id).ok_or_else(|| invalid_id_err(id))?;
+    let dir_meta = std::fs::symlink_metadata(&dir).map_err(|e| {
+        EditorError::new(
+            EditorErrorCode::Internal,
+            format!("Cannot resolve {}: {e}", dir.display()),
+        )
+    })?;
+    if dir_meta.file_type().is_symlink() {
+        return Err(EditorError::new(
+            EditorErrorCode::Internal,
+            format!(
+                "{} is a symlink or junction; refusing to remove through it",
+                dir.display()
+            ),
+        ));
+    }
     let project_path = dir.join(PROJECT_FILE);
     let bytes = std::fs::read(&project_path).map_err(|e| {
         EditorError::new(
@@ -378,8 +409,8 @@ mod tests {
                 sha256: None,
                 size: 1_234,
                 duration_ms: 60_000,
-                width: 1920,
-                height: 1080,
+                width: Some(1920),
+                height: Some(1080),
                 has_audio: true,
                 has_video: true,
                 media_kind: super::super::project_store::SourceMediaKind::Video,
@@ -407,15 +438,32 @@ mod tests {
 
     #[test]
     fn load_refuses_an_oversized_file() {
+        // A VALID, well-formed envelope — not `b'x'` garbage, which the
+        // earlier version of this test used and which is malformed JSON on
+        // its own. That fixture passed for the wrong reason: dropping the
+        // size check entirely left the parse failure to refuse it anyway,
+        // so the test stayed green under a mutation that deleted the very
+        // check it claims to cover. JSON tolerates trailing whitespace, so
+        // padding a real envelope past the byte cap keeps it perfectly
+        // loadable — except for the size check this test exists to pin.
         let root = tempfile::tempdir().unwrap();
+        create_project(root.path(), &minimal_project("proj1"), &BTreeMap::new()).unwrap();
         let dir = project_dir(root.path(), "proj1").unwrap();
-        std::fs::create_dir_all(&dir).unwrap();
-        let oversized = vec![b'x'; (limits::MAX_PROJECT_JSON_BYTES + 1) as usize];
-        std::fs::write(dir.join(PROJECT_FILE), &oversized).unwrap();
+        let path = dir.join(PROJECT_FILE);
+        let json = std::fs::read_to_string(&path).unwrap();
+        let pad = (limits::MAX_PROJECT_JSON_BYTES as usize + 1).saturating_sub(json.len());
+        let padded = format!("{json}{}", " ".repeat(pad));
+        assert!(padded.len() as u64 > limits::MAX_PROJECT_JSON_BYTES);
+        std::fs::write(&path, padded.as_bytes()).unwrap();
 
         let err =
             load_project(root.path(), "proj1").expect_err("an oversized file must be refused");
         assert_eq!(err.code, EditorErrorCode::InvalidProject);
+        assert!(
+            err.message.contains("byte"),
+            "expected a size-specific message, got: {}",
+            err.message
+        );
     }
 
     // A27: a malformed `project.json` must be reported, not "repaired" —
@@ -468,6 +516,26 @@ mod tests {
         assert!(ids.contains(&"proj2"));
         assert!(!ids.contains(&"somewhere-else"));
         assert_eq!(rows.len(), 2, "the mismatched directory must be skipped");
+    }
+
+    // The doc says "will not parse OR validate" — this pins the second
+    // half, which nothing else here exercised: a file that is perfectly
+    // well-formed JSON matching the envelope shape, but semantically
+    // invalid (`validate_project`'s own rules), must not be listed either.
+    #[test]
+    fn list_projects_skips_a_project_that_parses_but_fails_semantic_validation() {
+        let root = tempfile::tempdir().unwrap();
+        create_project(root.path(), &minimal_project("proj1"), &BTreeMap::new()).unwrap();
+        let (mut envelope, _) = load_project(root.path(), "proj1").unwrap();
+        envelope.project.master_gain = 5.0; // out of validate_project's [0,1] range
+        let dir = project_dir(root.path(), "proj1").unwrap();
+        write_json(&dir.join(PROJECT_FILE), &envelope).unwrap();
+
+        let rows = list_projects(root.path());
+        assert!(
+            rows.is_empty(),
+            "an invalid-but-parseable project must not be listed"
+        );
     }
 
     #[test]
@@ -538,6 +606,51 @@ mod tests {
         assert!(
             dir.is_dir(),
             "a refused removal must leave the directory in place"
+        );
+    }
+
+    // Finding: `walk_no_follow` only inspects what is INSIDE `dir` — it
+    // never checked `dir` itself. A REAL project sits outside the store, at
+    // a path a symlink (or, on Windows, an NTFS junction — reported as a
+    // symlink by Rust too) stands in for at the expected project location:
+    // both the ownership read AND `read_dir` would silently follow it, so
+    // the walk would delete files that were never this app's to remove.
+    #[test]
+    fn remove_project_refuses_a_symlinked_project_directory_itself() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        // A real project OUTSIDE the store — with a valid, matching
+        // project.json, so if the link were followed the ownership check
+        // would actually pass and only the walk's own no-follow discipline
+        // would be left to save it.
+        create_project(outside.path(), &minimal_project("proj1"), &BTreeMap::new()).unwrap();
+        let real_dir = project_dir(outside.path(), "proj1").unwrap();
+        let link = project_dir(root.path(), "proj1").unwrap();
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real_dir, &link).unwrap();
+        #[cfg(not(unix))]
+        {
+            if let Err(e) = std::os::windows::fs::symlink_dir(&real_dir, &link) {
+                if e.raw_os_error() == Some(1314) {
+                    eprintln!(
+                        "SKIP: remove_project_refuses_a_symlinked_project_directory_itself — \
+                         symlink_dir needs SeCreateSymbolicLinkPrivilege (Developer Mode or an \
+                         elevated process); this account lacks it (OS error 1314)"
+                    );
+                    return;
+                }
+                panic!("symlink_dir failed unexpectedly: {e}");
+            }
+        }
+
+        let err = remove_project(root.path(), "proj1")
+            .expect_err("a symlinked project directory must refuse removal");
+        assert_eq!(err.code, EditorErrorCode::Internal);
+        assert!(
+            real_dir.join(PROJECT_FILE).is_file(),
+            "the real project was removed through the link"
         );
     }
 

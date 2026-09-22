@@ -77,34 +77,59 @@ pub enum SourceMediaKind {
 
 /// One entry of a project's `sources.json` — everything the project needs
 /// to know about a source WITHOUT re-probing the file on every open.
+///
+/// The wire shape is the ADR §4 native source registry entry exactly:
+/// `{"store": ..., "base"?/"file"?: ..., "sha256"?, "size", "durationMs",
+/// "width"?, "height"?, "hasAudio", "hasVideo", "mediaKind"}` — `locator`
+/// is flattened so `store`/`base`/`file` land at the TOP level beside the
+/// rest rather than nested under a `"locator"` key, and `width`/`height`
+/// are optional (an audio-only source has neither).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceRecord {
+    #[serde(flatten)]
     pub locator: SourceLocator,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
     pub size: u64,
     pub duration_ms: u64,
-    pub width: u32,
-    pub height: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
     pub has_audio: bool,
     pub has_video: bool,
     pub media_kind: SourceMediaKind,
 }
 
-/// A joined path, but only when it stays INSIDE `dir` — the
-/// `staging::write_sidecar` discipline (comparing the joined path's parent
-/// rather than re-deriving every escape shape a file name could take): a
-/// name carrying a separator, a `..` component, or (on Windows) a drive
-/// prefix moves `dir.join(name)` out of `dir`, and for the drive-prefix
-/// case `join` REPLACES the base outright.
+/// A joined path, but only when `name` is a single ordinary path component
+/// with nothing in it that could mean something OUTSIDE this platform's own
+/// parser.
+///
+/// This is deliberately NOT `dir.join(name)` plus a `.parent() == Some(dir)`
+/// check (what `staging::write_sidecar` uses): that comparison is only as
+/// strict as the CURRENT platform's `Path` parses `name`, and `sources.json`
+/// travels in portable packages (a later task) — a name written on one
+/// platform is read back on whichever platform opens the package. `"C:x"` is
+/// a Windows drive-RELATIVE escape but an utterly ordinary single-component
+/// file name on Unix, so a Linux CI run of this exact check would accept it
+/// and pass a test that must fail. `:` and `\` are therefore refused as
+/// characters, unconditionally, on every platform — never left to whichever
+/// platform's `Path` happens to be compiled in — on top of requiring exactly
+/// one `Component::Normal` (which already rules out `/`, `..`, `.` and an
+/// absolute root on every platform `Path` supports).
 fn join_contained(dir: &Path, name: &str) -> Option<PathBuf> {
-    let joined = dir.join(name);
-    if joined.parent() == Some(dir) {
-        Some(joined)
-    } else {
-        None
+    if name.contains(':') || name.contains('\\') {
+        return None;
     }
+    let mut components = Path::new(name).components();
+    let Some(std::path::Component::Normal(_)) = components.next() else {
+        return None;
+    };
+    if components.next().is_some() {
+        return None;
+    }
+    Some(dir.join(name))
 }
 
 /// Resolve a source record to the file it actually names on disk, or
@@ -281,8 +306,8 @@ mod tests {
             sha256: None,
             size: 0,
             duration_ms: 0,
-            width: 0,
-            height: 0,
+            width: None,
+            height: None,
             has_audio: false,
             has_video: false,
             media_kind: SourceMediaKind::Video,
@@ -319,8 +344,8 @@ mod tests {
             sha256: None,
             size: 0,
             duration_ms: 0,
-            width: 0,
-            height: 0,
+            width: None,
+            height: None,
             has_audio: false,
             has_video: false,
             media_kind: SourceMediaKind::Video,
@@ -365,8 +390,8 @@ mod tests {
             sha256: None,
             size: 0,
             duration_ms: 0,
-            width: 0,
-            height: 0,
+            width: None,
+            height: None,
             has_audio: false,
             has_video: false,
             media_kind: SourceMediaKind::Video,
@@ -383,6 +408,73 @@ mod tests {
         assert_eq!(
             v,
             serde_json::json!({"store": "staging", "base": "2026-09-20 1432 Demo"})
+        );
+    }
+
+    // ADR §4's native source registry entry, literally: `{ "<assetId>": {
+    // "store": ..., "base"?/"file"?: ..., "sha256"?, "size", "durationMs",
+    // "width"?, "height"?, "hasAudio", "hasVideo", "mediaKind" } }`.
+    // `#[serde(flatten)]` on `locator` is what puts `store`/`base` at the
+    // TOP level rather than nested under a `"locator"` key — a
+    // struct-re-serialized-against-itself test cannot catch a missing
+    // flatten, since both sides would nest identically; only a literal
+    // pins the wire shape.
+    #[test]
+    fn source_record_serializes_the_adr_native_registry_entry_shape() {
+        let record = SourceRecord {
+            locator: SourceLocator::Staging {
+                base: "2026-09-20 1432 Demo".to_string(),
+            },
+            sha256: None,
+            size: 1,
+            duration_ms: 1,
+            width: None,
+            height: None,
+            has_audio: true,
+            has_video: true,
+            media_kind: SourceMediaKind::Video,
+        };
+        assert_eq!(
+            serde_json::to_value(&record).unwrap(),
+            serde_json::json!({
+                "store": "staging",
+                "base": "2026-09-20 1432 Demo",
+                "size": 1,
+                "durationMs": 1,
+                "hasAudio": true,
+                "hasVideo": true,
+                "mediaKind": "video",
+            }),
+        );
+    }
+
+    // The `media` locator's own shape: `file`, not `base`, at the top level.
+    #[test]
+    fn source_record_media_locator_serializes_with_file_not_base() {
+        let record = SourceRecord {
+            locator: SourceLocator::Media {
+                file: "clip.mp4".to_string(),
+            },
+            sha256: None,
+            size: 1,
+            duration_ms: 1,
+            width: None,
+            height: None,
+            has_audio: true,
+            has_video: true,
+            media_kind: SourceMediaKind::Video,
+        };
+        assert_eq!(
+            serde_json::to_value(&record).unwrap(),
+            serde_json::json!({
+                "store": "media",
+                "file": "clip.mp4",
+                "size": 1,
+                "durationMs": 1,
+                "hasAudio": true,
+                "hasVideo": true,
+                "mediaKind": "video",
+            }),
         );
     }
 

@@ -12,11 +12,17 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-type ClearReply = { cleared: number; bytesFreed: number; skipped: number; failed: number };
+type ClearReply = {
+  cleared: number;
+  bytesFreed: number;
+  skipped: number;
+  skippedPinned: number;
+  failed: number;
+};
 
 function mountWith(
   usage: { captures: number; bytes: number },
-  clear: ClearReply | Error = { cleared: 0, bytesFreed: 0, skipped: 0, failed: 0 },
+  clear: ClearReply | Error = { cleared: 0, bytesFreed: 0, skipped: 0, skippedPinned: 0, failed: 0 },
 ) {
   const calls: string[] = [];
   let current = usage;
@@ -76,7 +82,7 @@ describe("StagedCapturesCard", () => {
   it("clears on the confirm and re-reads what is left", async () => {
     const { wrapper, calls } = mountWith(
       { captures: 2, bytes: 1_048_576 },
-      { cleared: 2, bytesFreed: 1_048_576, skipped: 0, failed: 0 },
+      { cleared: 2, bytesFreed: 1_048_576, skipped: 0, skippedPinned: 0, failed: 0 },
     );
     await flushPromises();
     await arm(wrapper);
@@ -89,12 +95,12 @@ describe("StagedCapturesCard", () => {
   });
 
   it("does NOT claim a skipped or refused capture was deleted", async () => {
-    // The whole reason clear_staged_captures returns four numbers. A capture
+    // The whole reason clear_staged_captures returns five numbers. A capture
     // left alone because an export is writing it, or refused because its leaf
     // is a symlink, is not a success and must not read as one.
     const { wrapper } = mountWith(
       { captures: 4, bytes: 4_000_000 },
-      { cleared: 2, bytesFreed: 2_000_000, skipped: 1, failed: 1 },
+      { cleared: 2, bytesFreed: 2_000_000, skipped: 1, skippedPinned: 0, failed: 1 },
     );
     await flushPromises();
     await arm(wrapper);
@@ -104,6 +110,26 @@ describe("StagedCapturesCard", () => {
     expect(text).toContain("Cleared 2");
     expect(text).toContain("1 left alone (being saved)");
     expect(text).toContain("1 could not be removed");
+  });
+
+  // R6: a capture pinned to a tutorial project is left alone too, and for a
+  // DIFFERENT reason than an in-progress export — the row must say so
+  // rather than folding it into "left alone (being saved)", which would be
+  // false (nothing is exporting it) and would send the user to Cancel a
+  // save that does not exist.
+  it("says a pinned capture was kept, not merely skipped", async () => {
+    const { wrapper } = mountWith(
+      { captures: 3, bytes: 3_000_000 },
+      { cleared: 2, bytesFreed: 2_000_000, skipped: 0, skippedPinned: 1, failed: 0 },
+    );
+    await flushPromises();
+    await arm(wrapper);
+    await wrapper.get('[data-testid="staging-clear-confirm"]').trigger("click");
+    await flushPromises();
+    const text = wrapper.text();
+    expect(text).toContain("Cleared 2");
+    expect(text).toContain("1 kept (used by a tutorial project)");
+    expect(text).not.toContain("left alone (being saved)");
   });
 
   it("surfaces a rejected clear instead of reporting success", async () => {
