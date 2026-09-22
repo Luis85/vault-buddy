@@ -2182,7 +2182,46 @@ is worth a consistent posture (both saturating, or both plain, with a
 comment on why) the next time either module is touched, so a future
 reader does not read the difference as meaningful when it isn't.
 
-## 9. Documentation & repo hygiene
+### GAP-172 · Low · The timeline's track-label column scrolls with the content instead of staying pinned, and Task 20 widened one e2e overflow tolerance to make room for it
+Two scoped, deliberate simplifications from Task 20 (the virtualized
+multi-track timeline, `src/components/editor/timeline/`), both documented
+inline where they live and recorded here per the tutorial-editor plan's
+own "a task that finds a gap adds a `docs/Gaps.md` entry" rule.
+
+**1. `TrackLane.vue`/`TimelineRuler.vue`'s label column is not pinned.**
+Real NLEs pin the track-name column with `position: sticky; left: 0`
+inside the horizontally-scrolling area so labels stay visible while clips
+scroll past. This task's label column scrolls away with the rest of the
+row instead (`TrackLane.vue`'s own module doc explains the CSS interaction
+that made `sticky` real added risk here: the row's flex-row width math
+would have to account for a pinned column's DOM-flow width separately from
+its visual position, and — per AGENTS.md's Testing conventions — happy-dom
+implements no layout engine, so nothing in `tests/editorTimelineView.test.ts`
+could have caught a regression in that math; the only place it could be
+proven is `tests/e2e/*.spec.ts`, which this task's brief did not ask for).
+Fix: add `position: sticky; left: 0` to `track-lane-header-*`/the ruler's
+label spacer, verified by a Playwright bounding-box assertion (the
+`editorLayout.spec.ts` precedent) that scrolls the timeline and asserts the
+header's `left` stays 0.
+
+**2. `tests/e2e/editorLayout.spec.ts`'s "the editor column overflowed"
+assertion now tolerates up to 20px at the 960x640 floor size, not 1px.**
+Before this task the shell's `timeline` slot was a one-line placeholder;
+Task 20 fills it with a real, resizable 260px timeline
+(`editorWorkspace.timelineHeight`'s own default, a Task 18 contract this
+task does not own), and `EditorRoot.vue` renders that new shell ALONGSIDE
+the full legacy phase-4 editor surface simultaneously — a deliberate,
+temporary state (`EditorRoot.vue`'s `SHOW_LEGACY_EDITOR` flag,
+`LegacyCaptureEditor.vue`'s own doc) that lasts until Task 21 retires the
+legacy surface. At the editor window's OS-level minimum size the two
+surfaces stacked no longer fit with zero overflow (measured: 15px, after
+also trimming `EditorShell.vue`'s timeline wrapper from `p-2` to `p-1`
+in the same commit); nothing becomes unreachable (Save/Discard are still
+asserted `toBeInViewport` at every size, including this one, and `main` is
+`overflow-y-auto` for exactly this situation). Fix: tighten the tolerance
+back to 1 in the same commit that flips `SHOW_LEGACY_EDITOR` off — removing
+roughly 150px of legacy chrome restores comfortable headroom well past
+what 20px of slack needs.
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md
 itself (broken PRD link, missing `cancel_transcription` /

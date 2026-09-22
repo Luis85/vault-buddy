@@ -378,6 +378,25 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
     });
   });
 
+  it("duplicate falls back to a 0 offset rather than -Infinity when no target id resolves (Task 20 carried finding)", () => {
+    // resolveClipMutation only checks targetClipIds(ctx).length > 0 -- it
+    // never confirms those ids still resolve against ctx.project.clips. A
+    // stale id (nothing named "ghost" exists in this project) makes
+    // buildDuplicate's own targetClips filter come back empty while `ids`
+    // itself is non-empty, so `Math.min(...[])`/`Math.max(...[])` would be
+    // Infinity/-Infinity without the guard -- offsetMs must be the
+    // documented 0 fallback, never a non-finite number sent over IPC.
+    const proj = project({ tracks: [track("v1")], clips: [] });
+    const context = ctx({ project: proj, snapshot: snapshot(), selectedClipIds: ["ghost"] });
+
+    expect(resolveActions(context).duplicate.enabled).toBe(true);
+    expect(commandFor("duplicate", context)).toEqual({
+      kind: "duplicateClips",
+      clipIds: ["ghost"],
+      offsetMs: 0,
+    });
+  });
+
   it("earlier/later refuse at the ends of the track's own clip order", () => {
     const proj = project({
       tracks: [track("v1")],

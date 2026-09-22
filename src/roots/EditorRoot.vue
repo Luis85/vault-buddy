@@ -48,6 +48,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import InspectorPanel from "../components/editor/inspector/InspectorPanel.vue";
 import LegacyCaptureEditor from "../components/editor/LegacyCaptureEditor.vue";
 import EditorShell from "../components/editor/shell/EditorShell.vue";
+import TimelineView from "../components/editor/timeline/TimelineView.vue";
 import { logWarning } from "../logging";
 import { useEditorProjectStore } from "../stores/editorProject";
 import { useEditorWorkspaceStore } from "../stores/editorWorkspace";
@@ -196,6 +197,12 @@ onBeforeUnmount(() => {
            filled in Task 17. -->
       <template #inspector>
         <InspectorPanel />
+      </template>
+      <!-- Task 20: the virtualized multi-track timeline fills the shell's
+           `timeline` slot, the same seam `PreviewToolbar`/`InspectorPanel`
+           filled in Tasks 17/19. -->
+      <template #timeline>
+        <TimelineView />
       </template>
     </EditorShell>
     <!-- A multi-root component: its own root nodes (header, preview, strip,

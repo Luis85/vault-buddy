@@ -12,14 +12,16 @@
  * (`actions.ts`) — the same source `ContextMenu.vue` reads — so a disabled
  * reason here and in a right-click menu can never disagree.
  *
- * `ActionContext` has no real selection/pointer/clipboard yet: the
- * `editorWorkspace` store that will own selection/playhead/clipboard lands
- * in Task 18. Until then this toolbar's context is built from `editorProject`
- * alone (`playheadMs: 0`, `selectedClipIds: []`, no pointer target, no
- * clipboard) — every clip-scoped action therefore reads "Select a clip
- * first" today, which is HONEST (R20): there is genuinely nothing selected
- * anywhere in the app yet, not a faked state. Task 18+ wires the real
- * context in without this component's own logic changing.
+ * `ActionContext`'s base (project/snapshot/playhead/selection) now comes
+ * from `../../../editor/actionContext`'s `baseActionContext` (Task 20),
+ * reading the REAL playhead/selection off `editorWorkspace` — this
+ * component's own doc used to read "the `editorWorkspace` store that will
+ * own selection/playhead lands in Task 18 … Task 18+ wires the real context
+ * in without this component's own logic changing", which is exactly this
+ * change, one task later than that doc guessed. No pointer target and no
+ * clipboard still (this toolbar has neither a right-clicked thing nor a
+ * wired clipboard) — every clip-scoped action reads "Select a clip first"
+ * exactly when nothing IS selected, real now rather than permanent.
  *
  * Overflow: `TOOLBAR_ITEMS` is a fixed, ordered list; a `ResizeObserver` on
  * the row measures its own width and moves however many TRAILING items
@@ -33,9 +35,11 @@
 import type { ComponentPublicInstance } from "vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
+import { baseActionContext } from "../../../editor/actionContext";
 import type { ActionContext, ActionId } from "../../../editor/actions";
 import { commandFor, resolveActions } from "../../../editor/actions";
 import { useEditorProjectStore } from "../../../stores/editorProject";
+import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 
 /** Fixed order: teaching tools, then ratio/review, then the panel/focus
  * toggles (SCREENS-AND-INTERACTIONS.md §02's own ordering). */
@@ -61,16 +65,16 @@ const emit = defineEmits<{
 }>();
 
 const editorProject = useEditorProjectStore();
+const editorWorkspace = useEditorWorkspaceStore();
 
-const context = computed<ActionContext>(() => ({
-  project: editorProject.project,
-  snapshot: editorProject.snapshot,
-  playheadMs: 0,
-  selectedClipIds: [],
-  pointerTarget: null,
-  hasClipboard: false,
-  clipboardFragment: null,
-}));
+const context = computed<ActionContext>(() =>
+  baseActionContext(
+    editorProject.project,
+    editorProject.snapshot,
+    editorWorkspace.playheadMs,
+    editorWorkspace.selectionClipIds,
+  ),
+);
 const resolved = computed(() => resolveActions(context.value));
 
 // ---- overflow measurement --------------------------------------------------

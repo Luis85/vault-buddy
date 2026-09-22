@@ -395,9 +395,21 @@ function buildDuplicate(ctx: ActionContext): EditorCommand {
   const targetClips = ids
     .map((id) => project.clips.find((c) => c.id === id))
     .filter((c): c is Clip => c !== undefined);
-  const minStart = Math.min(...targetClips.map((c) => c.start_ms));
-  const maxEnd = Math.max(...targetClips.map((c) => clipOutputEnd(clipSpanOf(c))));
-  const offsetMs = maxEnd - minStart;
+  // Task 20's own carried finding: `resolveClipMutation` only checks
+  // `targetClipIds(ctx).length > 0` -- it never confirms those ids still
+  // RESOLVE against `ctx.project.clips`. A stale id (a delete landing from
+  // another surface between resolving actions and this builder running)
+  // makes `targetClips` empty while `ids` is not, and `Math.min(...[])` /
+  // `Math.max(...[])` are `Infinity`/`-Infinity` -- an `offsetMs` of
+  // `-Infinity` sent straight to Rust. `0` for an empty resolved set is
+  // honest: nothing here can compute a real offset for zero real clips, and
+  // `0` at least fails Rust's own overlap/range validation cleanly instead
+  // of shipping a non-finite number over IPC.
+  const offsetMs =
+    targetClips.length === 0
+      ? 0
+      : Math.max(...targetClips.map((c) => clipOutputEnd(clipSpanOf(c)))) -
+        Math.min(...targetClips.map((c) => c.start_ms));
   return { kind: "duplicateClips", clipIds: ids, offsetMs };
 }
 

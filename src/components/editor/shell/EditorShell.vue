@@ -166,9 +166,14 @@ function onFocusPreview() {
       </aside>
     </div>
 
+    <!-- `p-1`, not the library/inspector panels' `p-2` -- Task 20's real
+         `TimelineView` already draws its own toolbar/lane/resize-handle
+         chrome, so the extra 8px this wrapper used to reserve was pure
+         padding-on-padding. Trimmed once the slot stopped being a bare
+         placeholder line that needed the breathing room. -->
     <section
       data-testid="editor-shell-timeline"
-      class="rounded-control border border-line bg-panel p-2 text-micro text-fg-subtle"
+      class="rounded-control border border-line bg-panel p-1 text-micro text-fg-subtle"
     >
       <slot name="timeline">
         Timeline — arrives in a later task.
