@@ -2,17 +2,22 @@
 //! `InternalCommand` (native-only, never `Deserialize`), plus their
 //! dispatch (`apply`/`apply_internal`) into family modules (R14, F-13, F31).
 //!
-//! Only FOUR kinds are actually implemented by this task: `rename` and
-//! `setDestination` here via `meta.rs`, plus the two `EditorSession`
-//! intercepts before ever calling `apply` at all, `undo`/`redo` (see
-//! `session.rs`'s `execute`). Every other kind falls through to the shared
-//! "not available yet" arm below -- each later task adds its own explicit
-//! arm ABOVE the fallback and deletes that kind's row from
+//! ELEVEN kinds are implemented so far: `rename`/`setDestination` (Task 6,
+//! `meta.rs`), the two `EditorSession` intercepts before ever calling
+//! `apply` at all, `undo`/`redo` (see `session.rs`'s `execute`), and the
+//! seven core clip commands `insertClip`/`updateClip`/`splitClip`/
+//! `trimClip`/`deleteClips`/`moveClips`/`reorderClip` (Task 7, `clips.rs`;
+//! cue reassignment for `splitClip` lives in the sibling `cue_follow.rs`).
+//! Every other kind falls through to the shared "not available yet" arm
+//! below -- each later task adds its own explicit arm ABOVE the fallback
+//! and deletes that kind's row from
 //! `unimplemented_kinds_are_invalid_request_not_panic`'s table (this
 //! module's own tests), so the table shrinks monotonically task by task;
 //! say so explicitly in that task's own report rather than re-verifying the
 //! whole table at the end.
 
+mod clips;
+mod cue_follow;
 mod meta;
 pub mod payloads;
 
@@ -125,6 +130,13 @@ pub fn apply(project: &Project, cmd: &EditorCommand) -> Result<(Project, String)
     match cmd {
         EditorCommand::Rename(p) => meta::rename(project, p),
         EditorCommand::SetDestination(p) => meta::set_destination(project, p),
+        EditorCommand::InsertClip(p) => clips::insert_clip(project, p),
+        EditorCommand::UpdateClip(p) => clips::update_clip(project, p),
+        EditorCommand::SplitClip(p) => clips::split_clip(project, p),
+        EditorCommand::TrimClip(p) => clips::trim_clip(project, p),
+        EditorCommand::DeleteClips(p) => clips::delete_clips(project, p),
+        EditorCommand::MoveClips(p) => clips::move_clips(project, p),
+        EditorCommand::ReorderClip(p) => clips::reorder_clip(project, p),
         EditorCommand::Undo | EditorCommand::Redo => Err(EditorError::new(
             EditorErrorCode::InvalidRequest,
             "undo/redo are dispatched by EditorSession::execute, never by apply",
@@ -160,68 +172,14 @@ mod tests {
         crate::editor::Num::from(v)
     }
 
-    /// Every `EditorCommand` kind NOT implemented by this task (`rename`,
-    /// `undo`, `redo`, `setDestination` are -- see the module doc). Each
-    /// later task deletes its own row here as it replaces `apply`'s
-    /// fallback with a real arm; report that removal explicitly in that
-    /// task's own report rather than re-verifying the whole table at once.
+    /// Every `EditorCommand` kind NOT implemented so far (`rename`, `undo`,
+    /// `redo`, `setDestination`, and the seven clip commands are -- see the
+    /// module doc). Each later task deletes its own row here as it
+    /// replaces `apply`'s fallback with a real arm; report that removal
+    /// explicitly in that task's own report rather than re-verifying the
+    /// whole table at once.
     fn unimplemented_commands() -> Vec<(&'static str, EditorCommand)> {
         vec![
-            (
-                "insertClip",
-                EditorCommand::InsertClip(InsertClipPayload {
-                    asset_id: "a1".into(),
-                    track_id: "t1".into(),
-                    start_ms: 0,
-                    in_ms: 0,
-                    out_ms: 1_000,
-                }),
-            ),
-            (
-                "updateClip",
-                EditorCommand::UpdateClip(UpdateClipPayload {
-                    clip_id: "c1".into(),
-                    name: "Clip".into(),
-                }),
-            ),
-            (
-                "splitClip",
-                EditorCommand::SplitClip(SplitClipPayload {
-                    clip_id: "c1".into(),
-                    at_ms: 500,
-                }),
-            ),
-            (
-                "trimClip",
-                EditorCommand::TrimClip(TrimClipPayload {
-                    clip_id: "c1".into(),
-                    start_ms: 0,
-                    in_ms: 0,
-                    out_ms: 500,
-                }),
-            ),
-            (
-                "deleteClips",
-                EditorCommand::DeleteClips(DeleteClipsPayload {
-                    clip_ids: vec!["c1".into()],
-                    close_gap: true,
-                }),
-            ),
-            (
-                "moveClips",
-                EditorCommand::MoveClips(MoveClipsPayload {
-                    clip_ids: vec!["c1".into()],
-                    delta_ms: -100,
-                    track_id: None,
-                }),
-            ),
-            (
-                "reorderClip",
-                EditorCommand::ReorderClip(ReorderClipPayload {
-                    clip_id: "c1".into(),
-                    direction: ReorderDirection::Later,
-                }),
-            ),
             (
                 "groupClips",
                 EditorCommand::GroupClips(GroupClipsPayload {
@@ -518,11 +476,13 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_commands_table_has_forty_two_rows() {
+    fn unimplemented_commands_table_has_thirty_five_rows() {
         // A vacuity guard, the `shared_fixture_table_has_ten_cases`
         // precedent (`time.rs`): 46 total EditorCommand kinds minus the
-        // four this task implements (rename, undo, redo, setDestination).
-        assert_eq!(unimplemented_commands().len(), 42);
+        // eleven implemented so far (rename, undo, redo, setDestination,
+        // insertClip, updateClip, splitClip, trimClip, deleteClips,
+        // moveClips, reorderClip).
+        assert_eq!(unimplemented_commands().len(), 35);
     }
 
     #[test]
