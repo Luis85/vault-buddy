@@ -212,6 +212,21 @@ describe("EditorShell — placeholders (later tasks fill these in)", () => {
   });
 });
 
+describe("EditorShell — PreviewToolbar's focus-preview (Task 17)", () => {
+  it("collapses both drawers when the toolbar's Focus preview control fires", async () => {
+    setViewportWidth(960); // compact, so the drawer toggles' aria-expanded is observable
+    const w = mount(EditorShell, { attachTo: document.body });
+
+    await w.get('[data-testid="editor-header-library-toggle"]').trigger("click");
+    expect(w.get('[data-testid="editor-header-library-toggle"]').attributes("aria-expanded")).toBe("true");
+
+    await w.get('[data-testid="preview-toolbar-focusPreview"]').trigger("click");
+
+    expect(w.get('[data-testid="editor-header-library-toggle"]').attributes("aria-expanded")).toBe("false");
+    expect(w.get('[data-testid="editor-header-inspector-toggle"]').attributes("aria-expanded")).toBe("false");
+  });
+});
+
 describe("EditorHeader — inline rename", () => {
   it("renames through the rename command on Enter, and leaves the title untouched on Escape", async () => {
     const store = useEditorProjectStore();

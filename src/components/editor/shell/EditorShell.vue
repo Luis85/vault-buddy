@@ -31,6 +31,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import EditorHeader from "./EditorHeader.vue";
+import PreviewToolbar from "./PreviewToolbar.vue";
 
 /** SCREENS-AND-INTERACTIONS.md §12's own breakpoint. */
 const COMPACT_BREAKPOINT = 1180;
@@ -81,6 +82,22 @@ watch(
 function toggleTheme() {
   theme.value = theme.value === "light" ? "dark" : "light";
 }
+
+/**
+ * `focus-preview` (Task 17's `PreviewToolbar`, F-48): collapses both
+ * drawers so the preview gets the room — a real, observable effect at the
+ * compact width where drawers exist at all (`showLibrary`/`showInspector`
+ * above always show both columns once `!isCompact`, so this is currently a
+ * no-op at wide width, same as clicking a closed drawer's own toggle would
+ * be). The dedicated distraction-free layout `Workspace.focus_preview`
+ * already names (`editorTypes.ts`) is Task 18's `editorWorkspace` store to
+ * build — this is the honest, minimal thing available before that store
+ * exists, not a placeholder that pretends to do more.
+ */
+function onFocusPreview() {
+  libraryOpen.value = false;
+  inspectorOpen.value = false;
+}
 </script>
 
 <template>
@@ -118,18 +135,17 @@ function toggleTheme() {
         class="flex flex-col gap-2 rounded-control border border-line bg-stage p-2"
       >
         <!-- DESIGN-SYSTEM.md: "The preview has one 48px control/header row."
-             Placeholder until Task 17 builds the real toolbar (preview
-             tools, aspect ratio, Review, panel controls) — the Playwright
-             spec counts this element to pin "exactly one row", so a later
-             task that replaces its content must keep this one wrapper. -->
-        <div
-          data-testid="preview-toolbar"
-          class="flex h-8 shrink-0 items-center rounded-control border border-line bg-raised px-2 text-micro text-fg-subtle"
-        >
-          <slot name="preview-toolbar">
-            Preview toolbar — arrives in Task 17.
-          </slot>
-        </div>
+             `PreviewToolbar` (Task 17) owns the `data-testid="preview-toolbar"`
+             row itself now — the Playwright spec's "exactly one row" count
+             still holds because its root, not a wrapper here, carries the
+             testid. -->
+        <PreviewToolbar
+          :library-open="libraryOpen"
+          :inspector-open="inspectorOpen"
+          @toggle-library="libraryOpen = !libraryOpen"
+          @toggle-inspector="inspectorOpen = !inspectorOpen"
+          @focus-preview="onFocusPreview"
+        />
         <div class="text-micro text-fg-subtle">
           <slot name="preview">
             Preview canvas — arrives in Task 17.
