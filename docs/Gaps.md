@@ -5096,9 +5096,9 @@ alone. A performance claim asserted on a shared machine's wall clock is
 load-sensitive by construction. Low; worth either a generous ratio or
 measuring CPU time, whenever that file is next touched.
 
-### GAP-170 · Low (unverified) · The editor command capability scoping's RUNTIME enforcement has never been exercised — only its build-time shape
+### GAP-170 · Low (unverified) · The editor command capability scoping's RUNTIME enforcement is proven against the generated ACL artifact, never against a live IPC call
 Task 11 (tutorial editor, R8's app-manifest half) added `build.rs`'s
-`EDITOR_COMMANDS` app manifest and `capabilities/editor.json`, so the five
+`ALL_COMMANDS` app manifest and `capabilities/editor.json`, so the five
 `editor_*` session commands (`editor_open_staged`, `editor_get_snapshot`,
 `editor_execute`, `editor_close_session`, `editor_hide_window`) are no
 longer capability-gate-free like every other custom command in this app —
@@ -5108,25 +5108,74 @@ check (defense in depth, not a redundant layer: the manifest is enforced by
 Tauri's ACL runtime before a command handler ever runs, the native check is
 enforced inside the handler).
 
-**What is actually verified today:** `editor::capability_guard`
-(`src-tauri/src/editor/capability_guard.rs`, test-only) pins the three
-sources of truth — `generate_handler!` in `lib.rs`, `build.rs`'s
-`EDITOR_COMMANDS`, and `editor.json`'s `permissions` — against each other,
-and `npx tauri build --no-bundle` succeeds, which proves the manifest and
-capability files are well-formed enough for `tauri-build` to accept and
-`tauri-cli` to compile the ACL manifest from. **What is NOT verified:**
-that Tauri's runtime ACL layer actually REJECTS an IPC call to
-`editor_execute` (or any of its four siblings) issued from a non-editor
-webview — e.g. the panel window's devtools console calling
-`window.__TAURI__.core.invoke("editor_execute", …)`. No automated test
-exercises this (Vitest's `mockIPC` never reaches the real Rust-side ACL
-layer, and the shell's own Rust tests never open a real webview), and it is
-not yet on `docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md`
+**A near-miss worth recording, because it is exactly the failure mode this
+gap is now scoped around.** The first version of this task's `build.rs`
+passed `AppManifest::commands()` only the five `editor_*` names. That
+compiled, `npx tauri build --no-bundle` succeeded, and the original
+(narrower) `capability_guard.rs` was green — because `AppManifest::
+commands()` doing ANYTHING non-empty flips a process-wide switch
+(`tauri_utils::acl::resolved::has_app_manifest`, read at runtime as
+`RuntimeAuthority::has_app_acl`) that `tauri`'s own IPC dispatch
+(`webview/mod.rs`'s `has_app_acl_manifest` check, ahead of every
+non-plugin, non-remote invoke) uses to decide whether EVERY custom command
+needs an explicit capability grant, not just the ones the manifest names.
+With only 5 of 101 commands in the manifest and `capabilities/default.json`
+granting none of the app's own `allow-<command>` permissions at all, the
+other 96 — `list_vaults`, `toggle_panel`, `start_capture`, `add_task`,
+`search_vaults`, every command in the app except the five new ones — would
+have been rejected by the ACL at runtime from every window, including the
+ones they already worked in. `cargo build`/`tauri build` cannot catch this:
+both compile and validate the manifest's SHAPE, neither ever dispatches an
+IPC call. Caught in code review, not by any test that existed at the time.
+Fixed by making the manifest exhaustive (all 101 commands) and
+`capabilities/default.json` grant `allow-<kebab>` for the other 96.
+
+**What is verified today, after the fix (fix round 1):**
+`editor::capability_guard` (`src-tauri/src/editor/capability_guard.rs`,
+test-only) now checks three things, not two. (1) The exhaustive/disjoint
+partition across the SOURCE files: every command in `lib.rs`'s
+`generate_handler!` is in `build.rs`'s `ALL_COMMANDS`, and is granted in
+EXACTLY ONE of `capabilities/editor.json` (iff `editor_*`) or
+`capabilities/default.json` (everything else) — never both, never
+neither, and no stale grant for a command that no longer exists. (2) That
+`editor.json` scopes to exactly the `"editor"` window. (3) **The GENERATED
+artifact, not just the source files that produced it**:
+`the_generated_acl_artifact_resolves_the_partition_correctly` reads
+`gen/schemas/{capabilities,acl-manifests}.json` — what `tauri-build`
+itself wrote for this exact build (regenerated on every plain `cargo
+build`/`test` of this crate, not only `tauri build`; `src-tauri/gen/` is
+git-ignored, correctly, since it is 1:1 derived from the checked-in source
+on every build) — and replicates tauri's own resolution over it: for the
+`panel`, `main`, `bubble`, `overlay` and `region-indicator` windows,
+`list_vaults` resolves as allowed and every `editor_*` command resolves as
+NOT allowed; for the `editor` window itself, `list_vaults` and all five
+`editor_*` commands resolve as allowed. This closes the actual defect
+above (a hand-parsed source file agreeing with itself proves nothing about
+what `tauri-build` did with it) and is more than a shape check — it is the
+same DATA `tauri`'s `RuntimeAuthority` consumes to build its resolved ACL,
+computed the way the runtime computes it for this app's simple permission
+model (no `permission_sets`, no scopes, no `default_permission` on any of
+this app's own commands — `AppManifest` exposes no builder for either, so
+a direct permission-map lookup is the COMPLETE resolution here, not an
+approximation of one).
+
+**What is still NOT verified, and cannot be from a unit test in this
+crate:** that Tauri's runtime ACL layer, inside a REAL running app,
+actually REJECTS a live IPC call to `editor_execute` (or any of its four
+siblings) issued from a non-editor webview — e.g. the panel window's
+devtools console calling
+`window.__TAURI__.core.invoke("editor_execute", …)`. The generated-artifact
+test proves the RESOLVED PERMISSION SET is correct; it does not exercise
+`RuntimeAuthority::resolve_access` itself, `webview/mod.rs`'s dispatch
+path, or a real IPC round-trip — no automated test in this repo can
+(Vitest's `mockIPC` never reaches the real Rust-side ACL layer, and the
+shell's own Rust tests never open a real webview). It is not yet on
+`docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md`
 — that file does not exist in this worktree yet (it is created by Task 15).
 Whoever runs Task 15 should add a manual row for it: open the panel
 window's devtools, `invoke("editor_execute", …)` with a fabricated session
 id, and confirm the call is refused (permission denied) BEFORE it ever
 reaches `session_commands::editor_execute`'s own body — a passing manual
-check there is the only thing that closes this gap; a passing
-`cargo test`/`tauri build` here proves only that the pieces are shaped
-correctly, never that Tauri wires them together as documented.
+check there is the only thing that closes this gap fully; everything above
+proves the DATA is right, never that the running app WIRES it up as
+documented.
