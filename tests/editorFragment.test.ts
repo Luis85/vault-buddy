@@ -122,4 +122,27 @@ describe("buildFragment", () => {
     expect(fragment.clips).toEqual([]);
     expect(fragment.originMs).toBe(0);
   });
+
+  // The envelope-vs-entity spelling split (global-constraints: "Every new
+  // DTO gets ... a decoder test in TS"): `originMs` is the ENVELOPE's own
+  // camelCase field, but every entity inside it stays document spelling
+  // (`start_ms`, `clip_id`, ...) -- the real port/decoders land in Task
+  // 13, so a JSON-shape assertion on the plain serialized object is
+  // enough to pin the split now.
+  it("serializes with originMs (camelCase envelope) and document-spelled entity keys", () => {
+    const fragment = buildFragment(project(), ["c1", "c2"]);
+    const json = JSON.parse(JSON.stringify(fragment)) as Record<string, unknown>;
+
+    expect(json).toHaveProperty("originMs");
+    expect(json).not.toHaveProperty("origin_ms");
+
+    const clips = json.clips as Record<string, unknown>[];
+    expect(clips[0]).toHaveProperty("start_ms");
+    expect(clips[0]).not.toHaveProperty("startMs");
+    expect(clips[0]).toHaveProperty("asset_id");
+
+    const effects = json.effects as Record<string, unknown>[];
+    expect(effects[0]).toHaveProperty("clip_id");
+    expect(effects[0]).not.toHaveProperty("clipId");
+  });
 });

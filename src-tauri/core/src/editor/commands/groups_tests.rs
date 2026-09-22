@@ -119,6 +119,25 @@ fn group_clips_requires_at_least_two_clips_and_mints_a_fresh_group_id() {
 }
 
 #[test]
+fn group_clips_dedups_before_the_at_least_two_check() {
+    // ["c1","c1"] names only ONE distinct clip twice -- must be refused
+    // exactly like ["c1"] would be, never accepted as a pair.
+    let mut project = base_project();
+    project.tracks.push(track("v1", TrackKind::Video, false));
+    project.assets.push(asset("a1", AssetKind::Video, 5_000));
+    project.clips.push(clip("c1", "v1", "a1", 0, 0, 200));
+
+    let err = group_clips(
+        &project,
+        &GroupClipsPayload {
+            clip_ids: vec!["c1".into(), "c1".into()],
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code, EditorErrorCode::InvalidRequest);
+}
+
+#[test]
 fn group_clips_refuses_when_a_named_clip_is_on_a_locked_track() {
     let mut project = base_project();
     project.tracks.push(track("v1", TrackKind::Video, true));
@@ -214,13 +233,22 @@ fn duplicate_mints_fresh_ids_everywhere() {
     for id in &existing_ids {
         assert!(new_ids.contains(id), "original id {id} vanished");
     }
-    let added = new_ids.len() - existing_ids.len();
+    // NOT `new_ids.len() - existing_ids.len() == new_ids.difference(&
+    // existing_ids).count()` -- that equality holds tautologically
+    // whenever existing_ids is a subset of new_ids (both sides are just
+    // "how many ids are new" computed two ways from the SAME two sets),
+    // so it stays green even if a reused id silently drops the total
+    // below what 5 fresh entities actually require. The real guard is a
+    // CONCRETE expected total: 2 duplicated clips + 1 duplicated effect +
+    // 1 duplicated marker + 1 duplicated caption = 5 ids that must not
+    // already appear anywhere in `existing_ids`.
     assert_eq!(
-        added,
-        new_ids.difference(&existing_ids).count(),
-        "duplication must add only BRAND NEW ids -- a reused source id \
-         (the mutation this test guards against) would shrink this count \
-         below the number of entities actually duplicated"
+        new_ids.len(),
+        existing_ids.len() + 5,
+        "duplication must add exactly 5 BRAND NEW ids (2 clips, 1 effect, \
+         1 marker, 1 caption) -- a reused source id (the mutation this \
+         test guards against) collapses two ids into one and this count \
+         falls short"
     );
     assert_eq!(candidate.clips.len(), 4, "2 originals + 2 duplicates");
     assert_eq!(candidate.effects.len(), 2, "1 original + 1 duplicate");
@@ -263,6 +291,23 @@ fn duplicate_mints_fresh_ids_everywhere() {
         .find(|m| m.id != "m1")
         .expect("a duplicated marker");
     assert_eq!(dup_marker.clip_id, dup2.id);
+
+    // Caption freshness was previously UNCHECKED entirely -- reusing the
+    // source caption's own id (mutation: `copy.id = c.id.clone();` in
+    // `duplicate_clips`'s caption-copy closure) stayed green under every
+    // assertion above, since `candidate.captions.cues.len() == 2` and the
+    // ids-added-count check both still hold when two cues merely share
+    // one id (a HashSet dedupes it, `len()` counts the `Vec`, not the
+    // set).
+    let dup_caption = candidate
+        .captions
+        .as_ref()
+        .unwrap()
+        .cues
+        .iter()
+        .find(|c| c.id != "cap1")
+        .expect("a duplicated caption with a FRESH id");
+    assert_eq!(dup_caption.clip_id, dup1.id);
 }
 
 #[test]
@@ -382,6 +427,63 @@ fn paste_repoints_cues_to_new_clips() {
         .find(|c| c.id != "cap1")
         .expect("a pasted caption");
     assert_eq!(pasted_caption.clip_id, pasted.id);
+}
+
+#[test]
+fn paste_preserves_relative_offsets_and_remints_groups() {
+    // A two-clip fragment, grouped, with a NON-ZERO origin and an
+    // asymmetric gap (700 and 1150 -- a 450ms relative offset, not a
+    // clean round number) so a bug that ignores the relative offset
+    // entirely (`new_start = at_ms` for every clip) or one that keeps
+    // the fragment's OWN group id cannot pass by accident.
+    let mut project = base_project();
+    project.tracks.push(track("v1", TrackKind::Video, false));
+    project.assets.push(asset("a1", AssetKind::Video, 5_000));
+
+    let mut fc1 = clip("c1", "v1", "a1", 700, 0, 200);
+    fc1.group_id = Some("g-src".into());
+    let mut fc2 = clip("c2", "v1", "a1", 1_150, 0, 200);
+    fc2.group_id = Some("g-src".into());
+    let fragment = ClipboardFragment {
+        clips: vec![fc1, fc2],
+        effects: Vec::new(),
+        captions: Vec::new(),
+        markers: Vec::new(),
+        origin_ms: 700,
+    };
+
+    let (candidate, _) = paste_fragment(
+        &project,
+        &PasteFragmentPayload {
+            fragment,
+            track_id: "v1".into(),
+            at_ms: 2_000,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(candidate.clips.len(), 2);
+    let earlier = candidate.clips.iter().find(|c| c.start_ms == 2_000).expect(
+        "the clip whose fragment start EQUALS originMs (700) must land \
+             exactly at atMs (2000) -- a relative offset of 0",
+    );
+    let later = candidate.clips.iter().find(|c| c.start_ms == 2_450).expect(
+        "the clip 450ms after originMs in the fragment (1150 - 700) \
+             must land 450ms after atMs (2000 + 450 = 2450) -- NOT at \
+             atMs itself, which is what `new_start = at_ms` (ignoring the \
+             relative offset) would produce for BOTH clips",
+    );
+
+    assert_eq!(
+        earlier.group_id, later.group_id,
+        "both pasted clips must share ONE fresh common group id"
+    );
+    assert!(earlier.group_id.is_some());
+    assert_ne!(
+        earlier.group_id.as_deref(),
+        Some("g-src"),
+        "the pasted group id must be freshly minted, never the fragment's own g-src"
+    );
 }
 
 #[test]

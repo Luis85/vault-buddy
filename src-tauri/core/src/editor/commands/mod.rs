@@ -517,6 +517,71 @@ mod tests {
     }
 
     #[test]
+    fn paste_fragment_wire_literal() {
+        // The literal-JSON wire pin `ClipboardFragment` (and its carrying
+        // command, `pasteFragment`) had lacked so far (global-constraints:
+        // "Every new DTO gets a literal-JSON pin test in Rust and a
+        // decoder test in TS, never a struct re-serialized against
+        // itself") -- hand-written JSON in, asserted field-for-field
+        // against a struct built independently of the payload's own
+        // Serialize impl, so a wire-shape regression (e.g. `originMs`
+        // silently reverting to `origin_ms`, or a clip entity field
+        // losing document spelling) reddens this even if `Serialize`/
+        // `Deserialize` still agree with EACH OTHER.
+        let json = serde_json::json!({
+            "kind": "pasteFragment",
+            "fragment": {
+                "clips": [{
+                    "id": "c1",
+                    "asset_id": "a1",
+                    "track_id": "v1",
+                    "name": "c1",
+                    "start_ms": 0,
+                    "in_ms": 0,
+                    "out_ms": 200,
+                    "fade_in_ms": 0,
+                    "fade_out_ms": 0,
+                    "fade_curve": "linear",
+                    "opacity": 1,
+                    "volume": 1,
+                    "muted": false,
+                    "x": 0,
+                    "y": 0,
+                    "w": 1,
+                    "h": 1
+                }],
+                "effects": [],
+                "captions": [],
+                "markers": [],
+                "originMs": 0
+            },
+            "trackId": "t",
+            "atMs": 0
+        });
+        let cmd: EditorCommand =
+            serde_json::from_value(json).expect("the literal must deserialize");
+
+        let expected_clip = crate::editor::test_support::clip("c1", "v1", "a1", 0, 0, 200);
+        assert_eq!(
+            cmd,
+            EditorCommand::PasteFragment(PasteFragmentPayload {
+                fragment: ClipboardFragment {
+                    clips: vec![expected_clip],
+                    effects: Vec::new(),
+                    captions: Vec::new(),
+                    markers: Vec::new(),
+                    origin_ms: 0,
+                },
+                track_id: "t".to_string(),
+                at_ms: 0,
+            }),
+            "the literal must decode to exactly the expected command -- \
+             clip fields in document spelling, the envelope's own \
+             originMs/trackId/atMs in camelCase"
+        );
+    }
+
+    #[test]
     fn add_track_transition_and_effect_do_not_lose_the_outer_kind_tag() {
         // Regression: AddTrackPayload/AddTransitionPayload/AddEffectPayload
         // each carry their OWN `kind` field (TrackKind/TransitionKind/

@@ -133,26 +133,28 @@ fn extend_captions(project: &mut Project, new_cues: Vec<CaptionCue>) {
 
 // ---- groupClips / ungroupClips -------------------------------------------
 
-/// `groupClips{clipIds}`: at least 2 clips, sets a FRESH `group_id` on
-/// every one of them -- overwriting any group a clip was previously in
-/// (re-grouping a clip is not an error, it just moves it into the new
-/// group).
+/// `groupClips{clipIds}`: at least 2 DISTINCT clips (dedup runs BEFORE
+/// this count check, so `["c1","c1"]` -- two entries naming the same
+/// clip -- is refused just like `["c1"]` would be, never treated as a
+/// pair), sets a FRESH `group_id` on every one of them -- overwriting any
+/// group a clip was previously in (re-grouping a clip is not an error, it
+/// just moves it into the new group).
 pub(super) fn group_clips(
     project: &Project,
     payload: &GroupClipsPayload,
 ) -> Result<(Project, String), EditorError> {
-    if payload.clip_ids.len() < 2 {
+    let ids: HashSet<&str> = payload.clip_ids.iter().map(String::as_str).collect();
+    if ids.len() < 2 {
         return Err(invalid_request("groupClips requires at least 2 clips"));
     }
-    let mut clips: Vec<&Clip> = Vec::with_capacity(payload.clip_ids.len());
-    for id in &payload.clip_ids {
+    let mut clips: Vec<&Clip> = Vec::with_capacity(ids.len());
+    for id in &ids {
         clips.push(find_clip(project, id)?);
     }
     for clip in &clips {
         ensure_unlocked(project, &clip.track_id)?;
     }
 
-    let ids: HashSet<&str> = payload.clip_ids.iter().map(String::as_str).collect();
     let group_id = new_entity_id("group");
     let mut candidate = project.clone();
     for c in candidate.clips.iter_mut() {
