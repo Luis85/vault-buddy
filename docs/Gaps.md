@@ -2223,6 +2223,17 @@ back to 1 in the same commit that flips `SHOW_LEGACY_EDITOR` off — removing
 roughly 150px of legacy chrome restores comfortable headroom well past
 what 20px of slack needs.
 
+Fix round 1 paired this with a LOWER bound at the same floor size
+(`expect(overflow).toBeGreaterThan(1)`, same `it` block): without it the
+widened upper tolerance would keep passing silently forever once the
+legacy surface is gone, and nobody reviewing a green CI run would notice
+it still needed tightening. The lower bound turns that into a red test
+the moment Task 21 flips `SHOW_LEGACY_EDITOR` off, and its own failure
+message names exactly what to do (tighten the tolerance back to 1, delete
+the lower-bound check).
+
+## 9. Documentation & repo hygiene
+
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md
 itself (broken PRD link, missing `cancel_transcription` /
 `transcription_queue_status` / `count_open_tasks` + `transcription.rs` in

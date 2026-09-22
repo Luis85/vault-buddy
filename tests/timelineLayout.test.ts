@@ -220,19 +220,33 @@ describe("visibleClips (virtualization)", () => {
     expect(result.map((c) => c.id)).not.toContain("far");
   });
 
-  // The brief's own mutation check, encoded directly: a clip that is only
-  // HALF visible at the (unpadded) viewport boundary must still render. This
-  // is what goes red if the ± one screen padding is ever dropped.
-  it("mutation check: a clip straddling the exact viewport boundary is never dropped", () => {
+  // Fix round 1, finding 6: this is a plain correctness check, NOT the
+  // padding mutation check its previous name claimed -- a clip straddling
+  // the UNPADDED viewport boundary is `start < hiMs && end > loMs` by
+  // construction regardless of `pad`, so it stays visible with or without
+  // the ± one screen padding and cannot, on its own, catch that padding
+  // being dropped. The test right above this one ("keeps a clip that is
+  // only HALF visible at the padded edge") is the one that actually
+  // exercises the padding: it places a clip entirely OUTSIDE the unpadded
+  // window but inside the padded one, which is exactly the case the
+  // brief's own mutation check names and this repo's own mutation-check
+  // run (see this task's report) confirmed goes red without the padding.
+  //
+  // The fixture here previously did not even straddle the boundary it
+  // claimed to: a 200ms clip starting 100px before `hiMs` ended 10px
+  // short of `hiMs` (at zoom 1, `pxPerMs` = 0.05), landing entirely
+  // inside the unpadded window rather than crossing its edge. Re-pointed
+  // to a clip whose span genuinely spans `hiMs` (50px on either side).
+  it("a clip straddling the exact (unpadded) viewport boundary is never dropped", () => {
     const zoom = 1;
     const width = 1000;
     const scrollLeft = 500 * pxPerMs(zoom);
-    // Straddles the viewport's right edge: starts before it ends after.
+    const hiMs = (scrollLeft + width) / pxPerMs(zoom);
     const straddling = clip({
       id: "straddle",
-      start_ms: (scrollLeft + width - 100) / pxPerMs(zoom),
+      start_ms: hiMs - 50 / pxPerMs(zoom),
       in_ms: 0,
-      out_ms: 200,
+      out_ms: 100 / pxPerMs(zoom), // 100px of span, 50px on either side of hiMs
     });
     const result = visibleClips([straddling], scrollLeft, width, zoom);
     expect(result.map((c) => c.id)).toContain("straddle");

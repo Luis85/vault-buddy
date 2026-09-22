@@ -142,11 +142,26 @@ for (const size of [
     // task's own brief asked it to outgrow. Task 21 retiring the ~150px
     // legacy surface restores comfortable headroom; tighten this back to 1
     // in the same commit that flips the flag.
-    const tolerance = size.width === 960 && size.height === 640 ? 20 : 1;
+    const isFloorSize = size.width === 960 && size.height === 640;
+    const tolerance = isFloorSize ? 20 : 1;
     expect(
       overflow,
       `the editor column overflowed by ${overflow}px at ${label}`,
     ).toBeLessThanOrEqual(tolerance);
+    // Fix round 1, finding 5: paired with a LOWER bound at the floor size, so
+    // this test goes red — not quietly stays green — the moment Task 21
+    // retires the legacy surface (`SHOW_LEGACY_EDITOR` flips off) and the
+    // ~150px of double-rendered chrome that caused the overflow is gone.
+    // Without this, the widened upper tolerance above would keep passing
+    // forever, silently masking that it is no longer doing anything and
+    // nobody would notice it needed tightening back to 1 (GAP-172 §2).
+    if (isFloorSize) {
+      expect(
+        overflow,
+        `overflow dropped to ${overflow}px at ${label} -- the legacy editor surface ` +
+          "looks retired; tighten the tolerance above back to 1 and delete this check",
+      ).toBeGreaterThan(1);
+    }
   });
 }
 

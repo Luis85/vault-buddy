@@ -19,6 +19,18 @@
  * Trim handles are VISUAL ONLY this task (drag/trim lands in Task 21) — they
  * carry no pointer handlers, so dragging one does nothing yet; rendering
  * them now is what lets Task 21 add behavior without a markup change.
+ *
+ * `role="option"`, not `role="button"` (fix round 1, finding 3): `aria-
+ * selected` is only a valid ARIA attribute on a handful of roles (option,
+ * row, tab, gridcell, …) and `button` is not one of them —
+ * `SearchHitRow.vue`'s own `role="option"` + `:aria-selected` is this
+ * repo's existing precedent for exactly this "one of several selectable
+ * items" shape. Because this element is a `<div>`, not a native `<button>`,
+ * Enter/Space activation has to be wired by hand
+ * (`TranscriptionSummary.vue`'s `@keydown.enter`/`@keydown.space.prevent`
+ * precedent, folded into the same `onKeydown` this component already uses
+ * for Shift+F10/Menu) — without it a keyboard user who tabs to a clip can
+ * open its context menu but has no way to select it.
  */
 import { isContextMenuShortcut } from "../../../editor/shortcuts";
 import { clipOutputEnd } from "../../../editor/timeMap";
@@ -60,17 +72,23 @@ function onContextMenu(event: MouseEvent) {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (!isContextMenuShortcut(event)) return;
-  event.preventDefault();
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-  emit("context-menu", { clip: props.clip, clientX: rect.left, clientY: rect.bottom });
+  if (isContextMenuShortcut(event)) {
+    event.preventDefault();
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    emit("context-menu", { clip: props.clip, clientX: rect.left, clientY: rect.bottom });
+    return;
+  }
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    onSelect();
+  }
 }
 </script>
 
 <template>
   <div
     :data-testid="`clip-${clip.id}`"
-    role="button"
+    role="option"
     tabindex="0"
     :aria-selected="selected"
     :aria-label="label(clip)"

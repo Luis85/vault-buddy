@@ -231,6 +231,15 @@ describe("ClipItem — accessible label and media-kind styling", () => {
     expect(w.get('[data-testid="clip-c2"]').attributes("aria-label")).toBe("Clip c2, 0:00–0:01");
   });
 
+  it("is role=option, not role=button -- aria-selected is invalid on button (fix round 1, finding 3)", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView);
+    await flushPromises();
+
+    expect(w.get('[data-testid="clip-c2"]').attributes("role")).toBe("option");
+  });
+
   it("uses the video vs audio colour token by the clip's own asset kind", async () => {
     executed = [];
     await openProject();
@@ -417,8 +426,30 @@ describe("TimelineView — virtualization", () => {
   });
 });
 
-describe("TimelineView — resize handle", () => {
-  it("dragging the handle changes editorWorkspace.timelineHeight", async () => {
+describe("TimelineView — resize handle (fix round 1, finding 4)", () => {
+  it("sits at the timeline's TOP edge, above the toolbar", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView);
+    await flushPromises();
+
+    // The timeline panel is the last (bottom) row of the whole editor shell,
+    // so a block element's height grows DOWNWARD from a fixed top -- the
+    // handle has to sit at that TOP edge for its own position to move WITH
+    // an upward drag. A handle below the scroll area would move AWAY from
+    // the pointer on every drag (the defect this fix round named).
+    const root = w.get('[data-testid="timeline-view"]').element;
+    const handleIndex = Array.from(root.children).findIndex(
+      (el) => el.getAttribute("data-testid") === "timeline-resize-handle",
+    );
+    const toolbarIndex = Array.from(root.children).findIndex(
+      (el) => el.getAttribute("data-testid") === "timeline-toolbar",
+    );
+    expect(handleIndex).toBeGreaterThanOrEqual(0);
+    expect(handleIndex).toBeLessThan(toolbarIndex);
+  });
+
+  it("dragging UP grows the timeline -- consistent with the handle sitting at the top edge", async () => {
     executed = [];
     await openProject();
     const workspace = useEditorWorkspaceStore();
@@ -432,7 +463,9 @@ describe("TimelineView — resize handle", () => {
     window.dispatchEvent(new PointerEvent("pointerup"));
     await flushPromises();
 
-    // Dragging UP (a smaller clientY) grows the timeline.
+    // Dragging UP (a smaller clientY) grows the timeline -- and because the
+    // handle sits at the top edge (the test above), growth moves that same
+    // top edge further up, in the same direction the pointer moved.
     expect(workspace.timelineHeight).toBeGreaterThan(before);
   });
 });
@@ -467,6 +500,37 @@ describe("ClipItem — keyboard gate", () => {
   });
 });
 
+describe("ClipItem — keyboard activation (fix round 1, finding 3)", () => {
+  // role=option/tabindex=0 is not a native <button>, so Enter/Space must be
+  // wired by hand (the TranscriptionSummary.vue precedent,
+  // @keydown.enter/@keydown.space.prevent) or a keyboard user who can TAB to
+  // a clip and open its context menu (Shift+F10) still has no way to select
+  // it without a mouse.
+  it("Enter selects the focused clip", async () => {
+    executed = [];
+    await openProject();
+    const workspace = useEditorWorkspaceStore();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    await w.get('[data-testid="clip-c2"]').trigger("keydown", { key: "Enter" });
+
+    expect(workspace.selectionClipIds).toEqual(["c2"]);
+  });
+
+  it("Space selects the focused clip", async () => {
+    executed = [];
+    await openProject();
+    const workspace = useEditorWorkspaceStore();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    await w.get('[data-testid="clip-c1"]').trigger("keydown", { key: " " });
+
+    expect(workspace.selectionClipIds).toEqual(["c1"]);
+  });
+});
+
 describe("TimelineRuler — degenerate zoom", () => {
   it("a non-positive zoom seeks to 0 rather than dividing by zero", async () => {
     const workspace = useEditorWorkspaceStore();
@@ -477,6 +541,61 @@ describe("TimelineRuler — degenerate zoom", () => {
       ({ left: 0, top: 0, width: 500, height: 24, right: 500, bottom: 24, x: 0, y: 0 }) as DOMRect;
 
     await ticks.trigger("pointerdown", { clientX: 300 });
+
+    expect(workspace.playheadMs).toBe(0);
+  });
+});
+
+describe("TimelineRuler — drag (fix round 1, finding 2)", () => {
+  it("a drag moves the playhead repeatedly and never touches the selection", async () => {
+    executed = [];
+    // A large durationMs -- workspace.setPlayhead clamps to
+    // [0, editorProject.durationMs], and a standalone TimelineRuler mount
+    // opens no project at all (durationMs 0) unless one is opened first.
+    await openProject({}, { durationMs: 1_000_000 });
+    const workspace = useEditorWorkspaceStore();
+    workspace.select(["c1"]);
+    const w = mount(TimelineRuler, { props: { zoom: 1, widthPx: 2000 } });
+
+    const ticks = w.get('[data-testid="timeline-ruler-ticks"]');
+    (ticks.element as HTMLElement).getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 2000, height: 24, right: 2000, bottom: 24, x: 0, y: 0 }) as DOMRect;
+
+    await ticks.trigger("pointerdown", { clientX: 400, pointerId: 1 });
+    const afterDown = workspace.playheadMs;
+    await ticks.trigger("pointermove", { clientX: 800, pointerId: 1 });
+    const afterFirstMove = workspace.playheadMs;
+    await ticks.trigger("pointermove", { clientX: 1200, pointerId: 1 });
+    const afterSecondMove = workspace.playheadMs;
+    await ticks.trigger("pointerup", { pointerId: 1 });
+
+    // Each move genuinely moved the playhead further -- a drag, not a
+    // single click plus inert hovering.
+    expect(afterFirstMove).toBeGreaterThan(afterDown);
+    expect(afterSecondMove).toBeGreaterThan(afterFirstMove);
+    // Never the selection, at any point in the drag.
+    expect(workspace.selectionClipIds).toEqual(["c1"]);
+
+    // A move AFTER pointerup must not still be dragging.
+    const stoppedAt = workspace.playheadMs;
+    await ticks.trigger("pointermove", { clientX: 1900, pointerId: 1 });
+    expect(workspace.playheadMs).toBe(stoppedAt);
+  });
+
+  it("a plain hover (no press) never moves the playhead", async () => {
+    executed = [];
+    // A real, nonzero range -- otherwise "never moves" would hold trivially
+    // (workspace.setPlayhead clamps into [0, durationMs]) regardless of
+    // whether the hover gate works at all.
+    await openProject({}, { durationMs: 1_000_000 });
+    const workspace = useEditorWorkspaceStore();
+    workspace.setPlayhead(0);
+    const w = mount(TimelineRuler, { props: { zoom: 1, widthPx: 2000 } });
+    const ticks = w.get('[data-testid="timeline-ruler-ticks"]');
+    (ticks.element as HTMLElement).getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 2000, height: 24, right: 2000, bottom: 24, x: 0, y: 0 }) as DOMRect;
+
+    await ticks.trigger("pointermove", { clientX: 900 });
 
     expect(workspace.playheadMs).toBe(0);
   });

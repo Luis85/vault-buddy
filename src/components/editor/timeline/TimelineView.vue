@@ -195,6 +195,21 @@ function onMenuActivate(actionId: ActionId) {
     class="flex flex-col gap-1"
     :style="{ height: `${workspace.timelineHeight}px` }"
   >
+    <!-- Fix round 1, finding 4: this panel is the LAST (bottom) row of the
+         whole editor shell, so a block element's height grows DOWNWARD from
+         a fixed top edge -- the handle has to sit AT that top edge for a
+         drag to move it the same direction as the pointer. It used to sit
+         below the scroll area, where growing the timeline moved the handle
+         AWAY from an upward drag instead of with it. -->
+    <div
+      data-testid="timeline-resize-handle"
+      role="separator"
+      aria-label="Resize the timeline"
+      aria-orientation="horizontal"
+      class="h-1.5 shrink-0 cursor-row-resize rounded bg-line"
+      @pointerdown="onResizePointerDown"
+    />
+
     <TimelineToolbar @fit="onFit" />
 
     <div
@@ -224,15 +239,6 @@ function onMenuActivate(actionId: ActionId) {
         @context-menu="onClipContextMenu"
       />
     </div>
-
-    <div
-      data-testid="timeline-resize-handle"
-      role="separator"
-      aria-label="Resize the timeline"
-      aria-orientation="horizontal"
-      class="h-1.5 shrink-0 cursor-row-resize rounded bg-line"
-      @pointerdown="onResizePointerDown"
-    />
 
     <ContextMenu
       :open="menuOpen"
