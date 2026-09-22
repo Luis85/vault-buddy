@@ -5096,17 +5096,28 @@ alone. A performance claim asserted on a shared machine's wall clock is
 load-sensitive by construction. Low; worth either a generous ratio or
 measuring CPU time, whenever that file is next touched.
 
-### GAP-170 · Low (unverified) · The editor command capability scoping's RUNTIME enforcement is proven against the generated ACL artifact, never against a live IPC call
-Task 11 (tutorial editor, R8's app-manifest half) added `build.rs`'s
-`ALL_COMMANDS` app manifest and `capabilities/editor.json`, so the five
-`editor_*` session commands (`editor_open_staged`, `editor_get_snapshot`,
-`editor_execute`, `editor_close_session`, `editor_hide_window`) are no
-longer capability-gate-free like every other custom command in this app —
-in principle only the `editor` window's webview may even attempt an IPC
-call to them now, on top of Task 10's native `authz::require_editor_window`
-check (defense in depth, not a redundant layer: the manifest is enforced by
-Tauri's ACL runtime before a command handler ever runs, the native check is
-enforced inside the handler).
+### GAP-170 · High (unverified) · The app-wide ACL that now gates ALL 101 commands has never run inside a live app — if it resolves differently than the generated-artifact replica models, every IPC command from every window is refused, not just the editor ones
+Task 11 (tutorial editor, R8's app-manifest half) made `build.rs`'s
+`AppManifest::commands(ALL_COMMANDS)` list EVERY command in
+`generate_handler!`, not just the five `editor_*` session commands
+(`editor_open_staged`, `editor_get_snapshot`, `editor_execute`,
+`editor_close_session`, `editor_hide_window`) — because (see the near-miss
+below) doing anything less silently turns off ACL enforcement's grant for
+every command NOT in the list, not just the ones a narrower list would have
+scoped. That makes this gap's blast radius the whole app, not one feature:
+**this is not "the editor commands might stay reachable from other
+windows" (a missed defense layer, tolerable because Task 10's native
+`authz::require_editor_window` still holds for those five) — it is "if
+Tauri's live ACL resolution disagrees with what this task's tests model,
+every window loses EVERY command," including `list_vaults`, `toggle_panel`,
+`start_capture`, `add_task`, `search_vaults`, and the other 91 that have NO
+second layer at all.** The editor commands alone have `authz::
+require_editor_window` as native defense-in-depth if the capability layer
+fails; the other 96 have nothing behind the ACL — a resolution mismatch for
+any of them is a fully bricked app, not a security gap. That is why this is
+High, not Low, until it is verified on real hardware: the SEVERITY question
+here is not "could an unauthorized window reach a command" but "does the
+app still start and work at all."
 
 **A near-miss worth recording, because it is exactly the failure mode this
 gap is now scoped around.** The first version of this task's `build.rs`
@@ -5160,22 +5171,37 @@ a direct permission-map lookup is the COMPLETE resolution here, not an
 approximation of one).
 
 **What is still NOT verified, and cannot be from a unit test in this
-crate:** that Tauri's runtime ACL layer, inside a REAL running app,
-actually REJECTS a live IPC call to `editor_execute` (or any of its four
-siblings) issued from a non-editor webview — e.g. the panel window's
-devtools console calling
-`window.__TAURI__.core.invoke("editor_execute", …)`. The generated-artifact
-test proves the RESOLVED PERMISSION SET is correct; it does not exercise
+crate:** that Tauri's runtime ACL layer, inside a REAL running app, resolves
+access exactly the way the generated-artifact replica models it — in
+BOTH directions, and both matter equally:
+1. **Ordinary commands still dispatch.** The app actually starts, the panel
+   opens and lists vaults (`list_vaults`), a capture can be started
+   (`start_capture`), and a settings save round-trips (e.g.
+   `set_capture_config`) — each exercised from the window it is granted to
+   in `capabilities/default.json`. A failure here is not a security gap,
+   it is the app not working at all: every one of these commands now
+   depends on the exhaustive manifest resolving the way this task's tests
+   say it does.
+2. **`editor_*` is still refused from a non-editor window.** From the
+   PANEL window's devtools console (not the editor's), call
+   `window.__TAURI__.core.invoke("editor_execute", …)` with a fabricated
+   session id and confirm the call is refused by the ACL (permission
+   denied) BEFORE it ever reaches `session_commands::editor_execute`'s own
+   body — this is the scoping half Task 11 exists for.
+
+The generated-artifact test (`the_generated_acl_artifact_resolves_the_
+partition_correctly`) proves the RESOLVED PERMISSION SET is correct as
+COMPUTED BY A REPLICA of Tauri's algorithm; it does not exercise
 `RuntimeAuthority::resolve_access` itself, `webview/mod.rs`'s dispatch
 path, or a real IPC round-trip — no automated test in this repo can
 (Vitest's `mockIPC` never reaches the real Rust-side ACL layer, and the
-shell's own Rust tests never open a real webview). It is not yet on
+shell's own Rust tests never open a real webview). Neither direction is
+yet on
 `docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md`
-— that file does not exist in this worktree yet (it is created by Task 15).
-Whoever runs Task 15 should add a manual row for it: open the panel
-window's devtools, `invoke("editor_execute", …)` with a fabricated session
-id, and confirm the call is refused (permission denied) BEFORE it ever
-reaches `session_commands::editor_execute`'s own body — a passing manual
-check there is the only thing that closes this gap fully; everything above
-proves the DATA is right, never that the running app WIRES it up as
-documented.
+— that file does not exist in this worktree yet; **it is created by Task 15,
+and Task 15 MUST carry both rows above**, not just the editor-refusal one,
+precisely because the blast radius of a resolution mismatch here is the
+whole app, not one feature. A passing manual check on both fronts is the
+only thing that closes this gap fully and lets the severity drop back down;
+everything above proves the DATA is right, never that the running app
+WIRES it up as documented.

@@ -1,12 +1,17 @@
 //! Structural pin for R8's native caller check (test-only).
 //!
-//! Custom commands are not capability-gated in this app, so an `editor_*`
-//! command that forgets `require_editor_window(&window)` is callable from
-//! EVERY webview — and nothing else in the suite would notice, because the
-//! command still works perfectly from the editor. This scan reads every
-//! `.rs` file under `src/editor/` (whatever it is named — a command moved
-//! into a new sibling file is still covered) and requires, for each
-//! `#[tauri::command]`:
+//! Since Task 11's exhaustive app manifest, `capabilities/editor.json`
+//! already scopes every `editor_*` command to the `editor` window at the
+//! Tauri ACL layer — but this native check is the SECOND, independent
+//! layer (`authz.rs`'s module doc), not a substitute for it. An `editor_*`
+//! command that forgets `require_editor_window(&window)` is still a real
+//! defect: it stays reachable from any window a FUTURE capability edit
+//! (or a new command mis-granted to the wrong capability file) newly
+//! permits, and nothing else in the suite would notice, because the
+//! command still works perfectly from the editor either way. This scan
+//! reads every `.rs` file under `src/editor/` (whatever it is named — a
+//! command moved into a new sibling file is still covered) and requires,
+//! for each `#[tauri::command]`:
 //! - a `window: WebviewWindow` parameter, and
 //! - `require_editor_window(&window)?` as the body's first statement — the
 //!   `?` included, so a discarded refusal (`let _ = …`, `.ok()`) fails (only

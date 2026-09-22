@@ -1,9 +1,16 @@
 //! The native half of R8's two-layer command authorization.
 //!
-//! Custom commands are not capability-gated in this app (one capability
-//! covers all six windows), so without this check ANY webview — the panel,
-//! the bubble, the region overlay — could drive an editing session or
-//! discard a project. Every `editor_*` command therefore calls
+//! Since Task 11's exhaustive app manifest (`build.rs`'s `ALL_COMMANDS` +
+//! `capabilities/editor.json`), the `editor_*` commands are ALSO
+//! capability-gated at the Tauri ACL layer — `editor.json` scopes them to
+//! the `editor` window alone, and Tauri refuses the IPC call before any
+//! command handler runs. This check is the SECOND, independent layer,
+//! inside the handler: without it, a capability misconfiguration (a future
+//! edit that widens `editor.json`'s `windows`, or a new command added to
+//! `generate_handler!` and granted to the wrong file) would be the only
+//! thing standing between another webview — the panel, the bubble, the
+//! region overlay — and driving an editing session or discarding a
+//! project. Every `editor_*` command therefore calls
 //! `require_editor_window(&window)?` as its FIRST statement, and
 //! `authz_guard.rs` scans the module and fails naming any command that does
 //! not. `require_session` is the second half of R8's native check: the

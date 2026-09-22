@@ -1,11 +1,18 @@
 //! Structural pin for R8's app-manifest half (Task 11): scoping the
 //! `editor_*` commands to the editor window's OWN Tauri capability.
 //!
-//! Custom commands are not capability-gated by default in this app
-//! (`authz_guard.rs`'s module doc) — every command in `generate_handler!`
-//! is callable from every window unless an app-manifest command list
-//! (`build.rs`'s `ALL_COMMANDS`) takes it out of that default and a
-//! capability file grants it back to specific windows.
+//! Tauri does NOT capability-gate a custom command by default — but this
+//! app no longer relies on that default anywhere. `build.rs`'s
+//! `AppManifest::commands(ALL_COMMANDS)` lists EVERY command in
+//! `generate_handler!`, and doing so switches Tauri's own IPC dispatch
+//! into requiring an explicit capability grant for ALL of them, not just
+//! the ones named — see the EXHAUSTIVE note below for why that is not
+//! optional. So every custom command in this app IS capability-gated,
+//! unconditionally: `capabilities/editor.json` grants the five `editor_*`
+//! session commands to the `editor` window alone, and
+//! `capabilities/default.json` grants every other command to its
+//! `windows` list. A command reachable from a window with no matching
+//! grant is a bug this scan exists to catch, not an intentional gap.
 //!
 //! **The manifest command list must be EXHAUSTIVE, not just the five
 //! `editor_*` commands, and that is not obvious from the Tauri docs.**
@@ -118,8 +125,13 @@ fn registered_commands() -> Vec<String> {
 fn build_rs_commands() -> Vec<String> {
     let path = manifest_dir().join("build.rs");
     let src = read_to_string(&path);
+    // Anchor on the DECLARATION (`const ALL_COMMANDS`), not the bare name —
+    // `ALL_COMMANDS` alone would also match a doc comment mentioning it (as
+    // this very module's own doc does), and matching whichever occurrence
+    // comes first in the file is exactly the kind of accident this scan
+    // must not depend on.
     let name_at = src
-        .find("ALL_COMMANDS")
+        .find("const ALL_COMMANDS")
         .expect("build.rs must declare a const named ALL_COMMANDS");
     // Skip past the `= ` so the bracket search lands on the VALUE's `&[`,
     // not the type annotation's (`const ALL_COMMANDS: &[&str] = &[` has
