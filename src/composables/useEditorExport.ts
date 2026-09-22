@@ -148,22 +148,37 @@ export function useEditorExport(
    * moment `EditorRoot` opens it (Task 15's own Behavior). `editorProject
    * .close("discardProject")` unpins AND removes the project — never the
    * recording itself, see that action's own doc — so the legacy discard that
-   * follows can actually succeed. Only attempted when a session is really
-   * open (`sessionId !== null`): a session whose OWN open failed pinned
-   * nothing, and calling `close()` on nothing is a documented no-op that
-   * would otherwise risk reading a stale `lastError` left over from an
-   * unrelated earlier failure. `close()` itself never throws — it reports a
-   * failure through `lastError` instead (its own doc) — so a refused close
-   * (e.g. the project is still open elsewhere) is read from there and stops
-   * this function before the staged capture — the only copy of the
-   * recording — is touched at all. */
+   * follows can actually succeed.
+   *
+   * The close is gated on `sourceBase === base`, not merely `sessionId !==
+   * null` (fix round 2): `editorProject` is a SINGLE-session store, so its
+   * live session can belong to a DIFFERENT capture than the one being
+   * discarded — e.g. capture A opened a real session, then a later
+   * capture B's own session-open FAILED (the store never blanks on a
+   * failed open, by design), and the legacy surface moved on to B anyway
+   * because B's `load_staged_capture` succeeded independently. Guarding on
+   * `sessionId !== null` alone closed, unpinned and REMOVED A's project as
+   * a side effect of discarding B — a session this Discard click has
+   * nothing to do with. When the store's session is for a different
+   * capture (or none), this skips straight to `discard_staged_capture`:
+   * Rust refuses a B that turns out to be pinned to some OTHER project
+   * with its own clear message, which still surfaces through the same
+   * catch block below — there is no second copy of that refusal to write.
+   * Only attempted when a MATCHING session is really open: calling
+   * `close()` on nothing is a documented no-op that would otherwise risk
+   * reading a stale `lastError` left over from an unrelated earlier
+   * failure. `close()` itself never throws — it reports a failure through
+   * `lastError` instead (its own doc) — so a refused close (e.g. the
+   * project is still open elsewhere) is read from there and stops this
+   * function before the staged capture — the only copy of the recording —
+   * is touched at all. */
   async function onDiscard() {
     const base = detail.value?.base;
     if (base === undefined) return;
     discardBusy.value = true;
     try {
       const editorProject = useEditorProjectStore();
-      if (editorProject.sessionId !== null) {
+      if (editorProject.sessionId !== null && editorProject.sourceBase === base) {
         await editorProject.close("discardProject");
         if (editorProject.lastError) {
           exportPhase.value = "failed";

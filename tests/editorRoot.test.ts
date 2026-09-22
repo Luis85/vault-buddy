@@ -1086,4 +1086,79 @@ describe("EditorRoot", () => {
     // The capture is still showing: a refused close must not have blanked it.
     expect(w.text()).toContain("Screen 1");
   });
+
+  // ---- Fix round 2: the close guard must be keyed on WHICH capture is
+  // being discarded, not merely "is any session open". `editorProject` is a
+  // single-session store, so a session left over from a PREVIOUS capture
+  // (still open because its own close was never attempted, or because a
+  // later capture's own session-open failed and the store never blanks on
+  // failure) must not be torn down as a side effect of discarding a
+  // DIFFERENT capture. ----
+
+  it("does not close an unrelated session when discarding a different capture", async () => {
+    const closeCalls: string[] = [];
+    const store = useEditorProjectStore();
+    let openCalls = 0;
+    store.setPort(
+      fakeEditorPort({
+        openStaged: (base) => {
+          openCalls += 1;
+          // "cap one" opens a real session; "cap two"'s own session-open
+          // FAILS, but its legacy `load_staged_capture` succeeds
+          // independently (mocked below) — the exact scenario the
+          // coordinator named.
+          if (openCalls === 1) {
+            return Promise.resolve(openResultFixture({ sourceBase: base }));
+          }
+          return Promise.reject(
+            new EditorPortError({
+              code: "sourceMissing",
+              message: "That capture's video file is missing.",
+              retryable: false,
+              operationId: "op-2",
+            }),
+          );
+        },
+        closeSession: (sessionId, disposition) => {
+          closeCalls.push(`${sessionId}:${disposition}`);
+          return Promise.resolve();
+        },
+      }),
+    );
+    const w = await open(undefined, ["cap one", "cap two"], {
+      "cap one": DETAIL,
+      "cap two": { ...DETAIL, base: "cap two", sourceTitle: "Firefox" },
+    });
+    // Sanity: A's session really opened.
+    expect(store.sessionId).toBe("ses-a");
+    expect(store.sourceBase).toBe("cap one");
+
+    listeners["editor:open"]();
+    await flushPromises();
+    // B's own session-open failed, so the store's `sessionId`/`sourceBase`
+    // are UNCHANGED (A's) — the store's own documented "never blank on a
+    // failed open" behavior — while the legacy surface has moved on to B.
+    expect(w.text()).toContain("Firefox");
+    expect(store.sessionId).toBe("ses-a");
+    expect(store.sourceBase).toBe("cap one");
+
+    const discardCalls: string[] = [];
+    mockIPC((cmd, args) => {
+      if (cmd === "discard_staged_capture") {
+        discardCalls.push((args as { base: string }).base);
+        return undefined;
+      }
+      return undefined;
+    });
+    await w.get('[data-testid="export-discard"]').trigger("click");
+    await w.get('[data-testid="export-discard"]').trigger("click");
+    await flushPromises();
+
+    // MUTATION CHECK (this fix round): guard the close on
+    // `sourceBase === base` rather than `sessionId !== null` alone, and
+    // this reads `["ses-a:discardProject"]` — A's session, unpinned and
+    // removed as a side effect of discarding an unrelated capture B.
+    expect(closeCalls).toEqual([]);
+    expect(discardCalls).toEqual(["cap two"]);
+  });
 });
