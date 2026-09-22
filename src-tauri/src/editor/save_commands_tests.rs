@@ -313,6 +313,14 @@ fn reopen_after_save_restores_clips_and_cues() {
         "reopening a closed, saved project must restore the exact edited graph"
     );
     assert_eq!(reopened.source_base.as_deref(), Some(BASE));
+    assert_eq!(
+        reopened.snapshot.revision, trimmed.snapshot.revision,
+        "reopen must resume at the saved revision, not reset to 1"
+    );
+    assert_eq!(
+        reopened.snapshot.persisted_revision,
+        Some(trimmed.snapshot.revision)
+    );
 
     // Read the raw bytes, not a hash of them -- a byte-for-byte comparison
     // is at least as strong evidence as a SHA-256 match and needs no new
@@ -391,4 +399,245 @@ fn list_projects_reflects_a_save_and_stays_sorted_newest_first() {
     assert_eq!(rows[0].project_file_id, pid);
     assert_eq!(rows[0].title, "Renamed");
     assert_eq!(rows[0].persisted_revision, 2);
+}
+
+// Fix round 1, finding 1: a `load_project` failure used to be silently
+// swallowed (`Err(_) => {}`) regardless of WHY it failed, and the save
+// proceeded to overwrite the file anyway. A corrupt/oversized project.json
+// is `invalidProject` and must refuse the save outright -- the fixture is
+// the exact oversized-padding shape `store_io`'s own
+// `load_refuses_an_oversized_file` test uses, so this pins the SAVE path's
+// reaction to the same failure store_io's read path already reports.
+#[test]
+fn a_corrupt_project_json_refuses_the_save_rather_than_overwriting_it() {
+    let f = Fixture::new();
+    f.stage(&sidecar(BASE, "vaultA"));
+    let state = EditorState::default();
+    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let sid = open.snapshot.session_id.clone();
+    let pid = open.project.id.clone();
+    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "Renamed")).unwrap();
+
+    let path = f.project_json_path(&pid);
+    let json = std::fs::read_to_string(&path).unwrap();
+    let pad = (vault_buddy_core::editor::limits::MAX_PROJECT_JSON_BYTES as usize + 1)
+        .saturating_sub(json.len());
+    std::fs::write(&path, format!("{json}{}", " ".repeat(pad))).unwrap();
+    let before = std::fs::read(&path).unwrap();
+
+    // MUTATION CHECK: reverting to `Err(_) => (json!({}), now)` for every
+    // error (rather than propagating `invalidProject`) makes this
+    // assertion fail -- the save would succeed and silently clobber the
+    // corrupt-but-still-on-disk file instead of refusing to touch it.
+    let err = save_project_in(&state, f.root(), &sid, 2).unwrap_err();
+    assert_eq!(err.code, EditorErrorCode::InvalidProject);
+
+    let after = std::fs::read(&path).unwrap();
+    assert_eq!(
+        before, after,
+        "a refused save must never overwrite the corrupt file"
+    );
+}
+
+// Fix round 1, finding 1's other branch: a project.json that has
+// genuinely vanished out from under a live session (not corrupt, just
+// gone) is the one case that may still degrade -- to a fresh `{}`
+// workspace and a fresh `createdAt` -- rather than failing the save
+// outright, since there is nothing left to refuse ON.
+#[test]
+fn a_missing_project_json_degrades_to_a_fresh_workspace_rather_than_failing() {
+    let f = Fixture::new();
+    f.stage(&sidecar(BASE, "vaultA"));
+    let state = EditorState::default();
+    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let sid = open.snapshot.session_id.clone();
+    let pid = open.project.id.clone();
+    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "Renamed")).unwrap();
+
+    // Directory stays (so the write below can still land); only the file
+    // this save would otherwise read the last-saved envelope from is gone.
+    std::fs::remove_file(f.project_json_path(&pid)).unwrap();
+
+    let receipt = save_project_in(&state, f.root(), &sid, 2).unwrap();
+    assert_eq!(receipt.saved_revision, 2);
+
+    let (on_disk, _sources) = load_project(f.root(), &pid).unwrap();
+    assert_eq!(on_disk.workspace, serde_json::json!({}));
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(&on_disk.record.created_at).is_ok(),
+        "createdAt must degrade to a fresh, parseable timestamp: {:?}",
+        on_disk.record.created_at
+    );
+}
+
+// A writer that signals when it has been ENTERED (so a test can prove a
+// concurrent caller is genuinely blocked behind it, not merely racing) and
+// then blocks until told to proceed -- lets a test force the exact
+// interleaving a real disk write's timing cannot be relied on to produce.
+struct GatedWriter {
+    entered: std::sync::mpsc::Sender<()>,
+    proceed: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl ProjectWriter for GatedWriter {
+    fn write(&self, path: &Path, content: &str) -> io::Result<()> {
+        let _ = self.entered.send(());
+        let _ = self.proceed.lock().unwrap().recv();
+        RealWriter.write(path, content)
+    }
+}
+
+// Fix round 1, finding 2: two concurrent saves on ONE session must not
+// interleave their read-revision/commit/mark_saved sequence. This forces
+// the exact race the fix's commit message describes -- A reads revision 2
+// and is held (by `GatedWriter`) mid-write, an edit then advances the
+// session to revision 3, and B (targeting that new revision) is spawned
+// while A still holds the per-session save lock. Without the lock, B's
+// read-through-write would race ahead of A's stalled one instead of
+// blocking behind it.
+#[test]
+fn concurrent_saves_on_one_session_serialize_and_leave_persisted_revision_matching_disk() {
+    let f = Fixture::new();
+    f.stage(&sidecar(BASE, "vaultA"));
+    let state = EditorState::default();
+    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let sid = open.snapshot.session_id.clone();
+    let pid = open.project.id.clone();
+    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "First")).unwrap();
+
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+    let (proceed_tx, proceed_rx) = std::sync::mpsc::channel::<()>();
+    let gated = GatedWriter {
+        entered: entered_tx,
+        proceed: std::sync::Mutex::new(proceed_rx),
+    };
+
+    std::thread::scope(|scope| {
+        let a = std::thread::Builder::new()
+            .name("editor-save-a".into())
+            .spawn_scoped(scope, || {
+                save_project_with(&gated, &state, f.root(), &sid, 2)
+            })
+            .unwrap();
+
+        // Wait until A is inside its write -- i.e. holding the per-session
+        // save lock -- before doing anything else.
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("A must enter its write");
+
+        // While A still holds the lock: a concurrent edit (revision 2 ->
+        // 3), then a second save racing for the SAME session, targeting
+        // the NEW revision.
+        execute_in(&state, &rename_request(&sid, 2, "cmd-2", "Second")).unwrap();
+        let b = std::thread::Builder::new()
+            .name("editor-save-b".into())
+            .spawn_scoped(scope, || save_project_in(&state, f.root(), &sid, 3))
+            .unwrap();
+
+        // B must NOT be able to complete while A still holds the lock. Read
+        // the flag BEFORE unblocking A, but assert on it only AFTER both
+        // threads are joined -- if this ever panics before A is released
+        // and joined, `thread::scope` would otherwise deadlock waiting to
+        // join a thread parked forever on `proceed.recv()`.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let b_was_still_blocked = !b.is_finished();
+
+        // Let A finish; only then can B proceed.
+        proceed_tx.send(()).unwrap();
+        let a_result = a.join().unwrap();
+        let b_result = b.join().unwrap();
+        let a_receipt = a_result.expect("A's save");
+        let b_receipt = b_result.expect("B's save");
+        assert!(
+            b_was_still_blocked,
+            "B must block behind A's per-session save lock, not race it"
+        );
+        assert_eq!(a_receipt.saved_revision, 2);
+        assert_eq!(b_receipt.saved_revision, 3);
+    });
+
+    let (on_disk, _sources) = load_project(f.root(), &pid).unwrap();
+    let snap = snapshot_in(&state, &sid).unwrap();
+    assert_eq!(
+        on_disk.record.revision, 3,
+        "B's write (the later, unblocked save) must be what actually lands"
+    );
+    assert_eq!(
+        snap.snapshot.persisted_revision,
+        Some(on_disk.record.revision),
+        "persistedRevision must always equal what is actually on disk, never a stale mark \
+         left behind by an earlier save completing after a later one"
+    );
+}
+
+// Controller ruling (Task 12 fix round 1): record.revision is monotonic
+// across a project's WHOLE life, not just one session's -- reopening a
+// project must resume its session at the SAVED revision, never reset to 1.
+#[test]
+fn record_revision_is_monotonic_across_a_close_and_reopen() {
+    let f = Fixture::new();
+    f.stage(&sidecar(BASE, "vaultA"));
+    let state = EditorState::default();
+    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let sid = open.snapshot.session_id.clone();
+    let pid = open.project.id.clone();
+
+    let r2 = execute_in(&state, &rename_request(&sid, 1, "cmd-1", "First")).unwrap();
+    assert_eq!(r2.snapshot.revision, 2);
+    let r3 = execute_in(&state, &rename_request(&sid, 2, "cmd-2", "Second")).unwrap();
+    assert_eq!(r3.snapshot.revision, 3);
+    save_project_in(&state, f.root(), &sid, 3).unwrap();
+
+    close_in(&state, f.root(), &f.staging(), &sid, CloseDisposition::Keep).unwrap();
+
+    // MUTATION CHECK: minting the resumed session via `EditorSession::new`
+    // (always revision 1) instead of `EditorSession::resume` makes this
+    // assertion fail.
+    let reopened = open_project_session(&state, f.root(), &pid).unwrap();
+    assert_eq!(
+        reopened.snapshot.revision, 3,
+        "reopen must resume at the saved revision, not reset to 1"
+    );
+    assert_eq!(reopened.snapshot.persisted_revision, Some(3));
+
+    let new_sid = reopened.snapshot.session_id.clone();
+    let r4 = execute_in(&state, &rename_request(&new_sid, 3, "cmd-3", "Third")).unwrap();
+    assert_eq!(r4.snapshot.revision, 4);
+    save_project_in(&state, f.root(), &new_sid, 4).unwrap();
+
+    let (on_disk, _sources) = load_project(f.root(), &pid).unwrap();
+    assert_eq!(on_disk.record.revision, 4);
+
+    let rows = store_io::list_projects(f.root());
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].persisted_revision, 4);
+}
+
+// Controller ruling, the OTHER named path: `editor_open_staged` reopening
+// an already-pinned, already-saved project (not just `editor_open_project`
+// by id) must resume at the on-disk revision too -- `open_staged_in`'s
+// "a pin naming a project that still exists reopens it" branch feeds the
+// exact same `register_session` this task's fix changed.
+#[test]
+fn open_staged_resumes_a_pinned_project_at_its_saved_revision_not_1() {
+    let f = Fixture::new();
+    f.stage(&sidecar(BASE, "vaultA"));
+    let state = EditorState::default();
+    let first = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let sid = first.snapshot.session_id.clone();
+
+    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "First")).unwrap();
+    let r3 = execute_in(&state, &rename_request(&sid, 2, "cmd-2", "Second")).unwrap();
+    assert_eq!(r3.snapshot.revision, 3);
+    save_project_in(&state, f.root(), &sid, 3).unwrap();
+    close_in(&state, f.root(), &f.staging(), &sid, CloseDisposition::Keep).unwrap();
+
+    let reopened = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    assert_eq!(
+        reopened.snapshot.revision, 3,
+        "reopening the same staged capture must resume the pinned project at its saved \
+         revision, not reset to 1"
+    );
+    assert_eq!(reopened.snapshot.persisted_revision, Some(3));
 }

@@ -96,6 +96,28 @@ impl EditorSession {
         }
     }
 
+    /// A session resumed from an existing on-disk envelope, at exactly the
+    /// revision that envelope carries (Task 12 fix round 1, controller
+    /// ruling). `record.revision` (`model_cues::Record`) is monotonic
+    /// across a project's WHOLE life, not just one session's: a project
+    /// saved at revision 3, closed, and reopened must resume at 3, never
+    /// reset to 1 -- `new`'s "starts at 1" is only right for a project that
+    /// has genuinely never been saved (a fresh mint, whose own envelope on
+    /// disk also carries revision 1, so calling this with `revision: 1` for
+    /// that case is equivalent). `persisted_revision` starts at
+    /// `Some(revision)`: what is in memory on resume IS exactly what was
+    /// just read off disk.
+    pub fn resume(session_id: impl Into<String>, project: Project, revision: u64) -> Self {
+        Self {
+            session_id: session_id.into(),
+            project,
+            revision,
+            persisted_revision: Some(revision),
+            history: History::new(),
+            recent: VecDeque::new(),
+        }
+    }
+
     pub fn execute(&mut self, req: &ExecuteRequest) -> Result<EditorSnapshot, EditorError> {
         if req.session_id != self.session_id {
             return Err(EditorError::new(
@@ -196,10 +218,24 @@ impl EditorSession {
     }
 
     /// Marks `r` as persisted, but only if it is not AHEAD of the session's
-    /// own revision -- a save receipt racing a later edit must not claim a
-    /// revision the session has not actually reached yet.
+    /// own revision (a save receipt racing a later edit must not claim a
+    /// revision the session has not actually reached yet) AND not BEHIND
+    /// the persisted revision already recorded (Task 12 fix round 1: two
+    /// concurrent saves can complete out of order -- an older save's
+    /// `mark_saved` landing after a newer one's must never regress the
+    /// mark). Both guards together make `persisted_revision` monotonically
+    /// non-decreasing for the life of the session; the per-session save
+    /// lock (`save_commands.rs`) additionally prevents two saves from being
+    /// in flight at once in the first place, so this is belt-and-suspenders
+    /// against any future caller that calls `mark_saved` outside that lock.
     pub fn mark_saved(&mut self, r: u64) {
-        if r <= self.revision {
+        if r > self.revision {
+            return;
+        }
+        if self
+            .persisted_revision
+            .is_none_or(|persisted| r > persisted)
+        {
             self.persisted_revision = Some(r);
         }
     }
@@ -487,6 +523,51 @@ mod tests {
         assert!(
             serde_json::from_value::<ExecuteRequest>(with_extra_key).is_err(),
             "an extra top-level key must be rejected"
+        );
+    }
+
+    // Task 12 fix round 1 (controller ruling): a session resumed from an
+    // existing on-disk envelope must start AT that envelope's revision, not
+    // reset to 1 -- record.revision is monotonic across a project's whole
+    // life.
+    #[test]
+    fn resume_starts_at_the_given_revision_and_marks_it_saved() {
+        let session = EditorSession::resume("s1", minimal_project(), 7);
+        let snap = session.snapshot();
+        assert_eq!(snap.revision, 7);
+        assert_eq!(snap.persisted_revision, Some(7));
+        assert!(
+            !snap.can_undo,
+            "a resumed session starts with no local history"
+        );
+    }
+
+    // Task 12 fix round 1: two concurrent saves racing on one session must
+    // never let the LATER-COMPLETING call's mark_saved regress
+    // persistedRevision below what an EARLIER-COMPLETING call already
+    // recorded (belt-and-suspenders alongside the per-session save lock).
+    #[test]
+    fn mark_saved_never_moves_persisted_revision_backwards() {
+        let mut session = new_session();
+        session
+            .execute(&rename_request("s1", 1, "cmd-1", "First"))
+            .unwrap();
+        session
+            .execute(&rename_request("s1", 2, "cmd-2", "Second"))
+            .unwrap();
+        assert_eq!(session.revision, 3);
+
+        session.mark_saved(3);
+        assert_eq!(session.persisted_revision, Some(3));
+
+        // MUTATION CHECK: dropping the backwards-guard in `mark_saved` makes
+        // this assertion fail -- a stale mark_saved(2) racing in after the
+        // newer mark_saved(3) would otherwise silently regress the mark.
+        session.mark_saved(2);
+        assert_eq!(
+            session.persisted_revision,
+            Some(3),
+            "an older mark_saved must never regress a newer one"
         );
     }
 

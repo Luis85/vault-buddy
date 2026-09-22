@@ -20,7 +20,7 @@ pub mod session_commands;
 pub mod store_io;
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use vault_buddy_core::editor::EditorSession;
 
@@ -40,9 +40,25 @@ use vault_buddy_core::editor::EditorSession;
 /// scan, the create and the pin are exactly what it serializes). Only opens
 /// wait on it; execute/snapshot/close never take it. The maps are never held
 /// across disk I/O.
+///
+/// `save_locks` (Task 12 fix round 1) is a SEPARATE, per-session mutex,
+/// keyed by session id: `save_commands::save_project_with` holds it across
+/// its whole read-the-revision → commit → `mark_saved` sequence, so two
+/// concurrent `editor_save_project` calls on the SAME session can never
+/// interleave — without it, one save's `mark_saved` can land after a
+/// second, newer save's and regress `persistedRevision` below what is
+/// actually on disk. It is NEVER taken while holding `by_project` or
+/// `sessions` (it sits outside that trio entirely — `open` covers
+/// minting/registering a session, this covers saving an already-registered
+/// one, and the two never overlap for the same session); `sessions` is
+/// taken only BRIEFLY inside it, the same posture `open` has toward the
+/// maps. Entries are pruned when their session closes
+/// (`session_commands::drop_session`), so the map only grows with sessions
+/// currently open.
 #[derive(Default)]
 pub struct EditorState {
     pub open: Mutex<()>,
     pub sessions: Mutex<HashMap<String, EditorSession>>,
     pub by_project: Mutex<HashMap<String, String>>,
+    pub save_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }

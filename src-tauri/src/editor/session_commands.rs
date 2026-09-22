@@ -236,9 +236,21 @@ pub(crate) fn missing_media(
 
 /// Register a session over `project`, or return the LIVE one already open on
 /// it — a second open must not fork the project into two sessions whose
-/// saves would race. A fresh session is marked saved at its first revision:
-/// what it holds is exactly what is on disk.
-pub(crate) fn register_session(state: &EditorState, project: Project) -> EditorProjection {
+/// saves would race. A freshly minted session RESUMES at `revision` — the
+/// on-disk envelope's own `record.revision` the caller just read (Task 12
+/// fix round 1, controller ruling): `record.revision` is monotonic across a
+/// project's WHOLE life, not just one session's, so reopening a project
+/// saved at revision 3 must resume its session AT 3, never reset to 1. A
+/// freshly MINTED project's own envelope (via `create_project`) also
+/// carries `record.revision: 1`, so callers pass that same on-disk value
+/// uniformly for both cases — there is no separate "fresh" path here.
+/// `persisted_revision` starts at `Some(revision)`: what is in memory is
+/// exactly what was just read off disk.
+pub(crate) fn register_session(
+    state: &EditorState,
+    project: Project,
+    revision: u64,
+) -> EditorProjection {
     let mut by_project = lock_ignoring_poison(&state.by_project);
     let mut sessions = lock_ignoring_poison(&state.sessions);
     if let Some(live) = by_project
@@ -249,8 +261,7 @@ pub(crate) fn register_session(state: &EditorState, project: Project) -> EditorP
     }
     let session_id = new_entity_id("ses");
     let project_id = project.id.clone();
-    let mut session = EditorSession::new(session_id.clone(), project);
-    session.mark_saved(session.snapshot().revision);
+    let session = EditorSession::resume(session_id.clone(), project, revision);
     let projection = EditorProjection::of(&session);
     sessions.insert(session_id.clone(), session);
     by_project.insert(project_id, session_id);
@@ -269,7 +280,8 @@ pub(crate) fn open_staged_session(
     let _open = lock_ignoring_poison(&state.open);
     let opened = open_staged_in(root, staging_dir, base)?;
     let workspace = sanitize(&opened.envelope.workspace);
-    let projection = register_session(state, opened.envelope.project);
+    let revision = opened.envelope.record.revision;
+    let projection = register_session(state, opened.envelope.project, revision);
     let missing = missing_media(root, &projection.project, &opened.sources);
     Ok(EditorOpenResult {
         snapshot: projection.snapshot,
@@ -324,6 +336,11 @@ fn drop_session(state: &EditorState, session_id: &str) {
             by_project.remove(project_id);
         }
     }
+    // Prune the per-session save lock (`EditorState::save_locks`'s own
+    // doc) along with the session it belongs to, so the map only grows
+    // with sessions currently open rather than every session ever opened
+    // in this process's life.
+    lock_ignoring_poison(&state.save_locks).remove(session_id);
 }
 
 /// Close a session. `discardProject` UNPINS the staged capture first and

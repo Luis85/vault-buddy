@@ -15,6 +15,7 @@
 
 use std::io;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, WebviewWindow};
@@ -66,14 +67,21 @@ pub struct SaveReceipt {
 /// can act on distinctly from every other failure: **disk full** and
 /// **permission denied** are the two ordinary states a save can hit on a
 /// real machine. `ErrorKind::StorageFull` is the portable case (Linux's
-/// ENOSPC maps to it too); the raw OS 112 check is Windows' own
-/// `ERROR_DISK_FULL` code, checked directly rather than assumed to already
-/// be folded into `StorageFull` on every platform this crate might run on.
-/// Anything else (a vanished volume, a path that became invalid mid-write,
-/// …) degrades to `internal` — this task has no test evidence to classify
-/// it more precisely.
+/// ENOSPC maps to it too) and is checked on every platform; the raw OS 112
+/// check is Windows' own `ERROR_DISK_FULL` code, gated `#[cfg(windows)]`
+/// (fix round 1) because 112 names a DIFFERENT condition on other
+/// platforms — `EHOSTDOWN` on Linux — so checking it unconditionally would
+/// misclassify an unrelated Linux error as `diskFull`. Anything else (a
+/// vanished volume, a path that became invalid mid-write, …) degrades to
+/// `internal` — this task has no test evidence to classify it more
+/// precisely.
 fn map_write_error(e: io::Error) -> EditorError {
-    if e.kind() == io::ErrorKind::StorageFull || e.raw_os_error() == Some(112) {
+    #[cfg(windows)]
+    let is_disk_full = e.kind() == io::ErrorKind::StorageFull || e.raw_os_error() == Some(112);
+    #[cfg(not(windows))]
+    let is_disk_full = e.kind() == io::ErrorKind::StorageFull;
+
+    if is_disk_full {
         EditorError::new(
             EditorErrorCode::DiskFull,
             format!("Not enough disk space to save the project: {e}"),
@@ -91,6 +99,20 @@ fn map_write_error(e: io::Error) -> EditorError {
     }
 }
 
+/// The per-session save lock (`EditorState::save_locks`'s own doc): finds
+/// — or, on a session's first save, mints — the `Arc<Mutex<()>>` keyed on
+/// `session_id`. The map mutex is held only for this lookup/insert, never
+/// across the save itself; the returned `Arc` is what the caller then locks
+/// and holds for its whole read-revision-through-commit-through-mark_saved
+/// sequence.
+fn session_save_lock(state: &EditorState, session_id: &str) -> Arc<Mutex<()>> {
+    let mut locks = lock_ignoring_poison(&state.save_locks);
+    locks
+        .entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
 /// The `AppHandle`-free half of `editor_save_project`, injectable with a
 /// `ProjectWriter` so tests can simulate a disk-full/permission-denied
 /// write without touching the real filesystem's own failure modes.
@@ -101,11 +123,18 @@ fn map_write_error(e: io::Error) -> EditorError {
 /// fails must leave the session's `persistedRevision` exactly where it was,
 /// never claim a revision that was never actually written to disk.
 ///
-/// The session mutex is held only twice, briefly, never across the write:
-/// once to read the project + confirm the revision, once afterward to mark
-/// it saved. A revision mismatch is `revisionConflict` — the same check
-/// `EditorSession::execute` makes, applied to the save request instead of a
-/// command.
+/// **Fix round 1, finding 2**: the WHOLE function body runs under
+/// `session_save_lock`, held for the entire read-revision → commit →
+/// mark_saved sequence — without it, two concurrent saves on the SAME
+/// session can interleave (A reads revision 2, an edit advances the
+/// session to 3, B reads revision 3, and depending on which write and
+/// which `mark_saved` lands last, `persistedRevision` can end up claiming
+/// a revision that disagrees with what is actually on disk). The
+/// `sessions` mutex itself is still taken only twice, briefly, INSIDE that
+/// lock: once to read the project + confirm the revision, once afterward
+/// to mark it saved — never across the write. A revision mismatch is
+/// `revisionConflict` — the same check `EditorSession::execute` makes,
+/// applied to the save request instead of a command.
 pub(crate) fn save_project_with(
     writer: &dyn ProjectWriter,
     state: &EditorState,
@@ -113,6 +142,9 @@ pub(crate) fn save_project_with(
     session_id: &str,
     expected_revision: u64,
 ) -> Result<SaveReceipt, EditorError> {
+    let session_lock = session_save_lock(state, session_id);
+    let _save_guard = lock_ignoring_poison(&session_lock);
+
     let (project, revision) = {
         let sessions = require_session(state, session_id)?;
         let session = sessions
@@ -138,13 +170,29 @@ pub(crate) fn save_project_with(
     // Task 18 replaces this "last saved workspace or {}" read with the
     // sanitized LIVE workspace once a command exists to change it; until
     // then, carrying the on-disk value forward is the only honest choice.
-    // A missing/unreadable `project.json` (the project vanished out from
-    // under a live session) degrades to a fresh `{}` workspace and `now` as
-    // `createdAt` rather than failing the save outright.
+    //
+    // Fix round 1, finding 1: a `load_project` failure is NOT one thing --
+    // `invalidProject` (a corrupt or oversized `project.json`) must REFUSE
+    // the save rather than silently overwrite the very file a human might
+    // still be able to recover by hand, so that error propagates as-is,
+    // BEFORE anything is written. Only a genuinely absent envelope (the
+    // project directory vanished out from under a live session -- not
+    // something any path in this codebase currently does, but not provably
+    // impossible either) may still degrade to a fresh `{}` workspace and
+    // `now` as `createdAt`, and even that degrade is logged rather than
+    // swallowed (AGENTS.md's "no swallowed error" diagnostics invariant).
     let now = chrono::Local::now().to_rfc3339();
     let (workspace, created_at) = match load_project(root, &project_id) {
         Ok((envelope, _sources)) => (envelope.workspace, envelope.record.created_at),
-        Err(_) => (serde_json::json!({}), now.clone()),
+        Err(e) if e.code == EditorErrorCode::InvalidProject => return Err(e),
+        Err(e) => {
+            log::warn!(
+                "editor_save_project: could not read the last saved envelope for project \
+                 {project_id:?}, degrading to a fresh workspace: {}",
+                e.message
+            );
+            (serde_json::json!({}), now.clone())
+        }
     };
 
     let envelope = WorkspaceEnvelope {
@@ -206,7 +254,8 @@ pub(crate) fn open_project_session(
     let _open = lock_ignoring_poison(&state.open);
     let (envelope, sources) = load_project(root, project_file_id)?;
     let workspace = sanitize(&envelope.workspace);
-    let projection = register_session(state, envelope.project);
+    let revision = envelope.record.revision;
+    let projection = register_session(state, envelope.project, revision);
     let missing = missing_media(root, &projection.project, &sources);
     Ok(EditorOpenResult {
         snapshot: projection.snapshot,
