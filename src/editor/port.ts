@@ -58,7 +58,20 @@ export class EditorPortError extends Error {
  * only ever throws `EditorPortError`. */
 function toPortError(e: unknown): EditorPortError {
   if (isEditorError(e)) {
-    return new EditorPortError(decodeEditorError(e));
+    // `isEditorError` only checks code/message/retryable/operationId —
+    // `decodeEditorError` can still throw `ProtocolError` on its own if
+    // the otherwise well-shaped payload carries a malformed
+    // `retainedAssetIds` (fix round 1, finding 3). That throw must not
+    // escape past THIS function as a bare `ProtocolError` in place of the
+    // `EditorPortError` every `EditorPort` method promises, so it falls
+    // back to the four fields `isEditorError`'s own type guard already
+    // proved correct, dropping only the field that failed to decode.
+    try {
+      return new EditorPortError(decodeEditorError(e));
+    } catch {
+      const { code, message, retryable, operationId } = e;
+      return new EditorPortError({ code, message, retryable, operationId });
+    }
   }
   const message = e instanceof Error ? e.message : String(e);
   return new EditorPortError({

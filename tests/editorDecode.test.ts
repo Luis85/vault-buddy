@@ -130,6 +130,20 @@ describe("decodeOpenResult", () => {
     expect(decoded.recovered).toBe(false);
   });
 
+  it("decodes the MissingMedia Rust literal (projection.rs missing_media_serializes_camel_case)", () => {
+    const decoded = decodeOpenResult({
+      snapshot: PROJECTION_SNAPSHOT_LITERAL,
+      project: MINIMAL_PROJECT_LITERAL,
+      workspace: {},
+      missing: [{ assetId: "src", name: "Demo", expectedSize: 4096, expectedDurationMs: 61500 }],
+      sourceBase: null,
+      recovered: false,
+    });
+    expect(decoded.missing).toEqual([
+      { assetId: "src", name: "Demo", expectedSize: 4096, expectedDurationMs: 61500 },
+    ]);
+  });
+
   it("accepts a null sourceBase and an empty missing list", () => {
     const decoded = decodeOpenResult({
       snapshot: PROJECTION_SNAPSHOT_LITERAL,
