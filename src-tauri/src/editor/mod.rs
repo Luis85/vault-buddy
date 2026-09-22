@@ -11,6 +11,8 @@
 pub mod authz;
 #[cfg(test)]
 mod authz_guard;
+#[cfg(test)]
+mod capability_guard;
 pub mod project_store;
 pub mod session_commands;
 pub mod store_io;

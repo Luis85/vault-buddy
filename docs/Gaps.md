@@ -5095,3 +5095,38 @@ cargo builds (e.g. remux 9871 ms vs re-encode 8396 ms), passing whenever run
 alone. A performance claim asserted on a shared machine's wall clock is
 load-sensitive by construction. Low; worth either a generous ratio or
 measuring CPU time, whenever that file is next touched.
+
+### GAP-170 · Low (unverified) · The editor command capability scoping's RUNTIME enforcement has never been exercised — only its build-time shape
+Task 11 (tutorial editor, R8's app-manifest half) added `build.rs`'s
+`EDITOR_COMMANDS` app manifest and `capabilities/editor.json`, so the five
+`editor_*` session commands (`editor_open_staged`, `editor_get_snapshot`,
+`editor_execute`, `editor_close_session`, `editor_hide_window`) are no
+longer capability-gate-free like every other custom command in this app —
+in principle only the `editor` window's webview may even attempt an IPC
+call to them now, on top of Task 10's native `authz::require_editor_window`
+check (defense in depth, not a redundant layer: the manifest is enforced by
+Tauri's ACL runtime before a command handler ever runs, the native check is
+enforced inside the handler).
+
+**What is actually verified today:** `editor::capability_guard`
+(`src-tauri/src/editor/capability_guard.rs`, test-only) pins the three
+sources of truth — `generate_handler!` in `lib.rs`, `build.rs`'s
+`EDITOR_COMMANDS`, and `editor.json`'s `permissions` — against each other,
+and `npx tauri build --no-bundle` succeeds, which proves the manifest and
+capability files are well-formed enough for `tauri-build` to accept and
+`tauri-cli` to compile the ACL manifest from. **What is NOT verified:**
+that Tauri's runtime ACL layer actually REJECTS an IPC call to
+`editor_execute` (or any of its four siblings) issued from a non-editor
+webview — e.g. the panel window's devtools console calling
+`window.__TAURI__.core.invoke("editor_execute", …)`. No automated test
+exercises this (Vitest's `mockIPC` never reaches the real Rust-side ACL
+layer, and the shell's own Rust tests never open a real webview), and it is
+not yet on `docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md`
+— that file does not exist in this worktree yet (it is created by Task 15).
+Whoever runs Task 15 should add a manual row for it: open the panel
+window's devtools, `invoke("editor_execute", …)` with a fabricated session
+id, and confirm the call is refused (permission denied) BEFORE it ever
+reaches `session_commands::editor_execute`'s own body — a passing manual
+check there is the only thing that closes this gap; a passing
+`cargo test`/`tauri build` here proves only that the pieces are shaped
+correctly, never that Tauri wires them together as documented.
