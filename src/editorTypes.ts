@@ -6,9 +6,15 @@
  * `src/editor/timeMap.ts` need (`ClipSpan`); Task 8 extends it with the
  * entity/clipboard shapes `src/editor/fragment.ts` needs (`Clip`/
  * `Effect`/`CaptionCue`/`Marker`/`ClipboardFragment`, plus the minimal
- * `Project` slice `buildFragment` reads). Later tasks keep growing this
- * file rather than forking a second declaration site or growing
- * `types.ts`.
+ * `Project` slice `buildFragment` reads). Task 13 widens `Project` to the
+ * FULL interchange graph (`core::editor::model::Project` field for field)
+ * and adds every remaining Contract-reference envelope
+ * (`EditorSnapshot`/`EditorProjection`/`EditorOpenResult`/`SaveReceipt`/
+ * `ProjectSummaryDto`/`EditorError`/`JobProgressDto`/…) plus the
+ * `EditorCommand` union, split out to `src/editor/editorCommandTypes.ts`
+ * (F31) and re-exported below so this stays the one import site every
+ * caller uses. Later tasks keep growing this file rather than forking a
+ * second declaration site or growing `types.ts`.
  *
  * Field spelling: the IPC ENVELOPE wraps everything in camelCase
  * (`sessionId`, `projectId`, …), but the `project` graph it carries keeps
@@ -25,6 +31,13 @@
  * (`#[serde(rename = "fontSize")]`, pinned by
  * `font_size_keeps_its_camel_case_spelling`).
  */
+
+// `EditorCommand` is declared in the split-out file (F31) and imported
+// here so `ExecuteRequest` below can reference it locally; the bare
+// `export type {...} from` at the end of this file re-exports the SAME
+// import for every other caller — an `export ... from` re-export alone
+// does not bring a name into this module's own scope.
+import type { EditorCommand } from "./editor/editorCommandTypes";
 
 /** A clip's time-mapping span: output start, half-open source range
  * `[in_ms, out_ms)`, and speed. Mirrors `core::editor::time::ClipSpan`
@@ -59,6 +72,9 @@ export interface Adjustments {
 }
 
 export type CardPreset = "intro" | "chapter" | "outro" | "blank";
+
+/** `core::editor::model::TrackKind`. */
+export type TrackKind = "audio" | "video";
 
 /** A titles/chapter card's editable content (`core::editor::model::Card`). */
 export interface Card {
@@ -166,16 +182,30 @@ export interface Marker {
 }
 
 /**
- * The slice of `core::editor::model::Project` this task's TS code reads —
- * grows as later tasks need more of the project graph (the single-TS-
- * declaration-site rule: extend this interface rather than forking a
- * second, narrower one).
+ * The full interchange project graph (`core::editor::model::Project`,
+ * field for field, document spelling). Widened in Task 13 from the
+ * narrower `{clips, effects, markers, captions}` slice Task 8 introduced —
+ * the single-TS-declaration-site rule: extend this interface rather than
+ * forking a second, narrower one. `captions` mirrors Rust's own
+ * `#[serde(skip_serializing_if = "Option::is_none")]`: the key is OMITTED
+ * on the wire when there are no captions, which `decodeProject`
+ * normalizes to `null` here rather than `undefined`, so callers can rely
+ * on one falsy shape.
  */
 export interface Project {
+  schema: string;
+  id: string;
+  title: string;
+  canvas: Canvas;
+  master_gain: number;
+  assets: Asset[];
+  tracks: Track[];
   clips: Clip[];
   effects: Effect[];
   markers: Marker[];
+  transitions: Transition[];
   captions: CaptionSettings | null;
+  destination: Destination;
 }
 
 /**
@@ -193,3 +223,250 @@ export interface ClipboardFragment {
   markers: Marker[];
   originMs: number;
 }
+
+// ---- the rest of the project graph (Task 13) ------------------------------
+// Document spelling throughout — see the module doc above.
+
+/** `core::editor::model_cues::TransitionKind` (kebab-case on the wire). */
+export type TransitionKind = "dissolve" | "equal-power";
+
+/** A pairwise relationship between two clips (`core::editor::model_cues::Transition`). */
+export interface Transition {
+  id: string;
+  from: string;
+  to: string;
+  duration_ms: number;
+  kind: TransitionKind;
+}
+
+export type AssetKind = "video" | "audio";
+
+/** `core::editor::model::Builtin` — a procedurally-supplied asset. */
+export type Builtin = "presenter" | "screen" | "detail" | "cues" | "ambient" | "card";
+
+export type MediaType = "image";
+
+/** An original immutable source or procedural source (`core::editor::model::Asset`). */
+export interface Asset {
+  id: string;
+  kind: AssetKind;
+  name: string;
+  duration_ms: number;
+  width?: number;
+  height?: number;
+  size?: number;
+  builtin?: Builtin;
+  media_type?: MediaType;
+  linked_asset?: string;
+  original_name?: string;
+}
+
+/** The output frame (`core::editor::model::Canvas`) — one of the four
+ * supported canvases at 30 fps; range validation is Rust's job. */
+export interface Canvas {
+  width: number;
+  height: number;
+  fps: number;
+}
+
+/** An ordered composition layer or audio lane (`core::editor::model::Track`). */
+export interface Track {
+  id: string;
+  kind: TrackKind;
+  name: string;
+  visible: boolean;
+  locked: boolean;
+  muted: boolean;
+  solo: boolean;
+  volume: number;
+}
+
+/** Where "Save into a vault" publishes (`core::editor::model::Destination`).
+ * `vault` is the Obsidian vault ID, never a display name (R3). */
+export interface Destination {
+  vault: string;
+  folder: string;
+  dated: boolean;
+}
+
+// ---- the saved workspace view-preference blob ------------------------------
+// `core::editor::workspace` has no `rename_all` — its fields are snake_case
+// on the wire too, like the project graph, because it is part of the same
+// persisted document (`workspace.json`), not an IPC envelope.
+
+/** `core::editor::workspace::Selected`. */
+export interface Selected {
+  type: string;
+  id: string;
+}
+
+/** `core::editor::workspace::DeleteMode`. */
+export type DeleteMode = "gap" | "close";
+
+/** The 18 sanitized workspace preference fields (R16,
+ * `core::editor::workspace::Workspace`) — every one optional, since a
+ * malformed/stale value degrades to absent rather than failing the read. */
+export interface Workspace {
+  selection_clip_ids?: string[];
+  selected?: Selected;
+  playhead_ms?: number;
+  library_tab?: string;
+  property_tab?: string;
+  timeline_zoom?: number;
+  timeline_height?: number;
+  timeline_scroll_left?: number;
+  timeline_scroll_top?: number;
+  snap?: boolean;
+  delete_mode?: DeleteMode;
+  monitor_muted?: boolean;
+  playback_rate?: number;
+  library_hidden?: boolean;
+  properties_hidden?: boolean;
+  properties_open?: boolean;
+  focus_preview?: boolean;
+  caption_settings_open?: boolean;
+}
+
+// ---- IPC envelopes (Contract reference `Envelopes` paragraph) -------------
+// camelCase throughout — these wrap the document-spelled graph above, they
+// are not part of it (R3).
+
+/** What `editor_get_snapshot`/`editor_execute` return alongside the
+ * project graph (`core::editor::session::EditorSnapshot`). `undoLabel`/
+ * `redoLabel` are always-present keys (`null`, never omitted) — an absent
+ * key is a decoding error, not "none". */
+export interface EditorSnapshot {
+  sessionId: string;
+  projectId: string;
+  revision: number;
+  persistedRevision: number | null;
+  title: string;
+  durationMs: number;
+  canUndo: boolean;
+  canRedo: boolean;
+  undoLabel: string | null;
+  redoLabel: string | null;
+}
+
+/** `editor_execute`/`editor_get_snapshot`'s reply
+ * (`core::editor::projection::EditorProjection`). */
+export interface EditorProjection {
+  snapshot: EditorSnapshot;
+  project: Project;
+}
+
+/** One source a freshly opened project references but whose file is not on
+ * disk (`core::editor::projection::MissingMedia`). Never a path. */
+export interface MissingMedia {
+  assetId: string;
+  name: string;
+  expectedSize: number;
+  expectedDurationMs: number;
+}
+
+/** What `editor_open_staged`/`editor_open_project` return
+ * (`core::editor::projection::EditorOpenResult`). `sourceBase` and
+ * `missing` are always-present keys, even when `null`/`[]`. */
+export interface EditorOpenResult {
+  snapshot: EditorSnapshot;
+  project: Project;
+  workspace: Workspace;
+  missing: MissingMedia[];
+  sourceBase: string | null;
+  recovered: boolean;
+}
+
+/** The `editor_execute` request envelope
+ * (`core::editor::session::ExecuteRequest`). */
+export interface ExecuteRequest {
+  sessionId: string;
+  expectedRevision: number;
+  commandId: string;
+  command: EditorCommand;
+}
+
+/** `editor_save_project`'s reply (`save_commands::SaveReceipt`, shell). */
+export interface SaveReceipt {
+  sessionId: string;
+  savedRevision: number;
+  projectFileId: string;
+}
+
+/** One row of `editor_list_projects` (`store_io::ProjectSummaryDto`, shell). */
+export interface ProjectSummaryDto {
+  projectFileId: string;
+  title: string;
+  updatedAt: string;
+  persistedRevision: number;
+  hasRecovery: boolean;
+  sourceBase: string | null;
+}
+
+/** `editor_close_session`'s disposition (`session_commands::CloseDisposition`). */
+export type CloseDisposition = "keep" | "discardRecovery" | "discardProject";
+
+/** The editor's 15 IPC error codes (`core::editor::error::EditorErrorCode`). */
+export type EditorErrorCode =
+  | "invalidRequest"
+  | "invalidProject"
+  | "revisionConflict"
+  | "sessionGone"
+  | "unauthorizedSource"
+  | "sourceMissing"
+  | "unsupportedMedia"
+  | "deviceUnavailable"
+  | "permissionDenied"
+  | "diskFull"
+  | "writeDenied"
+  | "destinationUnavailable"
+  | "encoderUnavailable"
+  | "cancelled"
+  | "internal";
+
+/** Every rejected `editor_*` invoke's error shape
+ * (`core::editor::error::EditorError`). `operationId` is always present;
+ * `retainedAssetIds` only when an operation left assets behind. */
+export interface EditorError {
+  code: EditorErrorCode;
+  message: string;
+  retryable: boolean;
+  operationId: string;
+  retainedAssetIds?: string[];
+}
+
+/** A background job's kind/phase (Contract reference `JobProgressDto`).
+ * No Rust command emits these yet — declared ahead of that later task so
+ * `decodeJobProgress` has a target shape, per this task's own brief. */
+export type JobKind = "import" | "render" | "peaks" | "publish";
+export type JobPhase =
+  | "queued"
+  | "preparing"
+  | "rendering"
+  | "publishing"
+  | "complete"
+  | "cancelled"
+  | "failed";
+
+/** A terminal job's outcome payload (Contract reference `JobTerminal`). */
+export interface JobTerminal {
+  productId?: string;
+  assetIds?: string[];
+  perFile?: { name: string; error: string }[];
+  error?: EditorError;
+}
+
+/** Contract reference `JobProgressDto`. */
+export interface JobProgressDto {
+  sessionId: string;
+  jobId: string;
+  kind: JobKind;
+  sequence: number;
+  phase: JobPhase;
+  fraction: number;
+  terminal: JobTerminal | null;
+}
+
+// The ~50-variant EditorCommand union lives in its own file (F31) so this
+// one does not grow toward the 500-line cap as later tasks add arms; every
+// caller still imports it from here.
+export type { EditorCommand } from "./editor/editorCommandTypes";

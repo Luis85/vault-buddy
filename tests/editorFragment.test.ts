@@ -12,6 +12,18 @@ import type { Project } from "../src/editorTypes";
  * data into the fragment. */
 function project(): Project {
   return {
+    // Task 13 widened `Project` to the full interchange graph; these five
+    // fields are structurally required but never read by `buildFragment`
+    // itself, so they are filled with the smallest valid values.
+    schema: "vault-buddy-video-project/3",
+    id: "project",
+    title: "Project",
+    canvas: { width: 1280, height: 720, fps: 30 },
+    master_gain: 1,
+    assets: [],
+    tracks: [],
+    transitions: [],
+    destination: { vault: "", folder: "", dated: false },
     clips: [
       {
         id: "c1",
