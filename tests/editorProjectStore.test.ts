@@ -733,3 +733,107 @@ describe("editorProject store — remaining guard branches", () => {
     expect(store.snapshot?.persistedRevision).toBeNull();
   });
 });
+
+describe("editorProject store — conflictIntent lifecycle (fix round 1)", () => {
+  it("a successful retryConflict clears conflictIntent", async () => {
+    const store = useEditorProjectStore();
+    const command: EditorCommand = { kind: "undo" };
+    let executeCalls = 0;
+    store.setPort(
+      fakePort({
+        openStaged: () => Promise.resolve(openResult({ snapshot: snapshot({ revision: 1 }) })),
+        execute: () => {
+          executeCalls += 1;
+          if (executeCalls === 1) {
+            return Promise.reject(
+              new EditorPortError(editorError({ code: "revisionConflict", retryable: true })),
+            );
+          }
+          return Promise.resolve({
+            snapshot: snapshot({ revision: 2, title: "Retried" }),
+            project: project({ title: "Retried" }),
+          });
+        },
+        getSnapshot: () => Promise.resolve({ snapshot: snapshot({ revision: 1 }), project: project() }),
+      }),
+    );
+    await store.openStaged("A");
+    await store.execute(command);
+    expect(store.conflictIntent).toEqual(command);
+
+    await store.retryConflict();
+
+    expect(executeCalls).toBe(2);
+    expect(store.conflictIntent).toBeNull();
+    expect(store.snapshot?.revision).toBe(2);
+    expect(store.project?.title).toBe("Retried");
+  });
+
+  it("an unrelated successful edit clears a pending conflictIntent — forward progress supersedes it", async () => {
+    const store = useEditorProjectStore();
+    store.setPort(
+      fakePort({
+        openStaged: () => Promise.resolve(openResult({ snapshot: snapshot({ revision: 1 }) })),
+        execute: () =>
+          Promise.reject(new EditorPortError(editorError({ code: "revisionConflict", retryable: true }))),
+        getSnapshot: () => Promise.resolve({ snapshot: snapshot({ revision: 1 }), project: project() }),
+      }),
+    );
+    await store.openStaged("A");
+    await store.execute({ kind: "undo" });
+    expect(store.conflictIntent).not.toBeNull();
+
+    // A different port now backs a genuinely unrelated edit that succeeds —
+    // the pending conflict was never resolved by name, only superseded by
+    // forward progress.
+    store.setPort(
+      fakePort({
+        execute: () =>
+          Promise.resolve({
+            snapshot: snapshot({ revision: 2, title: "Unrelated" }),
+            project: project({ title: "Unrelated" }),
+          }),
+      }),
+    );
+    await store.execute({ kind: "redo" });
+
+    expect(store.conflictIntent).toBeNull();
+  });
+
+  it("a double retryConflict sends the command only once", async () => {
+    const executeTask = deferred<EditorProjection>();
+    const store = useEditorProjectStore();
+    let executeCalls = 0;
+    store.setPort(
+      fakePort({
+        openStaged: () => Promise.resolve(openResult({ snapshot: snapshot({ revision: 1 }) })),
+        execute: () => {
+          executeCalls += 1;
+          if (executeCalls === 1) {
+            return Promise.reject(
+              new EditorPortError(editorError({ code: "revisionConflict", retryable: true })),
+            );
+          }
+          return executeTask.promise;
+        },
+        getSnapshot: () => Promise.resolve({ snapshot: snapshot({ revision: 1 }), project: project() }),
+      }),
+    );
+    await store.openStaged("A");
+    await store.execute({ kind: "undo" });
+    expect(store.conflictIntent).not.toBeNull();
+
+    // Two rapid Retry clicks: retryConflict clears conflictIntent BEFORE
+    // sending, so the second call reads it already null and never touches
+    // the port — a fresh commandId on a second send is exactly what Rust's
+    // replay dedup (keyed on commandId) cannot catch.
+    const first = store.retryConflict();
+    const second = store.retryConflict();
+    expect(executeCalls).toBe(2);
+
+    executeTask.resolve({ snapshot: snapshot({ revision: 2 }), project: project() });
+    await Promise.all([first, second]);
+
+    expect(executeCalls).toBe(2);
+  });
+});

@@ -41,7 +41,10 @@
  * automatically (R20: no silent retry) — it refetches the authoritative
  * snapshot via `getSnapshot` and parks the rejected command in
  * `conflictIntent` so a caller can offer an explicit Retry
- * (`store.execute(store.conflictIntent)`).
+ * (`store.retryConflict()`). `conflictIntent` is cleared the moment any
+ * `execute()` reply actually installs — a retry of the SAME command or a
+ * genuinely unrelated edit both count as forward progress past whatever
+ * revision the conflict was rejected against (fix round 1).
  */
 import { defineStore } from "pinia";
 import { markRaw } from "vue";
@@ -201,6 +204,15 @@ export const useEditorProjectStore = defineStore("editorProject", {
       this.snapshot = result.snapshot;
       this.project = result.project;
       this.lastError = null;
+      // Forward progress supersedes a pending conflict (fix round 1): a
+      // command that installs — whether it's a retry of the parked
+      // `conflictIntent` or a genuinely unrelated edit — means the
+      // revision the conflict was rejected against is no longer the story.
+      // Leaving `conflictIntent` set here is what let a resolved conflict
+      // keep looking unresolved, and a stale Retry affordance re-send an
+      // already-applied command with a FRESH `commandId` that Rust's
+      // commandId-keyed replay dedup cannot recognize as a repeat.
+      this.conflictIntent = null;
     },
     /**
      * After a `revisionConflict`, refetch the authoritative snapshot — the
@@ -264,6 +276,24 @@ export const useEditorProjectStore = defineStore("editorProject", {
       } finally {
         this.pending.delete(commandId);
       }
+    },
+    /**
+     * Resend the command parked in `conflictIntent` (fix round 1) — the
+     * explicit Retry affordance `execute` itself deliberately never drives
+     * on its own (R20). Clears `conflictIntent` BEFORE awaiting `execute`,
+     * not after: a double-click fires this twice back to back with no
+     * `await` between the calls, and since the clear happens synchronously
+     * at the start of the function body, the SECOND call already reads
+     * `conflictIntent` as null and returns without ever touching the port
+     * — a fresh `commandId` on a second send is exactly what Rust's
+     * commandId-keyed replay dedup cannot catch, so this is the only place
+     * that dedup has to happen. A no-op when nothing is parked.
+     */
+    async retryConflict(): Promise<void> {
+      const command = this.conflictIntent;
+      if (!command) return;
+      this.conflictIntent = null;
+      await this.execute(command);
     },
     /**
      * Persist the current revision. Installs `persistedRevision` from the
