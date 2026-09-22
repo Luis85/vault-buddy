@@ -206,6 +206,31 @@ fn insert_clip_refuses_an_overlap_on_the_same_track() {
 }
 
 #[test]
+fn insert_clip_refuses_a_start_ms_near_u64_max_instead_of_overflowing() {
+    // Regression: `startMs` here is unvalidated IPC input -- before the
+    // fix, `time::clip_output_end`'s unchecked `start_ms + duration`
+    // overflowed u64 (panics in debug, wraps in release) inside the
+    // overlap check, before `validate_project` ever got a chance to
+    // reject it.
+    let mut project = base_project();
+    project.tracks.push(track("v1", TrackKind::Video, false));
+    project.assets.push(asset("a1", AssetKind::Video, 5_000));
+
+    let err = insert_clip(
+        &project,
+        &InsertClipPayload {
+            asset_id: "a1".into(),
+            track_id: "v1".into(),
+            start_ms: u64::MAX - 10,
+            in_ms: 0,
+            out_ms: 1_000,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code, EditorErrorCode::InvalidRequest);
+}
+
+#[test]
 fn update_clip_trims_and_renames() {
     let mut project = base_project();
     project.tracks.push(track("v1", TrackKind::Video, false));
@@ -543,6 +568,29 @@ fn trim_to_empty_is_refused() {
     assert_eq!(err.code, EditorErrorCode::InvalidRequest);
 }
 
+#[test]
+fn trim_clip_refuses_a_start_ms_near_u64_max_instead_of_overflowing() {
+    // Regression: same overflow class as insertClip's -- trimClip's own
+    // `startMs` builds a `ClipSpan` straight from unvalidated IPC input
+    // for the overlap check.
+    let mut project = base_project();
+    project.tracks.push(track("v1", TrackKind::Video, false));
+    project.assets.push(asset("a1", AssetKind::Video, 5_000));
+    project.clips.push(clip("c1", "v1", "a1", 0, 0, 1_000));
+
+    let err = trim_clip(
+        &project,
+        &TrimClipPayload {
+            clip_id: "c1".into(),
+            start_ms: u64::MAX - 10,
+            in_ms: 0,
+            out_ms: 1_000,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code, EditorErrorCode::InvalidRequest);
+}
+
 // ---- deleteClips ------------------------------------------------------------
 
 #[test]
@@ -662,209 +710,10 @@ fn delete_close_gap_refuses_when_a_transition_spans_the_gap() {
     assert!(err.message.contains("transition"), "{}", err.message);
 }
 
-// ---- moveClips ----------------------------------------------------------
-
-#[test]
-fn move_group_clamps_the_shared_delta() {
-    let mut project = base_project();
-    project.tracks.push(track("v1", TrackKind::Video, false));
-    project.assets.push(asset("a1", AssetKind::Video, 5_000));
-    project.clips.push(clip("c1", "v1", "a1", 100, 0, 200));
-    project.clips.push(clip("c2", "v1", "a1", 500, 0, 200));
-
-    let (candidate, _) = move_clips(
-        &project,
-        &MoveClipsPayload {
-            clip_ids: vec!["c1".into(), "c2".into()],
-            delta_ms: -300,
-            track_id: None,
-        },
-    )
-    .unwrap();
-
-    let c1 = candidate.clips.iter().find(|c| c.id == "c1").unwrap();
-    let c2 = candidate.clips.iter().find(|c| c.id == "c2").unwrap();
-    assert_eq!(c1.start_ms, 0);
-    assert_eq!(c2.start_ms, 400);
-}
-
-#[test]
-fn move_into_overlap_rejects_the_whole_group() {
-    let mut project = base_project();
-    project.tracks.push(track("v1", TrackKind::Video, false));
-    project.assets.push(asset("a1", AssetKind::Video, 5_000));
-    project.clips.push(clip("c1", "v1", "a1", 100, 0, 200));
-    project.clips.push(clip("c2", "v1", "a1", 500, 0, 200));
-    project.clips.push(clip("blocker", "v1", "a1", 550, 0, 100));
-
-    let err = move_clips(
-        &project,
-        &MoveClipsPayload {
-            clip_ids: vec!["c1".into(), "c2".into()],
-            delta_ms: 50,
-            track_id: None,
-        },
-    )
-    .unwrap_err();
-    assert_eq!(err.code, EditorErrorCode::InvalidRequest);
-
-    let c1 = project.clips.iter().find(|c| c.id == "c1").unwrap();
-    assert_eq!(
-        c1.start_ms, 100,
-        "a rejected move must leave the caller's project untouched"
-    );
-}
-
-#[test]
-fn move_clips_refuses_track_id_with_multiple_clips_and_a_kind_incompatible_track() {
-    let mut project = base_project();
-    project.tracks.push(track("v1", TrackKind::Video, false));
-    project.tracks.push(track("a1", TrackKind::Audio, false));
-    project.assets.push(asset("va1", AssetKind::Video, 5_000));
-    project.clips.push(clip("c1", "v1", "va1", 0, 0, 200));
-    project.clips.push(clip("c2", "v1", "va1", 500, 0, 200));
-
-    let multi = move_clips(
-        &project,
-        &MoveClipsPayload {
-            clip_ids: vec!["c1".into(), "c2".into()],
-            delta_ms: 0,
-            track_id: Some("v1".into()),
-        },
-    )
-    .unwrap_err();
-    assert_eq!(multi.code, EditorErrorCode::InvalidRequest);
-
-    let mismatched = move_clips(
-        &project,
-        &MoveClipsPayload {
-            clip_ids: vec!["c1".into()],
-            delta_ms: 0,
-            track_id: Some("a1".into()),
-        },
-    )
-    .unwrap_err();
-    assert_eq!(mismatched.code, EditorErrorCode::InvalidRequest);
-}
-
-// ---- locked-track table test (split/trim/delete/move) --------------------
-
-#[test]
-fn locked_track_refuses_split_trim_delete_move() {
-    let mut project = base_project();
-    project.tracks.push(track("v1", TrackKind::Video, true));
-    project.assets.push(asset("a1", AssetKind::Video, 5_000));
-    project.clips.push(clip("c1", "v1", "a1", 0, 0, 1_000));
-
-    let split_err = split_clip(
-        &project,
-        &SplitClipPayload {
-            clip_id: "c1".into(),
-            at_ms: 500,
-        },
-    )
-    .unwrap_err();
-    let trim_err = trim_clip(
-        &project,
-        &TrimClipPayload {
-            clip_id: "c1".into(),
-            start_ms: 0,
-            in_ms: 100,
-            out_ms: 900,
-        },
-    )
-    .unwrap_err();
-    let delete_err = delete_clips(
-        &project,
-        &DeleteClipsPayload {
-            clip_ids: vec!["c1".into()],
-            close_gap: false,
-        },
-    )
-    .unwrap_err();
-    let move_err = move_clips(
-        &project,
-        &MoveClipsPayload {
-            clip_ids: vec!["c1".into()],
-            delta_ms: 100,
-            track_id: None,
-        },
-    )
-    .unwrap_err();
-
-    for (name, err) in [
-        ("split", &split_err),
-        ("trim", &trim_err),
-        ("delete", &delete_err),
-        ("move", &move_err),
-    ] {
-        assert_eq!(err.code, EditorErrorCode::InvalidRequest, "{name}");
-        assert!(err.message.contains("locked"), "{name}: {}", err.message);
-    }
-}
-
-// ---- reorderClip ----------------------------------------------------------
-
-#[test]
-fn reorder_swaps_adjacent_clips_keeping_span() {
-    let mut project = base_project();
-    project.tracks.push(track("v1", TrackKind::Video, false));
-    project.assets.push(asset("a1", AssetKind::Video, 5_000));
-    project.clips.push(clip("c1", "v1", "a1", 0, 0, 300));
-    project.clips.push(clip("c2", "v1", "a1", 500, 0, 200));
-
-    let (candidate, _) = reorder_clip(
-        &project,
-        &ReorderClipPayload {
-            clip_id: "c1".into(),
-            direction: ReorderDirection::Later,
-        },
-    )
-    .unwrap();
-
-    let c1 = candidate.clips.iter().find(|c| c.id == "c1").unwrap();
-    let c2 = candidate.clips.iter().find(|c| c.id == "c2").unwrap();
-    assert_eq!(
-        c2.start_ms, 0,
-        "the later clip takes the earlier clip's original start"
-    );
-    assert_eq!(
-        c1.start_ms, 200,
-        "the earlier clip follows immediately after the swapped-in clip's own duration"
-    );
-    assert_eq!(
-        clip_end(c1).max(clip_end(c2)),
-        clip_duration(c1) + clip_duration(c2),
-        "the pair's combined span (summed durations, anchored at the earlier clip's original \
-         start) must be preserved even though there was a gap before the swap"
-    );
-}
-
-#[test]
-fn reorder_refuses_when_already_first_or_last() {
-    let mut project = base_project();
-    project.tracks.push(track("v1", TrackKind::Video, false));
-    project.assets.push(asset("a1", AssetKind::Video, 5_000));
-    project.clips.push(clip("c1", "v1", "a1", 0, 0, 300));
-    project.clips.push(clip("c2", "v1", "a1", 500, 0, 200));
-
-    let err = reorder_clip(
-        &project,
-        &ReorderClipPayload {
-            clip_id: "c1".into(),
-            direction: ReorderDirection::Earlier,
-        },
-    )
-    .unwrap_err();
-    assert_eq!(err.message, "Already first");
-
-    let err = reorder_clip(
-        &project,
-        &ReorderClipPayload {
-            clip_id: "c2".into(),
-            direction: ReorderDirection::Later,
-        },
-    )
-    .unwrap_err();
-    assert_eq!(err.message, "Already last");
-}
+// moveClips and reorderClip tests (plus the locked-track table test that
+// spans all four track-locking commands) live in the sibling
+// `clips_move_reorder_tests.rs` -- this file itself was pushing past the
+// 800-nonblank-line Rust cap once the overflow regression tests landed,
+// the same `#[path]` split precedent `clips.rs` itself already uses.
+#[path = "clips_move_reorder_tests.rs"]
+mod move_reorder_tests;

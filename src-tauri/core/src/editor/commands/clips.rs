@@ -63,6 +63,37 @@ fn clip_duration(clip: &Clip) -> u64 {
     )
 }
 
+/// The `time::clip_output_end`-shaped computation, but via CHECKED
+/// arithmetic: unlike `clip_end` above (which only ever reads an EXISTING,
+/// already-`validate_project`-checked clip, so its `start_ms` is provably
+/// bounded), this is for a PROPOSED span built directly from an
+/// unvalidated IPC payload's own `startMs` (`insertClip`/`trimClip`/
+/// `moveClips`) -- a caller-chosen `startMs` near `u64::MAX` must not
+/// panic the process (debug) or silently wrap into a bogus overlap check
+/// (release) before `validate_project` ever gets a chance to reject it.
+/// Mirrors `validate::check_clip`'s own `checked_add` guard for an
+/// INSTALLED clip's `start_ms + output_duration`.
+fn checked_output_end(span: &ClipSpan) -> Result<u64, EditorError> {
+    let duration = time::clip_output_duration(span.in_ms, span.out_ms, span.speed);
+    span.start_ms
+        .checked_add(duration)
+        .ok_or_else(|| invalid_request("startMs + output duration overflows"))
+}
+
+/// Applies a (possibly negative) delta to an existing clip's `start_ms` via
+/// checked arithmetic: `checked_add_signed` returns `None` on EITHER an
+/// overflow (an unreasonably large positive `deltaMs`) or a result that
+/// would go negative. `moveClips`' shared-delta clamp already guarantees
+/// no clip's new start goes negative for a legitimate (clamped) delta, so
+/// in practice this only ever rejects the overflow case -- but it is the
+/// checked primitive that makes that guarantee load-bearing instead of
+/// assumed.
+fn apply_delta(start_ms: u64, delta_ms: i64) -> Result<u64, EditorError> {
+    start_ms
+        .checked_add_signed(delta_ms)
+        .ok_or_else(|| invalid_request("deltaMs overflows the clip's new position"))
+}
+
 fn find_clip<'a>(project: &'a Project, id: &str) -> Result<&'a Clip, EditorError> {
     project
         .clips
@@ -130,7 +161,7 @@ pub(super) fn insert_clip(
         out_ms: payload.out_ms,
         speed: 1.0,
     };
-    let new_end = time::clip_output_end(&new_span);
+    let new_end = checked_output_end(&new_span)?;
     for existing in project
         .clips
         .iter()
@@ -316,7 +347,7 @@ pub(super) fn trim_clip(
         out_ms: payload.out_ms,
         speed: speed_or_default(clip.speed.as_ref()),
     };
-    let new_end = time::clip_output_end(&new_span);
+    let new_end = checked_output_end(&new_span)?;
     for other in project
         .clips
         .iter()
@@ -469,7 +500,7 @@ pub(super) fn delete_clips(
 /// `DATA-MODEL.md`: "A group move uses a shared clamped offset, not
 /// separate per-clip clamping"). `trackId` is only accepted when moving a
 /// single clip (retargeting a whole group to one track at once is not
-/// this command's job); when given, the target track must be locked-free
+/// this command's job); when given, the target track must be unlocked
 /// and kind-compatible with the moved clip's asset. Overlapping ANY
 /// destination clip rejects the WHOLE group atomically -- checked in a
 /// read-only pass over `project` before `candidate` is ever built.
@@ -520,8 +551,30 @@ pub(super) fn move_clips(
         payload.delta_ms
     };
 
+    // One checked `new_start` per moved clip, computed ONCE here and reused
+    // for the mutation below -- never recomputed with the same unchecked
+    // arithmetic twice.
+    let mut new_starts: Vec<(String, u64)> = Vec::with_capacity(clips.len());
     for clip in &clips {
-        let new_start = ((clip.start_ms as i64) + clamped_delta).max(0) as u64;
+        let new_start = apply_delta(clip.start_ms, clamped_delta)?;
+        // `apply_delta`'s checked arithmetic alone is not enough to reject
+        // an unreasonable positive `deltaMs`: u64 has enough headroom
+        // above i64::MAX that adding it never actually overflows u64, so
+        // an unbounded delta would otherwise sail through as a
+        // business-nonsensical (but arithmetically "valid") position.
+        // Bound it against the same ceiling `validate::check_clip` already
+        // enforces on an installed clip, so this returns an explicit
+        // `invalidRequest` here rather than relying solely on the
+        // `validate_project` backstop.
+        if new_start > limits::MAX_DURATION_MS {
+            return Err(invalid_request(format!(
+                "clip {}: deltaMs would move it to {} ms, exceeding the {} ms maximum",
+                clip.id,
+                new_start,
+                limits::MAX_DURATION_MS
+            )));
+        }
+        new_starts.push((clip.id.clone(), new_start));
         let target_track = dest_track_id.unwrap_or(clip.track_id.as_str());
         let new_span = ClipSpan {
             start_ms: new_start,
@@ -529,7 +582,7 @@ pub(super) fn move_clips(
             out_ms: clip.out_ms,
             speed: speed_or_default(clip.speed.as_ref()),
         };
-        let new_end = time::clip_output_end(&new_span);
+        let new_end = checked_output_end(&new_span)?;
         for other in project
             .clips
             .iter()
@@ -551,7 +604,11 @@ pub(super) fn move_clips(
         .iter_mut()
         .filter(|c| ids.contains(c.id.as_str()))
     {
-        let new_start = ((clip.start_ms as i64) + clamped_delta).max(0) as u64;
+        let new_start = new_starts
+            .iter()
+            .find(|(id, _)| *id == clip.id)
+            .map(|(_, s)| *s)
+            .expect("every moved clip has a precomputed new start from the check pass above");
         clip.start_ms = new_start;
         if let Some(dest) = dest_track_id {
             clip.track_id = dest.to_string();
@@ -564,10 +621,12 @@ pub(super) fn move_clips(
 
 /// `reorderClip{clipId, direction}`: swaps the clip with its adjacent
 /// neighbour on the same track (by current `start_ms`), preserving the
-/// PAIR's combined span -- the two become contiguous at the earlier
-/// clip's original start, in swapped order, discarding any gap that
-/// existed between them (any gap re-opens as an ordinary `moveClips`
-/// afterward, this command's own job is only the swap). A missing
+/// PAIR's combined span `[a.start, b.end)` -- `a` is whichever of the two
+/// currently starts earlier, `b` the later one. After the swap `b` (now
+/// first) starts exactly where `a` used to start, and `a` (now second)
+/// ENDS exactly where `b` used to end (`a`'s new start is `b_end -
+/// a_duration`) -- so both the pair's outer boundary AND any gap that sat
+/// between them survive unchanged; only the order flips. A missing
 /// neighbour (already first/last on the track) is refused rather than a
 /// silent no-op.
 pub(super) fn reorder_clip(
@@ -604,28 +663,27 @@ pub(super) fn reorder_clip(
     };
 
     // `a` is whichever of the pair currently starts earlier, `b` the
-    // later one -- the reference algorithm's own naming (`editor.js`'s
-    // `reorderClip`), kept here because the swap formula below reads
-    // directly off it.
-    let (a_id, b_id) = if payload.direction == ReorderDirection::Earlier {
-        (neighbor.id.clone(), clip.id.clone())
+    // later one.
+    let (a, b) = if payload.direction == ReorderDirection::Earlier {
+        (neighbor, clip)
     } else {
-        (clip.id.clone(), neighbor.id.clone())
+        (clip, neighbor)
     };
-    let a_start = project
-        .clips
-        .iter()
-        .find(|c| c.id == a_id)
-        .unwrap()
-        .start_ms;
-    let b_duration = clip_duration(project.clips.iter().find(|c| c.id == b_id).unwrap());
+    let a_id = a.id.clone();
+    let b_id = b.id.clone();
+    let a_start = a.start_ms;
+    let a_duration = clip_duration(a);
+    let b_end = clip_end(b);
+    let a_new_start = b_end.checked_sub(a_duration).ok_or_else(|| {
+        invalid_request("reorder would place the earlier clip before the start of the timeline")
+    })?;
 
     let mut candidate = project.clone();
     for c in candidate.clips.iter_mut() {
         if c.id == b_id {
             c.start_ms = a_start;
         } else if c.id == a_id {
-            c.start_ms = a_start + b_duration;
+            c.start_ms = a_new_start;
         }
     }
     Ok((candidate, "Reorder clip".to_string()))
