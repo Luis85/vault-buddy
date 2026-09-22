@@ -1,7 +1,8 @@
 //! The tutorial editor's SHELL-side surface: the owned project store on
 //! disk (`project_store`, `store_io`, Task 9), pin-aware staging
-//! integration, and the `editor_*` session commands (`session_commands`,
-//! Task 10) behind R8's caller-window check (`authz`).
+//! integration, the `editor_*` session commands (`session_commands`, Task
+//! 10) and the durable save/list/reopen commands (`save_commands`, Task 12)
+//! behind R8's caller-window check (`authz`).
 //!
 //! Every `#[tauri::command]` in ANY file under this directory must take
 //! `window: WebviewWindow` and call `authz::require_editor_window(&window)`
@@ -14,6 +15,7 @@ mod authz_guard;
 #[cfg(test)]
 mod capability_guard;
 pub mod project_store;
+pub mod save_commands;
 pub mod session_commands;
 pub mod store_io;
 

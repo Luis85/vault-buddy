@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "editor",
-  "description": "The tutorial editor window alone: the editor_* session commands (open a staged capture into a session, read its snapshot, execute a command, close the session, hide the window) that build.rs's app manifest takes out of every other window's reach, plus the file dialogs its save/import flows need. No other capability grants any allow-editor-* permission.",
+  "description": "The tutorial editor window alone: the editor_* session commands (open a staged capture into a session, read its snapshot, execute a command, close the session, hide the window) plus the durable save/list/reopen commands (save a project, list every project on disk, reopen one by id) that build.rs's app manifest takes out of every other window's reach, plus the file dialogs its save/import flows need. No other capability grants any allow-editor-* permission.",
   "windows": ["editor"],
   "permissions": [
     "allow-editor-open-staged",
@@ -9,6 +9,9 @@
     "allow-editor-execute",
     "allow-editor-close-session",
     "allow-editor-hide-window",
+    "allow-editor-save-project",
+    "allow-editor-list-projects",
+    "allow-editor-open-project",
     "dialog:allow-open",
     "dialog:allow-save"
   ]

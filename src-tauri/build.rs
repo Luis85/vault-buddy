@@ -22,9 +22,9 @@
 ///
 /// Add a new command here in the same commit that adds it to
 /// `generate_handler!`, and grant it in EXACTLY ONE of
-/// `capabilities/editor.json` (only if it is one of the five `editor_*`
-/// session commands) or `capabilities/default.json` (every other
-/// command).
+/// `capabilities/editor.json` (only if it is one of the `editor_*` session
+/// commands -- eight as of Task 12) or `capabilities/default.json` (every
+/// other command).
 const ALL_COMMANDS: &[&str] = &[
     "add_task",
     "announce",
@@ -49,7 +49,10 @@ const ALL_COMMANDS: &[&str] = &[
     "editor_execute",
     "editor_get_snapshot",
     "editor_hide_window",
+    "editor_list_projects",
+    "editor_open_project",
     "editor_open_staged",
+    "editor_save_project",
     "export_and_save_capture",
     "get_autostart",
     "get_bubble_anchor",

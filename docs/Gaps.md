@@ -5096,18 +5096,20 @@ alone. A performance claim asserted on a shared machine's wall clock is
 load-sensitive by construction. Low; worth either a generous ratio or
 measuring CPU time, whenever that file is next touched.
 
-### GAP-170 · High (unverified) · The app-wide ACL that now gates ALL 101 commands has never run inside a live app — if it resolves differently than the generated-artifact replica models, every IPC command from every window is refused, not just the editor ones
+### GAP-170 · High (unverified) · The app-wide ACL that now gates ALL 104 commands has never run inside a live app — if it resolves differently than the generated-artifact replica models, every IPC command from every window is refused, not just the editor ones
 Task 11 (tutorial editor, R8's app-manifest half) made `build.rs`'s
 `AppManifest::commands(ALL_COMMANDS)` list EVERY command in
-`generate_handler!`, not just the five `editor_*` session commands
+`generate_handler!`, not just the eight `editor_*` commands
 (`editor_open_staged`, `editor_get_snapshot`, `editor_execute`,
-`editor_close_session`, `editor_hide_window`) — because (see the near-miss
-below) doing anything less silently turns off ACL enforcement's grant for
-every command NOT in the list, not just the ones a narrower list would have
-scoped. That makes this gap's blast radius the whole app, not one feature:
-**this is not "the editor commands might stay reachable from other
-windows" (a missed defense layer, tolerable because Task 10's native
-`authz::require_editor_window` still holds for those five) — it is "if
+`editor_close_session`, `editor_hide_window`, `editor_save_project`,
+`editor_list_projects`, `editor_open_project` — the last three added by
+Task 12) — because (see the near-miss below) doing anything less silently
+turns off ACL enforcement's grant for every command NOT in the list, not
+just the ones a narrower list would have scoped. That makes this gap's
+blast radius the whole app, not one feature: **this is not "the editor
+commands might stay reachable from other windows" (a missed defense layer,
+tolerable because Task 10's native `authz::require_editor_window` still
+holds for those eight) — it is "if
 Tauri's live ACL resolution disagrees with what this task's tests model,
 every window loses EVERY command," including `list_vaults`, `toggle_panel`,
 `start_capture`, `add_task`, `search_vaults`, and the other 91 that have NO
@@ -5159,7 +5161,7 @@ git-ignored, correctly, since it is 1:1 derived from the checked-in source
 on every build) — and replicates tauri's own resolution over it: for the
 `panel`, `main`, `bubble`, `overlay` and `region-indicator` windows,
 `list_vaults` resolves as allowed and every `editor_*` command resolves as
-NOT allowed; for the `editor` window itself, `list_vaults` and all five
+NOT allowed; for the `editor` window itself, `list_vaults` and all eight
 `editor_*` commands resolve as allowed. This closes the actual defect
 above (a hand-parsed source file agreeing with itself proves nothing about
 what `tauri-build` did with it) and is more than a shape check — it is the

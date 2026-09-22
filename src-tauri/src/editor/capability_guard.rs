@@ -8,8 +8,8 @@
 //! into requiring an explicit capability grant for ALL of them, not just
 //! the ones named — see the EXHAUSTIVE note below for why that is not
 //! optional. So every custom command in this app IS capability-gated,
-//! unconditionally: `capabilities/editor.json` grants the five `editor_*`
-//! session commands to the `editor` window alone, and
+//! unconditionally: `capabilities/editor.json` grants the `editor_*`
+//! session commands (eight as of Task 12) to the `editor` window alone, and
 //! `capabilities/default.json` grants every other command to its
 //! `windows` list. A command reachable from a window with no matching
 //! grant is a bug this scan exists to catch, not an intentional gap.
@@ -34,8 +34,8 @@
 //! 1. **Exhaustive + disjoint partition** (source files only): every
 //!    command in `lib.rs`'s `generate_handler!` appears in `build.rs`'s
 //!    `ALL_COMMANDS`, and is granted in EXACTLY ONE of
-//!    `capabilities/editor.json` (iff it is one of the five `editor_*`
-//!    session commands) or `capabilities/default.json` (every other
+//!    `capabilities/editor.json` (iff it is one of the `editor_*` session
+//!    commands) or `capabilities/default.json` (every other
 //!    command) — never both, never neither. No capability grants a
 //!    command `generate_handler!` does not register.
 //! 2. `capabilities/editor.json` scopes to exactly the `"editor"` window.
@@ -58,16 +58,20 @@ use std::path::{Path, PathBuf};
 
 use crate::structural_scan::code_only;
 
-/// The five `editor_*` session commands as of this task. Add a new one
-/// here in the same commit that adds it to `generate_handler!` (`lib.rs`),
-/// `build.rs`'s `ALL_COMMANDS`, and `capabilities/editor.json`'s
-/// `permissions` — never to `capabilities/default.json`.
+/// The `editor_*` session and save/list/reopen commands — eight as of
+/// Task 12. Add a new one here in the same commit that adds it to
+/// `generate_handler!` (`lib.rs`), `build.rs`'s `ALL_COMMANDS`, and
+/// `capabilities/editor.json`'s `permissions` — never to
+/// `capabilities/default.json`.
 const EXPECTED_EDITOR: &[&str] = &[
     "editor_close_session",
     "editor_execute",
     "editor_get_snapshot",
     "editor_hide_window",
+    "editor_list_projects",
+    "editor_open_project",
     "editor_open_staged",
+    "editor_save_project",
 ];
 
 fn manifest_dir() -> PathBuf {
@@ -471,7 +475,7 @@ fn resolved_commands_for_window(window_label: &str) -> HashSet<String> {
 /// `tauri`'s `RuntimeAuthority` would, and confirm a representative
 /// non-editor command reaches the windows it always could while no editor
 /// command reaches them -- and that the editor window itself still gets
-/// its own five commands. A test that only re-parsed our own source
+/// its own eight commands. A test that only re-parsed our own source
 /// `capabilities/*.json` files (the other test above) cannot catch
 /// `tauri-build` itself mishandling a grant; this one reads its output.
 #[test]

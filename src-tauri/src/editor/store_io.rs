@@ -44,10 +44,40 @@ fn invalid_id_err(id: &str) -> EditorError {
     )
 }
 
-fn write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
+/// The write seam every store file goes through (`editor_save_project`'s own
+/// tests, `save_commands.rs`): a real `io::Error` from a full disk or a
+/// denied permission is impractical to reproduce portably from a test, so
+/// this trait lets a test inject one instead of touching the filesystem's
+/// own failure modes. `RealWriter` — `capture_note::write_atomic_replacing`,
+/// exactly what every store write used before this seam existed — is what
+/// every production caller gets; nothing here changes the on-disk write
+/// itself (temp + fsync + replacing rename), only where it is dispatched
+/// from.
+pub trait ProjectWriter {
+    fn write(&self, path: &Path, content: &str) -> io::Result<()>;
+}
+
+/// The production `ProjectWriter`: `write_atomic_replacing`, unchanged.
+pub struct RealWriter;
+
+impl ProjectWriter for RealWriter {
+    fn write(&self, path: &Path, content: &str) -> io::Result<()> {
+        write_atomic_replacing(path, content)
+    }
+}
+
+fn write_json_with<T: Serialize>(
+    writer: &dyn ProjectWriter,
+    path: &Path,
+    value: &T,
+) -> io::Result<()> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    write_atomic_replacing(path, &json)
+    writer.write(path, &json)
+}
+
+fn write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
+    write_json_with(&RealWriter, path, value)
 }
 
 /// Create a brand-new project directory and its two founding files.
@@ -102,17 +132,25 @@ pub fn create_project(
 }
 
 /// Persist an already-built envelope — the ongoing-save path
-/// (`editor_save_project`, a later task), as opposed to `create_project`'s
-/// one-time mint. Only `project.json` is rewritten: `sources.json` changes
-/// far less often (only when a source is added/relinked) and is written by
-/// whatever operation actually changes it, not on every ordinary save.
-// Test-only until `editor_save_project` (a later task) gives it a
-// production caller — `clippy -D warnings` refuses an uncalled `pub fn` in
-// a lib crate, and a blanket `allow(dead_code)` would hide real dead code.
-#[cfg(test)]
-pub fn commit_project(root: &Path, id: &str, envelope: &WorkspaceEnvelope) -> io::Result<()> {
+/// (`editor_save_project`), as opposed to `create_project`'s one-time mint.
+/// Only `project.json` is rewritten: `sources.json` changes far less often
+/// (only when a source is added/relinked) and is written by whatever
+/// operation actually changes it, not on every ordinary save.
+///
+/// Takes the `ProjectWriter` explicitly rather than defaulting to
+/// `RealWriter` internally: `editor_save_project`'s own tests inject a
+/// `ProjectWriter` that fails (disk-full, permission-denied) to prove a
+/// failed save leaves the previous file untouched, without touching the
+/// real filesystem's own failure modes. Every production caller passes
+/// `&RealWriter`.
+pub fn commit_project(
+    writer: &dyn ProjectWriter,
+    root: &Path,
+    id: &str,
+    envelope: &WorkspaceEnvelope,
+) -> io::Result<()> {
     let dir = project_dir(root, id).ok_or_else(|| invalid_id(id))?;
-    write_json(&dir.join(PROJECT_FILE), envelope)
+    write_json_with(writer, &dir.join(PROJECT_FILE), envelope)
 }
 
 fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, EditorError> {
@@ -212,7 +250,10 @@ pub struct ProjectSummaryDto {
     pub source_base: Option<String>,
 }
 
-fn source_base_of(sources: &BTreeMap<String, SourceRecord>) -> Option<String> {
+/// `pub(crate)`: also `editor_open_project`'s (`save_commands.rs`) source
+/// for `EditorOpenResult.sourceBase` when reopening a project by id rather
+/// than by the staged capture that minted it.
+pub(crate) fn source_base_of(sources: &BTreeMap<String, SourceRecord>) -> Option<String> {
     sources.values().find_map(|r| match &r.locator {
         super::project_store::SourceLocator::Staging { base } => Some(base.clone()),
         _ => None,
@@ -504,7 +545,7 @@ mod tests {
         envelope.record.revision = 2;
         envelope.record.updated_at = "2026-09-22T00:00:00Z".to_string();
 
-        commit_project(root.path(), "proj1", &envelope).unwrap();
+        commit_project(&RealWriter, root.path(), "proj1", &envelope).unwrap();
 
         let (reloaded, _) = load_project(root.path(), "proj1").unwrap();
         assert_eq!(reloaded.record.revision, 2);
