@@ -2232,6 +2232,52 @@ the moment Task 21 flips `SHOW_LEGACY_EDITOR` off, and its own failure
 message names exactly what to do (tighten the tolerance back to 1, delete
 the lower-bound check).
 
+Task 22 (the layered preview) raised the floor tolerance again, 20 -> 30,
+measured rather than guessed: the shell's preview slot went from a 15px
+placeholder line to the real preview surface. Its stage `grow`s into
+leftover height and so gives up ALL of it at the floor (0px, measured), but
+its transport row (22px + a 4px gap) cannot — play/pause must stay
+reachable — so the floor overflow went 15 -> 26px. At 1280x820 and
+1920x1080 the stage and the legacy preview split the leftover height and the
+column fits with 0px overflow (measured), so the 1px tolerance there is
+unchanged. Same fix, same trigger: tighten back to 1 when the legacy surface
+retires.
+
+### GAP-173 · Medium (by design, until parity is proven) · The editor's preview approximates the render
+`src/editor/previewLayers.ts` + `src/editor/previewController.ts` +
+`src/components/editor/preview/PreviewSurface.vue` (tutorial-editor Task 22;
+NATIVE-MEDIA.md § Preview architecture: "independently prove
+preview/export parity for effects"). The preview is one pooled media element
+per ACTIVE clip, placed from the clip's normalized `x,y,w,h` inside the
+letterboxed canvas, stacked by reverse track index, with `opacity` and a
+Web Audio gain per element for MONITORING. It is an approximation of what a
+render produces, and it says so nowhere on screen yet. What it does NOT show:
+
+1. **Fades and transitions** — a clip's `fade_in_ms`/`fade_out_ms`/
+   `fade_curve` and every `Transition` are ignored; clips cut hard.
+2. **Effects, captions, markers and cards** — nothing clip-linked is
+   drawn; a `card` (and every other `builtin` asset) has no file and is not
+   laid out at all.
+3. **Rotation, mirror/flip, crop (`crop_zoom`/`crop_x`/`crop_y`), frame
+   shape and colour adjustments** — only the box, `fit` (`object-fit`) and
+   opacity are applied.
+4. **Timing** — sync is element-seek accurate, not frame accurate: a
+   playing element is re-seeked only past 250 ms of drift, a cut shows as a
+   seek, and audio/video from different elements are not sample-locked.
+   `speed` maps to `playbackRate` (`preserve_pitch` is the browser's
+   default, not the clip's setting).
+5. **More than 8 simultaneous layers** — the pool cap (`MAX_ELEMENTS`)
+   shows the top-most 8 and logs once per overflow episode.
+
+**Why accepted now:** the plan's P04 lands the preview surface before the
+effect/caption/transition/cards tasks that give those features a preview at
+all; each of those tasks owns its own preview arm. **Fix:** as each feature
+lands, add its preview arm and its row in a shared preview/render parity
+fixture (visible frame numbers, an audible pulse — NATIVE-MEDIA.md §
+Required media fixtures), so parity is measured rather than asserted; the
+Review render (a real file, `cache\review-<jobId>.mp4`) remains the only
+thing that shows the exported result.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md
@@ -3557,6 +3603,15 @@ app-WIDE, not per-window, so any future webview inherits the same read access
 to the staging directory. That is a property of Tauri's asset protocol rather
 than of this config, there is nothing to tighten today, and the test above
 makes any change to the line visible. Nothing else here is open.
+
+**Update (tutorial-editor Task 22, ADR R7):** the scope is no longer
+staging-only. It is an enumerated five-entry list — staging plus each editor
+project's `media`/`takes`/`products`/`cache` sub-directories, never `jobs`,
+never a vault — with R7's `img-src`/`media-src` CSP clauses, and the pin test
+was re-pointed (not deleted) to
+`the_asset_protocol_scope_is_pinned_to_staging_and_the_editor_project_media_dirs`,
+which asserts the exact array and both directives. The app-wide residual
+above now covers those project directories too.
 
 ### GAP-138 · Low · The staged-capture row on the panel's list view never expires or dismisses
 `src/stores/screenCapture.ts` (`lastStaged`, cleared only by a SUCCESSFUL

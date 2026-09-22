@@ -48,6 +48,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import ClipSection from "../components/editor/inspector/ClipSection.vue";
 import InspectorPanel from "../components/editor/inspector/InspectorPanel.vue";
 import LegacyCaptureEditor from "../components/editor/LegacyCaptureEditor.vue";
+import PreviewSurface from "../components/editor/preview/PreviewSurface.vue";
 import EditorShell from "../components/editor/shell/EditorShell.vue";
 import TimelineView from "../components/editor/timeline/TimelineView.vue";
 import { logWarning } from "../logging";
@@ -215,6 +216,13 @@ onBeforeUnmount(() => {
            filled in Tasks 17/19. -->
       <template #timeline>
         <TimelineView />
+      </template>
+      <!-- Task 22: the layered preview stage + transport fill the shell's
+           `preview` slot. Media paths come from `editor_media_url` only
+           (`PreviewSurface.vue`'s own doc); the legacy preview below keeps
+           its own `load_staged_capture` path until Task 59 (F3). -->
+      <template #preview>
+        <PreviewSurface />
       </template>
     </EditorShell>
     <!-- A multi-root component: its own root nodes (header, preview, strip,

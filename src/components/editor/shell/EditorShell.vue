@@ -49,6 +49,16 @@
  * target sits inside an open `role="menu"`/`role="dialog"` is the menu's
  * (`shouldHandle`'s `menuOwnsKeys`): Delete pressed in the context menu
  * must not delete the selection behind it.
+ *
+ * **Height (Task 22).** The shell root, its grid and the preview slot's
+ * wrapper all `grow`: the preview stage (`PreviewSurface`) takes whatever
+ * height the window has left rather than a fixed or aspect-derived one.
+ * While the legacy phase-4 surface still shares the window
+ * (`SHOW_LEGACY_EDITOR`), its own `flex-1` preview and this shell split the
+ * leftover height between them, and at the 960x640 floor both give theirs
+ * up entirely — so the stage never pushes Save off-screen (the
+ * `tests/e2e/editorLayout.spec.ts` contract). `min-height` stays `auto`
+ * everywhere: the shell never shrinks below its own content.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
@@ -167,7 +177,7 @@ function onShellKeydown(event: KeyboardEvent) {
 <template>
   <div
     data-testid="editor-shell"
-    class="flex flex-col gap-2 text-fg"
+    class="flex grow flex-col gap-2 text-fg"
     @keydown="onShellKeydown"
   >
     <EditorHeader
@@ -181,7 +191,7 @@ function onShellKeydown(event: KeyboardEvent) {
     />
 
     <div
-      class="grid gap-2"
+      class="grid grow gap-2"
       :class="isCompact ? 'grid-cols-1' : 'editor-shell-grid'"
     >
       <aside
@@ -211,9 +221,9 @@ function onShellKeydown(event: KeyboardEvent) {
           @toggle-inspector="inspectorOpen = !inspectorOpen"
           @focus-preview="onFocusPreview"
         />
-        <div class="text-micro text-fg-subtle">
+        <div class="flex min-h-0 grow flex-col text-micro text-fg-subtle">
           <slot name="preview">
-            Preview canvas — arrives in Task 17.
+            Preview — filled by the root (`PreviewSurface`, Task 22).
           </slot>
         </div>
       </section>

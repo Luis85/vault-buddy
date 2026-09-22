@@ -93,10 +93,16 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' asset: http://asset.localhost",
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; media-src 'self' asset: http://asset.localhost blob: mediastream:",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPLOCALDATA/screen-captures/*"]
+        "scope": [
+          "$APPLOCALDATA/screen-captures/*",
+          "$APPLOCALDATA/editor-projects/*/media/*",
+          "$APPLOCALDATA/editor-projects/*/takes/*",
+          "$APPLOCALDATA/editor-projects/*/products/*",
+          "$APPLOCALDATA/editor-projects/*/cache/*"
+        ]
       }
     }
   },

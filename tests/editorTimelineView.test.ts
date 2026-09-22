@@ -120,6 +120,7 @@ function fakePort(overrides: Partial<EditorPort> = {}): EditorPort {
     hideWindow: unimplemented("hideWindow"),
     getWorkspace: unimplemented("getWorkspace"),
     saveWorkspace: unimplemented("saveWorkspace"),
+    mediaUrl: unimplemented("mediaUrl"),
     ...overrides,
   };
 }

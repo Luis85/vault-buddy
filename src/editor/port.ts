@@ -26,12 +26,14 @@ import type {
   EditorOpenResult,
   EditorProjection,
   ExecuteRequest,
+  MediaRef,
   ProjectSummaryDto,
   SaveReceipt,
   Workspace,
 } from "../editorTypes";
 import {
   decodeEditorError,
+  decodeMediaPath,
   decodeOpenResult,
   decodeProjection,
   decodeProjectSummaries,
@@ -109,6 +111,10 @@ export interface EditorPort {
   /** `editor_save_workspace` — sanitizes and writes `workspace.json`.
    * Never touches the session's revision or its undo/redo history. */
   saveWorkspace(sessionId: string, workspace: Workspace): Promise<void>;
+  /** `editor_media_url` — the absolute path of a REGISTERED asset or
+   * product (`unauthorizedSource` otherwise, `sourceMissing` when its file
+   * is gone), for `convertFileSrc`. The frontend never builds a path. */
+  mediaUrl(sessionId: string, ref: MediaRef): Promise<string>;
 }
 
 export function createTauriEditorPort(): EditorPort {
@@ -146,6 +152,9 @@ export function createTauriEditorPort(): EditorPort {
     },
     async saveWorkspace(sessionId, workspace) {
       await call("editor_save_workspace", { sessionId, workspace }, () => undefined);
+    },
+    mediaUrl(sessionId, ref) {
+      return call("editor_media_url", { sessionId, ref }, decodeMediaPath);
     },
   };
 }

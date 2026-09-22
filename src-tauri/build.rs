@@ -51,6 +51,7 @@ const ALL_COMMANDS: &[&str] = &[
     "editor_get_workspace",
     "editor_hide_window",
     "editor_list_projects",
+    "editor_media_url",
     "editor_open_project",
     "editor_open_staged",
     "editor_save_project",

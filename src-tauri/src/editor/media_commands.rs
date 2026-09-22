@@ -1,0 +1,476 @@
+//! The editor's media-URL surface (Task 22, R7; ADR §3.3's
+//! `editor_media_url`): the ONE way the editor webview learns where a
+//! registered asset's or product's bytes live on disk.
+//!
+//! **The frontend never constructs a path.** It names an entity it already
+//! holds an id for (`{ assetId }` or `{ productId }`), and this command
+//! answers with an absolute path only when that id is REGISTERED to the
+//! caller's own session's project:
+//! - an asset must be in the live session's project graph AND have an entry
+//!   in the project's `sources.json`, resolved through
+//!   `project_store::resolve_source` (so a hand-edited `file` that tries to
+//!   escape its directory resolves to nothing);
+//! - a product must be in the project's saved `record.products`, and its
+//!   `filename` must be one ordinary path component under `products\`.
+//!
+//! Anything else — an unknown id, a builtin asset with no file, an escaping
+//! name, a symlink wearing one of our names — is `unauthorizedSource`; a
+//! registered entity whose file is not there is `sourceMissing`.
+//!
+//! This is NOT the authorization boundary for the asset protocol, and the
+//! path it returns is not a capability: `convertFileSrc` is URL conversion
+//! (bundle § Access control). The boundary is `tauri.conf.json`'s
+//! `assetProtocol.scope` (R7's enumerated list, pinned by `tray.rs`), which
+//! Tauri enforces on every request regardless of how the URL was built.
+//! This command's job is narrower: keep the webview from ever having to
+//! guess a path, so no editor surface can drift into building one.
+//!
+//! Every `#[tauri::command]` here takes `window: WebviewWindow` and calls
+//! `authz::require_editor_window(&window)?` FIRST — `authz_guard.rs` fails
+//! naming any that does not.
+
+use std::path::{Path, PathBuf};
+
+use serde_json::Value;
+use tauri::{AppHandle, Manager, WebviewWindow};
+use vault_buddy_core::editor::{is_valid_id, EditorError, EditorErrorCode};
+
+use super::authz::{require_editor_window, require_session};
+use super::prefs_commands::{blocking, local_data, project_id_for};
+use super::project_store::{join_contained, project_dir, resolve_source};
+use super::store_io::{load_project, load_sources};
+use super::EditorState;
+
+/// Which registered entity the caller wants a path for. The wire shape is
+/// exactly one of `{"assetId": "<id>"}` or `{"productId": "<id>"}` — parsed
+/// by hand (`parse_media_ref`) rather than through an untagged serde enum,
+/// so a malformed reference is an `invalidRequest` `EditorError` the
+/// frontend can branch on, not Tauri's own opaque argument-decode string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaRef {
+    Asset(String),
+    Product(String),
+}
+
+fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
+    EditorError::new(code, message)
+}
+
+fn unregistered(what: &str, id: &str) -> EditorError {
+    err(
+        EditorErrorCode::UnauthorizedSource,
+        format!("{what} {id:?} is not a registered source of this project."),
+    )
+}
+
+/// `{ "assetId": id }` or `{ "productId": id }` — exactly one key, a valid
+/// entity id, nothing else. Everything else is `invalidRequest`.
+pub(crate) fn parse_media_ref(value: &Value) -> Result<MediaRef, EditorError> {
+    let invalid = |why: &str| {
+        err(
+            EditorErrorCode::InvalidRequest,
+            format!("A media reference must be {{assetId}} or {{productId}}: {why}"),
+        )
+    };
+    let obj = value.as_object().ok_or_else(|| invalid("not an object"))?;
+    if obj.len() != 1 {
+        return Err(invalid("exactly one key is required"));
+    }
+    let (key, id) = obj.iter().next().expect("len checked above");
+    let id = id
+        .as_str()
+        .filter(|id| is_valid_id(id))
+        .ok_or_else(|| invalid("the id is not a valid entity id"))?
+        .to_string();
+    match key.as_str() {
+        "assetId" => Ok(MediaRef::Asset(id)),
+        "productId" => Ok(MediaRef::Product(id)),
+        other => Err(invalid(&format!("unknown key {other:?}"))),
+    }
+}
+
+/// The file must be a plain file we can hand out — checked no-follow
+/// (`symlink_metadata`), so a symlink wearing one of our names is refused
+/// rather than followed out of the project directory. Tauri's own scope
+/// check resolves symlinks too; this refusal is ours, one step earlier.
+fn require_plain_file(path: PathBuf, id: &str) -> Result<PathBuf, EditorError> {
+    match std::fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(unregistered("source", id)),
+        Ok(meta) if meta.is_file() => Ok(path),
+        Ok(_) => Err(missing(id)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(missing(id)),
+        Err(e) => Err(err(
+            EditorErrorCode::Internal,
+            format!("Cannot inspect the media file for {id:?}: {e}"),
+        )),
+    }
+}
+
+fn missing(id: &str) -> EditorError {
+    err(
+        EditorErrorCode::SourceMissing,
+        format!("The media file for {id:?} is no longer on disk."),
+    )
+}
+
+fn asset_path(
+    state: &EditorState,
+    root: &Path,
+    session_id: &str,
+    project_id: &str,
+    asset_id: &str,
+) -> Result<PathBuf, EditorError> {
+    // In the live graph first: a stale `sources.json` entry for an asset
+    // the project no longer holds is not something the preview can ask for.
+    let in_project = require_session(state, session_id)?
+        .get(session_id)
+        .is_some_and(|s| s.project().assets.iter().any(|a| a.id == asset_id));
+    if !in_project {
+        return Err(unregistered("asset", asset_id));
+    }
+    let sources = load_sources(root, project_id)?;
+    let record = sources
+        .get(asset_id)
+        .ok_or_else(|| unregistered("asset", asset_id))?;
+    let path =
+        resolve_source(root, project_id, record).ok_or_else(|| unregistered("asset", asset_id))?;
+    require_plain_file(path, asset_id)
+}
+
+fn product_path(root: &Path, project_id: &str, product_id: &str) -> Result<PathBuf, EditorError> {
+    let (envelope, _) = load_project(root, project_id)?;
+    let product = envelope
+        .record
+        .products
+        .iter()
+        .find(|p| p.id == product_id)
+        .ok_or_else(|| unregistered("product", product_id))?;
+    let dir = project_dir(root, project_id)
+        .ok_or_else(|| unregistered("product", product_id))?
+        .join("products");
+    let path = join_contained(&dir, &product.filename)
+        .ok_or_else(|| unregistered("product", product_id))?;
+    require_plain_file(path, product_id)
+}
+
+/// The absolute path of a registered asset or product of `session_id`'s
+/// project — see the module doc for every refusal.
+pub(crate) fn media_path_in(
+    state: &EditorState,
+    root: &Path,
+    session_id: &str,
+    media: &MediaRef,
+) -> Result<PathBuf, EditorError> {
+    let project_id = project_id_for(state, session_id)?;
+    match media {
+        MediaRef::Asset(id) => asset_path(state, root, session_id, &project_id, id),
+        MediaRef::Product(id) => product_path(root, &project_id, id),
+    }
+}
+
+/// ASYNC: reads `sources.json` (or `project.json`) and stats one file, off
+/// the main thread. `ref` is the ADR's own parameter name (`r#ref` —
+/// Tauri's command macro unraws it, so the IPC key is `ref`).
+#[tauri::command]
+pub async fn editor_media_url(
+    window: WebviewWindow,
+    app: AppHandle,
+    session_id: String,
+    r#ref: Value,
+) -> Result<String, EditorError> {
+    require_editor_window(&window)?;
+    let media = parse_media_ref(&r#ref)?;
+    let root = local_data(&app)?;
+    let path =
+        blocking(move || media_path_in(&app.state::<EditorState>(), &root, &session_id, &media))
+            .await?;
+    path.to_str().map(str::to_string).ok_or_else(|| {
+        err(
+            EditorErrorCode::Internal,
+            "The media path is not valid UTF-8.",
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use serde_json::json;
+    use vault_buddy_core::editor::{Asset, AssetKind, EditorSession, Map, Product};
+
+    use super::*;
+    use crate::editor::project_store::{
+        minimal_project, SourceLocator, SourceMediaKind, SourceRecord,
+    };
+    use crate::editor::store_io::{commit_project, create_project, RealWriter};
+
+    fn asset(id: &str) -> Asset {
+        Asset {
+            id: id.to_string(),
+            kind: AssetKind::Video,
+            name: format!("{id}.mp4"),
+            duration_ms: 4_000,
+            width: None,
+            height: None,
+            size: None,
+            builtin: None,
+            media_type: None,
+            linked_asset: None,
+            original_name: None,
+            extra: Map::new(),
+        }
+    }
+
+    fn record(locator: SourceLocator) -> SourceRecord {
+        SourceRecord {
+            locator,
+            sha256: None,
+            size: 10,
+            duration_ms: 4_000,
+            width: Some(1280),
+            height: Some(720),
+            has_audio: true,
+            has_video: true,
+            media_kind: SourceMediaKind::Video,
+        }
+    }
+
+    /// A live session over a project whose graph holds `in_graph` and whose
+    /// `sources.json` holds `sources`.
+    fn opened(
+        root: &Path,
+        state: &EditorState,
+        in_graph: &[&str],
+        sources: BTreeMap<String, SourceRecord>,
+    ) -> String {
+        let mut project = minimal_project("proj1");
+        project.assets = in_graph.iter().map(|id| asset(id)).collect();
+        create_project(root, &project, &sources).unwrap();
+        let session_id = "ses-proj1".to_string();
+        let session = EditorSession::resume(session_id.clone(), project, 1);
+        state
+            .sessions
+            .lock()
+            .unwrap()
+            .insert(session_id.clone(), session);
+        session_id
+    }
+
+    fn write_media(root: &Path, name: &str) -> PathBuf {
+        let dir = project_dir(root, "proj1").unwrap().join("media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, b"media").unwrap();
+        path
+    }
+
+    // This task's named RED case. The preview must never be handed a path
+    // for something the project did not register: an id absent from the
+    // graph, an id in the graph with no `sources.json` entry, a builtin
+    // (no file at all) and an escaping file name are all
+    // `unauthorizedSource`; a registered asset whose file is gone is the
+    // DIFFERENT `sourceMissing`, and a registered one that is present
+    // resolves under the project's own `media\`.
+    #[test]
+    fn media_url_refuses_unregistered_assets() {
+        let root = tempfile::tempdir().unwrap();
+        let state = EditorState::default();
+        let mut sources = BTreeMap::new();
+        sources.insert(
+            "real".to_string(),
+            record(SourceLocator::Media {
+                file: "real.mp4".into(),
+            }),
+        );
+        sources.insert(
+            "gone".to_string(),
+            record(SourceLocator::Media {
+                file: "gone.mp4".into(),
+            }),
+        );
+        sources.insert("synth".to_string(), record(SourceLocator::Builtin));
+        sources.insert(
+            "escape".to_string(),
+            record(SourceLocator::Media {
+                file: "..\\..\\secret.mp4".into(),
+            }),
+        );
+        let session = opened(
+            root.path(),
+            &state,
+            &["real", "gone", "synth", "escape", "graph-only"],
+            sources,
+        );
+        let expected = write_media(root.path(), "real.mp4");
+
+        let path = media_path_in(
+            &state,
+            root.path(),
+            &session,
+            &MediaRef::Asset("real".into()),
+        )
+        .expect("a registered, present asset resolves");
+        assert_eq!(path, expected);
+
+        for id in ["nope", "synth", "escape", "graph-only"] {
+            let e = media_path_in(&state, root.path(), &session, &MediaRef::Asset(id.into()))
+                .expect_err(id);
+            assert_eq!(e.code, EditorErrorCode::UnauthorizedSource, "{id}: {e:?}");
+        }
+        let e = media_path_in(
+            &state,
+            root.path(),
+            &session,
+            &MediaRef::Asset("gone".into()),
+        )
+        .unwrap_err();
+        assert_eq!(e.code, EditorErrorCode::SourceMissing);
+    }
+
+    // A `sources.json` entry the live graph no longer holds (a deleted asset
+    // whose record was not pruned) is not the preview's to ask for.
+    #[test]
+    fn a_source_record_outside_the_live_graph_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let state = EditorState::default();
+        let mut sources = BTreeMap::new();
+        sources.insert(
+            "stale".to_string(),
+            record(SourceLocator::Media {
+                file: "stale.mp4".into(),
+            }),
+        );
+        let session = opened(root.path(), &state, &[], sources);
+        write_media(root.path(), "stale.mp4");
+
+        let e = media_path_in(
+            &state,
+            root.path(),
+            &session,
+            &MediaRef::Asset("stale".into()),
+        )
+        .unwrap_err();
+        assert_eq!(e.code, EditorErrorCode::UnauthorizedSource);
+    }
+
+    #[test]
+    fn a_staged_asset_resolves_into_the_staging_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let state = EditorState::default();
+        let mut sources = BTreeMap::new();
+        sources.insert(
+            "cap".to_string(),
+            record(SourceLocator::Staging {
+                base: "2026-09-21 1430 Demo".into(),
+            }),
+        );
+        let session = opened(root.path(), &state, &["cap"], sources);
+        let staging = vault_buddy_screen::staging::staging_dir(root.path());
+        std::fs::create_dir_all(&staging).unwrap();
+        let file = staging.join("2026-09-21 1430 Demo.mp4");
+        std::fs::write(&file, b"mp4").unwrap();
+
+        let path = media_path_in(
+            &state,
+            root.path(),
+            &session,
+            &MediaRef::Asset("cap".into()),
+        )
+        .unwrap();
+        assert_eq!(path, file);
+    }
+
+    #[test]
+    fn media_url_resolves_a_registered_product_and_refuses_an_unknown_one() {
+        let root = tempfile::tempdir().unwrap();
+        let state = EditorState::default();
+        let session = opened(root.path(), &state, &[], BTreeMap::new());
+        let (mut envelope, _) = load_project(root.path(), "proj1").unwrap();
+        envelope.record.products.push(Product {
+            id: "prod1".into(),
+            project_id: "proj1".into(),
+            name: "Review".into(),
+            filename: "prod1.mp4".into(),
+            mime: "video/mp4".into(),
+            revision: 1,
+            duration_ms: 4_000,
+            created_at: "2026-09-21T14:30:00+02:00".into(),
+            edit_fingerprint: "sha256:abc".into(),
+            snapshot: None,
+            render_range: None,
+            extra: Map::new(),
+        });
+        commit_project(&RealWriter, root.path(), "proj1", &envelope).unwrap();
+
+        let e = media_path_in(
+            &state,
+            root.path(),
+            &session,
+            &MediaRef::Product("prod1".into()),
+        )
+        .unwrap_err();
+        assert_eq!(e.code, EditorErrorCode::SourceMissing, "not rendered yet");
+
+        let dir = project_dir(root.path(), "proj1").unwrap().join("products");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("prod1.mp4"), b"mp4").unwrap();
+        let path = media_path_in(
+            &state,
+            root.path(),
+            &session,
+            &MediaRef::Product("prod1".into()),
+        )
+        .unwrap();
+        assert_eq!(path, dir.join("prod1.mp4"));
+
+        let e = media_path_in(
+            &state,
+            root.path(),
+            &session,
+            &MediaRef::Product("other".into()),
+        )
+        .unwrap_err();
+        assert_eq!(e.code, EditorErrorCode::UnauthorizedSource);
+    }
+
+    #[test]
+    fn media_url_refuses_an_unknown_session() {
+        let root = tempfile::tempdir().unwrap();
+        let state = EditorState::default();
+        let e = media_path_in(
+            &state,
+            root.path(),
+            "ses-nope",
+            &MediaRef::Asset("a".into()),
+        )
+        .unwrap_err();
+        assert_eq!(e.code, EditorErrorCode::SessionGone);
+    }
+
+    // The wire shape, pinned as LITERAL JSON (never a struct re-serialized
+    // against itself): exactly `{assetId}` or `{productId}`.
+    #[test]
+    fn media_ref_wire_shape_is_pinned() {
+        assert_eq!(
+            parse_media_ref(&json!({ "assetId": "a1" })).unwrap(),
+            MediaRef::Asset("a1".into())
+        );
+        assert_eq!(
+            parse_media_ref(&json!({ "productId": "p1" })).unwrap(),
+            MediaRef::Product("p1".into())
+        );
+        for bad in [
+            json!({}),
+            json!({ "assetId": "a1", "productId": "p1" }),
+            json!({ "asset_id": "a1" }),
+            json!({ "path": "C:\\x.mp4" }),
+            json!({ "assetId": "../x" }),
+            json!({ "assetId": 7 }),
+            json!("a1"),
+        ] {
+            let e = parse_media_ref(&bad).expect_err(&bad.to_string());
+            assert_eq!(e.code, EditorErrorCode::InvalidRequest, "{bad}");
+        }
+    }
+}

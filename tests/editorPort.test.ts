@@ -266,6 +266,36 @@ describe("EditorPort", () => {
     ]);
   });
 
+  // Task 22: `editor_media_url`'s Rust parameter is `r#ref`, which Tauri's
+  // command macro unraws to the IPC key `ref` — and its value is the exact
+  // `{assetId}` / `{productId}` literal `media_commands.rs`'s own
+  // `media_ref_wire_shape_is_pinned` accepts. The reply is decoded: a path
+  // comes back as-is, an empty one is refused rather than handed to
+  // `convertFileSrc` (which would mint the bare asset-root URL).
+  it("mediaUrl sends { sessionId, ref } and decodes the path", async () => {
+    const PATH = "C:\\Users\\me\\AppData\\Local\\com.vaultbuddy.desktop\\editor-projects\\p1\\media\\a.mp4";
+    const calls: { cmd: string; args: unknown }[] = [];
+    let reply: unknown = PATH;
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "editor_media_url") return reply;
+      throw new Error(`unexpected command ${cmd}`);
+    });
+
+    const port = createTauriEditorPort();
+    await expect(port.mediaUrl("ses-1", { assetId: "a1" })).resolves.toBe(PATH);
+    await port.mediaUrl("ses-1", { productId: "prod-1" });
+    expect(calls).toEqual([
+      { cmd: "editor_media_url", args: { sessionId: "ses-1", ref: { assetId: "a1" } } },
+      { cmd: "editor_media_url", args: { sessionId: "ses-1", ref: { productId: "prod-1" } } },
+    ]);
+
+    for (const bad of ["", "   ", 42, null]) {
+      reply = bad;
+      await expect(port.mediaUrl("ses-1", { assetId: "a1" })).rejects.toBeInstanceOf(EditorPortError);
+    }
+  });
+
   it("converts a rejected invoke into EditorPortError", async () => {
     mockIPC(() => {
       throw { code: "revisionConflict", message: "stale", retryable: true, operationId: "op-1" };

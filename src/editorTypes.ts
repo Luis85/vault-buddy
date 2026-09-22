@@ -408,6 +408,10 @@ export interface ProjectSummaryDto {
   sourceBase: string | null;
 }
 
+/** `editor_media_url`'s `ref` argument (`media_commands::MediaRef`): exactly
+ * one registered entity, by id — the frontend never names a path. */
+export type MediaRef = { assetId: string } | { productId: string };
+
 /** `editor_close_session`'s disposition (`session_commands::CloseDisposition`). */
 export type CloseDisposition = "keep" | "discardRecovery" | "discardProject";
 

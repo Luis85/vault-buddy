@@ -9,7 +9,7 @@
 //! the ones named — see the EXHAUSTIVE note below for why that is not
 //! optional. So every custom command in this app IS capability-gated,
 //! unconditionally: `capabilities/editor.json` grants the `editor_*`
-//! session commands (ten as of Task 18) to the `editor` window alone, and
+//! session commands (eleven as of Task 22) to the `editor` window alone, and
 //! `capabilities/default.json` grants every other command to its
 //! `windows` list. A command reachable from a window with no matching
 //! grant is a bug this scan exists to catch, not an intentional gap.
@@ -58,8 +58,8 @@ use std::path::{Path, PathBuf};
 
 use crate::structural_scan::code_only;
 
-/// The `editor_*` session, save/list/reopen and workspace commands — ten as
-/// of Task 18. Add a new one here in the same commit that adds it to
+/// The `editor_*` session, save/list/reopen and workspace commands — eleven as
+/// of Task 22 (`editor_media_url`). Add a new one here in the same commit that adds it to
 /// `generate_handler!` (`lib.rs`), `build.rs`'s `ALL_COMMANDS`, and
 /// `capabilities/editor.json`'s `permissions` — never to
 /// `capabilities/default.json`.
@@ -70,6 +70,7 @@ const EXPECTED_EDITOR: &[&str] = &[
     "editor_get_workspace",
     "editor_hide_window",
     "editor_list_projects",
+    "editor_media_url",
     "editor_open_project",
     "editor_open_staged",
     "editor_save_project",
@@ -477,7 +478,7 @@ fn resolved_commands_for_window(window_label: &str) -> HashSet<String> {
 /// `tauri`'s `RuntimeAuthority` would, and confirm a representative
 /// non-editor command reaches the windows it always could while no editor
 /// command reaches them -- and that the editor window itself still gets
-/// its own ten commands. A test that only re-parsed our own source
+/// its own eleven commands. A test that only re-parsed our own source
 /// `capabilities/*.json` files (the other test above) cannot catch
 /// `tauri-build` itself mishandling a grant; this one reads its output.
 #[test]

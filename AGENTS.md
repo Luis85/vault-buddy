@@ -96,7 +96,7 @@ here is deliberately only the shipped increments.
 | [docs/superpowers/specs/](docs/superpowers/specs/) | Dated design specs — the *why* behind each increment's shape |
 | [docs/superpowers/plans/](docs/superpowers/plans/) | Dated implementation plans that executed those specs |
 | [docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md](docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md) | The screen-capture feature's manual Windows checklist — a RUNNING document across phases, not one phase's gate. It carries **57 rows** today — 1–55 plus 27a and 27b — of which **23** carry a result; the count is measured on the tree, not incremented (it has been wrong before from incrementing, which is why the one-liner to re-measure it lives in the file's own header). An empty Result column means unrun, which is not the same as failed. **The deferral is LIFTED**: the user began running it on 2026-09-21, batch by batch. Rows 1–13, 16, 17, 29 and 37–43 carry results (11 and 12 are DEFERRED by the author's decision to after the remaining Phase 3 work, not passed; 16, 17 and 43 passed on the GAP-166 fix build and re-run on the next installer); 14, 15, 18–28, 30–36, 44–52 **and 53–55** are still unrun — 34 rows. **Rows 44–52 are the region-capture indicator's own verification** (GAP-165), added when it landed and not run since: row 44 is the GATE, re-testing GAP-166's exact symptom against the SIXTH excluded window, and a failure there costs the indicator its capture exclusion and the feature with it. Row 49 is expected BLOCKED on the single-monitor verification machine, like row 13. **Rows 41–43 were added BY that pass**, each for something it found: GAP-164 (fixed), GAP-165 (an approved design never implemented) and GAP-166 (Vault Buddy breaking File Explorer's toolbar, unlocalised). Row 13 is BLOCKED — the verification machine has one monitor, so the mixed-DPI case its own module doc calls most likely to fail cannot be reached at all. **Rows 53–55** were added by the gap close-out: 53 records a window titled `CON` (the only thing that can test GAP-108's close-out against the Win32 name resolver rather than against reasoning), and 54–55 collect the evidence GAP-122's first-frame rework needs before anyone attempts it — the declared-vs-delivered sizes across window styles, and a window resized mid-capture, which is the one case where the prediction is known to go stale |
-| [docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md](docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md) | The tutorial-editor increment's manual Windows checklist — created by Task 15, a RUNNING document across that increment's own tasks (the screen-capture checklist's own precedent). Carries **7 rows** today (T1–T7), **0** with a result: T1–T3 verify Task 15's own `editor_open_staged` open paths (from the capture bar, from the staged list, and that a second open of the same capture reuses the session); T4–T5 close GAP-170 (the app-wide IPC ACL exhaustiveness gap Task 11 opened); T6–T7 are Task 21's timeline interactions in real WebView2 (pointer-captured drag/trim/Escape, and the shell's shortcut dispatcher not double-handling the legacy strip's Ctrl+Z) — re-measure with the file's own one-liner, never increment |
+| [docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md](docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md) | The tutorial-editor increment's manual Windows checklist — created by Task 15, a RUNNING document across that increment's own tasks (the screen-capture checklist's own precedent). Carries **10 rows** today (T1–T10), **0** with a result: T1–T3 verify Task 15's own `editor_open_staged` open paths (from the capture bar, from the staged list, and that a second open of the same capture reuses the session); T4–T5 close GAP-170 (the app-wide IPC ACL exhaustiveness gap Task 11 opened); T6–T7 are Task 21's timeline interactions in real WebView2 (pointer-captured drag/trim/Escape, and the shell's shortcut dispatcher not double-handling the legacy strip's Ctrl+Z); T8–T10 are Task 22's preview (audible playback through `editor_media_url` and Web Audio, local monitor mute/rate, and the widened asset scope still refusing `project.json`, `jobs` and vault paths) — re-measure with the file's own one-liner, never increment |
 | [docs/Gaps.md](docs/Gaps.md) | The audited backlog of known issues, weaknesses, tech debt, and untested paths — check it before "discovering" a known problem, extend it when you find a new one |
 
 ## Repository map
@@ -120,6 +120,9 @@ vault-buddy/
 │   │       └── shell/          # EditorShell + EditorHeader — the tutorial editor's own
 │   │                           #   responsive grid/header (Task 16), mounted by EditorRoot
 │   │                           #   ALONGSIDE LegacyCaptureEditor until Task 21 retires it
+│   │       └── preview/        # PreviewSurface + TransportBar — the layered preview stage
+│   │                           #   (Task 22); its non-reactive PreviewController +
+│   │                           #   pure layer/geometry math live in src/editor/preview*.ts
 │   ├── stores/                 # Pinia: vaults, capture, screenCapture, documentImports,
 │   │                           #   pandoc, ffmpeg, updates, settings, settingsStatus, notifications
 │   ├── composables/            # settings sync, startup update check, bubble, announcements,
@@ -135,9 +138,10 @@ vault-buddy/
 │                               #   searchResults (Search.vue's pure grouping/summary)
 ├── src-tauri/                  # Rust workspace: root shell crate + 5 member crates
 │   ├── tauri.conf.json         # the 6 windows, updater endpoint, version,
-│   │                           #   assetProtocol scope (staging only — a security boundary)
+│   │                           #   assetProtocol scope (staging + four editor-project media
+│   │                           #   dirs, ADR R7 — an enumerated security boundary)
 │   ├── capabilities/           # default.json (all 6 windows, every command but the
-│   │                           #   8 editor_* ones) + editor.json (those 8, the
+│   │                           #   11 editor_* ones) + editor.json (those 11, the
 │   │                           #   editor window alone — Task 11, R8's app-manifest half)
 │   ├── src/                    # SHELL: lib.rs (builder/setup/metronome), commands.rs,
 │   │                           #   capture_commands.rs, capture_config_commands.rs,
@@ -390,12 +394,12 @@ Six OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 106 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 107 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands — and COUNT the
 `generate_handler![…]` list rather than adding to the previous number: this
 sentence has been wrong four times (73 when it was 79, 79 when it was 81,
 81 when it was 85, then 85 when it was 92), and the count above was measured,
-not incremented:
+not incremented (107 after Task 22's `editor_media_url`):
 
 ```bash
 awk '/generate_handler!\[/,/\]\)/' src-tauri/src/lib.rs | grep -cE '^\s+[a-z_]+::[a-z_]+,$'
@@ -417,7 +421,7 @@ them, not just the ones a given task is scoping. So a new command needs:
    way as the count above, never incremented.
 3. A grant in EXACTLY ONE capability file's `permissions` array:
    `capabilities/editor.json` (as `allow-<kebab-case>`) if and only if the
-   command is one of the eight `editor_*` commands, otherwise
+   command is one of the `editor_*` commands (eleven as of Task 22), otherwise
    `capabilities/default.json`. `src-tauri/src/editor/capability_guard.rs`
    (test-only) is the enforcing test: it fails naming any command missing
    step 2 or 3, granted in the wrong file, or granted in both, and a third
@@ -447,9 +451,10 @@ them, not just the ones a given task is scoping. So a new command needs:
 | `export_commands.rs` | The export LIFECYCLE, and with it all five `screen:export*`/`screen:discarded` emits. Split from `staged_commands.rs` below because one file carrying both came to 989 nonblank lines against the 800 Rust cap; the seam is **lifecycle versus object**. `export_and_save_capture` *(async — it reads the sidecar, probes free space, runs ffmpeg on a named `screen-export` thread and waits for it, unbounded on purpose: a long recording legitimately takes minutes and a deadline would abandon a worker still writing into the vault)*, `cancel_export` *(sync — it takes one mutex, sets one `AtomicBool` and drops it; no I/O, so the sync rule keeps it off the blocking pool. `Ok` even when nothing is running, because a Cancel click racing the export's own completion is not the user's error)*. Both gate a frontend-supplied `base` through `editor_commands::is_safe_base` — never a second copy of those rules — and a structural test pins the refusal in the command's own body |
 | `staged_commands.rs` | A staged capture as an OBJECT. `discard_staged_capture` *(async — an irreversible three-file delete (`.mp4`, `.json`, any `.export.mp4.part`), gated behind the editor's and the picker's own two-step confirms, and REFUSED while that capture is the one being exported — or while it is PINNED to a tutorial project (its sidecar's `editorProjectId`, written by `editor_open_staged`): "This capture is used by a tutorial project. Discard the project first.")*, `list_staged_captures` *(async — a `read_dir` of staging plus a sidecar parse per row; it DEGRADES to what it could read rather than erroring, so a transient failure never blanks a list the user is reading; each row carries `projectId`, the pin, so the list offers Edit and hides Discard for a pinned capture)*, `open_screen_capture` *(sync — the read-only `uri::launch` hand-off for a SAVED capture, the `open_recording`/`open_task` shape)*. `screen:discarded` is emitted from `export_commands`' single warning-logging emitter on this module's behalf, so the one-emitter invariant survives the split |
 | `staging_commands.rs` | Staging as a WHOLE — the DIRECTORY, where `staged_commands` is one capture as an object and `export_commands` is the export's lifecycle. Its own module for that seam and because `staged_commands` sits at 677 of the 800-line Rust cap. `staging_usage` *(async — a `read_dir`, a sidecar parse per capture and a `symlink_metadata` per file; DEGRADES to zero rather than rejecting, so a settings card can always render, and the Clear beside it is disabled by that same zero)*, `clear_staged_captures` *(async — up to three unlinks per capture; the widest-reaching destructive action in the app, behind the card's two-step confirm, spec §10's "nothing is ever deleted silently"; a capture PINNED to a tutorial project is SKIPPED and counted in the result's `skippedPinned`, which the card reports as kept, never as cleared)*. **Every rule it applies is borrowed, never re-grown**: which captures exist is `staged_summaries`, which files one owns is `screen::staging_files::capture_file_names`, whether one may go is `discard_conflict`, and the removal with its two-pass symlink refusal is `discard_staged_files` — a second answer to "is this file ours" on the one path that deletes many recordings at once is exactly the hazard. It deliberately does NOT refuse while a capture is RECORDING: a live capture owns `.<base>.mp4.part`, which is not one of a staged capture's three files, and has no published `<base>.mp4`, so `staged_summaries` cannot see it and a clear cannot reach it. It emits one `screen:discarded` per capture actually removed, through `export_commands`' single emitter, or `lastStaged` would keep offering **Edit** for a base no longer on disk |
-| `editor/session_commands.rs` | The tutorial editor's session surface (ADR §3.3, R6, R8). **Every one takes `window: WebviewWindow` and calls `editor::authz::require_editor_window(&window)?` FIRST** — this is the NATIVE half of R8's two-layer authorization; `capabilities/editor.json` (Task 11, the app-manifest half) already scopes all ten `editor_*` commands to the `editor` window at the Tauri ACL layer, so without this native check the only remaining defense against a capability misconfiguration (or a new command mis-granted to the wrong file) would be gone — a structural scan (`editor/authz_guard.rs`) walks every `.rs` under `src/editor/` and fails naming any `#[tauri::command]` that lacks the parameter or the first-statement call, and pins the exact command set. Session ids are checked against the `EditorState` registry (`require_session` → `sessionGone`). Registered as `session_commands::…` via a `use` in `lib.rs` so the count one-liner still sees two-segment paths. `editor_open_staged` *(async — `is_safe_base`, reads the sidecar natively (missing → `sourceMissing`; the destination vault comes from the SIDECAR, A01), REFUSES a `recovered` or zero-duration capture before anything is created or pinned (F7), then reopens the pinned project, adopts an unpinned orphan whose `sources.json` names this base, or migrates a new one — `create_project` THEN `pin_staged`; reuses a live session on the same project)*, `editor_get_snapshot` *(async — in-memory; `knownRevision` accepted, full projection returned)*, `editor_execute` *(async on the blocking pool — the session mutex is held only for the apply)*, `editor_close_session` *(async — `keep` drops the session; `discardProject` UNPINS first, then removes the project directory, so a failure between leaves an adoptable orphan rather than a pin to nothing; the recording is never touched; `discardRecovery` is `invalidRequest` until Task 37)*, `editor_hide_window` *(sync — a window call)* |
+| `editor/session_commands.rs` | The tutorial editor's session surface (ADR §3.3, R6, R8). **Every one takes `window: WebviewWindow` and calls `editor::authz::require_editor_window(&window)?` FIRST** — this is the NATIVE half of R8's two-layer authorization; `capabilities/editor.json` (Task 11, the app-manifest half) already scopes all eleven `editor_*` commands to the `editor` window at the Tauri ACL layer, so without this native check the only remaining defense against a capability misconfiguration (or a new command mis-granted to the wrong file) would be gone — a structural scan (`editor/authz_guard.rs`) walks every `.rs` under `src/editor/` and fails naming any `#[tauri::command]` that lacks the parameter or the first-statement call, and pins the exact command set. Session ids are checked against the `EditorState` registry (`require_session` → `sessionGone`). Registered as `session_commands::…` via a `use` in `lib.rs` so the count one-liner still sees two-segment paths. `editor_open_staged` *(async — `is_safe_base`, reads the sidecar natively (missing → `sourceMissing`; the destination vault comes from the SIDECAR, A01), REFUSES a `recovered` or zero-duration capture before anything is created or pinned (F7), then reopens the pinned project, adopts an unpinned orphan whose `sources.json` names this base, or migrates a new one — `create_project` THEN `pin_staged`; reuses a live session on the same project)*, `editor_get_snapshot` *(async — in-memory; `knownRevision` accepted, full projection returned)*, `editor_execute` *(async on the blocking pool — the session mutex is held only for the apply)*, `editor_close_session` *(async — `keep` drops the session; `discardProject` UNPINS first, then removes the project directory, so a failure between leaves an adoptable orphan rather than a pin to nothing; the recording is never touched; `discardRecovery` is `invalidRequest` until Task 37)*, `editor_hide_window` *(sync — a window call)* |
 | `editor/save_commands.rs` | The durable half of the session lifecycle (Task 12, F-40/F-44): nothing in `session_commands.rs` writes `project.json` past `create_project`'s one-time mint, this file is what does. Same NATIVE `require_editor_window` + `authz_guard.rs` discipline as its sibling; registered as `save_commands::…` in `lib.rs` for the same two-segment-path reason. `editor_save_project` *(async — checks the session's live revision against `expectedRevision` (else `revisionConflict`, never touching disk); builds a `WorkspaceEnvelope` carrying the record's original `createdAt` (read back from the on-disk envelope) and, since Task 18 (F17), the SANITIZED LIVE `workspace.json` — read through `prefs_commands::read_workspace`, never a raw file read and never the stale "last saved envelope's own workspace" this used to carry forward — plus an always-empty `products` array (Task 46 populates it); commits through `store_io::commit_project`, which takes an injectable `ProjectWriter` seam so a disk-full/permission-denied write is testable without touching the real filesystem's own failure modes — `io::ErrorKind::StorageFull`/raw OS 112 map to `diskFull`, `PermissionDenied` to `writeDenied`; `mark_saved` runs ONLY after a successful write, never before, so a failed save leaves `project.json` byte-identical and `persistedRevision` untouched (A20); returns a `SaveReceipt`)*, `editor_list_projects` *(async — a thin wrapper over `store_io::list_projects`, already sorted `updatedAt` desc)*, `editor_open_project` *(async — loads an existing project by id and registers, or reuses, a session over it, under the SAME `open`-lock and live-session-reuse discipline as `editor_open_staged`; `useRecovery` is Task 37's — anything but `false` is `invalidRequest` rather than silently ignored, since `recovery.json` does not exist yet)* |
 | `editor/prefs_commands.rs` | The workspace view-preference surface (Task 18; F-48/F-25/F-14) — the `workspace.json` half of a project's own directory, split out precisely because it is the OPPOSITE kind of write from `save_commands.rs`: selection, playhead, panel layout and the theme toggle are not edits, so neither command here ever touches a session's revision or its undo/redo history — `session_id` only resolves WHICH project directory to read/write, never a `require_session(...).get_mut(...)` into the live `EditorSession`. Same NATIVE `require_editor_window` + `authz_guard.rs` discipline as its siblings. `editor_get_workspace` *(async — reads and sanitizes `workspace.json`; a missing or malformed file degrades to the sanitized empty blob rather than an error, so a project that predates this task, or one with no saved preferences yet, still opens cleanly)*, `editor_save_workspace` *(async — refuses a RAW incoming payload over 64 KiB before it is ever sanitized or written (`invalidRequest`), then sanitizes and writes through `capture_note::write_atomic_replacing` — temp + fsync + replacing rename, the same rails every other project-store file rides)*. F16: `core::editor::workspace::Workspace` gained a 19th field, `theme: Option<Theme>` (`dark`/`light`), so the header's toggle (Task 16) survives a reopen instead of being dropped as an unknown key. |
+| `editor/media_commands.rs` | The preview's media-URL lookup (Task 22, ADR R7). `editor_media_url` *(async — reads `sources.json` (or `project.json` for a product) and stats one file off the main thread)* takes `sessionId` and `ref: { assetId } \| { productId }` (the Rust parameter is `r#ref`; Tauri's macro unraws it, so the IPC key is `ref`) and returns the ABSOLUTE path of a REGISTERED entity only: an asset must be in the live session's graph AND have a `sources.json` record that `project_store::resolve_source` resolves (so a hand-edited escaping `file`, a `Builtin` with no file, or a stale record for an asset the graph no longer holds is `unauthorizedSource`); a product must be in the saved `record.products` with a single-component `filename` under `products\`. A registered entity whose file is gone is `sourceMissing`; a symlink wearing one of our names is refused no-follow. A malformed `ref` (zero or two keys, an unknown key, an invalid id) is `invalidRequest`, parsed by hand rather than through an untagged serde enum so it is an `EditorError`, not Tauri's opaque argument-decode string. **This is not the authorization boundary** — `convertFileSrc` is URL conversion and the asset protocol's enumerated scope (below, pinned by `tray.rs`) is what Tauri enforces on every request; this command exists so the frontend NEVER builds a path. Same NATIVE `require_editor_window` + `authz_guard.rs` discipline as its siblings; it reuses `prefs_commands`' `project_id_for`/`local_data`/`blocking` rather than a fourth copy. |
 | `ffmpeg.rs` | The export's external tool, resolved the way Pandoc is (`external_tool.rs` is the shared layer both consume — `CREATE_NO_WINDOW`, the timeout kill, the bounded drain, the registry-fresh PATH). `detect_ffmpeg` *(async — it spawns `ffmpeg -version` and `ffmpeg -encoders`)*, `set_ffmpeg_path` *(async — an fsync'd config write; the override lands in the app-global `documentImport` section beside `pandocPath`, which is where that section's tool overrides live rather than a statement about document import)*. **Both now have frontend callers** (GAP-144, closed): `FfmpegSettings.vue` in Buddy settings → Integrations, and `src/stores/ffmpeg.ts`, the `pandoc.ts` analogue whose `ensureDetected()` the Record Screen picker consults on mount. The picker shows a **non-blocking NOTICE, deliberately not a gate**: recording and editing work fine without ffmpeg and only the Save needs it, so disabling Start would take away a capture the user can make and edit. A regression test pins that Start stays enabled either way. Both cards consume one `useExternalTool` composable — the frontend mirror of `external_tool.rs` being the tool-agnostic half Pandoc and ffmpeg already share in Rust; a third tool card should reuse it rather than copy a fourth time |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
@@ -1529,21 +1534,35 @@ write here, it belongs in `export_worker/` or it is a design change.
   wrong:
   - **The asset protocol's scope is a security boundary, not a detail.** The
     preview plays the staged `.mp4` through `convertFileSrc(…, "asset")`, and
-    `tauri.conf.json`'s `assetProtocol.scope` is exactly
-    `["$APPLOCALDATA/screen-captures/*"]`. That one line is what stops the
+    `tauri.conf.json`'s `assetProtocol.scope` is exactly ADR R7's ENUMERATED
+    list (tutorial-editor Task 22 widened it from the staging directory
+    alone): `$APPLOCALDATA/screen-captures/*` plus, per editor project,
+    `$APPLOCALDATA/editor-projects/*/{media,takes,products,cache}/*` — four
+    entries, never a glob over the project directory itself. Deliberately
+    absent: a project's `jobs\` (pre-flight ruling F18 — a job's working
+    files are never preview media; Review renders write into `cache\`
+    instead), every project/store JSON file, every vault path and
+    `$APPLOCALDATA/*`. The CSP carries R7's two clauses whole: `img-src 'self'
+    data: asset: http://asset.localhost` and `media-src 'self' asset:
+    http://asset.localhost blob: mediastream:`. That list is what stops the
     editor webview reading arbitrary files off the disk through
-    `asset.localhost`. Widening it to `$APPLOCALDATA/*`, or to a vault path,
-    would be a real escalation — and **a test pins it**:
-    `tray.rs`'s `the_asset_protocol_scope_is_pinned_to_the_staging_directory_alone`
-    parses `tauri.conf.json` and asserts the scope array EXACTLY, plus
-    `enable: true` and the CSP's `media-src` clause, so a widening edit turns
-    `cargo test -p vault-buddy --lib` red rather than shipping. (This file and
-    GAP-137 both claimed the opposite for three commits after that test
-    landed, which is worse than saying nothing: it invited the next agent to
-    widen the scope expecting nothing to stop them.) Nothing on the frontend
-    side can widen it, which is why
+    `asset.localhost`, and **a test pins it**: `tray.rs`'s
+    `the_asset_protocol_scope_is_pinned_to_staging_and_the_editor_project_media_dirs`
+    parses `tauri.conf.json` and asserts the scope array EXACTLY (an equality,
+    so an added entry fails too), `enable: true`, and both CSP directives as
+    whole `;`-separated directives, so a widening edit turns
+    `cargo test -p vault-buddy --lib` red rather than shipping (Task 22's
+    mutation check: widening to `$APPLOCALDATA/*` goes red). (This file and
+    GAP-137 both once claimed no test existed, which is worse than saying
+    nothing: it invited the next agent to widen the scope expecting nothing
+    to stop them.) Nothing on the frontend side can widen it, which is why
     `StagedCaptureDetail.assetPath` carrying a full absolute path is not a
-    leak: the scope is enforced by Tauri on every request regardless.
+    leak: the scope is enforced by Tauri on every request regardless. The new
+    editor's preview never holds a path of its own making — it asks
+    `editor_media_url` for a REGISTERED asset or product by id (IPC table
+    above), while the legacy phase-4 preview keeps its `load_staged_capture`
+    path until Task 59 (pre-flight ruling F3), which is why the staging entry
+    stays in the list.
   - **The preview is NOT authoritative and is NOT gapless.** It is one
     `<video>` element seeking around a single source file, so a cut shows as
     a seek rather than a splice — spec §8.2 accepts that. The exported file
@@ -3306,6 +3325,15 @@ for a reason specific to it — it mirrors no BROADCAST Rust state the way
 opened elsewhere" event to listen for; only the ONE editor window ever opens
 one), so `EditorRoot` drives it directly by calling `openStaged` on every
 drained base rather than subscribing to anything at mount.
+The editor's PREVIEW (Task 22) is the one piece of that window's state that
+is deliberately in NO store: `PreviewSurface.vue` holds its
+`PreviewController` (`src/editor/previewController.ts`) in a plain `let`,
+never in Pinia or a `ref`, because it owns live media elements, an
+`AudioContext` and a rAF loop — a reactive proxy around any of those breaks
+native identity, and a store would rebuild reactive state at frame rate.
+Vue sees only its low-rate reports (`playing`, and a 10 Hz time that drives
+`editorWorkspace.playheadMs`); monitoring mute and rate are
+`editorWorkspace` fields, never editor commands.
 
 **Phase 5 gave the editor FIVE events, and Task 15 split where they are
 registered without changing that count.** `editor:open` (which carries no

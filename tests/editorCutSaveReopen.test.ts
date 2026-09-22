@@ -144,6 +144,7 @@ function cannedPort() {
     hideWindow: () => Promise.reject(new Error("not used")),
     getWorkspace: () => Promise.resolve({}),
     saveWorkspace: () => Promise.resolve(),
+    mediaUrl: () => Promise.reject(new Error("no media in this test")),
   };
   return { port, sent, saves };
 }

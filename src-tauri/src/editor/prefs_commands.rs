@@ -51,7 +51,7 @@ fn internal(message: impl Into<String>) -> EditorError {
 /// Deliberately does NOT touch `EditorSession::execute`/`mark_saved` or any
 /// other revision-bearing path: a workspace read/write only needs to know
 /// WHERE the project's directory is, never what revision it is at.
-fn project_id_for(state: &EditorState, session_id: &str) -> Result<String, EditorError> {
+pub(crate) fn project_id_for(state: &EditorState, session_id: &str) -> Result<String, EditorError> {
     let sessions = require_session(state, session_id)?;
     sessions
         .get(session_id)
@@ -140,13 +140,13 @@ pub(crate) fn save_workspace_in(
         .map_err(|e| internal(format!("Could not save the workspace: {e}")))
 }
 
-fn local_data(app: &AppHandle) -> Result<std::path::PathBuf, EditorError> {
+pub(crate) fn local_data(app: &AppHandle) -> Result<std::path::PathBuf, EditorError> {
     app.path()
         .app_local_data_dir()
         .map_err(|e| internal(format!("Could not resolve the app data directory: {e}")))
 }
 
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, EditorError> + Send + 'static,
 ) -> Result<T, EditorError> {
     tauri::async_runtime::spawn_blocking(f)

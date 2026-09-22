@@ -142,8 +142,18 @@ for (const size of [
     // task's own brief asked it to outgrow. Task 21 retiring the ~150px
     // legacy surface restores comfortable headroom; tighten this back to 1
     // in the same commit that flips the flag.
+    //
+    // Task 22 raised the floor tolerance 20 -> 30, MEASURED: the shell's
+    // preview slot went from a one-line placeholder (15px) to the real
+    // preview surface, whose stage `grow`s into leftover height and so gives
+    // ALL of it up at this size (0px, measured) -- but whose transport row
+    // (22px + a 4px gap) cannot, because play/pause must stay reachable.
+    // Net +11px: 15 -> 26. At every larger size the stage and the legacy
+    // preview split the leftover height and the column fits exactly (0px
+    // overflow at 1280x820 and 1920x1080, measured), so the tolerance there
+    // stays 1. The same retirement that tightens this back to 1 applies.
     const isFloorSize = size.width === 960 && size.height === 640;
-    const tolerance = isFloorSize ? 20 : 1;
+    const tolerance = isFloorSize ? 30 : 1;
     expect(
       overflow,
       `the editor column overflowed by ${overflow}px at ${label}`,

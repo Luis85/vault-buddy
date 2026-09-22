@@ -204,6 +204,16 @@ export function decodeSaveReceipt(value: unknown): SaveReceipt {
   };
 }
 
+/** `editor_media_url`'s reply: the absolute path of a registered asset or
+ * product, handed straight to `convertFileSrc`. Refuses an empty string
+ * rather than letting `convertFileSrc("")` mint a URL that resolves to the
+ * asset root. */
+export function decodeMediaPath(value: unknown): string {
+  const path = asString(value, "mediaPath");
+  if (path.trim() === "") fail("mediaPath must not be empty");
+  return path;
+}
+
 function decodeProjectSummary(value: unknown, index: number): ProjectSummaryDto {
   const v = asObject(value, `projects[${index}]`);
   return {

@@ -118,7 +118,7 @@ pub struct SourceRecord {
 /// platform's `Path` happens to be compiled in — on top of requiring exactly
 /// one `Component::Normal` (which already rules out `/`, `..`, `.` and an
 /// absolute root on every platform `Path` supports).
-fn join_contained(dir: &Path, name: &str) -> Option<PathBuf> {
+pub(crate) fn join_contained(dir: &Path, name: &str) -> Option<PathBuf> {
     if name.contains(':') || name.contains('\\') {
         return None;
     }

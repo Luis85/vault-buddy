@@ -463,15 +463,22 @@ mod tests {
         );
     }
 
-    // The editor webview reads its staged capture through the asset
-    // protocol, and this scope IS the security boundary: `$APPLOCALDATA`
-    // resolves to the app's own local-data dir, so this grants the webview
-    // read access to the staging directory and nothing else. Widening it to
-    // `$APPLOCALDATA/*` (or adding a vault root) would let the editor
-    // webview read arbitrary files via the asset handler -- a change this
-    // test exists to make loud rather than a silent config edit.
+    // The editor webview reads media through the asset protocol, and this
+    // scope IS the security boundary (ADR R7): `$APPLOCALDATA` resolves to
+    // the app's own local-data dir, and the scope is an ENUMERATED list --
+    // the staging directory (the legacy phase-4 preview, and every staged
+    // capture a project adopts by reference) plus exactly four
+    // sub-directories of each tutorial-editor project: `media` (copied
+    // imports), `takes` (webcam takes), `products` (rendered outputs) and
+    // `cache` (review renders). Deliberately NOT `jobs` (pre-flight ruling
+    // F18: a job's working files are never preview media), never
+    // `project.json`/`sources.json`/`workspace.json`, never a vault path and
+    // never `$APPLOCALDATA/*`. `convertFileSrc` is URL conversion, not
+    // authorization -- `editor_media_url` hands out paths, but THIS list is
+    // what Tauri checks on every request. Widening it is a change this test
+    // exists to make loud rather than a silent config edit.
     #[test]
-    fn the_asset_protocol_scope_is_pinned_to_the_staging_directory_alone() {
+    fn the_asset_protocol_scope_is_pinned_to_staging_and_the_editor_project_media_dirs() {
         let conf: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
         let scope = conf["app"]["security"]["assetProtocol"]["scope"]
@@ -483,27 +490,38 @@ mod tests {
             .collect();
         assert_eq!(
             scope,
-            vec!["$APPLOCALDATA/screen-captures/*"],
-            "the asset protocol scope must name the staging directory exactly -- never a \
-             vault path or a wider glob like $APPLOCALDATA/*"
+            vec![
+                "$APPLOCALDATA/screen-captures/*",
+                "$APPLOCALDATA/editor-projects/*/media/*",
+                "$APPLOCALDATA/editor-projects/*/takes/*",
+                "$APPLOCALDATA/editor-projects/*/products/*",
+                "$APPLOCALDATA/editor-projects/*/cache/*",
+            ],
+            "the asset protocol scope must be exactly ADR R7's enumerated list -- never a \
+             vault path, a project's jobs directory, or a wider glob like $APPLOCALDATA/*"
         );
         assert_eq!(
             conf["app"]["security"]["assetProtocol"]["enable"], true,
-            "the asset protocol must be enabled for the editor to read its staged capture"
+            "the asset protocol must be enabled for the editor to read its media"
         );
-        // Spec 5.1 names this CSP clause mandatory for preview playback: without
-        // it, a later edit or merge can silently drop the editor's <video>
-        // element's ability to load the staged capture through the asset
-        // handler, and every gate here stays green -- the failure surfaces
-        // only on a real Windows run of the editor.
+        // R7's CSP clauses, pinned as whole directives: without them a later
+        // edit or merge can silently drop the preview's ability to load
+        // media (video/audio via `media-src`, still images via `img-src`),
+        // and every other gate stays green -- the failure surfaces only on a
+        // real Windows run of the editor.
         let csp = conf["app"]["security"]["csp"]
             .as_str()
             .expect("app.security.csp must be a string");
-        assert!(
-            csp.contains("media-src 'self' asset: http://asset.localhost"),
-            "the CSP must allow media-src from the asset protocol, or the \
-             editor's <video> preview is blocked; csp was: {csp}"
-        );
+        let directives: Vec<&str> = csp.split(';').map(str::trim).collect();
+        for expected in [
+            "img-src 'self' data: asset: http://asset.localhost",
+            "media-src 'self' asset: http://asset.localhost blob: mediastream:",
+        ] {
+            assert!(
+                directives.contains(&expected),
+                "the CSP must carry the directive {expected:?} exactly (ADR R7); csp was: {csp}"
+            );
+        }
     }
 
     #[test]

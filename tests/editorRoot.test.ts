@@ -821,6 +821,7 @@ describe("EditorRoot", () => {
       hideWindow: unimplemented("hideWindow"),
       getWorkspace: unimplemented("getWorkspace"),
       saveWorkspace: unimplemented("saveWorkspace"),
+      mediaUrl: unimplemented("mediaUrl"),
       ...overrides,
     };
   }
