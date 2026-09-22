@@ -33,8 +33,17 @@ import TimelineStrip from "./TimelineStrip.vue";
  * or the root drained an empty stash. The root never clears this back to
  * `null` once it has been set to a real base (an empty re-drain is "nothing
  * NEW", not "close what is showing" — see `EditorRoot.vue`), so this
- * component sees only forward transitions to a real base, or none at all. */
-const props = defineProps<{ stagedBase: string | null }>();
+ * component sees only forward transitions to a real base, or none at all.
+ *
+ * `requestSeq` (fix round 1) is bumped by the root on every successful
+ * drain, INCLUDING a repeat of the same `stagedBase` string. Without it a
+ * re-Edit of the capture already open was a silent no-op: Vue's watch never
+ * fires for a same-value reassignment, so neither a failed
+ * `load_staged_capture` (never retried) nor a stale `done` export bar
+ * (never reset — pinning, this task, keeps a capture staged after a legacy
+ * Save, so re-opening the SAME capture is the ordinary case now) ever
+ * cleared. The watch below fires on either changing. */
+const props = defineProps<{ stagedBase: string | null; requestSeq: number }>();
 
 const detail = shallowRef<StagedCaptureDetail | null>(null);
 const error = shallowRef<string | null>(null);
@@ -234,15 +243,15 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown);
 });
 
-// The root drains the stash and hands over each new base in turn — see this
-// prop's own doc comment for why a re-assignment to the SAME string never
-// fires this watcher (Vue's default equality check on the getter's return
-// value), which is what keeps a duplicate `editor:open` for the capture
-// already open from re-reading its own sidecar out from under an in-flight
-// edit.
+// The root drains the stash and hands over each new base in turn, alongside
+// a `requestSeq` that bumps on EVERY drain (see both props' own doc
+// comments). A multi-source watch fires when either changes — `stagedBase`
+// for the ordinary case (a different capture), `requestSeq` alone for a
+// re-drain of the SAME capture, which is what makes a retried
+// `load_staged_capture` and a reset export bar possible after fix round 1.
 watch(
-  () => props.stagedBase,
-  (base) => {
+  [() => props.stagedBase, () => props.requestSeq],
+  ([base]) => {
     if (base !== null) void load(base);
   },
 );

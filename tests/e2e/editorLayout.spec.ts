@@ -129,6 +129,32 @@ for (const size of [
 }
 
 /**
+ * The floor, checked in the other axis. The loop above measures VERTICAL
+ * overflow (`scrollHeight - clientHeight`) at 960x640 among other sizes; it
+ * says nothing about HORIZONTAL overflow, and 960 is the editor's `minWidth`
+ * (tutorial-editor Task 15) — the narrowest width `main`'s row content (the
+ * verb row, the export bar) is ever asked to fit without wrapping. A
+ * `min-w-[...]` creeping onto any child of that row would widen `main`'s own
+ * scrollable content past its viewport with no VERTICAL symptom at all,
+ * which is exactly why this is its own test rather than a second assertion
+ * folded into the loop above (whose failure message is keyed to `overflow`,
+ * the vertical number, and would otherwise mask a horizontal regression
+ * under a misleading message).
+ */
+test("the editor fits at 960x640 without horizontal scroll", async ({ page }) => {
+  await openEditor(page, { width: 960, height: 640 });
+
+  const overflow = await page.evaluate(() => {
+    const m = document.querySelector("main")!;
+    return m.scrollWidth - m.clientWidth;
+  });
+  expect(
+    overflow,
+    `the editor column overflowed horizontally by ${overflow}px at 960x640`,
+  ).toBeLessThanOrEqual(0);
+});
+
+/**
  * The preview can give up all of its height, so the column can only overflow
  * when the header, strip, verbs and bar ALONE exceed the window. Losing the
  * save THERE would be the same defect in a smaller window, so `main` scrolls.

@@ -38,6 +38,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import LegacyCaptureEditor from "../components/editor/LegacyCaptureEditor.vue";
 import { logWarning } from "../logging";
 import { useEditorProjectStore } from "../stores/editorProject";
+import { formatDuration } from "../utils/formatDuration";
 
 /** Task 21 replaces this component with the real workspace UI and flips this
  * off; until then the legacy phase-4 surface is the only visible editor. Not
@@ -51,18 +52,38 @@ const editorProject = useEditorProjectStore();
  * successful drain — see `LegacyCaptureEditor`'s own `stagedBase` prop doc
  * for why an empty re-drain never resets this back to `null`. */
 const legacyBase = ref<string | null>(null);
-
-/** `mm:ss`, floored — a placeholder rendering, not a component of its own
- * (`EditorShellPlaceholder` is temporary text inside this root's template
- * until Task 21, not a file this task creates). */
-function formatDuration(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
+/**
+ * Fix round 1. `legacyBase` alone cannot tell `LegacyCaptureEditor` "reload"
+ * when a drain hands back the SAME base it is already showing — Vue's watch
+ * never fires for a same-value reassignment, and that silence was two real
+ * bugs: a `load_staged_capture` failure could never be retried by re-Editing
+ * the same capture, and a stale `done` export bar survived a re-open after a
+ * legacy Save (pinning, added by this task, keeps a capture staged rather
+ * than removing it, so re-opening the SAME capture after Save is the
+ * ORDINARY case now, not a corner). Bumped on every successful drain
+ * regardless of whether the base changed; `LegacyCaptureEditor`'s multi-
+ * source watch fires on this alone, and `load()` already flushes any
+ * pending edit first, so reloading the same base is safe.
+ */
+const legacyRequestSeq = ref(0);
 
 const shellDuration = computed(() => formatDuration(editorProject.durationMs));
+/**
+ * Fix round 1: a shell that goes on showing the PREVIOUS capture's identity
+ * while a later open fails is worse than showing nothing — it attributes a
+ * stale title/vault to whatever the legacy surface is now loading. The
+ * store deliberately does NOT blank `snapshot`/`project` on a failed open
+ * (`editorProject.ts`'s own doc: "it never blanks a working session over a
+ * picker mis-click" — a real requirement for a future project picker), so
+ * the guard belongs HERE: only trust the store's state when its own
+ * `sourceBase` still agrees with the base the legacy surface is actually
+ * showing. A failed second open leaves `sourceBase` pointed at whatever
+ * opened last successfully, which is no longer `legacyBase` once the drain
+ * that failed has updated it.
+ */
+const sessionMatchesLegacy = computed(
+  () => editorProject.sourceBase !== null && editorProject.sourceBase === legacyBase.value,
+);
 /** The project's OWN destination vault (A01: resolved by Rust from the
  * staged capture's sidecar, never from any store or UI state) — read
  * straight off the opened project, never from `screenCapture`'s `vaultId`.
@@ -85,6 +106,7 @@ async function openRequested() {
   }
   if (base === null) return;
   legacyBase.value = base;
+  legacyRequestSeq.value += 1;
   // Unconditional alongside the legacy load (this task's own Behavior
   // section): both open a session so the store/pin/recovery invariants are
   // exercised from here on. The store's own same-base guard (Task 15) is
@@ -92,6 +114,16 @@ async function openRequested() {
   // `editor_open_staged` round trip on a re-`editor:open` for the capture
   // already showing.
   await editorProject.openStaged(base);
+  // Fix round 1: a failed open used to be silent — `lastError` was set on
+  // the store and nothing else happened, so the only trace was whatever
+  // `sessionMatchesLegacy` now hides. Logged here, not inside the store,
+  // because the store's own `openWith` doc is explicit that a failure is a
+  // normal, expected outcome for some callers (a picker probing a project
+  // that no longer exists) and must not itself become a warning line for
+  // every one of them — this IS the one caller for which it always is.
+  if (editorProject.lastError) {
+    logWarning(`editor_open_staged failed for ${base}: ${editorProject.lastError.message}`);
+  }
 }
 
 const unlisteners: (() => void)[] = [];
@@ -114,9 +146,12 @@ onBeforeUnmount(() => {
     <!-- A temporary shell around the new session's own truth, until Task 21
          replaces the whole surface below it: title/duration/dirty/vault
          straight off `editorProject`, proving the new open path is really
-         live rather than merely invoked. -->
+         live rather than merely invoked. Gated on `sessionMatchesLegacy`
+         (fix round 1) so a failed open never leaves this attributing a
+         PREVIOUS capture's identity to whatever the legacy surface is now
+         showing. -->
     <section
-      v-if="editorProject.snapshot"
+      v-if="editorProject.snapshot && sessionMatchesLegacy"
       data-testid="editor-shell"
       class="shrink-0 rounded-control border border-white/10 bg-white/5 px-3 py-2 text-micro text-fg-subtle"
     >
@@ -134,10 +169,13 @@ onBeforeUnmount(() => {
          verbs, export bar — or the single "No capture open" line) land as
          DIRECT children of `main` in the DOM, exactly where they sat before
          this task's extraction, so `main`'s flex-column layout contract
-         (AGENTS.md's Testing conventions, the e2e rules) is unchanged. -->
+         (AGENTS.md's Testing conventions, the e2e rules) is unchanged.
+         `request-seq` (fix round 1) is what makes a re-drain of the SAME
+         base reload — see `legacyRequestSeq`'s own doc. -->
     <LegacyCaptureEditor
       v-if="SHOW_LEGACY_EDITOR"
       :staged-base="legacyBase"
+      :request-seq="legacyRequestSeq"
     />
   </main>
 </template>

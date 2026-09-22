@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { type Ref, ref } from "vue";
 
 import { logWarning } from "../logging";
+import { useEditorProjectStore } from "../stores/editorProject";
 import type { ExportFailure, ExportProgress, ExportResult, StagedCaptureDetail } from "../types";
 
 /**
@@ -20,9 +21,16 @@ import type { ExportFailure, ExportProgress, ExportResult, StagedCaptureDetail }
  * Discard, which reports it through `onDiscarded` so the root stays the only
  * writer of its own load state.
  *
- * Still no store: this is the editor's own in-flight progress, not state the
- * app owns anywhere else, so there is nothing to `init()` (AGENTS.md,
- * Frontend state).
+ * Mostly no store: this is the editor's own in-flight progress, not state
+ * the app owns anywhere else, so there is nothing to `init()` (AGENTS.md,
+ * Frontend state) — with ONE exception since fix round 1 (tutorial-editor
+ * Task 15, controller ruling): `onDiscard` reads `editorProject` to close a
+ * live session BEFORE discarding. `EditorRoot.openStaged`-ing a session
+ * alongside every legacy load (Task 15's own Behavior) PINS the staged
+ * capture to a tutorial project, and `discard_staged_capture` refuses
+ * outright while a capture is pinned ("Discard the project first.") — so
+ * without this, legacy Discard was permanently refused for every capture
+ * the editor has ever opened (docs/Gaps.md GAP-171).
  */
 export function useEditorExport(
   detail: Ref<StagedCaptureDetail | null>,
@@ -132,12 +140,37 @@ export function useEditorExport(
 
   /** The bar confirms first; this is the second click. The staged capture is
    * gone afterwards, so the window stops offering it rather than leaving Save
-   * pointed at a sidecar that no longer exists. */
+   * pointed at a sidecar that no longer exists.
+   *
+   * Close-THEN-discard, in that order, and never the reverse (fix round 1,
+   * controller ruling): `discard_staged_capture` refuses a capture pinned to
+   * a tutorial project, and every capture this window opens is pinned the
+   * moment `EditorRoot` opens it (Task 15's own Behavior). `editorProject
+   * .close("discardProject")` unpins AND removes the project — never the
+   * recording itself, see that action's own doc — so the legacy discard that
+   * follows can actually succeed. Only attempted when a session is really
+   * open (`sessionId !== null`): a session whose OWN open failed pinned
+   * nothing, and calling `close()` on nothing is a documented no-op that
+   * would otherwise risk reading a stale `lastError` left over from an
+   * unrelated earlier failure. `close()` itself never throws — it reports a
+   * failure through `lastError` instead (its own doc) — so a refused close
+   * (e.g. the project is still open elsewhere) is read from there and stops
+   * this function before the staged capture — the only copy of the
+   * recording — is touched at all. */
   async function onDiscard() {
     const base = detail.value?.base;
     if (base === undefined) return;
     discardBusy.value = true;
     try {
+      const editorProject = useEditorProjectStore();
+      if (editorProject.sessionId !== null) {
+        await editorProject.close("discardProject");
+        if (editorProject.lastError) {
+          exportPhase.value = "failed";
+          exportMessage.value = editorProject.lastError.message;
+          return;
+        }
+      }
       await invoke("discard_staged_capture", { base });
       onDiscarded();
       resetExport();

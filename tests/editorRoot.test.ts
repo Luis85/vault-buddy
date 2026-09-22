@@ -39,6 +39,7 @@ vi.mock("../src/logging", () => ({
 }));
 
 import type { EditorPort } from "../src/editor/port";
+import { EditorPortError } from "../src/editor/port";
 import type { EditorOpenResult, EditorSnapshot, Project } from "../src/editorTypes";
 import { logWarning } from "../src/logging";
 import EditorRoot from "../src/roots/EditorRoot.vue";
@@ -821,6 +822,28 @@ describe("EditorRoot", () => {
     };
   }
 
+  // Fix round 1: the shell's duration must use the shared
+  // `src/utils/formatDuration.ts` (h:mm:ss, negative-clamped), not a local
+  // mm:ss-only copy that overflows past an hour — 2h read "120:00" instead
+  // of "2:00:00" before this fix.
+  it("renders the shell's duration past an hour as h:mm:ss, not overflowed mm:ss", async () => {
+    const store = useEditorProjectStore();
+    store.setPort(
+      fakeEditorPort({
+        openStaged: (base) =>
+          Promise.resolve(
+            openResultFixture({
+              sourceBase: base,
+              snapshot: snapshotFixture({ durationMs: 7_200_000 }), // 2h
+            }),
+          ),
+      }),
+    );
+    const w = await open();
+
+    expect(w.get('[data-testid="editor-shell-duration"]').text()).toBe("2:00:00");
+  });
+
   // Opens the stashed base through the store's own `openStaged` — which is
   // the ONE seam that calls `editor_open_staged` (`src/editor/port.ts`'s own
   // module doc). `open()` still drives `take_editor_request`/
@@ -873,6 +896,194 @@ describe("EditorRoot", () => {
     // this test names — see `editorProjectStore.test.ts` for the guard's
     // own isolated pin.
     expect(calls).toEqual(["cap one"]);
+    expect(w.text()).toContain("Screen 1");
+  });
+
+  // ---- Fix round 1: the LEGACY surface must reload on every drain, even a
+  // repeated base (a request nonce alongside `stagedBase`), or a failed load
+  // can never be retried and a stale export-bar state can never clear. ----
+
+  // Reopening the SAME base after a `load_staged_capture` failure must
+  // retry the load, not sit on the stale error forever — Rust can
+  // legitimately re-stash the same base (a re-Edit click on the capture
+  // whose load just failed) and the fix is exactly what `load()` already
+  // guarantees: it flushes pending edits first, so retrying is safe.
+  it("retries after a load_staged_capture failure when the same base is re-opened", async () => {
+    let loadCalls = 0;
+    mockIPC((cmd) => {
+      if (cmd === "take_editor_request") return "cap one";
+      if (cmd === "load_staged_capture") {
+        loadCalls += 1;
+        if (loadCalls === 1) throw new Error("That capture's video file is missing.");
+        return DETAIL;
+      }
+      return undefined;
+    });
+    const w = mount(EditorRoot);
+    await flushPromises();
+    expect(w.get('[data-testid="editor-error"]').text()).toContain("video file is missing");
+
+    listeners["editor:open"]();
+    await flushPromises();
+
+    expect(loadCalls).toBe(2);
+    expect(w.find('[data-testid="editor-error"]').exists()).toBe(false);
+    expect(w.text()).toContain("Screen 1");
+  });
+
+  // A legacy Save no longer removes the staged capture once the editor has
+  // pinned it (the store opens a session alongside every legacy load, this
+  // task on) — `export_worker` keeps a pinned capture staged, so re-opening
+  // the SAME capture after a successful Save is the ordinary case, not a
+  // corner. The export bar must not go on claiming "done" for a capture the
+  // user can still act on.
+  it("resets a stale done export bar when the same capture is re-opened after a legacy Save", async () => {
+    const w = await open(undefined, ["cap one", "cap one"]);
+    emit("screen:exported", {
+      base: "cap one",
+      videoPath: "C:\\vault\\cap one.mp4",
+      notePath: null,
+      vaultId: "vault-7",
+      warning: null,
+    });
+    await flushPromises();
+    expect(w.find('[data-testid="export-open"]').exists()).toBe(true);
+    expect(w.find('[data-testid="export-save"]').exists()).toBe(false);
+
+    listeners["editor:open"]();
+    await flushPromises();
+
+    expect(w.find('[data-testid="export-open"]').exists()).toBe(false);
+    expect(w.find('[data-testid="export-message"]').exists()).toBe(false);
+    expect(w.get('[data-testid="export-save"]').attributes("disabled")).toBeUndefined();
+  });
+
+  // ---- Fix round 1: a failed session open must not leave the shell
+  // showing the PREVIOUS capture's identity under the new one. ----
+
+  it("hides the shell rather than showing a stale capture's title or vault when a later open fails", async () => {
+    const store = useEditorProjectStore();
+    let openCalls = 0;
+    store.setPort(
+      fakeEditorPort({
+        openStaged: (base) => {
+          openCalls += 1;
+          if (openCalls === 1) {
+            return Promise.resolve(
+              openResultFixture({
+                sourceBase: base,
+                snapshot: snapshotFixture({ title: "Capture A" }),
+                project: projectFixture({ destination: { vault: "vault-a", folder: "", dated: false } }),
+              }),
+            );
+          }
+          return Promise.reject(
+            new EditorPortError({
+              code: "sourceMissing",
+              message: "That capture's video file is missing.",
+              retryable: false,
+              operationId: "op-1",
+            }),
+          );
+        },
+      }),
+    );
+    const w = await open(undefined, ["cap one", "cap two"], {
+      "cap one": DETAIL,
+      "cap two": { ...DETAIL, base: "cap two", sourceTitle: "Firefox" },
+    });
+    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("Capture A");
+    expect(w.get('[data-testid="editor-shell-vault"]').text()).toBe("vault-a");
+
+    listeners["editor:open"]();
+    await flushPromises();
+
+    // The legacy surface still shows "cap two" (its own load succeeded),
+    // but the shell around it must not go on attributing capture A's title
+    // and vault to whatever is now open — the new session's own open FAILED.
+    expect(w.find('[data-testid="editor-shell"]').exists()).toBe(false);
+    expect(w.text()).not.toContain("Capture A");
+    expect(w.text()).not.toContain("vault-a");
+    expect(vi.mocked(logWarning)).toHaveBeenCalledWith(
+      expect.stringContaining("editor_open_staged"),
+    );
+  });
+
+  // ---- Fix round 1, controller ruling: opening a staged capture in the
+  // editor now PINS it to a tutorial project (every legacy load opens a
+  // session alongside it, this task on), and `discard_staged_capture`
+  // refuses outright while a capture is pinned ("Discard the project
+  // first."). Legacy Discard must close-then-discard, in that order, or it
+  // is permanently refused for every capture the editor has ever opened. ----
+
+  it("closes the live session (discardProject) before discarding a pinned staged capture", async () => {
+    const order: string[] = [];
+    const store = useEditorProjectStore();
+    store.setPort(
+      fakeEditorPort({
+        openStaged: (base) => Promise.resolve(openResultFixture({ sourceBase: base })),
+        closeSession: (_sessionId, disposition) => {
+          order.push(`close:${disposition}`);
+          return Promise.resolve();
+        },
+      }),
+    );
+    const w = await open();
+    // Sanity: the session really opened, or this test would prove nothing
+    // about ordering (a null `sessionId` before Discard is a different bug).
+    expect(store.sessionId).toBe("ses-a");
+
+    mockIPC((cmd) => {
+      if (cmd === "discard_staged_capture") {
+        order.push("discard");
+        return undefined;
+      }
+      return undefined;
+    });
+    await w.get('[data-testid="export-discard"]').trigger("click");
+    await w.get('[data-testid="export-discard"]').trigger("click");
+    await flushPromises();
+
+    expect(order).toEqual(["close:discardProject", "discard"]);
+    expect(w.text()).toContain("No capture open");
+  });
+
+  it("surfaces the close failure and never discards when closing the session fails", async () => {
+    const store = useEditorProjectStore();
+    const discardCalls: string[] = [];
+    store.setPort(
+      fakeEditorPort({
+        openStaged: (base) => Promise.resolve(openResultFixture({ sourceBase: base })),
+        closeSession: () =>
+          Promise.reject(
+            new EditorPortError({
+              code: "internal",
+              message: "This capture is still open in a tutorial project.",
+              retryable: false,
+              operationId: "op-1",
+            }),
+          ),
+      }),
+    );
+    const w = await open();
+    expect(store.sessionId).toBe("ses-a");
+
+    mockIPC((cmd) => {
+      if (cmd === "discard_staged_capture") {
+        discardCalls.push(cmd);
+        return undefined;
+      }
+      return undefined;
+    });
+    await w.get('[data-testid="export-discard"]').trigger("click");
+    await w.get('[data-testid="export-discard"]').trigger("click");
+    await flushPromises();
+
+    expect(discardCalls).toHaveLength(0);
+    expect(w.get('[data-testid="export-message"]').text()).toContain(
+      "This capture is still open in a tutorial project.",
+    );
+    // The capture is still showing: a refused close must not have blanked it.
     expect(w.text()).toContain("Screen 1");
   });
 });

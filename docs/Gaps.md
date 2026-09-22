@@ -5207,3 +5207,46 @@ empty *Result* column, not a failure). A passing manual check on both is
 the only thing that closes this gap fully and lets the severity drop back
 down; everything above proves the DATA is right, never that the running
 app WIRES it up as documented.
+
+### GAP-171 · Low (by design, until Task 59) · A capture opened in the editor stays staged after a legacy Save, because opening it now pins it to a tutorial project
+Tutorial-editor Task 15 made `EditorRoot` open a Rust editor session
+(`editor_open_staged`) alongside EVERY legacy `load_staged_capture` call,
+unconditionally, for every staged capture the panel's Edit button or the
+Record Screen picker's staged-capture list ever opens. Opening a session
+PINS the staged capture to that session's tutorial project
+(`editorProjectId` in the capture's sidecar — see AGENTS.md's "Tutorial
+editor projects" row and `editor_open_staged`'s own module doc), and the
+ninth-vault-write export path (`export_worker::commit_into_vault`,
+AGENTS.md's screen-capture section) deliberately does NOT delete a PINNED
+staged capture after a successful Save — "the project edits that `.mp4` by
+reference". So as of this task: press Save in the legacy editor on a
+capture that was opened this way, and the export lands in the vault exactly
+as before, but the STAGED copy stays in
+`%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures\` — pinned, not
+orphaned, but visibly still there in `StagedCaptureList` and still offering
+Edit — until the user (or fix round 1's Discard, which now closes the
+project first) removes it, or Task 59 deletes `LegacyCaptureEditor.vue` and
+the `load_staged_capture`/legacy-Save path along with it.
+
+This is filed Low and "by design" rather than a defect to fix now, for two
+reasons. First, nothing is lost or duplicated: the exported vault file is
+correct, and the staged copy is exactly what pinning is FOR — a project
+that references it must not have its source vanish out from under it.
+Second, fixing the visible symptom (a capture that looks "done" but is
+still staged) properly means either (a) not pinning captures the legacy
+surface opens, which would resurrect fix round 1's discard-permanently-
+refused bug the moment pinning is skipped for any path, or (b) auto-
+discarding a pinned capture's staging copy specifically on a SUCCESSFUL
+legacy Save when nothing else references its project — a real design
+question (does an empty, freshly-created tutorial project get torn down
+silently the moment its only consumer is the legacy exporter?) that belongs
+to Task 21's workspace UI decisions, not a one-line patch under this task's
+own fix round.
+
+**What DOES need to hold in the meantime, and does, as of fix round 1**:
+Discard must still work on a capture opened this way — see the
+close-then-discard ordering fix in `useEditorExport.onDiscard`
+(`src/composables/useEditorExport.ts`) — so a user who does not want the
+leftover staged copy always has a working way to remove it. The residual
+this gap tracks is purely "a Save alone does not clean it up," never "the
+user has no way to clean it up."
