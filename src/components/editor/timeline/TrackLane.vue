@@ -16,7 +16,7 @@
  */
 import { computed } from "vue";
 
-import { msToX, TRACK_LABEL_WIDTH_PX } from "../../../editor/timelineLayout";
+import { LANE_HEIGHT_PX, msToX, TRACK_LABEL_WIDTH_PX } from "../../../editor/timelineLayout";
 import { clipOutputEnd } from "../../../editor/timeMap";
 import type { Asset, Clip, ClipSpan, Track } from "../../../editorTypes";
 import ClipItem from "./ClipItem.vue";
@@ -28,12 +28,16 @@ const props = defineProps<{
   selectedClipIds: string[];
   zoom: number;
   widthPx: number;
+  /** This lane's own index in the visual (top-to-bottom) track order, and
+   * that same order's ids — Task 21's `useTimelineDrag` cross-track
+   * drop-target hit-test, threaded straight through to each `ClipItem`
+   * without this component needing to know why. */
+  trackIndex: number;
+  trackOrder: string[];
 }>();
 const emit = defineEmits<{
   (e: "context-menu", payload: { clip: Clip; clientX: number; clientY: number }): void;
 }>();
-
-const LANE_HEIGHT_PX = 56;
 
 function spanOf(c: Clip): ClipSpan {
   return { start_ms: c.start_ms, in_ms: c.in_ms, out_ms: c.out_ms, speed: c.speed ?? 1 };
@@ -88,6 +92,9 @@ function widthOf(clip: Clip): number {
         :selected="selectedClipIds.includes(clip.id)"
         :left-px="leftOf(clip)"
         :width-px="widthOf(clip)"
+        :zoom="zoom"
+        :track-index="trackIndex"
+        :track-order="trackOrder"
         @context-menu="emit('context-menu', $event)"
       />
     </div>

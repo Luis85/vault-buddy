@@ -96,7 +96,7 @@ here is deliberately only the shipped increments.
 | [docs/superpowers/specs/](docs/superpowers/specs/) | Dated design specs — the *why* behind each increment's shape |
 | [docs/superpowers/plans/](docs/superpowers/plans/) | Dated implementation plans that executed those specs |
 | [docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md](docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md) | The screen-capture feature's manual Windows checklist — a RUNNING document across phases, not one phase's gate. It carries **57 rows** today — 1–55 plus 27a and 27b — of which **23** carry a result; the count is measured on the tree, not incremented (it has been wrong before from incrementing, which is why the one-liner to re-measure it lives in the file's own header). An empty Result column means unrun, which is not the same as failed. **The deferral is LIFTED**: the user began running it on 2026-09-21, batch by batch. Rows 1–13, 16, 17, 29 and 37–43 carry results (11 and 12 are DEFERRED by the author's decision to after the remaining Phase 3 work, not passed; 16, 17 and 43 passed on the GAP-166 fix build and re-run on the next installer); 14, 15, 18–28, 30–36, 44–52 **and 53–55** are still unrun — 34 rows. **Rows 44–52 are the region-capture indicator's own verification** (GAP-165), added when it landed and not run since: row 44 is the GATE, re-testing GAP-166's exact symptom against the SIXTH excluded window, and a failure there costs the indicator its capture exclusion and the feature with it. Row 49 is expected BLOCKED on the single-monitor verification machine, like row 13. **Rows 41–43 were added BY that pass**, each for something it found: GAP-164 (fixed), GAP-165 (an approved design never implemented) and GAP-166 (Vault Buddy breaking File Explorer's toolbar, unlocalised). Row 13 is BLOCKED — the verification machine has one monitor, so the mixed-DPI case its own module doc calls most likely to fail cannot be reached at all. **Rows 53–55** were added by the gap close-out: 53 records a window titled `CON` (the only thing that can test GAP-108's close-out against the Win32 name resolver rather than against reasoning), and 54–55 collect the evidence GAP-122's first-frame rework needs before anyone attempts it — the declared-vs-delivered sizes across window styles, and a window resized mid-capture, which is the one case where the prediction is known to go stale |
-| [docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md](docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md) | The tutorial-editor increment's manual Windows checklist — created by Task 15, a RUNNING document across that increment's own tasks (the screen-capture checklist's own precedent). Carries **5 rows** today (T1–T5), **0** with a result: T1–T3 verify Task 15's own `editor_open_staged` open paths (from the capture bar, from the staged list, and that a second open of the same capture reuses the session); T4–T5 close GAP-170 (the app-wide IPC ACL exhaustiveness gap Task 11 opened) — re-measure with the file's own one-liner, never increment |
+| [docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md](docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md) | The tutorial-editor increment's manual Windows checklist — created by Task 15, a RUNNING document across that increment's own tasks (the screen-capture checklist's own precedent). Carries **7 rows** today (T1–T7), **0** with a result: T1–T3 verify Task 15's own `editor_open_staged` open paths (from the capture bar, from the staged list, and that a second open of the same capture reuses the session); T4–T5 close GAP-170 (the app-wide IPC ACL exhaustiveness gap Task 11 opened); T6–T7 are Task 21's timeline interactions in real WebView2 (pointer-captured drag/trim/Escape, and the shell's shortcut dispatcher not double-handling the legacy strip's Ctrl+Z) — re-measure with the file's own one-liner, never increment |
 | [docs/Gaps.md](docs/Gaps.md) | The audited backlog of known issues, weaknesses, tech debt, and untested paths — check it before "discovering" a known problem, extend it when you find a new one |
 
 ## Repository map
@@ -126,7 +126,9 @@ vault-buddy/
 │   │                           #   tasks helpers, useEditorTimeline (undo/redo + persist-on-edit),
 │   │                           #   useEditorSelection (the selection/playhead remap),
 │   │                           #   useEditorExport (the editor's export lifecycle + its four
-│   │                           #   screen:export* listeners), useTaskDetailSubtasks
+│   │                           #   screen:export* listeners), useTaskDetailSubtasks,
+│   │                           #   useTimelineDrag (the tutorial timeline's drag/trim/
+│   │                           #   nudge math), useInspectorDraft (inspector field drafts)
 │   ├── types.ts                # the wire types; re-exports screenTypes.ts, which holds
 │   │                           #   the screen-capture domain's (split at the 500 cap)
 │   └── utils/                  # highlight, recentSearches, formatDuration, timelineGeometry,
@@ -3284,6 +3286,15 @@ editor fills its own window, so there is no narrower focus target), still
 removed on unmount (a surviving `window` listener would go on editing AND
 persisting a timeline nobody can see), still gated on the event's target so
 the first `<input>` this window grows keeps its own native text undo.
+The tutorial editor's OWN shortcuts (Task 21) are deliberately NOT a second
+`window` listener: `EditorShell.vue` binds one `@keydown` on its root, routes
+it through `shortcuts.ts`' `shouldHandle` (text fields, and anything inside an
+open `role="menu"`/`role="dialog"`, are left alone) and the shared action
+registry, and `stopPropagation()`s only a keystroke it actually acted on — so
+a claimed Ctrl+Z never reaches the legacy surface's `window` listener, while
+a disabled or nothing-to-send combo (Ctrl+S, F1, F6) bubbles on untouched.
+Its clipboard (`src/editor/clipboard.ts`) is window-local, in-memory state,
+never sent to Rust and never persisted.
 **`RegionRoot` and `RegionIndicatorRoot` install no store** — the two roots
 that mirror no Rust state and need no per-window `init()` wiring; the
 indicator mirrors ONE boolean (paused or not) from four app-wide `screen:*`

@@ -134,8 +134,14 @@ function primaryTargetClip(ctx: ActionContext): Clip | null {
  * acts on: the pointer's clip alone UNLESS it is already part of the
  * current selection, in which case the whole selection moves together
  * (the common "right-click inside your selection acts on the selection"
- * rule) — otherwise the current selection. */
-function targetClipIds(ctx: ActionContext): string[] {
+ * rule) — otherwise the current selection.
+ *
+ * Exported (Task 21): `../clipboard.ts`'s `activateEditorAction` needs the
+ * exact same "which clips does Copy/Cut act on" answer `resolveClipMutation`/
+ * `buildCut` already use here, so a keyboard- or menu-triggered Copy can
+ * never select a different set of clips than the Cut/Delete that follows
+ * the identical gesture. */
+export function targetClipIds(ctx: ActionContext): string[] {
   const t = ctx.pointerTarget;
   if (t?.kind === "clip" && t.id) {
     return ctx.selectedClipIds.includes(t.id) ? ctx.selectedClipIds : [t.id];

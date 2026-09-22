@@ -45,6 +45,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
+import ClipSection from "../components/editor/inspector/ClipSection.vue";
 import InspectorPanel from "../components/editor/inspector/InspectorPanel.vue";
 import LegacyCaptureEditor from "../components/editor/LegacyCaptureEditor.vue";
 import EditorShell from "../components/editor/shell/EditorShell.vue";
@@ -194,9 +195,20 @@ onBeforeUnmount(() => {
       <!-- Task 19: the inspector shell (six category tabs + the shared
            draft composable later sections build on) fills the shell's
            `inspector` slot from here, the same seam `PreviewToolbar`
-           filled in Task 17. -->
+           filled in Task 17. Task 21 fills its FIRST real category slot,
+           `#clip`, with `ClipSection` — keyed on the SELECTION only (a
+           different clip is a different set of drafts); an undo/drag/nudge
+           on the same clip reaches its drafts live, without a remount
+           (`ClipSection.vue`'s own module doc). -->
       <template #inspector>
-        <InspectorPanel />
+        <InspectorPanel>
+          <template #clip="{ clipIds }">
+            <ClipSection
+              :key="clipIds.join(',')"
+              :clip-ids="clipIds"
+            />
+          </template>
+        </InspectorPanel>
       </template>
       <!-- Task 20: the virtualized multi-track timeline fills the shell's
            `timeline` slot, the same seam `PreviewToolbar`/`InspectorPanel`

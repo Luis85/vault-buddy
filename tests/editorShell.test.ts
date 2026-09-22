@@ -229,6 +229,165 @@ describe("EditorShell — PreviewToolbar's focus-preview (Task 17)", () => {
   });
 });
 
+describe("EditorShell — keyboard shortcut dispatcher (Task 21)", () => {
+  it("Ctrl+Z sends undo through the SAME registry the toolbar/menu read", async () => {
+    const store = useEditorProjectStore();
+    const executed: unknown[] = [];
+    store.setPort(
+      fakePort({
+        openStaged: () =>
+          Promise.resolve(openResult({ snapshot: snapshot({ canUndo: true, undoLabel: "Split clip" }) })),
+        execute: (req) => {
+          executed.push(req.command);
+          return Promise.resolve({ snapshot: snapshot({ revision: 2 }), project: project() });
+        },
+      }),
+    );
+    await store.openStaged("cap one");
+    const w = mount(EditorShell, { attachTo: document.body });
+
+    await w.get('[data-testid="editor-shell"]').trigger("keydown", { key: "z", ctrlKey: true });
+    await flushPromises();
+
+    expect(executed).toEqual([{ kind: "undo" }]);
+  });
+
+  it("a disabled shortcut (nothing to undo) sends nothing", async () => {
+    const store = useEditorProjectStore();
+    const executed: unknown[] = [];
+    store.setPort(
+      fakePort({
+        openStaged: () => Promise.resolve(openResult({ snapshot: snapshot({ canUndo: false }) })),
+        execute: (req) => {
+          executed.push(req.command);
+          return Promise.resolve({ snapshot: snapshot({ revision: 2 }), project: project() });
+        },
+      }),
+    );
+    await store.openStaged("cap one");
+    const w = mount(EditorShell, { attachTo: document.body });
+
+    await w.get('[data-testid="editor-shell"]').trigger("keydown", { key: "z", ctrlKey: true });
+    await flushPromises();
+
+    expect(executed).toEqual([]);
+  });
+
+  it("a shortcut typed into a text field is ignored (shouldHandle's input gate)", async () => {
+    const store = useEditorProjectStore();
+    const executed: unknown[] = [];
+    store.setPort(
+      fakePort({
+        openStaged: () => Promise.resolve(openResult({ snapshot: snapshot({ title: "Old", canUndo: true }) })),
+        execute: (req) => {
+          executed.push(req.command);
+          return Promise.resolve({ snapshot: snapshot({ revision: 2 }), project: project() });
+        },
+      }),
+    );
+    await store.openStaged("cap one");
+    const w = mount(EditorShell, { attachTo: document.body });
+
+    await w.get('[data-testid="editor-shell-title"]').trigger("click");
+    const input = w.get('[data-testid="editor-header-title-input"]');
+    await input.trigger("keydown", { key: "z", ctrlKey: true });
+    await flushPromises();
+
+    expect(executed).toEqual([]);
+  });
+});
+
+describe("EditorShell — dispatcher ownership (Task 21)", () => {
+  function undoablePort(executed: unknown[]) {
+    return fakePort({
+      openStaged: () => Promise.resolve(openResult({ snapshot: snapshot({ canUndo: true, undoLabel: "Move" }) })),
+      execute: (req) => {
+        executed.push(req.command);
+        return Promise.resolve({ snapshot: snapshot({ revision: 2 }), project: project() });
+      },
+    });
+  }
+  function keydown(target: Element, init: KeyboardEventInit): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+    target.dispatchEvent(event);
+    return event;
+  }
+
+  // The legacy capture editor (still mounted beside this shell) binds its
+  // own Ctrl+Z on `window`. A keystroke this dispatcher CLAIMS must never
+  // also reach that listener -- two undo stacks stepping on one keypress.
+  it("a claimed shortcut never reaches a window-level listener (the legacy editor's)", async () => {
+    const store = useEditorProjectStore();
+    const executed: unknown[] = [];
+    store.setPort(undoablePort(executed));
+    await store.openStaged("cap one");
+    const w = mount(EditorShell, { attachTo: document.body });
+    const legacy: string[] = [];
+    const onWindowKeydown = (e: KeyboardEvent) => legacy.push(e.key);
+    window.addEventListener("keydown", onWindowKeydown);
+    try {
+      const event = keydown(w.get('[data-testid="editor-shell"]').element, { key: "z", ctrlKey: true });
+      await flushPromises();
+
+      expect(executed).toEqual([{ kind: "undo" }]);
+      expect(event.defaultPrevented).toBe(true);
+      expect(legacy).toEqual([]);
+    } finally {
+      window.removeEventListener("keydown", onWindowKeydown);
+    }
+  });
+
+  // The other half of the same rule: an action this dispatcher cannot
+  // perform (save/help/focus-preview have no wire command here) must NOT be
+  // claimed -- preventDefault + stopPropagation with nothing done would
+  // swallow Ctrl+S / F1 / F6 silently (R20: no control that silently
+  // succeeds).
+  it("an enabled action with nothing to send (Ctrl+S) is left to bubble, not swallowed", async () => {
+    const store = useEditorProjectStore();
+    const executed: unknown[] = [];
+    store.setPort(undoablePort(executed));
+    await store.openStaged("cap one");
+    const w = mount(EditorShell, { attachTo: document.body });
+    const reached: string[] = [];
+    const onWindowKeydown = (e: KeyboardEvent) => reached.push(e.key);
+    window.addEventListener("keydown", onWindowKeydown);
+    try {
+      const event = keydown(w.get('[data-testid="editor-shell"]').element, { key: "s", ctrlKey: true });
+      await flushPromises();
+
+      expect(executed).toEqual([]);
+      expect(event.defaultPrevented).toBe(false);
+      expect(reached).toEqual(["s"]);
+    } finally {
+      window.removeEventListener("keydown", onWindowKeydown);
+    }
+  });
+
+  // `shouldHandle`'s `menuOwnsKeys`: an open menu or dialog inside the shell
+  // owns the keyboard. Pressing Delete or Ctrl+Z while a context menu has
+  // focus must not act on the timeline selection behind it.
+  it("a shortcut pressed inside an open menu or dialog is left to it", async () => {
+    const store = useEditorProjectStore();
+    const executed: unknown[] = [];
+    store.setPort(undoablePort(executed));
+    await store.openStaged("cap one");
+    const w = mount(EditorShell, {
+      attachTo: document.body,
+      slots: {
+        timeline:
+          '<div role="menu"><button data-testid="in-menu">Split</button></div>' +
+          '<div role="dialog"><button data-testid="in-dialog">OK</button></div>',
+      },
+    });
+
+    keydown(w.get('[data-testid="in-menu"]').element, { key: "z", ctrlKey: true });
+    keydown(w.get('[data-testid="in-dialog"]').element, { key: "z", ctrlKey: true });
+    await flushPromises();
+
+    expect(executed).toEqual([]);
+  });
+});
+
 describe("EditorHeader — inline rename", () => {
   it("renames through the rename command on Enter, and leaves the title untouched on Escape", async () => {
     const store = useEditorProjectStore();

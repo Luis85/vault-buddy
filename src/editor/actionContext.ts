@@ -19,14 +19,15 @@
  * real target, and building that from scratch a third time is the drift this
  * function exists to prevent.
  *
- * Clipboard wiring (`hasClipboard`/`clipboardFragment`) is NOT part of this
- * task — `fragment.ts`'s `buildFragment` exists but nothing here calls it,
- * so both fields stay the same honest "nothing to paste yet" default every
- * caller already used before real selection/playhead existed. A later task
- * that wires the clipboard replaces these two literals, not the callers.
+ * Clipboard wiring (`hasClipboard`/`clipboardFragment`): Task 21 (`./clipboard.ts`)
+ * is the "later task" this doc used to point at — both fields now read the
+ * real window-local clipboard ref instead of the honest "nothing to paste
+ * yet" literals every caller used before it existed, and every existing
+ * caller needed no change at all to pick that up.
  */
 import type { EditorSnapshot, Project } from "../editorTypes";
 import type { ActionContext, PointerTarget } from "./actions";
+import { clipboardFragment } from "./clipboard";
 
 export function baseActionContext(
   project: Project | null,
@@ -41,7 +42,7 @@ export function baseActionContext(
     playheadMs,
     selectedClipIds,
     pointerTarget,
-    hasClipboard: false,
-    clipboardFragment: null,
+    hasClipboard: clipboardFragment.value !== null,
+    clipboardFragment: clipboardFragment.value,
   };
 }

@@ -6,6 +6,7 @@
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { nextTick, ref } from "vue";
 
 import InspectorPanel from "../src/components/editor/inspector/InspectorPanel.vue";
 import { numberField, useInspectorDraft } from "../src/composables/useInspectorDraft";
@@ -160,6 +161,54 @@ describe("useInspectorDraft", () => {
     expect(d.error.value).toBe("Speed must be between 0.25× and 4×");
     expect(d.draft.value).toBe("9"); // the invalid text stays exactly as typed
     expect(commits).toEqual([]); // no command sent
+  });
+
+  // Task 19's carried finding, closed with the composable's first consumer
+  // (Task 21's ClipSection): the draft used to be read ONCE at setup, so an
+  // edit landing from elsewhere (an Undo, a timeline drag or nudge on the
+  // same clip) left the field showing a value the projection had already
+  // moved on from -- and a later blur-submit would send that stale number
+  // back as if the user had typed it.
+  it("follows an external change to the committed value while it is not being edited", async () => {
+    const committed = ref(1);
+    const commits: number[] = [];
+    const d = useInspectorDraft(speedField(() => committed.value), (v) => commits.push(v));
+
+    committed.value = 2.5; // e.g. an Undo elsewhere
+    await nextTick();
+
+    expect(d.draft.value).toBe("2.5");
+    d.submit(); // a blur now has nothing new to send
+    expect(commits).toEqual([]);
+  });
+
+  it("keeps an in-progress edit when the committed value changes underneath it", async () => {
+    const committed = ref(1);
+    const commits: number[] = [];
+    const d = useInspectorDraft(speedField(() => committed.value), (v) => commits.push(v));
+
+    d.draft.value = "3"; // the user is mid-edit
+    committed.value = 2.5;
+    await nextTick();
+
+    expect(d.draft.value).toBe("3"); // their keystrokes are not clobbered
+    d.submit();
+    expect(commits).toEqual([3]);
+  });
+
+  it("an integer field refuses a fractional value inline", () => {
+    const commits: number[] = [];
+    const d = useInspectorDraft(
+      numberField({ value: () => 0, label: "Start", min: 0, max: 10_000, rangeLabel: "0 and 10000 ms", integer: true }),
+      (v) => commits.push(v),
+    );
+
+    d.draft.value = "12.5";
+    d.submit();
+
+    expect(d.error.value).toBe("Start must be a whole number.");
+    expect(d.draft.value).toBe("12.5");
+    expect(commits).toEqual([]);
   });
 
   it("a non-numeric draft is refused before the range check", () => {

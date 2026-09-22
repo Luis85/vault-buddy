@@ -175,6 +175,17 @@ describe("snap", () => {
     // A huge threshold puts both within range; 1010 is nearer to 1006.
     expect(snap(1006, wideTargets, 100_000, 1)).toBe(1010);
   });
+
+  // Task 20's carried finding, landing with snap's first consumer (Task
+  // 21's drag/trim): a degenerate zoom makes `pxPerMs` 0, so the pixel
+  // threshold converted to ms is `Infinity` and EVERY target was "within
+  // threshold" -- a drag at zoom 0 would teleport onto the nearest target
+  // however far away it was. The siblings (`xToMs`) already read a
+  // non-positive zoom as degenerate; snap now does too.
+  it("a non-positive zoom snaps to nothing rather than to an infinitely-wide threshold", () => {
+    expect(snap(2500, targets, 8, 0)).toBe(2500);
+    expect(snap(2500, targets, 8, -1)).toBe(2500);
+  });
 });
 
 describe("visibleClips (virtualization)", () => {

@@ -29,9 +29,33 @@
  * evaluate a media query against (AGENTS.md's Testing conventions) — the
  * REAL, pixel-measured version of this rule is `tests/e2e/editorShell.
  * spec.ts`, driving the production bundle in real Chromium.
+ *
+ * **The keyboard shortcut dispatcher (Task 21)** lives here — the carried
+ * Task 17 finding ("there are no clip elements to focus until the timeline
+ * … CARRY the wiring to Task 20/21") lands on THIS root element rather than
+ * `window`, and deliberately so: `LegacyCaptureEditor.vue` (still mounted
+ * alongside this shell — `SHOW_LEGACY_EDITOR`, `EditorRoot.vue`) binds its
+ * OWN Ctrl+Z/Shift+Z/Y listener on `window` unconditionally, so a second
+ * `window`-level listener here would double-fire on every undo/redo
+ * keystroke while both surfaces are up. A `@keydown` on this shell's own
+ * root instead only ever sees a keystroke whose focus target is somewhere
+ * INSIDE this subtree (a toolbar button, a timeline clip, an inspector
+ * field) — bubbling, no capture — and calls `event.stopPropagation()` for
+ * every combo it actually handles, so a shortcut this dispatcher claims
+ * never reaches the legacy surface's `window` listener at all; an
+ * unmatched, currently-disabled, or nothing-to-send combo (Ctrl+S, F1, F6 —
+ * `activateEditorAction` returns `false` for those) is left alone to
+ * bubble normally, never swallowed with nothing done. A keystroke whose
+ * target sits inside an open `role="menu"`/`role="dialog"` is the menu's
+ * (`shouldHandle`'s `menuOwnsKeys`): Delete pressed in the context menu
+ * must not delete the selection behind it.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
+import { baseActionContext } from "../../../editor/actionContext";
+import { activateEditorAction } from "../../../editor/clipboard";
+import { matchShortcut, shouldHandle } from "../../../editor/shortcuts";
+import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import EditorHeader from "./EditorHeader.vue";
 import PreviewToolbar from "./PreviewToolbar.vue";
@@ -99,12 +123,52 @@ function onFocusPreview() {
   libraryOpen.value = false;
   inspectorOpen.value = false;
 }
+
+// ---- keyboard shortcut dispatcher (Task 21) --------------------------------
+
+const editorProject = useEditorProjectStore();
+
+/**
+ * A single selection gives the dispatcher a real `pointerTarget` — the
+ * `primaryTargetClip`/`targetTrackId` "falls back to a single selected clip"
+ * rule `actions.ts` already establishes for a pointer-target-less caller —
+ * so, for instance, Ctrl+V pastes onto the selected clip's own track rather
+ * than reading "Select a track first" whenever nothing was right-clicked.
+ */
+function menuOwnsKeys(event: KeyboardEvent): boolean {
+  const target = event.target;
+  return target instanceof Element && target.closest('[role="menu"], [role="dialog"]') !== null;
+}
+
+function onShellKeydown(event: KeyboardEvent) {
+  if (!shouldHandle(event, { menuOwnsKeys: menuOwnsKeys(event) })) return;
+  const actionId = matchShortcut(event);
+  if (!actionId) return;
+  const selection = workspace.selectionClipIds;
+  const clip = selection.length === 1 ? editorProject.clipById(selection[0]) : undefined;
+  const ctx = baseActionContext(
+    editorProject.project,
+    editorProject.snapshot,
+    workspace.playheadMs,
+    selection,
+    clip ? { kind: "clip", id: clip.id, timeMs: workspace.playheadMs } : null,
+  );
+  if (!activateEditorAction(actionId, ctx, (command) => editorProject.execute(command))) return;
+  // Claimed: stop it here so `LegacyCaptureEditor.vue`'s own `window`
+  // listener (still mounted -- see the module doc) never double-handles the
+  // same keystroke. A disabled/unmatched/nothing-to-send combo returns
+  // above WITHOUT this, so it keeps bubbling exactly as it did before this
+  // dispatcher existed.
+  event.preventDefault();
+  event.stopPropagation();
+}
 </script>
 
 <template>
   <div
     data-testid="editor-shell"
     class="flex flex-col gap-2 text-fg"
+    @keydown="onShellKeydown"
   >
     <EditorHeader
       :is-compact="isCompact"

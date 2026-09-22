@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import TimelineRuler from "../src/components/editor/timeline/TimelineRuler.vue";
 import TimelineView from "../src/components/editor/timeline/TimelineView.vue";
+import { clearClipboardForTest } from "../src/editor/clipboard";
 import type { EditorPort } from "../src/editor/port";
 import { pxPerMs } from "../src/editor/timelineLayout";
 import type { Asset, Clip, EditorOpenResult, EditorSnapshot, Project, Track } from "../src/editorTypes";
@@ -26,6 +27,7 @@ enableAutoUnmount(afterEach);
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  clearClipboardForTest();
 });
 
 // ---- fixtures ---------------------------------------------------------------
@@ -207,6 +209,36 @@ describe("TimelineView — clip selection", () => {
     expect(workspace.selectionClipIds).toEqual(["c2"]);
   });
 
+  // Brief: "Click selects (Ctrl/Shift extends)".
+  it("Ctrl+click toggles a clip in and out of the selection", async () => {
+    executed = [];
+    await openProject();
+    const workspace = useEditorWorkspaceStore();
+    workspace.select(["c1"]);
+    const w = mount(TimelineView);
+    await flushPromises();
+
+    await w.get('[data-testid="clip-c2"]').trigger("click", { ctrlKey: true });
+    expect(workspace.selectionClipIds).toEqual(["c1", "c2"]);
+
+    await w.get('[data-testid="clip-c1"]').trigger("click", { ctrlKey: true });
+    expect(workspace.selectionClipIds).toEqual(["c2"]);
+  });
+
+  it("Shift+click adds a clip to the selection without dropping the rest", async () => {
+    executed = [];
+    await openProject();
+    const workspace = useEditorWorkspaceStore();
+    workspace.select(["c1"]);
+    const w = mount(TimelineView);
+    await flushPromises();
+
+    await w.get('[data-testid="clip-c3"]').trigger("click", { shiftKey: true });
+    await w.get('[data-testid="clip-c3"]').trigger("click", { shiftKey: true }); // idempotent
+
+    expect(workspace.selectionClipIds).toEqual(["c1", "c3"]);
+  });
+
   it("applies aria-selected only to the selected clip", async () => {
     executed = [];
     await openProject();
@@ -361,6 +393,43 @@ describe("TimelineToolbar", () => {
     expect(executed).toEqual([]);
   });
 
+  it("the delete-mode toggle picks which deleteClips shape the Delete button sends", async () => {
+    executed = [];
+    await openProject();
+    const workspace = useEditorWorkspaceStore();
+    workspace.select(["c1"]);
+    const w = mount(TimelineView);
+    await flushPromises();
+
+    expect(workspace.deleteMode).toBe("gap"); // the store's own default
+    await w.get('[data-testid="timeline-toolbar-delete"]').trigger("click");
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "deleteClips", clipIds: ["c1"], closeGap: false }]);
+
+    executed = [];
+    await w.get('[data-testid="timeline-toolbar-delete-mode-close"]').trigger("click");
+    expect(workspace.deleteMode).toBe("close");
+    await w.get('[data-testid="timeline-toolbar-delete"]').trigger("click");
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "deleteClips", clipIds: ["c1"], closeGap: true }]);
+  });
+
+  // Brief: 'the close-gap button says "on this track"' -- Rust's closeGap
+  // ripples only the deleted clip's own track, and the visible label (not
+  // just a hover title) must not read as closing every track's gap.
+  it("the close-gap mode button says 'on this track' in its visible label", async () => {
+    await openProject();
+    const w = mount(TimelineView);
+    await flushPromises();
+
+    const close = w.get('[data-testid="timeline-toolbar-delete-mode-close"]');
+    expect(close.text()).toContain("on this track");
+    expect(close.attributes("aria-pressed")).toBe("false");
+    await close.trigger("click");
+    expect(close.attributes("aria-pressed")).toBe("true");
+    expect(w.get('[data-testid="timeline-toolbar-delete-mode-gap"]').attributes("aria-pressed")).toBe("false");
+  });
+
   it("snap toggles editorWorkspace.snap", async () => {
     executed = [];
     await openProject();
@@ -470,6 +539,34 @@ describe("TimelineView — resize handle (fix round 1, finding 4)", () => {
   });
 });
 
+describe("TimelineView — context menu copy/cut (Task 21)", () => {
+  it("Copy from the context menu writes the clipboard and sends no command", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    await w.get('[data-testid="clip-c2"]').trigger("contextmenu");
+    await w.get('[data-testid="editor-context-menu-item-copy"]').trigger("click");
+    await flushPromises();
+
+    expect(executed).toEqual([]);
+  });
+
+  it("Cut from the context menu copies AND sends exactly one cutClips", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    await w.get('[data-testid="clip-c2"]').trigger("contextmenu");
+    await w.get('[data-testid="editor-context-menu-item-cut"]').trigger("click");
+    await flushPromises();
+
+    expect(executed).toEqual([{ kind: "cutClips", clipIds: ["c2"], closeGap: true }]);
+  });
+});
+
 describe("TimelineView — context menu activation", () => {
   it("activating an enabled item sends the SAME command the registry builds", async () => {
     executed = [];
@@ -528,6 +625,241 @@ describe("ClipItem — keyboard activation (fix round 1, finding 3)", () => {
     await w.get('[data-testid="clip-c1"]').trigger("keydown", { key: " " });
 
     expect(workspace.selectionClipIds).toEqual(["c1"]);
+  });
+});
+
+describe("ClipItem — keyboard nudge (Task 21)", () => {
+  it("ArrowRight sends one moveClips of +33ms (one frame)", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    await w.get('[data-testid="clip-c2"]').trigger("keydown", { key: "ArrowRight" });
+    await flushPromises();
+
+    expect(executed).toEqual([{ kind: "moveClips", clipIds: ["c2"], deltaMs: 33, trackId: null }]);
+  });
+
+  it("ArrowLeft sends a NEGATIVE delta", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    await w.get('[data-testid="clip-c2"]').trigger("keydown", { key: "ArrowLeft" });
+    await flushPromises();
+
+    expect(executed).toEqual([{ kind: "moveClips", clipIds: ["c2"], deltaMs: -33, trackId: null }]);
+  });
+
+  it("Shift+ArrowRight nudges by a full second", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    await w.get('[data-testid="clip-c2"]').trigger("keydown", { key: "ArrowRight", shiftKey: true });
+    await flushPromises();
+
+    expect(executed).toEqual([{ kind: "moveClips", clipIds: ["c2"], deltaMs: 1_000, trackId: null }]);
+  });
+
+  // The fake returns a GENUINELY different projection (c2 moved by the
+  // nudge, a fresh project object -- `editorProject` replaces it wholesale
+  // on every acknowledged command), so the clip really re-renders at its
+  // new position; asserting focus against a fake that echoed the old
+  // projection back would pass without any re-render happening at all.
+  it("keyboard nudge keeps focus on the clip after re-render", async () => {
+    executed = [];
+    const store = useEditorProjectStore();
+    const p = project();
+    const s = snapshot();
+    store.setPort(
+      fakePort({
+        openStaged: () =>
+          Promise.resolve<EditorOpenResult>({
+            snapshot: s, project: p, workspace: {}, missing: [], sourceBase: "base", recovered: false,
+          }),
+        execute: (req) => {
+          executed.push(req.command);
+          const moved = project({
+            clips: p.clips.map((c) => (c.id === "c2" ? { ...c, start_ms: c.start_ms + 33 } : { ...c })),
+          });
+          return Promise.resolve({ snapshot: { ...s, revision: s.revision + 1 }, project: moved });
+        },
+      }),
+    );
+    await store.openStaged("base");
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    const c2 = w.get('[data-testid="clip-c2"]').element as HTMLElement;
+    const before = c2.getAttribute("style");
+    c2.focus();
+    expect(document.activeElement).toBe(c2);
+
+    await w.get('[data-testid="clip-c2"]').trigger("keydown", { key: "ArrowRight" });
+    await flushPromises();
+    await flushPromises(); // one more tick for the component's own nextTick
+
+    const after = w.get('[data-testid="clip-c2"]').element as HTMLElement;
+    expect(after.getAttribute("style")).not.toBe(before); // it really re-rendered
+    expect(document.activeElement).toBe(after);
+  });
+});
+
+describe("ClipItem — drag (Task 21)", () => {
+  it("a body drag submits exactly one moveClips on pointer-up", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    const c2 = w.get('[data-testid="clip-c2"]');
+    await c2.trigger("pointerdown", { clientX: 0, clientY: 0, pointerId: 1 });
+    await c2.trigger("pointermove", { clientX: 200, clientY: 0, pointerId: 1 });
+    await c2.trigger("pointerup", { clientX: 200, clientY: 0, pointerId: 1 });
+    await flushPromises();
+
+    expect(executed).toHaveLength(1);
+    const cmd = executed[0] as { kind: string; clipIds: string[]; deltaMs: number };
+    expect(cmd.kind).toBe("moveClips");
+    expect(cmd.clipIds).toEqual(["c2"]);
+    expect(cmd.deltaMs).toBeGreaterThan(0);
+  });
+
+  it("a leftward body drag sends a NEGATIVE delta", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    // c1 starts at 500ms: 10px left at zoom 1 is 200ms, so it lands at 300.
+    const c1 = w.get('[data-testid="clip-c1"]');
+    await c1.trigger("pointerdown", { clientX: 400, clientY: 0, pointerId: 1 });
+    await c1.trigger("pointermove", { clientX: 390, clientY: 0, pointerId: 1 });
+    await c1.trigger("pointerup", { clientX: 390, clientY: 0, pointerId: 1 });
+    await flushPromises();
+
+    expect(executed).toEqual([{ kind: "moveClips", clipIds: ["c1"], deltaMs: -200, trackId: null }]);
+  });
+
+  // Snap is ON by default. The dragged clip's OWN edges are not targets: a
+  // small drag (within the 8px threshold, 160ms at zoom 1) would otherwise
+  // snap straight back onto the clip's original start and send nothing --
+  // every nudge-sized drag silently undone by the magnet.
+  it("a small drag with snap on is not pulled back onto the clip's own start", async () => {
+    executed = [];
+    await openProject();
+    const workspace = useEditorWorkspaceStore();
+    expect(workspace.snap).toBe(true);
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    const c3 = w.get('[data-testid="clip-c3"]'); // 4000..5000, alone on a1
+    await c3.trigger("pointerdown", { clientX: 900, clientY: 0, pointerId: 1 });
+    await c3.trigger("pointermove", { clientX: 905, clientY: 0, pointerId: 1 }); // +100ms
+    await c3.trigger("pointerup", { clientX: 905, clientY: 0, pointerId: 1 });
+    await flushPromises();
+
+    expect(executed).toEqual([{ kind: "moveClips", clipIds: ["c3"], deltaMs: 100, trackId: null }]);
+  });
+
+  it("a secondary-button press never starts a drag", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    const c1 = w.get('[data-testid="clip-c1"]');
+    const before = c1.attributes("style");
+    await c1.trigger("pointerdown", { clientX: 400, clientY: 0, pointerId: 1, button: 2 });
+    await c1.trigger("pointermove", { clientX: 300, clientY: 0, pointerId: 1, button: 2 });
+    expect(c1.attributes("style")).toBe(before);
+    await c1.trigger("pointerup", { clientX: 300, clientY: 0, pointerId: 1, button: 2 });
+    await flushPromises();
+
+    expect(executed).toEqual([]);
+  });
+
+  // A drag ends in a click on the same element. Letting that click run the
+  // ordinary "click selects only this clip" rule collapsed a multi-clip
+  // selection the user had just dragged as a group down to one clip.
+  it("the click that ends a group drag keeps the whole selection", async () => {
+    executed = [];
+    await openProject();
+    const workspace = useEditorWorkspaceStore();
+    workspace.select(["c1", "c3"]);
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    const c1 = w.get('[data-testid="clip-c1"]');
+    await c1.trigger("pointerdown", { clientX: 400, clientY: 0, pointerId: 1 });
+    // 60px = 1200ms: c1 lands at 1700, clear of every snap target.
+    await c1.trigger("pointermove", { clientX: 460, clientY: 0, pointerId: 1 });
+    await c1.trigger("pointerup", { clientX: 460, clientY: 0, pointerId: 1 });
+    await c1.trigger("click", { clientX: 460, clientY: 0 });
+    await flushPromises();
+
+    expect(executed).toEqual([{ kind: "moveClips", clipIds: ["c1", "c3"], deltaMs: 1_200, trackId: null }]);
+    expect(workspace.selectionClipIds).toEqual(["c1", "c3"]);
+  });
+
+  // The handles through the real component: a trim previews locally while
+  // the pointer moves (the clip's rendered width changes, nothing is sent)
+  // and commits exactly ONE trimClip on release.
+  it("dragging the end handle previews, then submits exactly one trimClip", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    const handle = w.get('[data-testid="clip-c1-trim-end"]');
+    const before = w.get('[data-testid="clip-c1"]').attributes("style");
+    // c1 is 500..3000; 20px left at zoom 1 is 400ms off its end.
+    await handle.trigger("pointerdown", { clientX: 150, clientY: 0, pointerId: 1 });
+    await handle.trigger("pointermove", { clientX: 130, clientY: 0, pointerId: 1 });
+    expect(w.get('[data-testid="clip-c1"]').attributes("style")).not.toBe(before);
+    expect(executed).toEqual([]);
+    await handle.trigger("pointerup", { clientX: 130, clientY: 0, pointerId: 1 });
+    await flushPromises();
+
+    expect(executed).toEqual([{ kind: "trimClip", clipId: "c1", startMs: 500, inMs: 0, outMs: 2_100 }]);
+  });
+
+  it("dragging the start handle moves the start and keeps the end", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    const handle = w.get('[data-testid="clip-c1-trim-start"]');
+    await handle.trigger("pointerdown", { clientX: 25, clientY: 0, pointerId: 1 });
+    await handle.trigger("pointermove", { clientX: 40, clientY: 0, pointerId: 1 }); // +300ms
+    await handle.trigger("pointerup", { clientX: 40, clientY: 0, pointerId: 1 });
+    await flushPromises();
+
+    expect(executed).toEqual([{ kind: "trimClip", clipId: "c1", startMs: 800, inMs: 300, outMs: 2_500 }]);
+  });
+
+  it("Escape during a drag sends nothing and restores the clip's position", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    const c2 = w.get('[data-testid="clip-c2"]');
+    const before = c2.attributes("style");
+    await c2.trigger("pointerdown", { clientX: 0, clientY: 0, pointerId: 1 });
+    await c2.trigger("pointermove", { clientX: 200, clientY: 0, pointerId: 1 });
+    expect(c2.attributes("style")).not.toBe(before);
+
+    await c2.trigger("keydown", { key: "Escape" });
+    await flushPromises();
+
+    expect(w.get('[data-testid="clip-c2"]').attributes("style")).toBe(before);
+    expect(executed).toEqual([]);
   });
 });
 

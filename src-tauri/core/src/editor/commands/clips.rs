@@ -277,6 +277,20 @@ pub(super) fn split_clip(
     if payload.at_ms <= clip.start_ms || payload.at_ms >= output_end {
         return Err(invalid_request("Split point is at a clip boundary"));
     }
+    // F14: neither half may end up below `limits::MIN_CLIP_MS`. Both
+    // halves' OUTPUT durations are plain instant differences (`at_ms` IS an
+    // output instant, and both halves keep the original speed), so no
+    // speed-aware conversion is needed here -- unlike `trim_clip` below,
+    // which computes a NEW source range and has to go through
+    // `time::clip_output_duration` for that reason.
+    let left_duration = payload.at_ms - clip.start_ms;
+    let right_duration = output_end - payload.at_ms;
+    if left_duration < limits::MIN_CLIP_MS || right_duration < limits::MIN_CLIP_MS {
+        return Err(invalid_request(format!(
+            "Split would leave a clip shorter than the {} ms minimum",
+            limits::MIN_CLIP_MS
+        )));
+    }
     let s = time::source_at(&span, payload.at_ms).expect(
         "atMs strictly inside [start_ms, output_end) is exactly clip_is_active's own condition",
     );
@@ -349,11 +363,25 @@ pub(super) fn trim_clip(
         )));
     }
 
+    let speed = speed_or_default(clip.speed.as_ref());
+    // F14: refused BEFORE the overlap scan, and computed straight from the
+    // payload's own in/out (never a subtraction against `checked_output_end`
+    // below) -- `time::clip_output_duration` is the one formula that agrees
+    // with what `trimClip` above CALLS a clip's output duration everywhere
+    // else in this module.
+    let new_duration = time::clip_output_duration(payload.in_ms, payload.out_ms, speed);
+    if new_duration < limits::MIN_CLIP_MS {
+        return Err(invalid_request(format!(
+            "trimClip would produce a {new_duration} ms clip, below the {} ms minimum",
+            limits::MIN_CLIP_MS
+        )));
+    }
+
     let new_span = ClipSpan {
         start_ms: payload.start_ms,
         in_ms: payload.in_ms,
         out_ms: payload.out_ms,
-        speed: speed_or_default(clip.speed.as_ref()),
+        speed,
     };
     let new_end = checked_output_end(&new_span)?;
     for other in project

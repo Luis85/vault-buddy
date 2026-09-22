@@ -206,19 +206,25 @@ fn update_clip_rejects_an_empty_name() {
 fn split_conserves_total_duration() {
     let mut project = base_project();
     project.tracks.push(track("v1", TrackKind::Video, false));
-    project.assets.push(asset("a1", AssetKind::Video, 200));
-    let mut c1 = clip("c1", "v1", "a1", 0, 0, 100);
+    project.assets.push(asset("a1", AssetKind::Video, 1_200));
+    // Task 21 (F14): the source span/split point are widened from the
+    // original 0..100 @2x / at_ms 13 (50ms total, 13ms/37ms halves) so
+    // BOTH halves clear the new MIN_CLIP_MS (100ms) minimum -- this test is
+    // about duration conservation, not the minimum, and a fixture that
+    // trips a DIFFERENT guard than the one under test proves nothing (the
+    // global constraints' own "fixture flaw" rule).
+    let mut c1 = clip("c1", "v1", "a1", 0, 0, 600);
     c1.speed = Some(num_f(2.0));
     project.clips.push(c1);
 
     let before = time::project_duration(&project);
-    assert_eq!(before, 50);
+    assert_eq!(before, 300);
 
     let (candidate, _) = split_clip(
         &project,
         &SplitClipPayload {
             clip_id: "c1".into(),
-            at_ms: 13,
+            at_ms: 130,
         },
     )
     .unwrap();
@@ -229,6 +235,36 @@ fn split_conserves_total_duration() {
         before,
         "splitting must not change the project's total output duration"
     );
+}
+
+#[test]
+fn split_that_would_leave_a_sub_minimum_half_is_refused() {
+    // Task 21 (F14): a clip 0..1_000 split at 950 would leave a 50ms right
+    // half, and at 50 a 50ms left half -- either falls below
+    // limits::MIN_CLIP_MS (100). Refused before anything is installed.
+    let mut project = base_project();
+    project.tracks.push(track("v1", TrackKind::Video, false));
+    project.assets.push(asset("a1", AssetKind::Video, 2_000));
+    project.clips.push(clip("c1", "v1", "a1", 0, 0, 1_000));
+
+    // Both halves are checked: 950 leaves a 50ms RIGHT half, 50 a 50ms LEFT
+    // half -- a check of only one side would pass one of these.
+    for at_ms in [950, 50] {
+        let err = split_clip(
+            &project,
+            &SplitClipPayload {
+                clip_id: "c1".into(),
+                at_ms,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, EditorErrorCode::InvalidRequest);
+        assert!(
+            err.message.contains("100 ms minimum"),
+            "the refusal must name the 100ms minimum: {}",
+            err.message
+        );
+    }
 }
 
 #[test]
@@ -499,6 +535,55 @@ fn trim_to_empty_is_refused() {
     )
     .unwrap_err();
     assert_eq!(err.code, EditorErrorCode::InvalidRequest);
+}
+
+#[test]
+fn trim_below_the_minimum_is_refused_naming_100ms() {
+    // Task 21 (F14): 500..599 is a 99ms output duration -- one below
+    // limits::MIN_CLIP_MS.
+    let mut project = base_project();
+    project.tracks.push(track("v1", TrackKind::Video, false));
+    project.assets.push(asset("a1", AssetKind::Video, 5_000));
+    project.clips.push(clip("c1", "v1", "a1", 0, 0, 1_000));
+
+    let err = trim_clip(
+        &project,
+        &TrimClipPayload {
+            clip_id: "c1".into(),
+            start_ms: 0,
+            in_ms: 500,
+            out_ms: 599,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code, EditorErrorCode::InvalidRequest);
+    assert!(
+        err.message.contains("100 ms minimum"),
+        "the refusal must name the 100ms minimum: {}",
+        err.message
+    );
+}
+
+#[test]
+fn trim_to_exactly_the_minimum_is_accepted() {
+    // The boundary: 500..600 is exactly limits::MIN_CLIP_MS -- the minimum
+    // is a floor the clip may sit ON, not one it must clear.
+    let mut project = base_project();
+    project.tracks.push(track("v1", TrackKind::Video, false));
+    project.assets.push(asset("a1", AssetKind::Video, 5_000));
+    project.clips.push(clip("c1", "v1", "a1", 0, 0, 1_000));
+
+    let (candidate, _) = trim_clip(
+        &project,
+        &TrimClipPayload {
+            clip_id: "c1".into(),
+            start_ms: 0,
+            in_ms: 500,
+            out_ms: 600,
+        },
+    )
+    .unwrap();
+    assert_eq!(candidate.clips[0].out_ms - candidate.clips[0].in_ms, 100);
 }
 
 #[test]

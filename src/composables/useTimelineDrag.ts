@@ -1,0 +1,309 @@
+/**
+ * The timeline's drag/trim/nudge interaction model (Task 21; F-07, F-08,
+ * F-09, F-10, F-11, F-13). `ClipItem.vue` is the one caller: it owns every
+ * DOM-touching detail (pointer capture, `event.currentTarget`, focus) the
+ * `TimelineRuler.vue` precedent already establishes for this timeline, and
+ * calls into this composable with plain numbers so the interaction math
+ * itself stays Vue-DOM-free and directly testable (`tests/useTimelineDrag.test.ts`
+ * calls every function here with no `mount()` at all).
+ *
+ * **One instance per `ClipItem`, not one shared instance.** Only one clip is
+ * ever actively dragged at a time, so there is no need for a `clipId`-tagged
+ * preview object a caller has to filter by identity — each `ClipItem`'s own
+ * `movePreview`/`trimPreview` refs are implicitly scoped to the clip THAT
+ * instance renders, the same way it already calls `useEditorWorkspaceStore()`
+ * per-instance today.
+ *
+ * **Snap is wired here** (Task 20 shipped `timelineLayout.snap` with no
+ * consumer — its own module doc says so): `computeMoveDelta`/`computeTrimStart`/
+ * `computeTrimEnd` all snap the DRAGGED EDGE (never the delta directly) against
+ * `deps.snapTargets()` when `deps.snapEnabled()` is true, so the toolbar's Snap
+ * toggle finally changes something.
+ *
+ * **The 100 ms minimum is enforced HERE too**, mirroring
+ * `core::editor::limits::MIN_CLIP_MS` (F14) — a trim preview that ignored it
+ * would let the user watch a clip shrink past zero during the drag and only
+ * discover the refusal on release; Rust's own `trimClip`/`splitClip` refusal
+ * is still the authority (this is a preview clamp, never a substitute for
+ * it).
+ */
+import type { Ref } from "vue";
+import { ref } from "vue";
+
+import type { EditorCommand } from "../editor/editorCommandTypes";
+import { LANE_HEIGHT_PX, pxPerMs, snap } from "../editor/timelineLayout";
+import { clipOutputDuration, clipOutputEnd, roundHalfAway } from "../editor/timeMap";
+import type { Clip } from "../editorTypes";
+
+/** Mirrors `core::editor::mod::limits::MIN_CLIP_MS` (Task 21, F14) — read
+ * from the Rust source, never invented (`useInspectorDraft.ts`'s own rule
+ * for every client-side mirror of a server limit). */
+export const MIN_CLIP_MS = 100;
+
+/** How close (px) a dragged edge must land to a snap target to catch it —
+ * no contract value names one, so this is this module's own constant, the
+ * `BASE_PX_PER_MS`/`MIN_TICK_PX` precedent in `timelineLayout.ts` for a UX
+ * constant with no Rust twin. */
+const SNAP_THRESHOLD_PX = 8;
+
+export interface MovePreview {
+  deltaMs: number;
+}
+
+export interface TrimPreview {
+  startMs: number;
+  inMs: number;
+  outMs: number;
+}
+
+interface SnapOptions {
+  snapEnabled: boolean;
+  targets: readonly number[];
+  thresholdPx: number;
+  zoom: number;
+}
+
+function clipSpeed(clip: Clip): number {
+  return clip.speed ?? 1;
+}
+
+/**
+ * The clamped, optionally-snapped `deltaMs` a body drag should apply to
+ * `clip.start_ms` — computed from the clip's OWN new start (never the raw
+ * delta directly), so snapping catches the dragged edge landing near a
+ * target rather than snapping an offset that has no spatial meaning of its
+ * own. Clamped so `clip.start_ms + deltaMs` never goes negative — the same
+ * "never below zero" rule `moveClips`' own Rust-side shared-delta clamp
+ * enforces, mirrored here so the preview never shows a position Rust would
+ * refuse outright.
+ */
+export function computeMoveDelta(clip: Clip, rawDeltaMs: number, opts: SnapOptions): number {
+  const rawNewStart = clip.start_ms + rawDeltaMs;
+  const snappedStart = opts.snapEnabled
+    ? snap(rawNewStart, opts.targets, opts.thresholdPx, opts.zoom)
+    : rawNewStart;
+  // Whole milliseconds: every `EditorCommand` time is an integer (Rust
+  // decodes u64/i64), and a pointer offset at a non-integer px-per-ms is not.
+  const clampedStart = Math.round(Math.max(0, snappedStart));
+  return clampedStart - clip.start_ms;
+}
+
+/**
+ * Trimming the START handle: `outMs` stays fixed, `startMs` moves by the
+ * (clamped, optionally snapped) OUTPUT delta, and `inMs` is derived from the
+ * resulting output duration via the same `out_ms - duration*speed` inverse
+ * `time.rs`'s own formula implies — never a second, independently-invented
+ * mapping. Clamped so `startMs` never goes below 0, never extends further
+ * left than the source has footage (`inMs` reaching 0 — clamping `inMs`
+ * alone while `startMs` kept moving would detach the clip's END, which a
+ * start-handle trim must keep fixed), and the resulting output duration
+ * never drops below `MIN_CLIP_MS` (F14).
+ */
+export function computeTrimStart(clip: Clip, rawOutputDeltaMs: number, opts: SnapOptions): TrimPreview {
+  const speed = clipSpeed(clip);
+  const originalEnd = clip.start_ms + clipOutputDuration(clip.in_ms, clip.out_ms, speed);
+  const rawNewStart = clip.start_ms + rawOutputDeltaMs;
+  const snappedStart = opts.snapEnabled
+    ? snap(rawNewStart, opts.targets, opts.thresholdPx, opts.zoom)
+    : rawNewStart;
+  const minStart = Math.max(0, originalEnd - clipOutputDuration(0, clip.out_ms, speed));
+  const maxStart = Math.max(minStart, originalEnd - MIN_CLIP_MS);
+  const clampedStart = Math.round(Math.min(Math.max(snappedStart, minStart), maxStart));
+  const newDuration = originalEnd - clampedStart;
+  const newIn = Math.max(clip.out_ms - roundHalfAway(newDuration * speed), 0);
+  return { startMs: clampedStart, inMs: newIn, outMs: clip.out_ms };
+}
+
+/**
+ * Trimming the END handle: `startMs`/`inMs` stay fixed, the clip's OUTPUT
+ * end moves by the (clamped, optionally snapped) delta, and `outMs` is
+ * derived the same inverse way `computeTrimStart` uses. Clamped so the
+ * resulting output duration never drops below `MIN_CLIP_MS` (F14) — there is
+ * no client-side upper bound (the asset's own duration), so a preview that
+ * extends past it is left to Rust's own refusal on commit, exactly as the
+ * brief scopes the preview clamp to the MINIMUM only.
+ */
+export function computeTrimEnd(clip: Clip, rawOutputDeltaMs: number, opts: SnapOptions): TrimPreview {
+  const speed = clipSpeed(clip);
+  const originalEnd = clipOutputEnd({ start_ms: clip.start_ms, in_ms: clip.in_ms, out_ms: clip.out_ms, speed });
+  const rawNewEnd = originalEnd + rawOutputDeltaMs;
+  const snappedEnd = opts.snapEnabled ? snap(rawNewEnd, opts.targets, opts.thresholdPx, opts.zoom) : rawNewEnd;
+  const minEnd = clip.start_ms + MIN_CLIP_MS;
+  const clampedEnd = Math.round(Math.max(snappedEnd, minEnd));
+  const newDuration = clampedEnd - clip.start_ms;
+  const newOut = Math.max(clip.in_ms + roundHalfAway(newDuration * speed), clip.in_ms + 1);
+  return { startMs: clip.start_ms, inMs: clip.in_ms, outMs: newOut };
+}
+
+export interface TimelineDragDeps {
+  /** The clip THIS composable instance is scoped to — a getter so a caller
+   * that re-renders with a fresh `Clip` object (every commit replaces the
+   * project wholesale, `editorProject.ts`'s own discipline) always drives
+   * the math off the CURRENT one. */
+  clip: () => Clip;
+  zoom: () => number;
+  snapEnabled: () => boolean;
+  snapTargets: () => readonly number[];
+  /** The clip ids a body drag or nudge should move TOGETHER with this one —
+   * the caller's own "is this clip part of a multi-selection" answer
+   * (`[clip.id]` otherwise), the same rule `actions.ts`' `targetClipIds`
+   * applies for a pointer-driven mutation. */
+  moveTargetClipIds: () => string[];
+  /** Lane order (top to bottom) for the cross-track drop hit-test at
+   * pointer-up — `TimelineView.vue`'s own `tracks` computed, id-only. */
+  trackOrder: () => readonly string[];
+  /** This clip's own index into `trackOrder()`. */
+  trackIndex: () => number;
+  execute: (command: EditorCommand) => void | Promise<void>;
+}
+
+export interface UseTimelineDrag {
+  movePreview: Ref<MovePreview | null>;
+  trimPreview: Ref<TrimPreview | null>;
+  beginBodyDrag: (clientX: number, clientY: number) => void;
+  updateBodyDrag: (clientX: number) => void;
+  endBodyDrag: (clientY: number) => Promise<void>;
+  cancelBodyDrag: () => void;
+  beginTrim: (edge: "start" | "end", clientX: number) => void;
+  updateTrim: (clientX: number) => void;
+  endTrim: () => Promise<void>;
+  cancelTrim: () => void;
+  nudge: (deltaMs: number) => Promise<void>;
+}
+
+export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
+  const movePreview = ref<MovePreview | null>(null);
+  const trimPreview = ref<TrimPreview | null>(null);
+
+  function snapOpts(): SnapOptions {
+    return {
+      snapEnabled: deps.snapEnabled(),
+      targets: deps.snapTargets(),
+      thresholdPx: SNAP_THRESHOLD_PX,
+      zoom: deps.zoom(),
+    };
+  }
+
+  // ---- body drag ------------------------------------------------------------
+
+  let moveAnchor: { clientX: number; clientY: number } | null = null;
+
+  function beginBodyDrag(clientX: number, clientY: number): void {
+    moveAnchor = { clientX, clientY };
+    movePreview.value = { deltaMs: 0 };
+  }
+
+  function updateBodyDrag(clientX: number): void {
+    if (!moveAnchor) return;
+    const ppm = pxPerMs(deps.zoom());
+    const rawDeltaMs = ppm > 0 ? (clientX - moveAnchor.clientX) / ppm : 0;
+    movePreview.value = { deltaMs: computeMoveDelta(deps.clip(), rawDeltaMs, snapOpts()) };
+  }
+
+  /**
+   * Cross-track detection: a lane-count offset from the drag's own vertical
+   * pixel distance (rounded, then clamped into `trackOrder()`'s bounds) —
+   * no DOM hit-test against every OTHER `TrackLane`'s own rect is needed,
+   * because lanes are laid out in one fixed-height column
+   * (`LANE_HEIGHT_PX`) in `trackOrder()`'s own order.
+   */
+  function targetTrackFor(clip: Clip, clientY: number): string | null {
+    const order = deps.trackOrder();
+    if (order.length === 0 || !moveAnchor) return null;
+    const laneDelta = Math.round((clientY - moveAnchor.clientY) / LANE_HEIGHT_PX);
+    const targetIndex = Math.min(Math.max(deps.trackIndex() + laneDelta, 0), order.length - 1);
+    const targetId = order[targetIndex];
+    return targetId && targetId !== clip.track_id ? targetId : null;
+  }
+
+  async function endBodyDrag(clientY: number): Promise<void> {
+    if (!moveAnchor) return;
+    const clip = deps.clip();
+    const deltaMs = movePreview.value?.deltaMs ?? 0;
+    const clipIds = deps.moveTargetClipIds();
+    // `trackId` is only ever valid for a single moved clip — the exact rule
+    // Rust's own `moveClips` enforces (`clips.rs`: "trackId is only valid
+    // when moving a single clip"), checked here so a multi-selection drag
+    // never sends a `trackId` Rust would refuse outright.
+    const trackId = clipIds.length === 1 ? targetTrackFor(clip, clientY) : null;
+    moveAnchor = null;
+    movePreview.value = null;
+    if (deltaMs === 0 && trackId === null) return;
+    await deps.execute({ kind: "moveClips", clipIds, deltaMs, trackId });
+  }
+
+  function cancelBodyDrag(): void {
+    moveAnchor = null;
+    movePreview.value = null;
+  }
+
+  // ---- trim -------------------------------------------------------------
+
+  let trimEdge: "start" | "end" | null = null;
+  let trimStartClientX = 0;
+
+  function beginTrim(edge: "start" | "end", clientX: number): void {
+    trimEdge = edge;
+    trimStartClientX = clientX;
+    const clip = deps.clip();
+    trimPreview.value = { startMs: clip.start_ms, inMs: clip.in_ms, outMs: clip.out_ms };
+  }
+
+  function updateTrim(clientX: number): void {
+    if (!trimEdge) return;
+    const ppm = pxPerMs(deps.zoom());
+    const rawOutputDeltaMs = ppm > 0 ? (clientX - trimStartClientX) / ppm : 0;
+    const clip = deps.clip();
+    trimPreview.value =
+      trimEdge === "start"
+        ? computeTrimStart(clip, rawOutputDeltaMs, snapOpts())
+        : computeTrimEnd(clip, rawOutputDeltaMs, snapOpts());
+  }
+
+  async function endTrim(): Promise<void> {
+    if (!trimEdge) return;
+    const clip = deps.clip();
+    const preview = trimPreview.value;
+    trimEdge = null;
+    trimPreview.value = null;
+    if (!preview) return;
+    if (preview.startMs === clip.start_ms && preview.inMs === clip.in_ms && preview.outMs === clip.out_ms) {
+      return;
+    }
+    await deps.execute({
+      kind: "trimClip",
+      clipId: clip.id,
+      startMs: preview.startMs,
+      inMs: preview.inMs,
+      outMs: preview.outMs,
+    });
+  }
+
+  function cancelTrim(): void {
+    trimEdge = null;
+    trimPreview.value = null;
+  }
+
+  // ---- keyboard nudge -----------------------------------------------------
+
+  /** One `moveClips` per key press, no preview step — a nudge commits
+   * immediately (there is nothing to preview: the whole point is a discrete,
+   * already-decided step, not a drag the user is still watching). */
+  async function nudge(deltaMs: number): Promise<void> {
+    await deps.execute({ kind: "moveClips", clipIds: deps.moveTargetClipIds(), deltaMs, trackId: null });
+  }
+
+  return {
+    movePreview,
+    trimPreview,
+    beginBodyDrag,
+    updateBodyDrag,
+    endBodyDrag,
+    cancelBodyDrag,
+    beginTrim,
+    updateTrim,
+    endTrim,
+    cancelTrim,
+    nudge,
+  };
+}

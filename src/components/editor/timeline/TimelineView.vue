@@ -25,7 +25,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { baseActionContext } from "../../../editor/actionContext";
 import type { ActionId } from "../../../editor/actionMeta";
 import type { PointerTarget } from "../../../editor/actions";
-import { commandFor } from "../../../editor/actions";
+import { activateEditorAction } from "../../../editor/clipboard";
 import {
   fitZoom,
   pxPerMs,
@@ -95,6 +95,9 @@ const contentDurationMs = computed(() => Math.max(editorProject.durationMs, 0) +
 const contentWidthPx = computed(() => pxPerMs(workspace.timelineZoom) * contentDurationMs.value);
 
 const tracks = computed(() => editorProject.project?.tracks ?? []);
+/** Task 21: the lane order `ClipItem`'s cross-track drop hit-test needs —
+ * see `TrackLane.vue`'s own `trackOrder` prop doc. */
+const orderedTrackIds = computed(() => tracks.value.map((t) => t.id));
 
 /** `visibleClips` operates on the CLIP body's own coordinate space
  * (`TrackLane`'s convention: `msToX(start_ms, zoom)` with no label offset),
@@ -152,7 +155,7 @@ function onResizePointerDown(event: PointerEvent) {
 // ---- the one context menu ----------------------------------------------
 
 const CLIP_CONTEXT_ITEMS: ActionId[] = [
-  "split", "cut", "duplicate", "group", "ungroup", "earlier", "later", "deleteClose", "delete",
+  "split", "copy", "cut", "paste", "duplicate", "group", "ungroup", "earlier", "later", "deleteClose", "delete",
 ];
 
 const menuOpen = ref(false);
@@ -184,8 +187,7 @@ function onClipContextMenu(payload: { clip: Clip; clientX: number; clientY: numb
 }
 
 function onMenuActivate(actionId: ActionId) {
-  const command = commandFor(actionId, menuContext.value);
-  if (command) void editorProject.execute(command);
+  activateEditorAction(actionId, menuContext.value, (cmd) => editorProject.execute(cmd));
 }
 </script>
 
@@ -228,7 +230,7 @@ function onMenuActivate(actionId: ActionId) {
         :style="{ left: `${TRACK_LABEL_WIDTH_PX + pxPerMs(workspace.timelineZoom) * workspace.playheadMs}px` }"
       />
       <TrackLane
-        v-for="track in tracks"
+        v-for="(track, i) in tracks"
         :key="track.id"
         :track="track"
         :clips="clipsByTrack.get(track.id) ?? []"
@@ -236,6 +238,8 @@ function onMenuActivate(actionId: ActionId) {
         :selected-clip-ids="workspace.selectionClipIds"
         :zoom="workspace.timelineZoom"
         :width-px="contentWidthPx"
+        :track-index="i"
+        :track-order="orderedTrackIds"
         @context-menu="onClipContextMenu"
       />
     </div>

@@ -100,4 +100,13 @@ pub mod limits {
     pub const CANVAS_FPS: u32 = 30;
     pub const SPEED_MIN: f64 = 0.25;
     pub const SPEED_MAX: f64 = 4.0;
+
+    /// Task 21 (F14): the shortest OUTPUT duration a clip may end up with
+    /// after `trimClip`/`splitClip`. Enforced by those two commands
+    /// directly (`commands::clips`) -- this module still only DECLARES
+    /// limits, the way every other constant above does. A numeric
+    /// inspector entry bypasses the timeline's own drag-preview clamp, so
+    /// without this the frontend was the only thing standing between a
+    /// hand-typed `outMs` and a zero- or negative-length clip.
+    pub const MIN_CLIP_MS: u64 = 100;
 }

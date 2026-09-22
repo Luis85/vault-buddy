@@ -29,6 +29,12 @@ function clipSpanOf(clip: Clip): ClipSpan {
  * runtime or hand-copied twice. */
 export const TRACK_LABEL_WIDTH_PX = 196;
 
+/** One track lane's rendered height (`TrackLane.vue`'s own `LANE_HEIGHT_PX`,
+ * moved here in Task 21 so `useTimelineDrag.ts`'s cross-track drop hit-test
+ * shares the exact same number `TrackLane` lays lanes out with, rather than
+ * a second copy of the magic number). */
+export const LANE_HEIGHT_PX = 56;
+
 /** Pixels per millisecond at zoom 1 — 50px per second. Chosen so a typical
  * few-minute tutorial spans a scrollable-but-not-absurd content width; there
  * is no contract value for this, so it is this module's own constant and
@@ -106,9 +112,15 @@ export function snapTargets(project: Project | null, playheadMs: number): number
  * `zoom`), or `ms` unchanged when nothing qualifies. `<=` at the threshold
  * boundary (a target exactly `thresholdPx` away still snaps) and strict `<`
  * between candidates, so a tie keeps whichever target the targets array
- * lists first — deterministic, never "whichever iterated last". */
+ * lists first — deterministic, never "whichever iterated last". A
+ * non-positive zoom (`pxPerMs` 0) snaps to nothing, the `xToMs` guard: the
+ * pixel threshold would otherwise convert to an `Infinity`-ms one and catch
+ * every target however far away (Task 20's carried finding, fixed with
+ * snap's first consumer, Task 21's drag/trim). */
 export function snap(ms: number, targets: readonly number[], thresholdPx: number, zoom: number): number {
-  const thresholdMs = thresholdPx / pxPerMs(zoom);
+  const ppm = pxPerMs(zoom);
+  if (ppm <= 0) return ms;
+  const thresholdMs = thresholdPx / ppm;
   let best: number | null = null;
   let bestDist = Infinity;
   for (const t of targets) {

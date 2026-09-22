@@ -22,9 +22,19 @@
  * read the Rust source for the bound, never invent one): an out-of-range or
  * unparsable draft returns `{ok:false,message}`, which `error` surfaces
  * inline while the invalid text stays exactly as the user left it.
+ *
+ * The draft FOLLOWS the committed value (Task 21, closing Task 19's carried
+ * finding with this composable's first consumer, `ClipSection`): when
+ * `field.value()` changes from outside — an Undo, a timeline drag or nudge
+ * on the same clip — a draft the user is not currently editing is re-seeded
+ * from it, so the field never shows (and a later blur never re-sends) a
+ * value the projection has already moved on from. A draft the user HAS
+ * edited is left alone: their keystrokes win until they submit or revert.
+ * `field.value` must read reactive state for this to fire (a plain closure
+ * over a non-reactive variable simply never re-seeds).
  */
 import type { Ref } from "vue";
-import { ref } from "vue";
+import { ref, watch } from "vue";
 
 /** A field's read/format/parse trio — the composable never assumes it knows
  * what kind of value it is editing beyond what this describes. */
@@ -57,7 +67,9 @@ export interface InspectorDraft {
 /** Builds a plain numeric field: a value getter, an inclusive `[min,max]`
  * range mirroring a Rust bound, and the human-readable range phrase used in
  * the out-of-range message. An empty or non-finite draft is refused as "not
- * a number" before the range check ever runs. */
+ * a number" before the range check ever runs. `integer` (a millisecond
+ * field — every `EditorCommand` time is an integer Rust decodes as u64)
+ * refuses a fractional value rather than rounding it silently. */
 export function numberField(opts: {
   value: () => number;
   label: string;
@@ -65,6 +77,7 @@ export function numberField(opts: {
   max: number;
   rangeLabel: string;
   format?: (value: number) => string;
+  integer?: boolean;
 }): InspectorField<number> {
   const format = opts.format ?? ((v: number) => String(v));
   return {
@@ -76,10 +89,42 @@ export function numberField(opts: {
       if (trimmed === "" || !Number.isFinite(n)) {
         return { ok: false, message: `${opts.label} must be a number.` };
       }
+      if (opts.integer && !Number.isInteger(n)) {
+        return { ok: false, message: `${opts.label} must be a whole number.` };
+      }
       if (n < opts.min || n > opts.max) {
         return { ok: false, message: `${opts.label} must be between ${opts.rangeLabel}` };
       }
       return { ok: true, value: n };
+    },
+  };
+}
+
+/**
+ * Builds a plain trimmed-string field (Task 21, `ClipSection`'s Name field —
+ * the first caller): a value getter and an inclusive character-count
+ * maximum mirroring a Rust bound (e.g. `limits::MAX_NAME_CHARS` for a clip's
+ * own name). An empty (post-trim) draft is refused as "must not be empty",
+ * mirroring `core::editor::commands::clips::update_clip`'s own refusal —
+ * never silently kept as the last committed value.
+ */
+export function textField(opts: {
+  value: () => string;
+  label: string;
+  maxLength: number;
+}): InspectorField<string> {
+  return {
+    value: opts.value,
+    format: (v: string) => v,
+    parse(raw: string): InspectorParseResult<string> {
+      const trimmed = raw.trim();
+      if (trimmed === "") {
+        return { ok: false, message: `${opts.label} must not be empty.` };
+      }
+      if (trimmed.length > opts.maxLength) {
+        return { ok: false, message: `${opts.label} must be ${opts.maxLength} characters or fewer.` };
+      }
+      return { ok: true, value: trimmed };
     },
   };
 }
@@ -95,6 +140,13 @@ export function useInspectorDraft<T>(
   // what keeps a blur that follows an already-handled Enter from firing a
   // second, redundant `editor_execute` for the identical edit.
   let lastCommittedRaw = draft.value;
+
+  watch(field.value, (next) => {
+    if (draft.value !== lastCommittedRaw) return; // mid-edit: keep the user's text
+    draft.value = field.format(next);
+    lastCommittedRaw = draft.value;
+    error.value = null;
+  });
 
   function submit(): void {
     if (draft.value === lastCommittedRaw) return;
