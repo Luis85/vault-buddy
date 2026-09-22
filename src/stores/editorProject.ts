@@ -61,6 +61,7 @@ import type {
   EditorSnapshot,
   MissingMedia,
   Project,
+  SaveReceipt,
   Track,
 } from "../editorTypes";
 
@@ -121,6 +122,16 @@ export const useEditorProjectStore = defineStore("editorProject", {
     /** The command a `revisionConflict` rejected, kept for an explicit
      * Retry. `execute` never re-sends it on its own. */
     conflictIntent: null as EditorCommand | null,
+    /**
+     * True only while `save()`'s round trip is genuinely outstanding (Task
+     * 16, F-48) — `EditorHeader`'s "Saving…" status text derives from this
+     * rather than a timer, so a save that never resolves (a hung write) never
+     * silently reads "Saved" and a fast one never gets stuck showing
+     * "Saving…" past its own receipt. Reset on `openWith`/`close` too, so a
+     * session switch mid-save can never leave a NEW session reading
+     * `saving: true` for a request it never sent.
+     */
+    saving: false,
   }),
   getters: {
     /** Derived, never stored: two copies of "does disk match memory" are
@@ -172,6 +183,7 @@ export const useEditorProjectStore = defineStore("editorProject", {
       this.pending.clear();
       this.conflictIntent = null;
       this.lastError = null;
+      this.saving = false;
       try {
         const result = await run();
         if (generation !== this.generation) return;
@@ -318,6 +330,22 @@ export const useEditorProjectStore = defineStore("editorProject", {
       await this.execute(command);
     },
     /**
+     * Install a successful `save()` receipt, guarded exactly like
+     * `applyExecuteResult`: same generation, same session, and A18 (a
+     * receipt may not report a revision AHEAD of what's live). Split out of
+     * `save` for the same reason `applyExecuteResult` is split out of
+     * `execute` — one guard per line here, not a branch added to `save`'s
+     * own count (Task 16 pushed `save` over the fallow complexity
+     * threshold by inlining these checks alongside the new `saving` guard).
+     */
+    applySaveReceipt(generation: number, receipt: SaveReceipt): void {
+      if (generation !== this.generation) return;
+      if (receipt.sessionId !== this.sessionId) return;
+      if (!this.snapshot || receipt.savedRevision > this.snapshot.revision) return;
+      this.snapshot = { ...this.snapshot, persistedRevision: receipt.savedRevision };
+      this.lastError = null;
+    },
+    /**
      * Persist the current revision. Installs `persistedRevision` from the
      * receipt only when its `sessionId` matches this session AND
      * `savedRevision` is not AHEAD of the live revision (A18) — a receipt
@@ -330,15 +358,18 @@ export const useEditorProjectStore = defineStore("editorProject", {
       const generation = this.generation;
       const sessionId = this.sessionId;
       const expectedRevision = this.snapshot.revision;
+      this.saving = true;
       try {
         const receipt = await this.port.save(sessionId, expectedRevision);
-        if (generation !== this.generation) return;
-        if (receipt.sessionId !== this.sessionId) return;
-        if (!this.snapshot || receipt.savedRevision > this.snapshot.revision) return;
-        this.snapshot = { ...this.snapshot, persistedRevision: receipt.savedRevision };
-        this.lastError = null;
+        this.applySaveReceipt(generation, receipt);
       } catch (e) {
         if (generation === this.generation) this.lastError = toEditorError(e);
+      } finally {
+        // Guarded like every other post-await write in this file: a save
+        // from a superseded generation must not clear `saving` for whatever
+        // session/open is current now (it would race `openWith`'s own reset
+        // the other way and could clear a flag a NEWER save just set).
+        if (generation === this.generation) this.saving = false;
       }
     },
     /**
@@ -365,6 +396,7 @@ export const useEditorProjectStore = defineStore("editorProject", {
       this.missing = [];
       this.sourceBase = null;
       this.lastError = null;
+      this.saving = false;
       try {
         await this.port.closeSession(sessionId, disposition);
       } catch (e) {

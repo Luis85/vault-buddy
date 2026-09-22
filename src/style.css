@@ -30,6 +30,57 @@
   /* The one caption size that folds the ad-hoc text-[10px] usages
      (fixed-geometry count badges keep their literal text-[9px]). */
   --text-micro: 0.625rem;
+
+  /* Tutorial editor (Task 16, F-48) — semantic surface/media tokens, mapped
+     verbatim from docs/concepts/vault-buddy-editor/contracts/design-tokens.json
+     (dark values here; `[data-theme="light"]` below overrides them from the
+     same contract's reference implementation, `reference/editor.css`'s
+     `[data-theme=light]` block). Everything that already has a token in this
+     file (fg/accent/focus/danger) is reused as-is — these are only the names
+     the editor introduces: workspace surfaces (stage/panel/raised/line) and
+     the media-type accents (video/audio) plus the fade-handle gold. */
+  --color-stage: #131419;
+  --color-panel: #202127;
+  --color-raised: #292a33;
+  --color-line: #353640;
+  --color-video: #aa92ed;
+  --color-video-bg: #40364f;
+  --color-audio: #8cccc0;
+  --color-audio-bg: #263e3d;
+  --color-gold: #ebc582;
+  --color-gold-bg: #493d2c;
+
+  /* Editor shell region sizes (brief's exact values — the CONTRACT sidebar/
+     inspector widths, 244/276, not `reference/editor.css`'s own 220/282,
+     which is the executable reference's later drift, not the contract). Not
+     a recognized Tailwind namespace, so no utility class is generated — the
+     shell's own scoped CSS reads them with `var(--editor-sidebar)` etc. for
+     its grid-template-columns/rows. */
+  --editor-sidebar: 244px;
+  --editor-inspector: 276px;
+  --editor-timeline: 400px;
+  --editor-label: 196px;
+}
+
+/* Tutorial editor light theme (Task 18 will let the user persist this choice
+   in the `editorWorkspace` store; for now `EditorShell` sets `data-theme` on
+   `document.documentElement` from local state seeded by
+   `prefers-color-scheme`). Only the ten tokens above vary — every other
+   token in this file (fg/accent/focus/danger/radius/micro) is shared between
+   themes by design (DESIGN-SYSTEM.md: "Theme changes use semantic tokens").
+   Values from `reference/editor.css`'s `[data-theme=light]` block, the same
+   contract's executable reference. */
+[data-theme="light"] {
+  --color-stage: #e8e7ef;
+  --color-panel: #fff;
+  --color-raised: #f1f0f5;
+  --color-line: #dcdce5;
+  --color-video: #724f9e;
+  --color-video-bg: #e5ddee;
+  --color-audio: #246e62;
+  --color-audio-bg: #d9eeea;
+  --color-gold: #8b5c16;
+  --color-gold-bg: #f7ecd8;
 }
 
 html,

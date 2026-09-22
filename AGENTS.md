@@ -117,6 +117,9 @@ vault-buddy/
 │   ├── components/             # panel views + buddy character (ActionPanel is the shell)
 │   │   └── editor/             # CapturePreview + TimelineStrip + ExportBar + LegacyCaptureEditor
 │   │                           #   (the phase-4 surface, extracted behind EditorRoot's feature switch)
+│   │       └── shell/          # EditorShell + EditorHeader — the tutorial editor's own
+│   │                           #   responsive grid/header (Task 16), mounted by EditorRoot
+│   │                           #   ALONGSIDE LegacyCaptureEditor until Task 21 retires it
 │   ├── stores/                 # Pinia: vaults, capture, screenCapture, documentImports,
 │   │                           #   pandoc, ffmpeg, updates, settings, settingsStatus, notifications
 │   ├── composables/            # settings sync, startup update check, bubble, announcements,
@@ -3414,6 +3417,23 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
   them without touching call sites. The white-opacity glass surfaces
   (`bg-white/5`, `bg-white/10`, `border-white/10`) stay literal — already
   consistent, and tokenizing them risks `color-mix` drift.
+- **The tutorial editor (`src/components/editor/shell/`, Task 16, F-48)
+  adds its own token set to the same `@theme` block** rather than reusing
+  the panel's palette wholesale — it reuses `fg`/`accent`/`focus`/`danger`/
+  `rounded-control`/`text-micro` but needs ten more the panel never did:
+  `--color-stage`/`-panel`/`-raised`/`-line` (workspace surfaces) and
+  `-video`/`-video-bg`/`-audio`/`-audio-bg`/`-gold`/`-gold-bg` (media-type
+  and fade-handle accents), mapped verbatim from
+  `docs/concepts/vault-buddy-editor/contracts/design-tokens.json`. Dark
+  values are the `@theme` defaults; `[data-theme="light"]` (set on
+  `document.documentElement` by `EditorShell`, seeded from
+  `prefers-color-scheme` and toggled from the header — Task 18 moves that
+  choice into the future `editorWorkspace` store) overrides all ten. Four
+  more custom properties — `--editor-sidebar` (244px) / `--editor-inspector`
+  (276px) / `--editor-timeline` (400px) / `--editor-label` (196px) — are
+  region sizes, not colors, so Tailwind emits them as plain CSS variables
+  with no matching utility class; `EditorShell`'s own scoped `<style>`
+  reads them via `var(...)` for its grid-template-columns.
 - **Primitives** are presentational and each unit-tested: `IconButton`
   (icon-only; owns the focus/hover/disabled treatment; sizes `sm` = p-1,
   `md` = p-1.5), `AppButton` (primary/secondary/ghost/danger text button),

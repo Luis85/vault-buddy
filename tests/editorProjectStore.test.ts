@@ -240,6 +240,48 @@ describe("editorProject store", () => {
     expect(store.dirty).toBe(true);
   });
 
+  // Task 16 (F-48): `EditorHeader`'s status line needs a "Saving…" state that
+  // is genuinely in flight, not a timer-faked one (this task's own mutation
+  // check: deriving status from a `setTimeout` must fail this test, since
+  // `saveTask` here never resolves on its own — only the awaited receipt
+  // flips `saving` back).
+  it("saving is true only while a save is genuinely in flight, then clears on a resolved receipt", async () => {
+    const saveTask = deferred<SaveReceipt>();
+    const store = useEditorProjectStore();
+    store.setPort(
+      fakePort({
+        openStaged: () =>
+          Promise.resolve(openResult({ snapshot: snapshot({ revision: 2, persistedRevision: null }) })),
+        save: () => saveTask.promise,
+      }),
+    );
+    await store.openStaged("A");
+    expect(store.saving).toBe(false);
+
+    const saving = store.save();
+    expect(store.saving).toBe(true);
+
+    saveTask.resolve({ sessionId: "ses-a", savedRevision: 2, projectFileId: "project-a" });
+    await saving;
+
+    expect(store.saving).toBe(false);
+  });
+
+  it("saving clears even when the save request rejects", async () => {
+    const store = useEditorProjectStore();
+    store.setPort(
+      fakePort({
+        openStaged: () => Promise.resolve(openResult({ snapshot: snapshot({ revision: 2 }) })),
+        save: () => Promise.reject(new EditorPortError(editorError({ message: "disk full" }))),
+      }),
+    );
+    await store.openStaged("A");
+    await store.save();
+
+    expect(store.saving).toBe(false);
+    expect(store.lastError?.message).toBe("disk full");
+  });
+
   it("a receipt from another session is ignored", async () => {
     const store = useEditorProjectStore();
     store.setPort(

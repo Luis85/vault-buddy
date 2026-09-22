@@ -36,9 +36,9 @@ import { listen } from "@tauri-apps/api/event";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import LegacyCaptureEditor from "../components/editor/LegacyCaptureEditor.vue";
+import EditorShell from "../components/editor/shell/EditorShell.vue";
 import { logWarning } from "../logging";
 import { useEditorProjectStore } from "../stores/editorProject";
-import { formatDuration } from "../utils/formatDuration";
 
 /** Task 21 replaces this component with the real workspace UI and flips this
  * off; until then the legacy phase-4 surface is the only visible editor. Not
@@ -67,7 +67,6 @@ const legacyBase = ref<string | null>(null);
  */
 const legacyRequestSeq = ref(0);
 
-const shellDuration = computed(() => formatDuration(editorProject.durationMs));
 /**
  * Fix round 1: a shell that goes on showing the PREVIOUS capture's identity
  * while a later open fails is worse than showing nothing — it attributes a
@@ -80,17 +79,18 @@ const shellDuration = computed(() => formatDuration(editorProject.durationMs));
  * showing. A failed second open leaves `sourceBase` pointed at whatever
  * opened last successfully, which is no longer `legacyBase` once the drain
  * that failed has updated it.
+ *
+ * Task 16: `EditorShell`/`EditorHeader` now read `editorProject` directly
+ * for title/duration/vault (A01: resolved by Rust from the staged capture's
+ * sidecar, never from `screenCapture`'s `vaultId` — a DIFFERENT fact, the
+ * last capture the buddy/panel windows recorded —
+ * `tests/screenCaptureEditHandoff.test.ts` pins this), so this file no
+ * longer needs its own `shellDuration`/`shellVault` computeds; it keeps only
+ * the gate deciding WHETHER to show the shell at all.
  */
 const sessionMatchesLegacy = computed(
   () => editorProject.sourceBase !== null && editorProject.sourceBase === legacyBase.value,
 );
-/** The project's OWN destination vault (A01: resolved by Rust from the
- * staged capture's sidecar, never from any store or UI state) — read
- * straight off the opened project, never from `screenCapture`'s `vaultId`.
- * That store mirrors the LAST capture the buddy/panel windows recorded, an
- * entirely different fact this window must not conflate with the project it
- * actually has open (`tests/screenCaptureEditHandoff.test.ts` pins this). */
-const shellVault = computed(() => editorProject.project?.destination.vault ?? null);
 
 /** Drain the stash and open whatever it held. Runs on mount AND on every
  * `editor:open`. An empty drain means "nothing new", never "close what is
@@ -143,28 +143,15 @@ onBeforeUnmount(() => {
   <main
     class="flex h-screen w-screen flex-col gap-3 overflow-y-auto bg-slate-900 p-4 text-fg"
   >
-    <!-- A temporary shell around the new session's own truth, until Task 21
-         replaces the whole surface below it: title/duration/dirty/vault
-         straight off `editorProject`, proving the new open path is really
-         live rather than merely invoked. Gated on `sessionMatchesLegacy`
-         (fix round 1) so a failed open never leaves this attributing a
-         PREVIOUS capture's identity to whatever the legacy surface is now
-         showing. -->
-    <section
-      v-if="editorProject.snapshot && sessionMatchesLegacy"
-      data-testid="editor-shell"
-      class="shrink-0 rounded-control border border-white/10 bg-white/5 px-3 py-2 text-micro text-fg-subtle"
-    >
-      <span data-testid="editor-shell-title">{{ editorProject.snapshot.title }}</span>
-      ·
-      <span data-testid="editor-shell-duration">{{ shellDuration }}</span>
-      ·
-      <span data-testid="editor-shell-dirty">{{ editorProject.dirty ? "Unsaved changes" : "Saved" }}</span>
-      <template v-if="shellVault">
-        ·
-        <span data-testid="editor-shell-vault">{{ shellVault }}</span>
-      </template>
-    </section>
+    <!-- Task 16 (F-48): the real responsive shell/header, replacing Task
+         15's temporary title/duration/dirty/vault bar. Gated on
+         `sessionMatchesLegacy` (fix round 1) so a failed open never leaves
+         this attributing a PREVIOUS capture's identity to whatever the
+         legacy surface is now showing — `EditorShell`/`EditorHeader` read
+         `editorProject` directly and always render once mounted, so the
+         v-if here (not inside the shell) is what makes it disappear on a
+         failed open, exactly like the bar it replaces. -->
+    <EditorShell v-if="editorProject.snapshot && sessionMatchesLegacy" />
     <!-- A multi-root component: its own root nodes (header, preview, strip,
          verbs, export bar — or the single "No capture open" line) land as
          DIRECT children of `main` in the DOM, exactly where they sat before

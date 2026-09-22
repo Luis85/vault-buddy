@@ -1,0 +1,234 @@
+<script setup lang="ts">
+/**
+ * The tutorial editor's application header (Task 16, F-48; SCREENS-AND-
+ * INTERACTIONS.md §02: "The application header owns project title/status,
+ * project menu, Help, Checks, Save project and Render video"). It owns
+ * project-scoped command surface — everything else (preview tools, timeline,
+ * inspector) is a later task's own row/panel per that same section's
+ * "persistent command ownership" rule.
+ *
+ * Reads `editorProject` DIRECTLY rather than taking title/duration/vault/
+ * dirty as props: those are exactly the store's own committed truth (R14),
+ * and prop-drilling them through `EditorShell` would just be a second copy
+ * of state the store already owns for no benefit — the same reasoning
+ * `ScreenCaptureBar` reads `screenCapture` directly rather than through
+ * `ActionPanel` props. The layout-only bits this component does NOT own —
+ * compact/theme/drawer-open — stay props from `EditorShell`, because those
+ * are view state (ARCHITECTURE-AND-STACK.md's `editorWorkspace` boundary),
+ * never `editorProject`'s.
+ *
+ * `editor-shell-title` / `editor-shell-duration` / `editor-shell-vault` keep
+ * their EXACT testids from Task 15's temporary shell bar (`EditorRoot.vue`,
+ * pre-Task-16) — `tests/editorRoot.test.ts` and
+ * `tests/screenCaptureEditHandoff.test.ts` assert them directly and are not
+ * Task 16's files to rewrite ("keeping ... every existing editor test
+ * green").
+ */
+import { computed, nextTick, ref } from "vue";
+
+import type { EditorCommand } from "../../../editorTypes";
+import { useEditorProjectStore } from "../../../stores/editorProject";
+import { formatDuration } from "../../../utils/formatDuration";
+import AppButton from "../../ui/AppButton.vue";
+import IconButton from "../../ui/IconButton.vue";
+
+const props = defineProps<{
+  isCompact: boolean;
+  libraryOpen: boolean;
+  inspectorOpen: boolean;
+  theme: "dark" | "light";
+}>();
+const emit = defineEmits<{
+  (e: "toggle-library"): void;
+  (e: "toggle-inspector"): void;
+  (e: "toggle-theme"): void;
+}>();
+
+const editorProject = useEditorProjectStore();
+
+const title = computed(() => editorProject.snapshot?.title ?? "Untitled");
+const durationLabel = computed(() => formatDuration(editorProject.durationMs));
+const vault = computed(() => editorProject.project?.destination.vault ?? null);
+
+/**
+ * Save/Render's disabled reasons carry a visible reason string next to the
+ * button (R20: "a disabled control carries a reason string") rather than
+ * relying on a hover-only `title` attribute nobody sees on a touch device or
+ * without hovering — the `TaskSubtasks.vue` `disabledReason` precedent.
+ */
+const saveDisabledReason = computed<string | null>(() => {
+  if (!editorProject.sessionId) return "No project is open.";
+  if (editorProject.saving) return "Saving…";
+  return null;
+});
+/** Render video is a real, permanently-present button (SCREENS-AND-
+ * INTERACTIONS.md §02) that is simply not wired to anything yet — Task 47
+ * builds the render job. Disabling it with this reason, rather than hiding
+ * it, is what keeps the header's own command layout stable across that
+ * later task landing (nothing moves; the button just becomes clickable). */
+const RENDER_DISABLED_REASON = "Rendering a video arrives in a later update.";
+
+/**
+ * Status text (Task 16's own brief: "Saved, Unsaved changes, Saving…, Save
+ * failed"), derived every render from the store's own fields — never a
+ * timer (this task's mutation check: faking "Saved" from a `setTimeout`
+ * must read wrong against a receipt that has not actually landed yet).
+ * `lastError` is the store's one shared failure field (execute/open/save all
+ * set it), so a non-save failure can in principle read as "Save failed"
+ * here too; there is no separate save-only error flag to derive from
+ * without adding state the brief did not ask for, and the project stays
+ * dirty in exactly the cases this would misfire, so the worst case reads as
+ * a (still correct) "Unsaved changes" delay of one attempted save.
+ */
+const status = computed<string>(() => {
+  if (editorProject.saving) return "Saving…";
+  if (editorProject.lastError) return "Save failed";
+  return editorProject.dirty ? "Unsaved changes" : "Saved";
+});
+
+const editingTitle = ref(false);
+const titleDraft = ref("");
+const titleInput = ref<HTMLInputElement | null>(null);
+
+function startRename() {
+  titleDraft.value = title.value;
+  editingTitle.value = true;
+  void nextTick(() => titleInput.value?.focus());
+}
+function commitRename() {
+  if (!editingTitle.value) return;
+  editingTitle.value = false;
+  const next = titleDraft.value.trim();
+  if (!next || next === title.value) return;
+  const command: EditorCommand = { kind: "rename", title: next };
+  void editorProject.execute(command);
+}
+function cancelRename() {
+  editingTitle.value = false;
+}
+function onTitleEnter() {
+  commitRename();
+  titleInput.value?.blur();
+}
+
+function onSave() {
+  void editorProject.save();
+}
+</script>
+
+<template>
+  <header
+    data-testid="editor-header"
+    class="flex flex-wrap items-center gap-2 rounded-control border border-line bg-panel px-3 py-2"
+  >
+    <IconButton
+      v-if="props.isCompact"
+      label="Library"
+      title="Library"
+      data-testid="editor-header-library-toggle"
+      :aria-expanded="props.libraryOpen"
+      @click="emit('toggle-library')"
+    >
+      📁
+    </IconButton>
+
+    <input
+      v-if="editingTitle"
+      ref="titleInput"
+      v-model="titleDraft"
+      data-testid="editor-header-title-input"
+      aria-label="Project title"
+      class="min-w-0 flex-1 rounded-control border border-focus bg-raised px-2 py-1 text-sm text-fg focus:outline-none"
+      @keydown.enter="onTitleEnter"
+      @keydown.esc="cancelRename"
+      @blur="commitRename"
+    >
+    <button
+      v-else
+      type="button"
+      data-testid="editor-shell-title"
+      class="max-w-[24ch] cursor-pointer truncate rounded-control px-1 text-left text-sm font-medium text-fg hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      title="Rename project"
+      @click="startRename"
+    >
+      {{ title }}
+    </button>
+
+    <span
+      data-testid="editor-shell-duration"
+      class="text-micro text-fg-subtle"
+    >{{ durationLabel }}</span>
+    <span
+      data-testid="editor-header-status"
+      class="text-micro text-fg-subtle"
+    >{{ status }}</span>
+    <span
+      v-if="vault"
+      data-testid="editor-shell-vault"
+      class="text-micro text-fg-subtle"
+    >{{ vault }}</span>
+
+    <div class="ml-auto flex items-center gap-2">
+      <AppButton
+        variant="ghost"
+        size="sm"
+        data-testid="editor-header-help"
+      >
+        Help
+      </AppButton>
+      <AppButton
+        variant="ghost"
+        size="sm"
+        data-testid="editor-header-checks"
+      >
+        Checks
+      </AppButton>
+      <IconButton
+        :label="props.theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'"
+        data-testid="editor-header-theme-toggle"
+        @click="emit('toggle-theme')"
+      >
+        {{ props.theme === "light" ? "🌙" : "☀️" }}
+      </IconButton>
+      <AppButton
+        variant="secondary"
+        size="sm"
+        data-testid="editor-header-save"
+        :disabled="Boolean(saveDisabledReason)"
+        :title="saveDisabledReason ?? undefined"
+        @click="onSave"
+      >
+        Save project
+      </AppButton>
+      <span
+        v-if="saveDisabledReason"
+        data-testid="editor-header-save-reason"
+        class="text-micro text-fg-subtle"
+      >{{ saveDisabledReason }}</span>
+      <AppButton
+        variant="primary"
+        size="sm"
+        data-testid="editor-header-render"
+        :disabled="true"
+        :title="RENDER_DISABLED_REASON"
+      >
+        Render video
+      </AppButton>
+      <span
+        data-testid="editor-header-render-reason"
+        class="text-micro text-fg-subtle"
+      >{{ RENDER_DISABLED_REASON }}</span>
+    </div>
+
+    <IconButton
+      v-if="props.isCompact"
+      label="Inspector"
+      title="Inspector"
+      data-testid="editor-header-inspector-toggle"
+      :aria-expanded="props.inspectorOpen"
+      @click="emit('toggle-inspector')"
+    >
+      ⚙️
+    </IconButton>
+  </header>
+</template>
