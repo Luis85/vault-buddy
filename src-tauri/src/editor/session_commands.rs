@@ -194,7 +194,7 @@ fn ensure_sources_name(
     Err(err(
         EditorErrorCode::InvalidProject,
         format!(
-            "The capture {base:?} is linked to project {project_id:?}, but that project              edits {:?}. It was not opened.",
+            "The capture {base:?} is linked to project {project_id:?}, but that project edits {:?}. It was not opened.",
             staged.join(", ")
         ),
     ))

@@ -202,7 +202,20 @@ describe("TaskDetail.vue", () => {
     await wrapper.find('[data-testid="task-detail-delete-confirm"]').trigger("click");
     await new Promise((r) => setTimeout(r));
     expect(calls.some((c) => c[0] === "delete_task")).toBe(true);
-  });
+    // Explicit timeout: this is the FIRST test in the file to dynamically
+    // import ../src/components/TaskDetail.vue, so it alone pays the one-time
+    // cost of transforming and first-mounting the whole statically-imported
+    // subtree (TaskListPicker, TaskParentRow, TaskSubtasks, and everything
+    // those pull in) under istanbul coverage instrumentation — the same class
+    // of cost the "re-seeds every draft…" ActionPanel test below already
+    // documents. Measured on this host: 978ms plain / 1928ms with `--coverage`
+    // run in isolation, but a full `npm run test:coverage` run (114 files'
+    // worth of concurrent transform + instrumentation + render work
+    // saturating the host) pushed this one past Vitest's 5000ms default,
+    // observed timing out at 5034ms — CPU contention from the full suite, not
+    // a hang: every await here is an ordinary macrotask flush that always
+    // resolves in isolation.
+  }, 15000);
 
   it("save sends a description change in the patch", async () => {
     const calls: any[] = [];
