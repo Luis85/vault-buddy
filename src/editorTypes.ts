@@ -303,7 +303,12 @@ export interface Selected {
 /** `core::editor::workspace::DeleteMode`. */
 export type DeleteMode = "gap" | "close";
 
-/** The 18 sanitized workspace preference fields (R16,
+/** `core::editor::workspace::Theme` (F16, Task 18) — the editor header's
+ * light/dark toggle, persisted through the saved workspace so it survives a
+ * reopen. */
+export type Theme = "dark" | "light";
+
+/** The 18 sanitized workspace preference fields plus `theme` (R16 + F16,
  * `core::editor::workspace::Workspace`) — every one optional, since a
  * malformed/stale value degrades to absent rather than failing the read. */
 export interface Workspace {
@@ -325,6 +330,7 @@ export interface Workspace {
   properties_open?: boolean;
   focus_preview?: boolean;
   caption_settings_open?: boolean;
+  theme?: Theme;
 }
 
 // ---- IPC envelopes (Contract reference `Envelopes` paragraph) -------------

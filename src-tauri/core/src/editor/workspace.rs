@@ -22,6 +22,18 @@ pub enum DeleteMode {
     Close,
 }
 
+/// The editor window's own light/dark preference (F16; Task 18). Kept here
+/// rather than in `core::editor::model` because it is view state, not part
+/// of the project graph — the same reason the whole `workspace.json`
+/// sidecar exists as a document `editor_save_project` embeds read-only
+/// rather than a field on `Project` itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    Dark,
+    Light,
+}
+
 /// The workspace's "what is selected right now" pointer — a kind tag plus
 /// an entity id (`{"type":"clip","id":"presenter1"}` in the reference
 /// fixture). Kept as its own small struct, not an opaque `Value`, so a
@@ -76,6 +88,12 @@ pub struct Workspace {
     pub focus_preview: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption_settings_open: Option<bool>,
+    /// F16: the editor header's theme toggle. Without this field `sanitize`
+    /// drops `theme` as an unrecognized key (the module doc's "an unknown
+    /// key is simply never read"), so the toggle in `EditorHeader` (Task 16)
+    /// would never survive a reopen — the exact gap Task 18 closes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<Theme>,
 }
 
 fn str_field(v: &Value, key: &str) -> Option<String> {
@@ -128,6 +146,14 @@ fn delete_mode_field(v: &Value) -> Option<DeleteMode> {
     }
 }
 
+fn theme_field(v: &Value) -> Option<Theme> {
+    match v.get("theme")?.as_str()? {
+        "dark" => Some(Theme::Dark),
+        "light" => Some(Theme::Light),
+        _ => None,
+    }
+}
+
 /// Reads and sanitizes the workspace preference blob. Every field is
 /// looked up independently, so one wrong-typed or unknown key never
 /// affects any other — a hostile or merely stale document can shrink what
@@ -152,6 +178,7 @@ pub fn sanitize(v: &Value) -> Workspace {
         properties_open: bool_field(v, "properties_open"),
         focus_preview: bool_field(v, "focus_preview"),
         caption_settings_open: bool_field(v, "caption_settings_open"),
+        theme: theme_field(v),
     }
 }
 
@@ -211,6 +238,34 @@ mod tests {
         let v = serde_json::json!({ "selection_clip_ids": ids });
         let ws = sanitize(&v);
         assert_eq!(ws.selection_clip_ids.unwrap().len(), limits::MAX_CLIPS);
+    }
+
+    // F16: without the `theme` field on `Workspace`, `sanitize` drops it as
+    // an unrecognized key (the module doc's own "an unknown key is simply
+    // never read") and the header's theme toggle (Task 16) would never
+    // survive a reopen. `"dark"`/`"light"` must survive; anything else
+    // (including a plausible-looking third theme) must drop to `None`
+    // rather than being accepted as a free-form string.
+    #[test]
+    fn sanitize_keeps_theme_and_rejects_other_values() {
+        assert_eq!(
+            sanitize(&serde_json::json!({ "theme": "dark" })).theme,
+            Some(Theme::Dark)
+        );
+        assert_eq!(
+            sanitize(&serde_json::json!({ "theme": "light" })).theme,
+            Some(Theme::Light)
+        );
+        assert_eq!(
+            sanitize(&serde_json::json!({ "theme": "purple" })).theme,
+            None,
+            "an unrecognized theme must be dropped, not passed through"
+        );
+        assert_eq!(
+            sanitize(&serde_json::json!({})).theme,
+            None,
+            "an absent theme must stay absent"
+        );
     }
 
     #[test]

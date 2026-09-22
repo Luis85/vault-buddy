@@ -818,6 +818,8 @@ describe("EditorRoot", () => {
       save: unimplemented("save"),
       closeSession: unimplemented("closeSession"),
       hideWindow: unimplemented("hideWindow"),
+      getWorkspace: unimplemented("getWorkspace"),
+      saveWorkspace: unimplemented("saveWorkspace"),
       ...overrides,
     };
   }

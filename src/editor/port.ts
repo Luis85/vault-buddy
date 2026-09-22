@@ -28,6 +28,7 @@ import type {
   ExecuteRequest,
   ProjectSummaryDto,
   SaveReceipt,
+  Workspace,
 } from "../editorTypes";
 import {
   decodeEditorError,
@@ -35,6 +36,7 @@ import {
   decodeProjection,
   decodeProjectSummaries,
   decodeSaveReceipt,
+  decodeWorkspace,
   isEditorError,
 } from "./decode";
 
@@ -101,6 +103,12 @@ export interface EditorPort {
   save(sessionId: string, expectedRevision: number): Promise<SaveReceipt>;
   closeSession(sessionId: string, disposition: CloseDisposition): Promise<void>;
   hideWindow(): Promise<void>;
+  /** `editor_get_workspace` — reads (and sanitizes) `workspace.json`;
+   * missing/malformed degrades to an object with every field absent. */
+  getWorkspace(sessionId: string): Promise<Workspace>;
+  /** `editor_save_workspace` — sanitizes and writes `workspace.json`.
+   * Never touches the session's revision or its undo/redo history. */
+  saveWorkspace(sessionId: string, workspace: Workspace): Promise<void>;
 }
 
 export function createTauriEditorPort(): EditorPort {
@@ -132,6 +140,12 @@ export function createTauriEditorPort(): EditorPort {
     },
     async hideWindow() {
       await call("editor_hide_window", undefined, () => undefined);
+    },
+    getWorkspace(sessionId) {
+      return call("editor_get_workspace", { sessionId }, decodeWorkspace);
+    },
+    async saveWorkspace(sessionId, workspace) {
+      await call("editor_save_workspace", { sessionId, workspace }, () => undefined);
     },
   };
 }

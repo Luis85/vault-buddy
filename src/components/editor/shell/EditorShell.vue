@@ -32,6 +32,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
+import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import EditorHeader from "./EditorHeader.vue";
 import PreviewToolbar from "./PreviewToolbar.vue";
 
@@ -61,28 +62,26 @@ const showLibrary = computed(() => !isCompact.value || libraryOpen.value);
 const showInspector = computed(() => !isCompact.value || inspectorOpen.value);
 
 /**
- * Theme: `prefers-color-scheme` seeds the initial value, then a local toggle
- * can override it — "Task 18 persists it [in `editorWorkspace`]; local state
- * for now" (this task's brief). Applied via `document.documentElement`'s
- * `data-theme`, which `src/style.css`'s `[data-theme="light"]` block reads;
- * the editor window is its own webview, so this touches no other window.
+ * Theme: Task 16 kept this as a local ref seeded from
+ * `prefers-color-scheme`, with its own module doc promising "Task 18
+ * persists it [in `editorWorkspace`]". This task keeps that seed but moves
+ * the STATE itself into `editorWorkspace` (persisted through
+ * `editor_save_workspace` — F16 — so the toggle survives a reopen); this
+ * component's own job shrinks to the one thing that stays view-local:
+ * applying `document.documentElement`'s `data-theme`, which
+ * `src/style.css`'s `[data-theme="light"]` block reads. The editor window
+ * is its own webview, so this touches no other window.
  */
-function prefersLight(): boolean {
-  return (
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-color-scheme: light)").matches
-  );
-}
-const theme = ref<"dark" | "light">(prefersLight() ? "light" : "dark");
+const workspace = useEditorWorkspaceStore();
 watch(
-  theme,
+  () => workspace.theme,
   (t) => {
     document.documentElement.dataset.theme = t;
   },
   { immediate: true },
 );
 function toggleTheme() {
-  theme.value = theme.value === "light" ? "dark" : "light";
+  workspace.toggleTheme();
 }
 
 /**
@@ -111,7 +110,7 @@ function onFocusPreview() {
       :is-compact="isCompact"
       :library-open="libraryOpen"
       :inspector-open="inspectorOpen"
-      :theme="theme"
+      :theme="workspace.theme"
       @toggle-library="libraryOpen = !libraryOpen"
       @toggle-inspector="inspectorOpen = !inspectorOpen"
       @toggle-theme="toggleTheme"

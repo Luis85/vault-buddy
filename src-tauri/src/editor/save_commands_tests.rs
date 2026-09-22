@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use super::*;
+use crate::editor::prefs_commands::save_workspace_in;
 use crate::editor::session_commands::{
     close_in, execute_in, open_staged_session, snapshot_in, CloseDisposition,
 };
@@ -445,11 +446,57 @@ fn a_corrupt_project_json_refuses_the_save_rather_than_overwriting_it() {
     );
 }
 
+// Task 18 (F17): before this task, `editor_save_project` carried the LAST
+// SAVED envelope's own `workspace` field forward untouched, so a live
+// `editor_save_workspace` write was invisible to the next
+// `editor_save_project` until the process restarted. This pins the fix:
+// save a non-default workspace through `editor_save_workspace`'s own
+// helper FIRST, then save the project, then reload -- the envelope's
+// `workspace` field must equal the SANITIZED live value (theme kept,
+// unrecognized keys dropped), not `{}`.
+//
+// MUTATION CHECK (this task's brief): reverting `save_project_with` to
+// embed `serde_json::json!({})` (or the last-saved envelope's own
+// `workspace` field) instead of `prefs_commands::read_workspace(...)`
+// makes this assertion fail.
+#[test]
+fn save_project_embeds_the_current_workspace() {
+    let f = Fixture::new();
+    f.stage(&sidecar(BASE, "vaultA"));
+    let state = EditorState::default();
+    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let sid = open.snapshot.session_id.clone();
+    let pid = open.project.id.clone();
+
+    save_workspace_in(
+        &state,
+        f.root(),
+        &sid,
+        serde_json::json!({
+            "snap": false,
+            "theme": "light",
+            "bogus_future_field": "must not round-trip",
+        }),
+    )
+    .unwrap();
+
+    save_project_in(&state, f.root(), &sid, 1).unwrap();
+
+    let (on_disk, _sources) = load_project(f.root(), &pid).unwrap();
+    assert_eq!(
+        on_disk.workspace,
+        serde_json::json!({ "snap": false, "theme": "light" }),
+        "editor_save_project must embed the sanitized LIVE workspace.json, not {{}}"
+    );
+}
+
 // Fix round 1, finding 1's other branch: a project.json that has
 // genuinely vanished out from under a live session (not corrupt, just
-// gone) is the one case that may still degrade -- to a fresh `{}`
-// workspace and a fresh `createdAt` -- rather than failing the save
-// outright, since there is nothing left to refuse ON.
+// gone) is the one case that may still degrade -- to a fresh `createdAt`
+// -- rather than failing the save outright, since there is nothing left
+// to refuse ON. The embedded `workspace` field is unaffected either way
+// (Task 18): it always comes from `workspace.json`, never the envelope
+// this branch is about.
 #[test]
 fn a_missing_project_json_degrades_to_a_fresh_workspace_rather_than_failing() {
     let f = Fixture::new();

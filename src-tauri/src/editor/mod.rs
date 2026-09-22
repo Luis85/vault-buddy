@@ -14,6 +14,7 @@ pub mod authz;
 mod authz_guard;
 #[cfg(test)]
 mod capability_guard;
+pub mod prefs_commands;
 pub mod project_store;
 pub mod save_commands;
 pub mod session_commands;

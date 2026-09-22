@@ -39,7 +39,7 @@ pub use model_cues::*;
 pub use projection::{EditorOpenResult, EditorProjection, MissingMedia};
 pub use session::{EditorSession, EditorSnapshot, ExecuteRequest};
 pub use validate::{validate_envelope, validate_project};
-pub use workspace::{sanitize, DeleteMode, Selected, Workspace};
+pub use workspace::{sanitize, DeleteMode, Selected, Theme, Workspace};
 
 /// A raw JSON object of fields this crate does not model, preserved
 /// verbatim on every entity via `#[serde(flatten)]` so an interchange

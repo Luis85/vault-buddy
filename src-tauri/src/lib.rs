@@ -63,6 +63,7 @@ use tauri_plugin_notification::NotificationExt;
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 // Imported so the editor commands register as two-segment paths, like
 // every other command (the handler count's one-liner counts exactly those).
+use editor::prefs_commands;
 use editor::save_commands;
 use editor::session_commands;
 
@@ -504,6 +505,8 @@ pub fn run() {
             save_commands::editor_save_project,
             save_commands::editor_list_projects,
             save_commands::editor_open_project,
+            prefs_commands::editor_get_workspace,
+            prefs_commands::editor_save_workspace,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to

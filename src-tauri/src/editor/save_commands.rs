@@ -25,6 +25,7 @@ use vault_buddy_core::editor::{
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::{require_editor_window, require_session};
+use super::prefs_commands::read_workspace;
 use super::session_commands::{missing_media, register_session};
 use super::store_io::{
     self, commit_project, load_project, project_file_exists, source_base_of, ProjectSummaryDto,
@@ -183,12 +184,9 @@ pub(crate) fn save_project_with(
     };
     let project_id = project.id.clone();
 
-    // The workspace preference blob and the record's `createdAt` are not
-    // owned by the in-memory session at all -- both live only in the last
-    // saved envelope, so this reads it back rather than inventing either.
-    // Task 18 replaces this "last saved workspace or {}" read with the
-    // sanitized LIVE workspace once a command exists to change it; until
-    // then, carrying the on-disk value forward is the only honest choice.
+    // The record's `createdAt` is not owned by the in-memory session at
+    // all -- it lives only in the last saved envelope, so this reads it
+    // back rather than inventing it.
     //
     // Fix round 1, finding 1 (narrowed further in fix round 2, finding 1):
     // a `load_project` failure is NOT one thing. Round 1 only special-cased
@@ -204,18 +202,27 @@ pub(crate) fn save_project_with(
     // written. The one remaining degrade is still logged rather than
     // swallowed (AGENTS.md's "no swallowed error" diagnostics invariant).
     let now = chrono::Local::now().to_rfc3339();
-    let (workspace, created_at) = if project_file_exists(root, &project_id) {
+    let created_at = if project_file_exists(root, &project_id) {
         match load_project(root, &project_id) {
-            Ok((envelope, _sources)) => (envelope.workspace, envelope.record.created_at),
+            Ok((envelope, _sources)) => envelope.record.created_at,
             Err(e) => return Err(e),
         }
     } else {
         log::warn!(
             "editor_save_project: no last-saved envelope for project {project_id:?} \
-             (project.json is absent), degrading to a fresh workspace"
+             (project.json is absent), stamping createdAt fresh"
         );
-        (serde_json::json!({}), now.clone())
+        now.clone()
     };
+
+    // Task 18 (F17): the envelope's `workspace` field is the sanitized LIVE
+    // `workspace.json` this task introduced, read through the same helper
+    // `editor_get_workspace` uses -- never a raw file read, and never the
+    // stale "last saved envelope's own workspace" this used to carry
+    // forward. `read_workspace` already degrades a missing/malformed file
+    // to the sanitized empty blob, so a project with no saved preferences
+    // yet still saves cleanly.
+    let workspace = read_workspace(root, &project_id)?;
 
     let envelope = WorkspaceEnvelope {
         schema: editor::WORKSPACE_SCHEMA.to_string(),

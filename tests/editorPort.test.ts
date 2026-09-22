@@ -221,6 +221,51 @@ describe("EditorPort", () => {
     ]);
   });
 
+  it("sends camelCased, unwrapped arguments for openProject/closeSession/hideWindow", async () => {
+    const calls: { cmd: string; args: unknown }[] = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "editor_open_project") {
+        return { ...PROJECTION_REPLY, workspace: {}, missing: [], sourceBase: null, recovered: false };
+      }
+      if (cmd === "editor_close_session") return null;
+      if (cmd === "editor_hide_window") return null;
+      throw new Error(`unexpected command ${cmd}`);
+    });
+
+    const port = createTauriEditorPort();
+    await port.openProject("proj-1", false);
+    await port.closeSession("ses-1", "keep");
+    await port.hideWindow();
+
+    expect(calls).toEqual([
+      { cmd: "editor_open_project", args: { projectFileId: "proj-1", useRecovery: false } },
+      { cmd: "editor_close_session", args: { sessionId: "ses-1", disposition: "keep" } },
+      { cmd: "editor_hide_window", args: {} },
+    ]);
+  });
+
+  // Task 18 (F-48/F-25/F-14): the workspace view-preference commands.
+  it("sends camelCased, unwrapped arguments for getWorkspace/saveWorkspace", async () => {
+    const calls: { cmd: string; args: unknown }[] = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "editor_get_workspace") return { snap: false, theme: "light" };
+      if (cmd === "editor_save_workspace") return null;
+      throw new Error(`unexpected command ${cmd}`);
+    });
+
+    const port = createTauriEditorPort();
+    const ws = await port.getWorkspace("ses-1");
+    await port.saveWorkspace("ses-1", { snap: false, theme: "light" });
+
+    expect(ws).toEqual({ snap: false, theme: "light" });
+    expect(calls).toEqual([
+      { cmd: "editor_get_workspace", args: { sessionId: "ses-1" } },
+      { cmd: "editor_save_workspace", args: { sessionId: "ses-1", workspace: { snap: false, theme: "light" } } },
+    ]);
+  });
+
   it("converts a rejected invoke into EditorPortError", async () => {
     mockIPC(() => {
       throw { code: "revisionConflict", message: "stale", retryable: true, operationId: "op-1" };

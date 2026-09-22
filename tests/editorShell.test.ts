@@ -91,6 +91,8 @@ function fakePort(overrides: Partial<EditorPort> = {}): EditorPort {
     save: unimplemented("save"),
     closeSession: unimplemented("closeSession"),
     hideWindow: unimplemented("hideWindow"),
+    getWorkspace: unimplemented("getWorkspace"),
+    saveWorkspace: unimplemented("saveWorkspace"),
     ...overrides,
   };
 }

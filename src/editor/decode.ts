@@ -157,11 +157,14 @@ export function decodeProjection(value: unknown): EditorProjection {
   };
 }
 
-function decodeWorkspace(value: unknown): Workspace {
-  // Rust already sanitizes this blob field by field on the way out
-  // (`core::editor::workspace::sanitize`) — every key is optional and a
-  // wrong-typed one is simply absent, so the frontend does not re-validate
-  // each of the 18 fields, only that the envelope itself is an object.
+/** `editor_get_workspace`'s reply, and the shape `editor_open_staged`/
+ * `editor_open_project` embed under their own `workspace` field. Rust
+ * already sanitizes this blob field by field on the way out
+ * (`core::editor::workspace::sanitize`) — every key is optional and a
+ * wrong-typed one is simply absent, so the frontend does not re-validate
+ * each of the 19 fields (R16's 18 plus `theme`, F16), only that the
+ * envelope itself is an object. */
+export function decodeWorkspace(value: unknown): Workspace {
   return asObject(value, "workspace") as unknown as Workspace;
 }
 
