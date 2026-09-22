@@ -26,10 +26,19 @@ use vault_buddy_core::editor::EditorSession;
 /// id to the one session open on it, so a second open of the same project
 /// reuses that session instead of forking a second, racing one.
 ///
-/// **Lock order: `by_project` before `sessions`** whenever both are held
-/// (`session_commands`' module doc). Neither is held across disk I/O.
+/// `open` serializes every open (find-or-mint + pin + register): without
+/// it two opens of one unpinned capture both miss the pin and the orphan
+/// scan and mint two projects, the second pin silently orphaning the first.
+///
+/// **Lock order: `open`, then `by_project`, then `sessions`.** `open` is the
+/// OUTERMOST lock — never taken while holding either map — and, unlike the
+/// maps, it IS held across disk I/O by design (the sidecar read, the store
+/// scan, the create and the pin are exactly what it serializes). Only opens
+/// wait on it; execute/snapshot/close never take it. The maps are never held
+/// across disk I/O.
 #[derive(Default)]
 pub struct EditorState {
+    pub open: Mutex<()>,
     pub sessions: Mutex<HashMap<String, EditorSession>>,
     pub by_project: Mutex<HashMap<String, String>>,
 }

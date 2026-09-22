@@ -9,10 +9,10 @@
 //! is unit-testable on a tempdir, the `clear_staged` / `discard_conflict`
 //! precedent.
 //!
-//! **Lock order** (`EditorState`'s two maps): `by_project` BEFORE
-//! `sessions`, whenever both are held. Neither is ever held across disk
-//! I/O: every function here does its disk work first and takes the maps
-//! only for the in-memory register/apply/remove.
+//! **Lock order**: `open` (outermost, held across an open's disk I/O by
+//! design), then `by_project`, then `sessions`. The two maps are never held
+//! across disk I/O: every function here does its disk work first and takes
+//! them only for the in-memory register/apply/remove.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -105,7 +105,8 @@ pub(crate) fn open_staged_in(
 
     if let Some(pid) = pinned_project(&sidecar) {
         if project_dir(root, &pid).is_some_and(|d| d.is_dir()) {
-            return load_opened(root, &pid);
+            let opened = load_opened(root, &pid)?;
+            return ensure_sources_name(opened, base, &pid);
         }
         log::warn!(
             "editor_open_staged: {base:?} is pinned to missing project {pid:?}; re-adopting"
@@ -168,6 +169,35 @@ pub(crate) fn open_staged_in(
         .map_err(|e| internal(format!("Could not create the project: {e}")))?;
     pin(staging_dir, base, &project_id)?;
     load_opened(root, &project_id)
+}
+
+/// The pin is a claim made by a hand-editable sidecar: refuse a project
+/// whose own `sources.json` names a DIFFERENT staged capture (or none), so
+/// opening one capture can never open — and later edit or discard — another
+/// capture's project.
+fn ensure_sources_name(
+    opened: OpenedProject,
+    base: &str,
+    project_id: &str,
+) -> Result<OpenedProject, EditorError> {
+    let staged: Vec<&str> = opened
+        .sources
+        .values()
+        .filter_map(|r| match &r.locator {
+            SourceLocator::Staging { base } => Some(base.as_str()),
+            _ => None,
+        })
+        .collect();
+    if staged.contains(&base) {
+        return Ok(opened);
+    }
+    Err(err(
+        EditorErrorCode::InvalidProject,
+        format!(
+            "The capture {base:?} is linked to project {project_id:?}, but that project              edits {:?}. It was not opened.",
+            staged.join(", ")
+        ),
+    ))
 }
 
 fn load_opened(root: &Path, id: &str) -> Result<OpenedProject, EditorError> {
@@ -234,6 +264,9 @@ pub(crate) fn open_staged_session(
     staging_dir: &Path,
     base: &str,
 ) -> Result<EditorOpenResult, EditorError> {
+    // Held until the session is registered: the open lock (outermost; see
+    // `EditorState`) serializes find-or-mint + pin + register.
+    let _open = lock_ignoring_poison(&state.open);
     let opened = open_staged_in(root, staging_dir, base)?;
     let workspace = sanitize(&opened.envelope.workspace);
     let projection = register_session(state, opened.envelope.project);

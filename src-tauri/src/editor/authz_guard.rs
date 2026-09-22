@@ -8,7 +8,8 @@
 //! into a new sibling file is still covered) and requires, for each
 //! `#[tauri::command]`:
 //! - a `window: WebviewWindow` parameter, and
-//! - `require_editor_window(&window)` as the body's first statement (only
+//! - `require_editor_window(&window)?` as the body's first statement — the
+//!   `?` included, so a discarded refusal (`let _ = …`, `.ok()`) fails (only
 //!   plain `let` bindings with no call in them may precede it).
 //!
 //! It also pins the exact SET of commands found, so a new command has to be
@@ -68,9 +69,11 @@ pub(crate) fn check_commands(src: &str) -> Vec<(String, Option<String>)> {
             .find(|l| !(l.is_empty() || l.starts_with("let ") && !l.contains('(')));
         let problem = if !takes_window {
             Some("does not take `window: WebviewWindow`".to_string())
-        } else if !first.is_some_and(|l| l.contains(THE_CALL)) {
+        } else if !first.is_some_and(|l| l.starts_with(&format!("{THE_CALL}?"))) {
+            // `starts_with` + `?`, never `contains`: `let _ = …;` and `….ok();`
+            // make the call and throw its refusal away.
             Some(format!(
-                "does not call {THE_CALL} first (first statement: {:?})",
+                "does not call {THE_CALL}? first (first statement: {:?})",
                 first.unwrap_or("")
             ))
         } else {
@@ -148,8 +151,24 @@ fn the_checker_names_a_command_without_the_call() {
          {THE_CALL}?;\n    x\n}}\n"
     );
     let no_window = format!("{attr}\npub fn no_window(app: AppHandle) -> R {{\n    go()\n}}\n");
-    let result = check_commands(&format!("{good}{late}{no_window}"));
-    assert_eq!(result.len(), 3);
+    // The call made but its refusal DISCARDED: an unauthorized caller would
+    // sail straight past it, so both must be reported, naming the fn.
+    let discarded = format!(
+        "{attr}\npub fn discarded(window: WebviewWindow) -> R {{\n    let _ = {THE_CALL};\n    \
+         go()\n}}\n"
+    );
+    let ok_ed = format!(
+        "{attr}\npub fn ok_ed(window: WebviewWindow) -> R {{\n    {THE_CALL}.ok();\n    go()\n}}\n"
+    );
+    let result = check_commands(&format!("{good}{late}{no_window}{discarded}{ok_ed}"));
+    assert_eq!(result.len(), 5);
+    for (i, name) in [(3, "discarded"), (4, "ok_ed")] {
+        assert_eq!(result[i].0, name);
+        assert!(
+            result[i].1.is_some(),
+            "{name} discards the refusal and must be reported"
+        );
+    }
     assert_eq!(result[0], ("good".to_string(), None));
     assert_eq!(result[1].0, "late");
     assert!(result[1].1.as_deref().unwrap().contains("first"));

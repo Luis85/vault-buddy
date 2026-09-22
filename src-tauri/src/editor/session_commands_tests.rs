@@ -315,3 +315,65 @@ fn close_disposition_decodes_the_wire_spelling() {
     }
     assert!(serde_json::from_str::<CloseDisposition>("\"discard_project\"").is_err());
 }
+
+// Two `editor_open_staged` calls for the same UNPINNED capture (a double
+// click, a duplicated `editor:open`) must not both miss the pin and the
+// orphan scan and mint two projects — the second pin would win, leaving the
+// first project an unreachable orphan. The open lock serializes them.
+// Repeated, because the race window is only the scan-to-create gap.
+#[test]
+fn concurrent_opens_of_one_capture_mint_one_project() {
+    for round in 0..20 {
+        let f = Fixture::new();
+        f.stage(&sidecar(BASE, "vaultA"));
+        let state = EditorState::default();
+        let barrier = std::sync::Barrier::new(2);
+        let ids: Vec<String> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..2)
+                .map(|n| {
+                    std::thread::Builder::new()
+                        .name(format!("editor-open-race-{n}"))
+                        .spawn_scoped(s, || {
+                            barrier.wait();
+                            open_staged_session(&state, f.root(), &f.staging(), BASE)
+                                .unwrap()
+                                .project
+                                .id
+                        })
+                        .unwrap()
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert_eq!(
+            ids[0], ids[1],
+            "round {round}: both opens must get one project"
+        );
+        assert_eq!(f.project_dirs().len(), 1, "round {round}: one directory");
+    }
+}
+
+// A pin is a claim by a hand-editable sidecar; if it names a project whose
+// sources belong to a DIFFERENT capture, opening this capture must not
+// silently open (and later edit or discard) someone else's project.
+#[test]
+fn open_staged_refuses_a_pin_to_another_captures_project() {
+    const OTHER: &str = "2026-09-21 0915 Other";
+    let f = Fixture::new();
+    f.stage(&sidecar(OTHER, "vaultB"));
+    let other = open_staged_in(f.root(), &f.staging(), OTHER).unwrap();
+    let other_id = other.envelope.project.id.clone();
+    f.stage(&sidecar(BASE, "vaultA"));
+    pin_staged(&f.staging(), BASE, &other_id).unwrap();
+
+    let e = open_staged_in(f.root(), &f.staging(), BASE)
+        .err()
+        .expect("a cross-wired pin must be refused");
+    assert_eq!(e.code, EditorErrorCode::InvalidProject);
+    assert!(
+        e.message.contains(BASE) && e.message.contains(OTHER),
+        "{}",
+        e.message
+    );
+    assert_eq!(f.project_dirs(), vec![other_id], "nothing new minted");
+}
