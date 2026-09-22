@@ -188,7 +188,29 @@ export const useEditorProjectStore = defineStore("editorProject", {
     openProject(id: string, useRecovery: boolean): Promise<void> {
       return this.openWith(() => this.port.openProject(id, useRecovery));
     },
+    /**
+     * Task 15: `EditorRoot` calls this UNCONDITIONALLY on every base it
+     * drains from the stash — both `mount` and every `editor:open` — rather
+     * than tracking "did I already open this" itself, so the guard against
+     * reopening a LIVE session for the same capture has to live here. A
+     * duplicate Edit click, or a second `open_capture_editor` for the
+     * capture already showing, re-stashes the same base and re-emits
+     * `editor:open`; without this a re-drain would spend a second
+     * `editor_open_staged` round trip re-minting local state Rust's own
+     * `open_staged_session_reuses_a_live_session` already keeps idempotent
+     * server-side, and would needlessly reset `missing`/`workspace` under
+     * the caller's feet.
+     *
+     * `sourceBase` (not the `base` argument of some LAST call) is the field
+     * to compare against, because it is what the PREVIOUS open's own reply
+     * reported — the same round-trip guarantee `sessionId` gives the rest of
+     * this store. `sessionId !== null` is the other half: a base can equal
+     * `sourceBase` while no session is open at all (a fresh store, or one
+     * `close()` just cleared), and `close()` nulls `sourceBase` for exactly
+     * this reason, so a reopen after closing is never short-circuited.
+     */
     openStaged(base: string): Promise<void> {
+      if (this.sourceBase === base && this.sessionId !== null) return Promise.resolve();
       return this.openWith(() => this.port.openStaged(base));
     },
     /**

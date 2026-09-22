@@ -429,10 +429,16 @@ mod tests {
         );
         // Spec 5.1's geometry block, unpinned before this: a shrink to
         // e.g. 100x100 passed every other assertion here.
-        assert_eq!(editor["width"], 960);
-        assert_eq!(editor["height"], 640);
-        assert_eq!(editor["minWidth"], 720);
-        assert_eq!(editor["minHeight"], 480);
+        //
+        // Widened in tutorial-editor Task 15 (960x640 -> 1280x820, min
+        // 720x480 -> 960x640): the new workspace UI (Task 21) needs more
+        // room than the phase-4 timeline editor did, and the OLD default
+        // becomes the new FLOOR — a user can still shrink to exactly what
+        // fit before, never smaller.
+        assert_eq!(editor["width"], 1280);
+        assert_eq!(editor["height"], 820);
+        assert_eq!(editor["minWidth"], 960);
+        assert_eq!(editor["minHeight"], 640);
     }
 
     // Without "editor" in this capability's `windows` array, the editor

@@ -837,3 +837,72 @@ describe("editorProject store — conflictIntent lifecycle (fix round 1)", () =>
     expect(executeCalls).toBe(2);
   });
 });
+
+// Task 15: EditorRoot calls `openStaged` unconditionally on every drained
+// base (both `mount` and every `editor:open`), so the "do not reopen a live
+// session" rule has to live HERE, not in the caller — a duplicate Edit click
+// or a repeated `editor:open` for the capture already open must not spend a
+// second `editor_open_staged` round trip re-minting state Rust already has.
+describe("editorProject store — openStaged same-base short-circuit (Task 15)", () => {
+  it("does not reopen the same base while its session is live", async () => {
+    const store = useEditorProjectStore();
+    let calls = 0;
+    store.setPort(
+      fakePort({
+        openStaged: (base) => {
+          calls += 1;
+          return Promise.resolve(
+            openResult({ sourceBase: base, snapshot: snapshot({ sessionId: "ses-a" }) }),
+          );
+        },
+      }),
+    );
+    await store.openStaged("cap one");
+    await store.openStaged("cap one");
+
+    // MUTATION CHECK (this task's brief): drop the `sourceBase === base &&
+    // sessionId !== null` guard in `openStaged` and this reads 2, red for
+    // the reason this test names.
+    expect(calls).toBe(1);
+  });
+
+  it("still reopens a DIFFERENT base", async () => {
+    const store = useEditorProjectStore();
+    const seen: string[] = [];
+    store.setPort(
+      fakePort({
+        openStaged: (base) => {
+          seen.push(base);
+          return Promise.resolve(
+            openResult({ sourceBase: base, snapshot: snapshot({ sessionId: `ses-${base}` }) }),
+          );
+        },
+      }),
+    );
+    await store.openStaged("cap one");
+    await store.openStaged("cap two");
+
+    expect(seen).toEqual(["cap one", "cap two"]);
+  });
+
+  it("reopens the same base again once its session has been closed", async () => {
+    const store = useEditorProjectStore();
+    let calls = 0;
+    store.setPort(
+      fakePort({
+        openStaged: (base) => {
+          calls += 1;
+          return Promise.resolve(
+            openResult({ sourceBase: base, snapshot: snapshot({ sessionId: "ses-a" }) }),
+          );
+        },
+        closeSession: () => Promise.resolve(),
+      }),
+    );
+    await store.openStaged("cap one");
+    await store.close("keep");
+    await store.openStaged("cap one");
+
+    expect(calls).toBe(2);
+  });
+});

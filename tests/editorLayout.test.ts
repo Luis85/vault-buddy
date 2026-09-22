@@ -25,6 +25,7 @@
  */
 import { mockConvertFileSrc } from "@tauri-apps/api/mocks";
 import { enableAutoUnmount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listeners: Record<string, (e?: { payload: unknown }) => void> = {};
@@ -48,6 +49,9 @@ enableAutoUnmount(afterEach);
 beforeEach(() => {
   for (const key of Object.keys(listeners)) delete listeners[key];
   mockConvertFileSrc("windows");
+  // Task 15: EditorRoot (mounted by `open()` below) now calls
+  // `useEditorProjectStore()`.
+  setActivePinia(createPinia());
 });
 
 /** Every class on an element, as a set, so order never matters. */

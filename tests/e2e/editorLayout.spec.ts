@@ -79,12 +79,15 @@ test("the fixture really loads, so the preview has an intrinsic aspect ratio", a
 });
 
 // The two defects a human reported on a 3840x2400 display, at the sizes that
-// produced them. 960x640 is the editor's configured size; the wider two are
-// "dragged wider" and "maximised".
+// produced them. 960x640 is the OLD floor (still the editor's `minWidth`/
+// `minHeight` since tutorial-editor Task 15 widened the default open size to
+// 1280x820 — the new workspace UI needs more room than the phase-4 timeline
+// editor did); 1280x820 is that new default; the wider two are "dragged
+// wider" and "maximised".
 for (const size of [
   { width: 960, height: 640 },
-  { width: 1280, height: 720 },
-  { width: 1600, height: 900 },
+  { width: 1280, height: 820 },
+  { width: 1600, height: 1000 },
   { width: 1920, height: 1080 },
 ]) {
   const label = `${size.width}x${size.height}`;

@@ -11,6 +11,7 @@
  */
 import { mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Nothing here drives `editor:open` — that is the lifecycle half's business —
@@ -44,7 +45,12 @@ import {
 // listeners) must not outlive their test.
 enableAutoUnmount(afterEach);
 
-beforeEach(() => mockConvertFileSrc("windows"));
+beforeEach(() => {
+  mockConvertFileSrc("windows");
+  // Task 15: EditorRoot (which every fixture here mounts through
+  // `helpers/editorMount.ts`) now calls `useEditorProjectStore()`.
+  setActivePinia(createPinia());
+});
 
 afterEach(() => {
   vi.restoreAllMocks();

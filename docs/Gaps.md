@@ -5197,13 +5197,13 @@ COMPUTED BY A REPLICA of Tauri's algorithm; it does not exercise
 `RuntimeAuthority::resolve_access` itself, `webview/mod.rs`'s dispatch
 path, or a real IPC round-trip — no automated test in this repo can
 (Vitest's `mockIPC` never reaches the real Rust-side ACL layer, and the
-shell's own Rust tests never open a real webview). Neither direction is
-yet on
+shell's own Rust tests never open a real webview). Both directions now
+carry rows on
 `docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md`
-— that file does not exist in this worktree yet; **it is created by Task 15,
-and Task 15 MUST carry both rows above**, not just the editor-refusal one,
-precisely because the blast radius of a resolution mismatch here is the
-whole app, not one feature. A passing manual check on both fronts is the
-only thing that closes this gap fully and lets the severity drop back down;
-everything above proves the DATA is right, never that the running app
-WIRES it up as documented.
+(created by Task 15, as this entry originally required): **T4** is
+"ordinary commands still dispatch" and **T5** is "an `editor_*` command is
+refused from a non-editor window" — both UNRUN as of Task 15 landing (an
+empty *Result* column, not a failure). A passing manual check on both is
+the only thing that closes this gap fully and lets the severity drop back
+down; everything above proves the DATA is right, never that the running
+app WIRES it up as documented.

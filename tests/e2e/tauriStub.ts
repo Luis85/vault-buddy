@@ -39,13 +39,56 @@ export const DETAIL = {
  *  about, and `page.route` fulfils it from the fixture either way. */
 export const FIXTURE_VIDEO_URL = "/__fixture__/capture.webm";
 
+/**
+ * A decode-valid `EditorOpenResult` (`src/editor/decode.ts`'s
+ * `decodeOpenResult`/`decodeProject`/`decodeSnapshot`) for `editor_open_staged`
+ * — tutorial-editor Task 15's `EditorRoot` calls `editorProject.openStaged`
+ * for every drained base UNCONDITIONALLY, alongside the legacy
+ * `load_staged_capture` path this stub already served, so a stub that left
+ * this command unanswered would make the store decode `undefined` and throw
+ * a `ProtocolError` on every page load this spec drives.
+ */
+const EDITOR_OPEN_RESULT = {
+  snapshot: {
+    sessionId: "ses-e2e",
+    projectId: "project-e2e",
+    revision: 1,
+    persistedRevision: null,
+    title: DETAIL.sourceTitle,
+    durationMs: DETAIL.durationMs,
+    canUndo: false,
+    canRedo: false,
+    undoLabel: null,
+    redoLabel: null,
+  },
+  project: {
+    schema: "vault-buddy-video-project/3",
+    id: "project-e2e",
+    title: DETAIL.sourceTitle,
+    canvas: { width: 1280, height: 720, fps: 30 },
+    master_gain: 1,
+    assets: [],
+    tracks: [],
+    clips: [],
+    effects: [],
+    markers: [],
+    transitions: [],
+    captions: null,
+    destination: { vault: "vault-e2e", folder: "", dated: false },
+  },
+  workspace: {},
+  missing: [],
+  sourceBase: DETAIL.base,
+  recovered: false,
+};
+
 export async function installTauriStub(page: Page) {
   await page.addInitScript(
-    ({ detail, videoUrl }) => {
+    ({ detail, videoUrl, openResult }) => {
       const listeners = new Map<number, unknown>();
       let nextId = 1;
 
-      // Only the three surfaces the editor touches. Anything else returns
+      // Only the surfaces the editor touches. Anything else returns
       // undefined rather than throwing, so a command added later shows up as
       // a behaviour change in the test rather than an unhandled rejection
       // that could be mistaken for a layout failure.
@@ -53,6 +96,7 @@ export async function installTauriStub(page: Page) {
         if (cmd === "take_editor_request") return detail.base;
         if (cmd === "load_staged_capture") return detail;
         if (cmd === "save_capture_timeline") return null;
+        if (cmd === "editor_open_staged") return openResult;
         if (cmd.startsWith("plugin:event|listen")) {
           listeners.set(nextId, args);
           return nextId++;
@@ -73,6 +117,6 @@ export async function installTauriStub(page: Page) {
         },
       };
     },
-    { detail: DETAIL, videoUrl: FIXTURE_VIDEO_URL },
+    { detail: DETAIL, videoUrl: FIXTURE_VIDEO_URL, openResult: EDITOR_OPEN_RESULT },
   );
 }

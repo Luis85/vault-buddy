@@ -1,0 +1,85 @@
+# Tutorial Editor — Windows Verification Checklist
+
+Manual end-to-end verification on a real Windows machine. **A running
+document across tasks**, not one task's gate — the tutorial-editor increment
+lands in many small tasks (see
+`docs/superpowers/specs/2026-09-21-tutorial-editor-integration-design.md`),
+and each one that touches something no automated gate on any platform can
+observe appends its own rows here rather than opening a second file. The
+screen-capture feature's own checklist
+(`docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md`)
+is the model this file's header, table shape and measurement discipline are
+copied from — read that file's own header once if any of the conventions
+below are unclear.
+
+**Created by Task 15.** Its first five rows exist for two different reasons
+that happen to land in the same task:
+
+- **T1–T3** verify the thing Task 15 itself ships: opening a staged screen
+  capture into the new Rust-backed editor session (`editor_open_staged`),
+  from both entry points the panel offers, and that a second open of the
+  SAME capture reuses the session rather than minting a duplicate one.
+- **T4–T5** close out GAP-170 (docs/Gaps.md), a gap Task 11 opened and this
+  file did not exist yet to carry: `build.rs`'s `AppManifest::commands(...)`
+  now lists every command in `generate_handler!`, not just the `editor_*`
+  ones, because leaving any command out of that list silently disables ACL
+  enforcement's grant for every command NOT listed — the near-miss GAP-170
+  documents at length. A Rust unit test
+  (`editor::capability_guard::the_generated_acl_artifact_resolves_the_
+  partition_correctly`) replicates Tauri's own resolution algorithm over the
+  generated `gen/schemas/{capabilities,acl-manifests}.json` artifact and
+  proves the DATA is right; it cannot exercise `RuntimeAuthority::
+  resolve_access` itself, `webview/mod.rs`'s dispatch path, or a real IPC
+  round trip inside a running app — no automated test in this repo can. T4
+  and T5 are that proof, and until both carry a result GAP-170 stays at its
+  current severity (High, unverified): a resolution mismatch here would not
+  be a scoping gap, it would be the WHOLE APP refusing every command from
+  every window.
+
+Re-measure the row count rather than incrementing it — the screen-capture
+checklist's own header explains why that discipline exists (it was wrong
+twice from incrementing):
+
+```bash
+grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
+```
+
+This file carries **5 rows** today (T1–T5), of which **0** carry a result. An
+empty *Result* column means unrun, which is not the same as failed — never
+convert one to the other, and never claim a manual run that was not actually
+performed on this host.
+
+Spec: `docs/superpowers/specs/2026-09-21-tutorial-editor-integration-design.md`
+(the ADR this task and its siblings implement); GAP-170 in `docs/Gaps.md` (the
+gap T4/T5 close).
+
+Run against a build of `claude/vault-buddy-improvement-polish-95f5bc`
+(`npx tauri build`, or `npm run test-build` for a dev run).
+
+## Measurement discipline
+
+Same rule the screen-capture checklist established: **prefer instrumentation
+that reports over assertions that confirm.** Write the observed value into
+the *Result* column, not a tick — which project id opened, whether a second
+open reused it or minted a new session id, the exact ACL refusal message,
+which commands were exercised and that each one actually returned data
+rather than silently no-op'ing.
+
+## Where to look
+
+| What | Where |
+| --- | --- |
+| A staged capture's editor session | `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\` — `project.json` is the workspace envelope; the PIN back to the staged capture is `editorProjectId` in the capture's own sidecar (`%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures\<base>.json`) |
+| Whether a second open reused the session | The editor window's title/duration line (`EditorRoot.vue`'s temporary shell, testid `editor-shell` in the DOM) shows the opened project's own title; `vault-buddy.log` logs each `editor_open_staged` call and, on reuse, does NOT create a new `<projectId>` folder under `editor-projects\` |
+| The app-wide IPC ACL | `src-tauri/gen/schemas/{capabilities,acl-manifests}.json`, regenerated on every `cargo build`/`tauri build` of the shell crate (git-ignored, 1:1 derived from `src-tauri/tauri.conf.json` + `src-tauri/capabilities/*.json` + `src-tauri/build.rs`'s `ALL_COMMANDS`) |
+| Logs / crash records | `vault-buddy.log` (tray → *Open logs folder*) |
+
+## Task 15's rows
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T1 | **Open from the capture bar's Edit button** | Record a short screen capture and stop it. On the panel's list view, the finished capture's row offers **Edit** (`ScreenCaptureBar`'s finished-row affordance). Click it. **Record**: whether the editor window opens, whether its temporary shell line (top of the window) shows a title/duration, and whether `vault-buddy.log` shows an `editor_open_staged` call for that capture's base. | |
+| T2 | **Open from the staged-capture list** | Capture knowledge → *Record screen* → with at least one staged (unsaved) capture already sitting in staging, the picker's `StagedCaptureList` shows it with a **Resume editing** action. Click it for a capture that is NOT the one T1 already opened. **Record**: same three observations as T1, for this second, independently-opened capture. | |
+| T3 | **A second open of the SAME capture reuses the session, not a new one** | With the editor open on the capture from T1 (or T2), go back to the panel and click **Edit** again for that exact same capture (from the capture bar if it is still the most recent, or from the staged list otherwise). **Record**: the `<projectId>` folder under `editor-projects\` before this second click (list the directory, or read the project id off the editor shell / log line), then click, then record it again. Expect: identical — no second folder created, and `vault-buddy.log` shows Rust reusing the live session rather than opening a fresh one (`open_staged_session_reuses_a_live_session_and_reports_missing_media`'s production behavior). A DIFFERENT id here means a duplicate project was minted for one capture. | |
+| T4 | **Ordinary commands still dispatch under the exhaustive app ACL** (GAP-170, closing) | With the app freshly launched, drive it as a user would, through windows OTHER than the editor: open the panel and confirm the vault list populates (`list_vaults`); start and stop a short audio recording (`start_capture`/`stop_capture`); open Buddy settings and save any per-vault or app-global setting (e.g. toggle a Screen tab field via `set_screen_capture_config`, or `set_capture_config`). **Record**, per command, whether it worked exactly as before this task's `build.rs` change (which made the app manifest list ALL commands, not just the eight `editor_*` ones) — a regression here means the app is effectively bricked from every window, not a security issue in one feature. | |
+| T5 | **An `editor_*` command is refused from a non-editor window** (GAP-170, closing) | With the PANEL window focused, open its devtools console (right-click → Inspect, or the equivalent dev shortcut) and run `window.__TAURI__.core.invoke("editor_execute", { request: { sessionId: "not-a-real-session", expectedRevision: 0, commandId: "manual-check", command: { kind: "undo" } } })`. **Record**: the exact rejection — it must be refused by the ACL (a permission-denied shape) BEFORE `session_commands::editor_execute`'s own body ever runs (which would instead reject with `sessionGone` for a made-up session id — a DIFFERENT failure that would mean the ACL scoping failed silently and only the native `authz::require_editor_window` caught it). The two are distinguishable by the error's own shape/message; write down which one was observed. | |

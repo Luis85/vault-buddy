@@ -12,6 +12,7 @@
  */
 import { mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Captured so a test can drive `editor:open` the way Rust does — from the
@@ -37,8 +38,11 @@ vi.mock("../src/logging", () => ({
   logWarning: vi.fn(),
 }));
 
+import type { EditorPort } from "../src/editor/port";
+import type { EditorOpenResult, EditorSnapshot, Project } from "../src/editorTypes";
 import { logWarning } from "../src/logging";
 import EditorRoot from "../src/roots/EditorRoot.vue";
+import { useEditorProjectStore } from "../src/stores/editorProject";
 import {
   type Call,
   DETAIL,
@@ -57,6 +61,11 @@ enableAutoUnmount(afterEach);
 beforeEach(() => {
   for (const key of Object.keys(listeners)) delete listeners[key];
   mockConvertFileSrc("windows");
+  // Task 15: EditorRoot now calls `useEditorProjectStore()`, which needs an
+  // active Pinia at mount time — a fresh instance per test, the PanelRoot
+  // test's own precedent, since this window installs a real store for the
+  // first time.
+  setActivePinia(createPinia());
 });
 
 afterEach(() => {
@@ -740,5 +749,130 @@ describe("EditorRoot", () => {
   it("disables Save when the timeline holds no footage", async () => {
     const w = await open({ ...DETAIL, timeline: { segments: [] } });
     expect(w.get('[data-testid="export-save"]').attributes("disabled")).toBeDefined();
+  });
+
+  // ---- The new Rust session (Task 15) -------------------------------------
+
+  function snapshotFixture(overrides: Partial<EditorSnapshot> = {}): EditorSnapshot {
+    return {
+      sessionId: "ses-a",
+      projectId: "project-a",
+      revision: 1,
+      persistedRevision: null,
+      title: "Tutorial",
+      durationMs: 6000,
+      canUndo: false,
+      canRedo: false,
+      undoLabel: null,
+      redoLabel: null,
+      ...overrides,
+    };
+  }
+
+  function projectFixture(overrides: Partial<Project> = {}): Project {
+    return {
+      schema: "vault-buddy-video-project/3",
+      id: "project-a",
+      title: "Tutorial",
+      canvas: { width: 1280, height: 720, fps: 30 },
+      master_gain: 1,
+      assets: [],
+      tracks: [],
+      clips: [],
+      effects: [],
+      markers: [],
+      transitions: [],
+      captions: null,
+      destination: { vault: "vault-a", folder: "", dated: false },
+      ...overrides,
+    };
+  }
+
+  function openResultFixture(overrides: Partial<EditorOpenResult> = {}): EditorOpenResult {
+    return {
+      snapshot: snapshotFixture(),
+      project: projectFixture(),
+      workspace: {},
+      missing: [],
+      sourceBase: "cap one",
+      recovered: false,
+      ...overrides,
+    };
+  }
+
+  /** A minimal fake `EditorPort` for exercising the store's `openStaged`
+   * seam without a full `mockIPC`-decoded round trip — `editorPort.test.ts`
+   * already pins the `editor_open_staged` wire mapping; this level pins that
+   * `EditorRoot` calls it exactly the way the store expects. */
+  function fakeEditorPort(overrides: Partial<EditorPort> = {}): EditorPort {
+    const unimplemented = (name: string) => (): never => {
+      throw new Error(`fakeEditorPort.${name} not stubbed for this test`);
+    };
+    return {
+      openStaged: unimplemented("openStaged"),
+      openProject: unimplemented("openProject"),
+      listProjects: unimplemented("listProjects"),
+      getSnapshot: unimplemented("getSnapshot"),
+      execute: unimplemented("execute"),
+      save: unimplemented("save"),
+      closeSession: unimplemented("closeSession"),
+      hideWindow: unimplemented("hideWindow"),
+      ...overrides,
+    };
+  }
+
+  // Opens the stashed base through the store's own `openStaged` — which is
+  // the ONE seam that calls `editor_open_staged` (`src/editor/port.ts`'s own
+  // module doc). `open()` still drives `take_editor_request`/
+  // `load_staged_capture` for the legacy preview through `mockIPC`; the new
+  // session opens alongside it through the store's injected port.
+  it("opens the stashed base through editor_open_staged", async () => {
+    const calls: string[] = [];
+    const store = useEditorProjectStore();
+    store.setPort(
+      fakeEditorPort({
+        openStaged: (base) => {
+          calls.push(base);
+          return Promise.resolve(openResultFixture({ sourceBase: base }));
+        },
+      }),
+    );
+    await open();
+
+    expect(calls).toEqual(["cap one"]);
+    expect(store.sessionId).toBe("ses-a");
+  });
+
+  // A second `editor:open` for the SAME base while that session is open must
+  // not mint a second one — the store-level guard Task 15 adds to
+  // `openStaged` (`editorProjectStore.test.ts` pins the guard itself; this
+  // is the scenario it exists for: a duplicate Edit click, or a re-emitted
+  // `editor:open`, for the capture already showing).
+  it("a second editor:open for the same base reuses the session", async () => {
+    const calls: string[] = [];
+    const store = useEditorProjectStore();
+    store.setPort(
+      fakeEditorPort({
+        openStaged: (base) => {
+          calls.push(base);
+          return Promise.resolve(openResultFixture({ sourceBase: base }));
+        },
+      }),
+    );
+    // `open()`'s default request queue is `["cap one"]`; a second
+    // `editor:open` with nothing further queued still resolves to "cap one"
+    // here because Rust re-stashes the SAME base for a re-Edit click on a
+    // capture that is already open — modelled by handing `open()` the base
+    // twice.
+    const w = await open(undefined, ["cap one", "cap one"]);
+    listeners["editor:open"]();
+    await flushPromises();
+
+    // MUTATION CHECK (this task's brief): drop the same-base short-circuit
+    // in `editorProject.openStaged` and this reads 2, red for the reason
+    // this test names — see `editorProjectStore.test.ts` for the guard's
+    // own isolated pin.
+    expect(calls).toEqual(["cap one"]);
+    expect(w.text()).toContain("Screen 1");
   });
 });

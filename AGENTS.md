@@ -96,6 +96,7 @@ here is deliberately only the shipped increments.
 | [docs/superpowers/specs/](docs/superpowers/specs/) | Dated design specs — the *why* behind each increment's shape |
 | [docs/superpowers/plans/](docs/superpowers/plans/) | Dated implementation plans that executed those specs |
 | [docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md](docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md) | The screen-capture feature's manual Windows checklist — a RUNNING document across phases, not one phase's gate. It carries **57 rows** today — 1–55 plus 27a and 27b — of which **23** carry a result; the count is measured on the tree, not incremented (it has been wrong before from incrementing, which is why the one-liner to re-measure it lives in the file's own header). An empty Result column means unrun, which is not the same as failed. **The deferral is LIFTED**: the user began running it on 2026-09-21, batch by batch. Rows 1–13, 16, 17, 29 and 37–43 carry results (11 and 12 are DEFERRED by the author's decision to after the remaining Phase 3 work, not passed; 16, 17 and 43 passed on the GAP-166 fix build and re-run on the next installer); 14, 15, 18–28, 30–36, 44–52 **and 53–55** are still unrun — 34 rows. **Rows 44–52 are the region-capture indicator's own verification** (GAP-165), added when it landed and not run since: row 44 is the GATE, re-testing GAP-166's exact symptom against the SIXTH excluded window, and a failure there costs the indicator its capture exclusion and the feature with it. Row 49 is expected BLOCKED on the single-monitor verification machine, like row 13. **Rows 41–43 were added BY that pass**, each for something it found: GAP-164 (fixed), GAP-165 (an approved design never implemented) and GAP-166 (Vault Buddy breaking File Explorer's toolbar, unlocalised). Row 13 is BLOCKED — the verification machine has one monitor, so the mixed-DPI case its own module doc calls most likely to fail cannot be reached at all. **Rows 53–55** were added by the gap close-out: 53 records a window titled `CON` (the only thing that can test GAP-108's close-out against the Win32 name resolver rather than against reasoning), and 54–55 collect the evidence GAP-122's first-frame rework needs before anyone attempts it — the declared-vs-delivered sizes across window styles, and a window resized mid-capture, which is the one case where the prediction is known to go stale |
+| [docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md](docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md) | The tutorial-editor increment's manual Windows checklist — created by Task 15, a RUNNING document across that increment's own tasks (the screen-capture checklist's own precedent). Carries **5 rows** today (T1–T5), **0** with a result: T1–T3 verify Task 15's own `editor_open_staged` open paths (from the capture bar, from the staged list, and that a second open of the same capture reuses the session); T4–T5 close GAP-170 (the app-wide IPC ACL exhaustiveness gap Task 11 opened) — re-measure with the file's own one-liner, never increment |
 | [docs/Gaps.md](docs/Gaps.md) | The audited backlog of known issues, weaknesses, tech debt, and untested paths — check it before "discovering" a known problem, extend it when you find a new one |
 
 ## Repository map
@@ -114,7 +115,8 @@ vault-buddy/
 │   ├── roots/                  # BuddyRoot / PanelRoot / BubbleRoot / RegionRoot / EditorRoot /
 │   │                           #   RegionIndicatorRoot + rootFor() map
 │   ├── components/             # panel views + buddy character (ActionPanel is the shell)
-│   │   └── editor/             # CapturePreview + TimelineStrip + ExportBar (the editor window's surface)
+│   │   └── editor/             # CapturePreview + TimelineStrip + ExportBar + LegacyCaptureEditor
+│   │                           #   (the phase-4 surface, extracted behind EditorRoot's feature switch)
 │   ├── stores/                 # Pinia: vaults, capture, screenCapture, documentImports,
 │   │                           #   pandoc, ffmpeg, updates, settings, settingsStatus, notifications
 │   ├── composables/            # settings sync, startup update check, bubble, announcements,
@@ -348,13 +350,13 @@ Six OS windows, one frontend bundle, one Rust process:
    │  tray.rs ── tray icon/menu + hide_buddy chokepoint;  diagnostics.rs ── crash/marker  │
    └─────┬────────────┬────────────┬────────────┬──────────────┬────────────┬─────────────┘
          │            │            │            │              │            │  IPC + events
-   ┌─────┴────┐ ┌─────┴────┐ ┌─────┴────┐ ┌─────┴────┐ ┌───────┴──────┐ ┌───┴──────────┐
-   │main (88²)│ │panel     │ │bubble    │ │overlay   │ │editor 960×640│ │region-       │
-   │BuddyRoot │ │PanelRoot │ │BubbleRoot│ │RegionRoot│ │EditorRoot    │ │indicator     │
-   │character,│ │ActionPnl │ │greeting /│ │rubber    │ │preview +     │ │RegionIndic.  │
-   │drag, dots│ │all views │ │announce  │ │band (1×) │ │strip         │ │border, click-│
-   │          │ │          │ │          │ │          │ │              │ │through       │
-   └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────────┘ └──────────────┘
+   ┌─────┴────┐ ┌─────┴────┐ ┌─────┴────┐ ┌─────┴────┐ ┌───────┴───────┐┌───┴──────────┐
+   │main (88²)│ │panel     │ │bubble    │ │overlay   │ │editor 1280×820││region-       │
+   │BuddyRoot │ │PanelRoot │ │BubbleRoot│ │RegionRoot│ │EditorRoot     ││indicator     │
+   │character,│ │ActionPnl │ │greeting /│ │rubber    │ │preview +      ││RegionIndic.  │
+   │drag, dots│ │all views │ │announce  │ │band (1×) │ │strip          ││border, click-│
+   │          │ │          │ │          │ │          │ │               ││through       │
+   └──────────┘ └──────────┘ └──────────┘ └──────────┘ └───────────────┘└──────────────┘
       each webview = own Pinia; cross-window sync = Tauri events + localStorage `storage`
 
    pure logic lives below the shell:
@@ -599,7 +601,10 @@ and the rules below say so where they differ:
   entry in `EXCLUDED_LABELS`, which is the whole reason a border drawn over
   the recorded area is free — the user sees it and the recording does not
   contain it.
-- **`editor`** — the capture editor (spec §5.1, §8), 960×640, created hidden.
+- **`editor`** — the capture editor (spec §5.1, §8), 1280×820 (min 960×640 —
+  widened from a 960×640 default / 720×480 floor in tutorial-editor Task 15,
+  the old default becoming the new floor, since the new Rust-backed workspace
+  needs more room than the phase-4 timeline editor did), created hidden.
   The odd one out in every respect, and each difference is load-bearing:
   - It is **not transparent, not always-on-top, `decorations: true`,
     `resizable: true` and `skipTaskbar: false`** — a real application window
@@ -622,6 +627,12 @@ and the rules below say so where they differ:
   - Because it is hidden and reused rather than destroyed, its webview mounts
     exactly ONCE per process — which is why `editor:open` exists (see the
     Events table), the editor's counterpart to `region:begin`.
+  - Since tutorial-editor Task 15 it is no longer the store-free root the
+    "Frontend state" section used to describe — `EditorRoot.vue` installs
+    `editorProject` (`src/stores/editorProject.ts`, Task 14) and drives it
+    through `editor_open_staged` on every drained base. See "Frontend state"
+    below for what that store owns and why `RegionRoot`/
+    `RegionIndicatorRoot` remain the store-free pair.
 
 `panel`, `bubble` and `overlay` are *positioned while hidden, then shown* — a
 moved-only window has no stale-frame flash. (The overlay is also RESIZED while
@@ -3253,32 +3264,47 @@ hosts `ActionPanel` and closes via `close_panel` on Escape/gutter-click;
 `BubbleRoot` hosts the greeting and calls `close_bubble` on dismiss;
 `RegionRoot` paints the rubber band and answers with
 `resolve_region_selection` (a rectangle, or `null` for Escape / a click with
-no drag / a degenerate box); `EditorRoot` hosts the capture editor's preview,
-strip and (phase 5) its `ExportBar`, and binds spec §8.2's Ctrl+Z /
-Ctrl+Shift+Z / Ctrl+Y on `window` (the editor fills its own window, so there
-is no narrower focus target) — removed on unmount, because a surviving
-`window` listener would go on editing AND persisting a timeline nobody can
-see, and gated on the event's target so the first `<input>` this window grows
-keeps its own native text undo. **`RegionRoot`, `EditorRoot` and
-`RegionIndicatorRoot` install no store** — they are the THREE roots that
-mirror no Rust state, which is why they are the three that need no per-window
-`init()` wiring. The indicator mirrors ONE boolean (paused or not) from four
-app-wide `screen:*` events, which is less machinery than the per-window
-wiring a store would need.
+no drag / a degenerate box); `EditorRoot` drains the Rust-owned stash
+(`take_editor_request`) and opens the drained base into a new
+`editorProject` session (`editor_open_staged`, tutorial-editor Task 15),
+rendering a temporary title/duration/dirty/vault shell around whatever that
+session reports (Task 21 replaces this shell with the real workspace UI) —
+the phase-4 timeline/preview/`ExportBar` surface it used to own directly now
+lives in `LegacyCaptureEditor.vue` (`src/components/editor/`), mounted by
+`EditorRoot` behind a `SHOW_LEGACY_EDITOR` feature switch and driven by a
+`stagedBase` prop rather than draining the stash itself. Spec §8.2's Ctrl+Z /
+Ctrl+Shift+Z / Ctrl+Y binding moved there with it — still on `window` (the
+editor fills its own window, so there is no narrower focus target), still
+removed on unmount (a surviving `window` listener would go on editing AND
+persisting a timeline nobody can see), still gated on the event's target so
+the first `<input>` this window grows keeps its own native text undo.
+**`RegionRoot` and `RegionIndicatorRoot` install no store** — the two roots
+that mirror no Rust state and need no per-window `init()` wiring; the
+indicator mirrors ONE boolean (paused or not) from four app-wide `screen:*`
+events, which is less machinery than the per-window wiring a store would
+need. **`EditorRoot` is no longer in that set** (it was, through phase 5):
+`editorProject` is a genuine Pinia store, but it needs no `init()` either,
+for a reason specific to it — it mirrors no BROADCAST Rust state the way
+`capture`/`screenCapture` do (there is no cross-window "an editor session
+opened elsewhere" event to listen for; only the ONE editor window ever opens
+one), so `EditorRoot` drives it directly by calling `openStaged` on every
+drained base rather than subscribing to anything at mount.
 
-**Phase 5 did not change that, and the reason is worth stating so the next
-reader does not "fix" it.** `EditorRoot` now listens to FIVE events rather
-than one — `editor:open` itself, plus the four `screen:export*`, which it
-registers through `useEditorExport` (split out at the 500 cap; the root still
-awaits all five before its first drain) — but they are the
-editor's own in-flight progress, not state the app owns anywhere else: there
+**Phase 5 gave the editor FIVE events, and Task 15 split where they are
+registered without changing that count.** `editor:open` (which carries no
+state — it is the edge that says "read the stash again") stays on
+`EditorRoot` itself, since draining the stash is now that root's own job; the
+four `screen:export*` events stay on `LegacyCaptureEditor` through
+`useEditorExport` (split out at the frontend 500-line cap; the component
+still awaits all four before its first drain). None of the five is state the
+app owns anywhere else: there
 is no `export` store in any window, so there is nothing to `init()`. Every
-one of the four is filtered through `addressesOpenCapture(base)` first,
-because all five export events are emitted APP-WIDE while this window edits
-exactly one capture and is hidden-and-reused: without the filter, an editor
-reopened on B while A was still exporting would render A's progress and,
-worse, A's "Saved" under B's title. `region:begin` is still the overlay's one
-stateless re-arm. Each
+one of the four export events is filtered through `addressesOpenCapture(base)`
+first, because all four are emitted APP-WIDE while `LegacyCaptureEditor`
+edits exactly one capture and is (via its reused root) hidden-and-reused:
+without the filter, a capture reopened on B while A was still exporting
+would render A's progress and, worse, A's "Saved" under B's title.
+`region:begin` is still the overlay's one stateless re-arm. Each
 window is its own webview with its own Pinia stores, so any store that mirrors
 Rust state must be wired up per window: **both** `BuddyRoot` and `PanelRoot`
 call `capture.init()` (or the panel never sees `capture:*` events — dead level
