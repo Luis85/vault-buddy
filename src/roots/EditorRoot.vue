@@ -144,7 +144,21 @@ async function openRequested() {
   // silently never written or read back. `editorProject.sessionId` is the
   // store's own post-open session id, not the `base` this function was
   // handed — the same id `editor_save_workspace` keys its file on.
-  if (editorProject.sessionId) {
+  //
+  // Task 18 fix round 2 (controller ruling): hydrate ONLY for a genuinely
+  // NEW session, never on every resolved `openStaged` call.
+  // `editorProject.openStaged` short-circuits for a duplicate open of the
+  // capture already showing (its own same-base guard, `editorProject.ts`)
+  // without touching `sessionId` at all — so a duplicate `editor:open`
+  // resolves here with the SAME `sessionId` it already hydrated. Hydrating
+  // again would reset every field to defaults and re-apply the (up to
+  // 750ms stale) persisted blob, silently discarding a change made since
+  // the last debounce flush — exactly `editorProject.ts`'s own documented
+  // "never blanks a working session" hazard, one layer up. Comparing
+  // against `editorWorkspace.sessionId` (the id its OWN last `hydrate`
+  // call set, synchronously, before any await) is what tells a genuinely
+  // new session apart from a duplicate resolve of the same one.
+  if (editorProject.sessionId && editorProject.sessionId !== editorWorkspace.sessionId) {
     void editorWorkspace.hydrate(editorProject.sessionId);
   }
 }

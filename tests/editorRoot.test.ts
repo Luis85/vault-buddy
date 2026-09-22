@@ -926,6 +926,89 @@ describe("EditorRoot", () => {
     expect(hydrateCalls).toEqual([]);
   });
 
+  // Task 18 fix round 2 (controller ruling): `editorProject.openStaged`
+  // SHORT-CIRCUITS for a duplicate open of the capture already showing
+  // (`editorProject.ts`'s own same-base guard) without touching
+  // `sessionId`, so re-hydrating on EVERY resolved `openStaged` call —
+  // rather than only on a genuinely NEW session — re-fetches the (up to
+  // 750ms stale) persisted workspace and resets fields to defaults first,
+  // silently discarding a change made since the last debounce flush.
+  it("a duplicate editor:open for the same base does not re-hydrate or discard an unpersisted change", async () => {
+    const project = useEditorProjectStore();
+    project.setPort(
+      fakeEditorPort({
+        openStaged: (base) => Promise.resolve(openResultFixture({ sourceBase: base })),
+      }),
+    );
+    const workspace = useEditorWorkspaceStore();
+    const hydrateCalls: string[] = [];
+    workspace.setPort(
+      fakeEditorPort({
+        getWorkspace: (id) => {
+          hydrateCalls.push(id);
+          return Promise.resolve({});
+        },
+      }),
+    );
+
+    // `open()`'s default queue is `["cap one"]`; a second `editor:open`
+    // with nothing further queued still resolves to "cap one" here,
+    // modelling Rust re-stashing the same base for a re-Edit click on the
+    // capture already open (the "a second editor:open..." test's own
+    // precedent, immediately below).
+    await open(undefined, ["cap one", "cap one"]);
+    // MUTATION CHECK: without the fix, the first mount-time open already
+    // hydrates once here — this assertion is the baseline, not yet the red
+    // one.
+    expect(hydrateCalls).toEqual(["ses-a"]);
+
+    // An unpersisted, in-flight view-state change -- the user moved the
+    // playhead -- that has not yet reached its 750ms debounce flush.
+    workspace.setPlayhead(4_000);
+    expect(workspace.playheadMs).toBe(4_000);
+
+    listeners["editor:open"]();
+    await flushPromises();
+
+    // MUTATION CHECK: dropping the "only hydrate a genuinely NEW session"
+    // guard makes BOTH of these fail -- `hydrateCalls` gains a second
+    // "ses-a" entry, and the re-hydrate's `applyDefaults` resets
+    // `playheadMs` back to 0 before re-applying the stale persisted `{}`.
+    expect(hydrateCalls).toEqual(["ses-a"]);
+    expect(workspace.playheadMs).toBe(4_000);
+  });
+
+  it("opening a genuinely different base still hydrates the workspace", async () => {
+    const project = useEditorProjectStore();
+    project.setPort(
+      fakeEditorPort({
+        openStaged: (base) =>
+          Promise.resolve(
+            openResultFixture({
+              sourceBase: base,
+              snapshot: snapshotFixture({ sessionId: base === "cap one" ? "ses-a" : "ses-b" }),
+            }),
+          ),
+      }),
+    );
+    const workspace = useEditorWorkspaceStore();
+    const hydrateCalls: string[] = [];
+    workspace.setPort(
+      fakeEditorPort({
+        getWorkspace: (id) => {
+          hydrateCalls.push(id);
+          return Promise.resolve({});
+        },
+      }),
+    );
+
+    await open(undefined, ["cap one", "cap two"]);
+    listeners["editor:open"]();
+    await flushPromises();
+
+    expect(hydrateCalls).toEqual(["ses-a", "ses-b"]);
+  });
+
   // A second `editor:open` for the SAME base while that session is open must
   // not mint a second one — the store-level guard Task 15 adds to
   // `openStaged` (`editorProjectStore.test.ts` pins the guard itself; this
