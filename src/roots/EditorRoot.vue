@@ -45,6 +45,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
+import InspectorPanel from "../components/editor/inspector/InspectorPanel.vue";
 import LegacyCaptureEditor from "../components/editor/LegacyCaptureEditor.vue";
 import EditorShell from "../components/editor/shell/EditorShell.vue";
 import { logWarning } from "../logging";
@@ -188,7 +189,15 @@ onBeforeUnmount(() => {
          `editorProject` directly and always render once mounted, so the
          v-if here (not inside the shell) is what makes it disappear on a
          failed open, exactly like the bar it replaces. -->
-    <EditorShell v-if="editorProject.snapshot && sessionMatchesLegacy" />
+    <EditorShell v-if="editorProject.snapshot && sessionMatchesLegacy">
+      <!-- Task 19: the inspector shell (six category tabs + the shared
+           draft composable later sections build on) fills the shell's
+           `inspector` slot from here, the same seam `PreviewToolbar`
+           filled in Task 17. -->
+      <template #inspector>
+        <InspectorPanel />
+      </template>
+    </EditorShell>
     <!-- A multi-root component: its own root nodes (header, preview, strip,
          verbs, export bar — or the single "No capture open" line) land as
          DIRECT children of `main` in the DOM, exactly where they sat before
