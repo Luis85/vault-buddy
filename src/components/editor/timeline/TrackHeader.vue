@@ -107,6 +107,20 @@ const soloClass = computed(() => [
   props.track.solo ? "bg-accent/20 text-accent-fg" : "text-fg-secondary",
 ]);
 const volumeTitle = computed(() => (locked.value ? reason.value : "Track volume"));
+/** `aria-label`, not just `title` (fix round 1): the button controls carry
+ * a visible glyph plus a title, but a bare `<input type="range">` has no
+ * accessible name at all otherwise -- "volume" alone would be ambiguous
+ * once more than one track exists on the timeline. */
+const volumeLabel = computed(() => `${props.track.name} volume`);
+/** `aria-disabled`, never the native `disabled` attribute (fix round 1) --
+ * this control had drifted from every sibling's own rule (see the module
+ * doc): a native `disabled` range input drops out of the tab order and, in
+ * most browsers/AT, stops reliably surfacing its `title`, making a locked
+ * track's volume control LESS explorable than mute/solo/eye next to it.
+ * `onVolumeChange`'s own `if (locked.value) return;` guard already refuses
+ * the change while locked, so removing `disabled` does not reopen
+ * anything `setTrackFlags` wouldn't refuse anyway. */
+const volumeClass = computed(() => (locked.value ? disabledClass : enabledClass));
 
 // ---- inline rename ----------------------------------------------------------
 
@@ -287,9 +301,11 @@ function deleteTrack() {
       max="2"
       step="0.01"
       :value="track.volume"
-      :disabled="locked"
+      :aria-disabled="locked"
+      :aria-label="volumeLabel"
       :title="volumeTitle"
-      class="w-10 shrink-0 accent-violet-500 disabled:cursor-default disabled:opacity-50"
+      class="w-10 shrink-0 accent-violet-500"
+      :class="volumeClass"
       @change="onVolumeChange"
     >
 

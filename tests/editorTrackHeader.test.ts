@@ -196,6 +196,19 @@ describe("TrackHeader — lock", () => {
     expect(w.get('[data-testid="track-header-a1-solo"]').attributes("title")).toBe(reason);
     expect(w.get('[data-testid="track-header-a1-mute"]').attributes("aria-disabled")).toBe("true");
 
+    // The volume slider follows the same rule as every other control here
+    // (fix round 1): aria-disabled, never the native `disabled` attribute
+    // (a native `disabled` range drops out of the tab order and, in most
+    // browsers/AT, stops reliably surfacing its `title`), and the change
+    // it would have sent is refused just like the buttons above.
+    const volume = w.get<HTMLInputElement>('[data-testid="track-header-a1-volume"]');
+    expect(volume.attributes("disabled")).toBeUndefined();
+    expect(volume.attributes("aria-disabled")).toBe("true");
+    expect(volume.attributes("title")).toBe(reason);
+    volume.element.value = "1.8";
+    await volume.trigger("change");
+    expect(executed).toEqual([]);
+
     // Rename is refused too: clicking the name never opens the edit input.
     await w.get('[data-testid="track-header-a1-name"]').trigger("click");
     expect(w.find('[data-testid="track-header-a1-name-input"]').exists()).toBe(false);
@@ -243,12 +256,16 @@ describe("TrackHeader — eye / mute / solo / volume", () => {
   it("the volume slider renders only for an audio track and sends its new value on change", async () => {
     executed = [];
     await openProject();
-    const audio = track("a1", { kind: "audio", volume: 0.6 });
+    const audio = track("a1", { kind: "audio", volume: 0.6, name: "Ambient bed" });
     const w = mount(TrackHeader, { props: { track: audio, trackIndex: 0, trackCount: 2 } });
     await flushPromises();
 
     const slider = w.get<HTMLInputElement>('[data-testid="track-header-a1-volume"]');
     expect(slider.element.value).toBe("0.6");
+    // Fix round 1: the slider has an accessible name beyond its `title`,
+    // naming the track it controls (there can be more than one on a
+    // timeline, so "volume" alone would be ambiguous).
+    expect(slider.attributes("aria-label")).toBe("Ambient bed volume");
     slider.element.value = "1.5";
     await slider.trigger("change");
     expect(lastCommand()).toEqual({ kind: "setTrackFlags", trackId: "a1", volume: 1.5 });
