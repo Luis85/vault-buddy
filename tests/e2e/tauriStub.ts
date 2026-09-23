@@ -97,6 +97,7 @@ export async function installTauriStub(page: Page) {
         if (cmd === "load_staged_capture") return detail;
         if (cmd === "save_capture_timeline") return null;
         if (cmd === "editor_open_staged") return openResult;
+        if (cmd === "editor_get_jobs") return [];
         if (cmd.startsWith("plugin:event|listen")) {
           listeners.set(nextId, args);
           return nextId++;

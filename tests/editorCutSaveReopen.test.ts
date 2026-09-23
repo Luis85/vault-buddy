@@ -145,6 +145,9 @@ function cannedPort() {
     getWorkspace: () => Promise.resolve({}),
     saveWorkspace: () => Promise.resolve(),
     mediaUrl: () => Promise.reject(new Error("no media in this test")),
+    importMedia: () => Promise.reject(new Error("not used")),
+    cancelJob: () => Promise.reject(new Error("not used")),
+    getJobs: () => Promise.resolve([]),
   };
   return { port, sent, saves };
 }

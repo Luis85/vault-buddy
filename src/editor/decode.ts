@@ -24,8 +24,11 @@ import type {
   EditorOpenResult,
   EditorProjection,
   EditorSnapshot,
+  JobKind,
   JobPhase,
   JobProgressDto,
+  JobRecordDto,
+  JobStarted,
   JobTerminal,
   MissingMedia,
   ProjectSummaryDto,
@@ -259,33 +262,58 @@ function decodeJobTerminal(value: unknown): JobTerminal {
   };
 }
 
-/** Contract reference `JobProgressDto`. No Rust command emits this yet
- * (declared ahead of that later task per this task's own brief), so this
- * decoder is checked against the Contract's own shape, not a Rust literal
- * pin. */
-export function decodeJobProgress(value: unknown): JobProgressDto {
-  const v = asObject(value, "jobProgress");
-  const phase = asString(v.phase, "jobProgress.phase");
+/** The four fields a progress message and a registry row share
+ * (`JobProgressDto`/`JobRecordDto`), decoded ONCE so the two can never
+ * disagree about what a phase or a fraction is. */
+function decodeJobState(
+  v: Record<string, unknown>,
+  field: string,
+): Pick<JobProgressDto, "kind" | "phase" | "fraction" | "terminal"> {
+  const phase = asString(v.phase, `${field}.phase`);
   if (!(JOB_PHASES as readonly string[]).includes(phase)) {
-    fail(`jobProgress.phase is not a recognized phase: ${phase}`);
+    fail(`${field}.phase is not a recognized phase: ${phase}`);
   }
   const fraction = v.fraction;
   if (typeof fraction !== "number" || !Number.isFinite(fraction) || fraction < 0 || fraction > 1) {
-    fail("jobProgress.fraction must be a number in [0, 1]");
+    fail(`${field}.fraction must be a number in [0, 1]`);
   }
-  const kind = asString(v.kind, "jobProgress.kind");
+  const kind = asString(v.kind, `${field}.kind`);
   if (!["import", "render", "peaks", "publish"].includes(kind)) {
-    fail(`jobProgress.kind is not a recognized kind: ${kind}`);
+    fail(`${field}.kind is not a recognized kind: ${kind}`);
   }
   return {
-    sessionId: asId(v.sessionId, "jobProgress.sessionId"),
-    jobId: asId(v.jobId, "jobProgress.jobId"),
-    kind: kind as JobProgressDto["kind"],
-    sequence: asInteger(v.sequence, "jobProgress.sequence"),
+    kind: kind as JobKind,
     phase: phase as JobPhase,
     fraction,
     // Present-even-when-null, the `EditorOpenResult.sourceBase` posture:
     // an absent key is a decoding error, not "no terminal outcome yet".
     terminal: v.terminal === null ? null : decodeJobTerminal(v.terminal),
   };
+}
+
+/** Contract reference `JobProgressDto` — one message on a job's Channel
+ * (`media_jobs.rs`' `job_progress_wire_shape_is_pinned` is the Rust
+ * literal this mirrors). */
+export function decodeJobProgress(value: unknown): JobProgressDto {
+  const v = asObject(value, "jobProgress");
+  return {
+    sessionId: asId(v.sessionId, "jobProgress.sessionId"),
+    jobId: asId(v.jobId, "jobProgress.jobId"),
+    sequence: asInteger(v.sequence, "jobProgress.sequence"),
+    ...decodeJobState(v, "jobProgress"),
+  };
+}
+
+/** `editor_get_jobs`' reply: the authoritative `JobRecordDto` rows. */
+export function decodeJobRecords(value: unknown): JobRecordDto[] {
+  return asArray(value, "jobs").map((row, i) => {
+    const v = asObject(row, `jobs[${i}]`);
+    return { jobId: asId(v.jobId, `jobs[${i}].jobId`), ...decodeJobState(v, `jobs[${i}]`) };
+  });
+}
+
+/** `editor_import_media`'s immediate `{ jobId }`. */
+export function decodeJobStarted(value: unknown): JobStarted {
+  const v = asObject(value, "jobStarted");
+  return { jobId: asId(v.jobId, "jobStarted.jobId") };
 }

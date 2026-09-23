@@ -117,6 +117,9 @@ describe("EditorRoot — never reads a vault id from the screenCapture store", (
       getWorkspace: unimplemented("getWorkspace"),
       saveWorkspace: unimplemented("saveWorkspace"),
       mediaUrl: unimplemented("mediaUrl"),
+      importMedia: unimplemented("importMedia"),
+      cancelJob: unimplemented("cancelJob"),
+      getJobs: unimplemented("getJobs"),
       ...overrides,
     };
   }

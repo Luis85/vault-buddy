@@ -37,12 +37,30 @@ pub enum ImportKind {
 /// `EditorErrorCode::UnsupportedMedia`, never a best-effort guess.
 pub fn classify_extension(name: &str) -> Option<ImportKind> {
     let (_, ext) = name.rsplit_once('.')?;
-    match ext.to_ascii_lowercase().as_str() {
-        "mp4" | "m4v" | "mov" | "webm" | "mkv" => Some(ImportKind::Video),
-        "mp3" | "wav" | "m4a" | "aac" | "ogg" | "opus" | "flac" => Some(ImportKind::Audio),
-        "png" | "jpg" | "jpeg" | "webp" => Some(ImportKind::Image),
-        _ => None,
+    let ext = ext.to_ascii_lowercase();
+    let ext = ext.as_str();
+    if VIDEO_EXTENSIONS.contains(&ext) {
+        Some(ImportKind::Video)
+    } else if AUDIO_EXTENSIONS.contains(&ext) {
+        Some(ImportKind::Audio)
+    } else if IMAGE_EXTENSIONS.contains(&ext) {
+        Some(ImportKind::Image)
+    } else {
+        None
     }
+}
+
+/// The allowlist `classify_extension` reads, one slice per kind, lowercase
+/// and without the dot. Public so the import dialog's filter (Task 25)
+/// offers EXACTLY what classification accepts — a second hand-typed list in
+/// the shell is how the two would drift apart.
+pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "m4v", "mov", "webm", "mkv"];
+pub const AUDIO_EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "aac", "ogg", "opus", "flac"];
+pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp"];
+
+/// Every importable extension, in video → audio → image order.
+pub fn import_extensions() -> Vec<&'static str> {
+    [VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, IMAGE_EXTENSIONS].concat()
 }
 
 /// The maximum width or height `sniff_image` accepts. A header that
@@ -456,6 +474,23 @@ mod tests {
         // an earlier-looking segment of the name.
         assert_eq!(classify_extension("clip.mp4.exe"), None);
         assert_eq!(classify_extension("no-extension-at-all"), None);
+    }
+
+    // The import dialog's filter is `import_extensions()`: every entry must
+    // classify (a filter offering a type classification then refuses is a
+    // dead end), and the list must hold all sixteen, lowercase, dotless.
+    #[test]
+    fn import_extensions_are_exactly_what_classification_accepts() {
+        let all = import_extensions();
+        assert_eq!(all.len(), 16);
+        for ext in &all {
+            assert_eq!(*ext, ext.to_ascii_lowercase());
+            assert!(!ext.contains('.'), "{ext}");
+            assert!(classify_extension(&format!("x.{ext}")).is_some(), "{ext}");
+        }
+        assert_eq!(classify_extension("x.webp"), Some(ImportKind::Image));
+        assert_eq!(classify_extension("x.opus"), Some(ImportKind::Audio));
+        assert_eq!(classify_extension("x.mkv"), Some(ImportKind::Video));
     }
 
     #[test]

@@ -251,6 +251,9 @@ describe("monitoring", () => {
       getWorkspace: unimplemented("getWorkspace"),
       saveWorkspace: () => Promise.resolve(),
       mediaUrl: unimplemented("mediaUrl"),
+      importMedia: unimplemented("importMedia"),
+      cancelJob: unimplemented("cancelJob"),
+      getJobs: unimplemented("getJobs"),
       ...overrides,
     };
   }

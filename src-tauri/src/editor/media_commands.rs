@@ -30,12 +30,22 @@
 //! naming any that does not.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use serde_json::Value;
+use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri_plugin_dialog::DialogExt;
+use vault_buddy_core::editor::probe::import_extensions;
 use vault_buddy_core::editor::{is_valid_id, EditorError, EditorErrorCode};
 
 use super::authz::{require_editor_window, require_session};
+use super::media_import::{run_import, FfprobeImportIo, ImportJob};
+use super::media_jobs::{
+    cancel_job_in, jobs_in, start_job_in, JobKind, JobPhase, JobProgressDto, JobRecordDto,
+    JobReporter, JobStarted, JobTerminal,
+};
 use super::prefs_commands::{blocking, local_data, project_id_for};
 use super::project_store::{join_contained, project_dir, resolve_source};
 use super::store_io::{load_project, load_sources};
@@ -190,6 +200,144 @@ pub async fn editor_media_url(
             "The media path is not valid UTF-8.",
         )
     })
+}
+
+// ---- the import job (Task 25) ------------------------------------------------
+
+/// The files the user picked in the native multi-file dialog — the ONLY way
+/// a path reaches the import: the dialog, not a frontend string, is what
+/// grants access (ADR §3.3). The filter is the classification allowlist
+/// itself (`probe::import_extensions`). Blocking, so it must never run on
+/// the main thread; the `editor-import` thread is where it is called.
+fn pick_files(app: &AppHandle, window: &WebviewWindow) -> Vec<PathBuf> {
+    app.dialog()
+        .file()
+        .set_title("Import media")
+        .add_filter("Video, audio and images", &import_extensions())
+        .set_parent(window)
+        .blocking_pick_files()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|picked| match picked.into_path() {
+            Ok(path) => Some(path),
+            Err(e) => {
+                log::warn!("editor import: a picked file has no local path: {e}");
+                None
+            }
+        })
+        .collect()
+}
+
+/// The `editor-import` thread: `queued` → the dialog → the pipeline, which
+/// sends the job's ONE terminal. A dismissed dialog is a `cancelled` job
+/// with nothing imported — the user called it off before it began.
+fn import_worker(
+    app: AppHandle,
+    window: WebviewWindow,
+    root: PathBuf,
+    session_id: String,
+    job_id: String,
+    cancel: Arc<AtomicBool>,
+    channel: Channel<JobProgressDto>,
+) {
+    let state = app.state::<EditorState>();
+    let mut reporter =
+        JobReporter::new(&state.jobs, &channel, &session_id, &job_id, JobKind::Import);
+    reporter.progress(JobPhase::Queued, 0.0);
+    let files = pick_files(&app, &window);
+    if files.is_empty() {
+        return reporter.finish(
+            JobPhase::Cancelled,
+            JobTerminal {
+                asset_ids: Some(Vec::new()),
+                per_file: Some(Vec::new()),
+                ..JobTerminal::default()
+            },
+        );
+    }
+    let io = FfprobeImportIo::default();
+    let job = ImportJob {
+        state: &state,
+        root: &root,
+        session_id: &session_id,
+        io: &io,
+        cancel: &cancel,
+    };
+    run_import(&job, &files, reporter);
+}
+
+/// ASYNC (ADR §3.3): answers `{jobId}` at once; the dialog, the copies, the
+/// probes and the hashing all run on the named `editor-import` thread, and
+/// every result travels on `on_progress` — never an app-wide event.
+#[tauri::command]
+pub async fn editor_import_media(
+    window: WebviewWindow,
+    app: AppHandle,
+    session_id: String,
+    on_progress: Channel<JobProgressDto>,
+) -> Result<JobStarted, EditorError> {
+    require_editor_window(&window)?;
+    let root = local_data(&app)?;
+    let (job_id, cancel) = start_job_in(&app.state::<EditorState>(), &session_id, JobKind::Import)?;
+    // Kept so a failed spawn can still end the job it registered: the
+    // closure (and the channel inside it) is gone once `spawn` refuses.
+    let fallback = on_progress.clone();
+    let worker = {
+        let (app, session_id, job_id) = (app.clone(), session_id.clone(), job_id.clone());
+        move || import_worker(app, window, root, session_id, job_id, cancel, on_progress)
+    };
+    if let Err(e) = std::thread::Builder::new()
+        .name("editor-import".into())
+        .spawn(worker)
+    {
+        log::error!("editor import: could not start the import thread: {e}");
+        let error = err(
+            EditorErrorCode::Internal,
+            format!("The import could not start: {e}"),
+        );
+        let state = app.state::<EditorState>();
+        JobReporter::new(
+            &state.jobs,
+            &fallback,
+            &session_id,
+            &job_id,
+            JobKind::Import,
+        )
+        .finish(
+            JobPhase::Failed,
+            JobTerminal {
+                error: Some(error.clone()),
+                ..JobTerminal::default()
+            },
+        );
+        return Err(error);
+    }
+    Ok(JobStarted { job_id })
+}
+
+/// SYNC (ADR §3.3): one leaf-lock read and an atomic store — no I/O. Stops
+/// FUTURE work only; what a job already finished stays.
+#[tauri::command]
+pub fn editor_cancel_job(
+    window: WebviewWindow,
+    app: AppHandle,
+    session_id: String,
+    job_id: String,
+) -> Result<(), EditorError> {
+    require_editor_window(&window)?;
+    cancel_job_in(&app.state::<EditorState>(), &session_id, &job_id)
+}
+
+/// The authoritative job states after a reload or a missed message
+/// (IPC-CONTRACTS.md "reconciliation").
+#[tauri::command]
+pub async fn editor_get_jobs(
+    window: WebviewWindow,
+    app: AppHandle,
+    session_id: String,
+) -> Result<Vec<JobRecordDto>, EditorError> {
+    require_editor_window(&window)?;
+    jobs_in(&app.state::<EditorState>(), &session_id)
 }
 
 #[cfg(test)]

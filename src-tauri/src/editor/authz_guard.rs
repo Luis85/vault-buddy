@@ -29,11 +29,14 @@ const THE_CALL: &str = "require_editor_window(&window)";
 /// Every editor command, by name. Add a new command here in the same commit
 /// that adds it.
 const EXPECTED: &[&str] = &[
+    "editor_cancel_job",
     "editor_close_session",
     "editor_execute",
+    "editor_get_jobs",
     "editor_get_snapshot",
     "editor_get_workspace",
     "editor_hide_window",
+    "editor_import_media",
     "editor_list_projects",
     "editor_media_url",
     "editor_open_project",

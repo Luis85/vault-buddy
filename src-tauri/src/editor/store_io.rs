@@ -243,6 +243,20 @@ pub fn load_sources(root: &Path, id: &str) -> Result<BTreeMap<String, SourceReco
     read_sources(&dir)
 }
 
+/// Rewrite a project's `sources.json` — the media import's per-file
+/// registration (Task 25). Same rails as every other store file
+/// (`write_atomic_replacing`); the caller holds the session's save lock
+/// across its load-modify-write so two writers never lose each other's
+/// entry and a discard never removes the directory mid-write.
+pub fn write_sources(
+    root: &Path,
+    id: &str,
+    sources: &BTreeMap<String, SourceRecord>,
+) -> io::Result<()> {
+    let dir = project_dir(root, id).ok_or_else(|| invalid_id(id))?;
+    write_json(&dir.join(SOURCES_FILE), sources)
+}
+
 fn read_sources(dir: &Path) -> Result<BTreeMap<String, SourceRecord>, EditorError> {
     let path = dir.join(SOURCES_FILE);
     let bytes = std::fs::read(&path).map_err(|e| {

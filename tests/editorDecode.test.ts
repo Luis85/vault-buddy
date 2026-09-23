@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   decodeEditorError,
   decodeJobProgress,
+  decodeJobRecords,
+  decodeJobStarted,
   decodeOpenResult,
   decodeProject,
   decodeProjection,
@@ -277,5 +279,44 @@ describe("decodeJobProgress", () => {
 
   it('rejects phase "done"', () => {
     expect(() => decodeJobProgress({ ...VALID, phase: "done" })).toThrow(ProtocolError);
+  });
+
+  // `media_jobs.rs`' `job_progress_wire_shape_is_pinned` terminal literal,
+  // byte for byte: absent terminal fields are ABSENT, not null.
+  it("decodes the Rust import terminal literal", () => {
+    const literal = {
+      sessionId: "ses-a", jobId: "job-b", kind: "import",
+      sequence: 3, phase: "complete", fraction: 1.0,
+      terminal: {
+        assetIds: ["asset-1"],
+        perFile: [{ name: "broken.mov", error: "damaged" }],
+      },
+    };
+    expect(decodeJobProgress(literal)).toEqual(literal);
+  });
+
+  it("rejects an absent terminal key (present-even-when-null)", () => {
+    const { terminal: _terminal, ...noTerminal } = VALID;
+    expect(() => decodeJobProgress(noTerminal)).toThrow(ProtocolError);
+  });
+});
+
+describe("decodeJobRecords / decodeJobStarted", () => {
+  // `media_jobs.rs`' `JobRecordDto` literal (`job_progress_wire_shape_is_pinned`).
+  it("decodes the Rust registry row literal", () => {
+    const rows = [{ jobId: "job-b", kind: "import", phase: "cancelled", fraction: 0.25, terminal: {} }];
+    expect(decodeJobRecords(rows)).toEqual(rows);
+  });
+
+  it("rejects a non-array reply and a malformed row", () => {
+    expect(() => decodeJobRecords(undefined)).toThrow(ProtocolError);
+    expect(() =>
+      decodeJobRecords([{ jobId: "job-b", kind: "import", phase: "nope", fraction: 0, terminal: null }]),
+    ).toThrow(ProtocolError);
+  });
+
+  it("decodes { jobId } and refuses an invalid id", () => {
+    expect(decodeJobStarted({ jobId: "job-b" })).toEqual({ jobId: "job-b" });
+    expect(() => decodeJobStarted({ jobId: "../x" })).toThrow(ProtocolError);
   });
 });

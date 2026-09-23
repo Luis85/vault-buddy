@@ -445,8 +445,8 @@ export interface EditorError {
 }
 
 /** A background job's kind/phase (Contract reference `JobProgressDto`).
- * No Rust command emits these yet — declared ahead of that later task so
- * `decodeJobProgress` has a target shape, per this task's own brief. */
+ * Emitted by `media_jobs.rs` since Task 25 (import); the Rust enum grows
+ * `render`/`peaks`/`publish` with the tasks that start those jobs. */
 export type JobKind = "import" | "render" | "peaks" | "publish";
 export type JobPhase =
   | "queued"
@@ -474,6 +474,22 @@ export interface JobProgressDto {
   phase: JobPhase;
   fraction: number;
   terminal: JobTerminal | null;
+}
+
+/** One row of `editor_get_jobs` — the authoritative job state a
+ * reconcile installs over whatever the Channel said (Contract reference
+ * `JobRecordDto`). */
+export interface JobRecordDto {
+  jobId: string;
+  kind: JobKind;
+  phase: JobPhase;
+  fraction: number;
+  terminal: JobTerminal | null;
+}
+
+/** `editor_import_media`'s immediate reply. */
+export interface JobStarted {
+  jobId: string;
 }
 
 // The ~50-variant EditorCommand union lives in its own file (F31) so this

@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **10 rows** today (T1–T10), of which **0** carry a result. An
+This file carries **11 rows** today (T1–T11), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -114,3 +114,18 @@ scope as Tauri actually resolves it, and element-seek sync on real media.
 | T9 | **Monitor mute, volume and rate are local, and mute/rate survive a reopen** | During T8's playback: click **Sound** (it becomes **Muted**), drag the volume slider, and pick 1.5x in the rate menu. **Record**: that the sound stops/changes level immediately, that playback speeds up, and that the header's Undo label did NOT change (no editor command was sent). Close the editor window and reopen the same capture. **Record** whether Muted and 1.5x are restored (both are `workspace.json` fields) and that the volume came back at full (deliberately not persisted — R16's workspace has no field for it). | |
 | T10 | **The widened asset scope still refuses what R7 leaves out** | Run the app as a DEBUG build with `npm run test-build` (`tauri dev`): a release `npx tauri build` ships without devtools, and `window.__TAURI__` does not exist because `tauri.conf.json` does not set `withGlobalTauri`. With the editor window open, right-click → Inspect to open its devtools console and, for each path below, run ``const url = window.__TAURI_INTERNALS__.convertFileSrc(String.raw`<path>`, "asset"); await fetch(url).then(r => r.status)`` (`__TAURI_INTERNALS__.convertFileSrc(filePath, protocol)` is exactly what `@tauri-apps/api/core`'s `convertFileSrc` calls). The three paths: the open project's own `editor-projects\<projectId>\project.json`, a file you create under that project's `jobs\` directory, and any note in one of your vaults. **Record** each status: all three must be refused (403), while the same call for the project's staged `.mp4` under `screen-captures\` returns 200. A 200 for any of the first three means the scope Tauri resolved is wider than the pinned `tauri.conf.json` array says. | |
 
+
+## Task 25's rows
+
+Task 25 adds media import (`editor_import_media`): Rust opens its own native
+multi-file dialog, copies each file into the project's `media\`, probes the
+copy with the user's ffprobe, and reports per-file results on a job
+`Channel`. The Rust suite drives the pipeline against a FAKE prober and a
+tempdir; `ffmpeg::probe_media` is exercised against a real ffprobe on
+synthesized clips; nothing automated opens the real Windows file dialog,
+feeds a real damaged file to the real ffprobe, or watches the result land in
+the WebView2 library column. This row is that proof.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T11 | **A mixed batch with one corrupt file imports everything else** | With ffmpeg installed (Buddy settings → Integrations shows it), open a staged capture in the editor. Prepare a folder with: one ordinary `.mp4` video, one `.mp3` WITH embedded cover art (most music files have it), one `.png` screenshot, and one CORRUPT file — a plain `.txt` renamed to `broken.mov` (a truncated `.mp4` is NOT a reliable stand-in: a fast-start file keeps its index at the front, so ffprobe can still read its streams and length from the first few KB). In the library column press **Import…**; the Windows file dialog opens (parented to the editor window, filtered to video/audio/image types). Multi-select all four and press Open. **Record**: (a) the progress bar appears and finishes; (b) the summary line's imported count, and that the per-file list names ONLY the corrupt file (by its file name, with no folder path in the message); (c) that the three good files appear as cards with the right kind (Video / Audio / Image) and a plausible duration (the image reads 0:05); (d) the files under `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\media\` — exactly three `<assetId>.<ext>` files, and NO `.part` file and no copy of the corrupt one; (e) that ONE Ctrl+Z (or the header's Undo) removes all three cards at once; (f) run it again and press **Cancel** while a large file is copying: the files already imported stay, and the summary reads "Import stopped". | |

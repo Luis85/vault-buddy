@@ -87,7 +87,7 @@ function nextCommandId(): string {
  * doc) — unwrap the decoded `EditorError` it carries. Anything else caught
  * here (a bug in a test double, a non-Error throw) becomes a synthetic
  * `internal` error rather than crashing an action's catch block. */
-function toEditorError(e: unknown): EditorError {
+export function toEditorError(e: unknown): EditorError {
   if (e instanceof EditorPortError) return e.error;
   const message = e instanceof Error ? e.message : String(e);
   return { code: "internal", message, retryable: false, operationId: "store-local" };
@@ -264,6 +264,27 @@ export const useEditorProjectStore = defineStore("editorProject", {
           this.snapshot = fresh.snapshot;
           this.project = fresh.project;
         }
+      } catch (e) {
+        if (generation === this.generation) this.lastError = toEditorError(e);
+      }
+    },
+    /**
+     * Re-read the committed projection after an edit Rust made on its OWN
+     * (Task 25: a finished import's `AddAssets`, which no `execute` reply
+     * carries). Installed under the usual generation/session guards, and
+     * never BEHIND the revision already shown — a refresh racing a newer
+     * `execute` reply must not roll it back.
+     */
+    async refresh(): Promise<void> {
+      if (!this.sessionId) return;
+      const generation = this.generation;
+      const sessionId = this.sessionId;
+      try {
+        const fresh = await this.port.getSnapshot(sessionId, null);
+        if (generation !== this.generation || fresh.snapshot.sessionId !== this.sessionId) return;
+        if (this.snapshot && fresh.snapshot.revision < this.snapshot.revision) return;
+        this.snapshot = fresh.snapshot;
+        this.project = fresh.project;
       } catch (e) {
         if (generation === this.generation) this.lastError = toEditorError(e);
       }

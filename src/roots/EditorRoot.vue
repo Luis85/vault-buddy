@@ -48,6 +48,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import ClipSection from "../components/editor/inspector/ClipSection.vue";
 import InspectorPanel from "../components/editor/inspector/InspectorPanel.vue";
 import LegacyCaptureEditor from "../components/editor/LegacyCaptureEditor.vue";
+import MediaLibrary from "../components/editor/library/MediaLibrary.vue";
 import PreviewSurface from "../components/editor/preview/PreviewSurface.vue";
 import EditorShell from "../components/editor/shell/EditorShell.vue";
 import TimelineView from "../components/editor/timeline/TimelineView.vue";
@@ -223,6 +224,12 @@ onBeforeUnmount(() => {
            its own `load_staged_capture` path until Task 59 (F3). -->
       <template #preview>
         <PreviewSurface />
+      </template>
+      <!-- Task 25: the media library (search, asset cards, Import through
+           Rust's own dialog, per-file results, "+" at the playhead) fills
+           the shell's `library` slot, the last of its four region slots. -->
+      <template #library>
+        <MediaLibrary />
       </template>
     </EditorShell>
     <!-- A multi-root component: its own root nodes (header, preview, strip,

@@ -49,6 +49,7 @@ import { useTimelineDrag } from "../../../composables/useTimelineDrag";
 import { isContextMenuShortcut } from "../../../editor/shortcuts";
 import { msToX, snapTargets as computeSnapTargets } from "../../../editor/timelineLayout";
 import { clipOutputEnd } from "../../../editor/timeMap";
+import { trackAccepts } from "../../../editor/trackCompat";
 import type { Clip, ClipSpan } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -136,10 +137,7 @@ const drag = useTimelineDrag({
   moveTargetClipIds,
   trackOrder: () => props.trackOrder,
   trackIndex: () => props.trackIndex,
-  trackAccepts: (trackId) => {
-    const track = editorProject.trackById(trackId);
-    return track !== undefined && !track.locked && track.kind === props.assetKind;
-  },
+  trackAccepts: (trackId) => trackAccepts(editorProject.trackById(trackId), props.assetKind),
   execute: (command) => editorProject.execute(command),
 });
 

@@ -18,7 +18,7 @@
  * decoded `EditorError`, so a caller can branch on `error.error.code`
  * rather than parsing a message string.
  */
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 import type {
   CloseDisposition,
@@ -26,13 +26,20 @@ import type {
   EditorOpenResult,
   EditorProjection,
   ExecuteRequest,
+  JobProgressDto,
+  JobRecordDto,
+  JobStarted,
   MediaRef,
   ProjectSummaryDto,
   SaveReceipt,
   Workspace,
 } from "../editorTypes";
+import { logWarning } from "../logging";
 import {
   decodeEditorError,
+  decodeJobProgress,
+  decodeJobRecords,
+  decodeJobStarted,
   decodeMediaPath,
   decodeOpenResult,
   decodeProjection,
@@ -115,6 +122,35 @@ export interface EditorPort {
    * product (`unauthorizedSource` otherwise, `sourceMissing` when its file
    * is gone), for `convertFileSrc`. The frontend never builds a path. */
   mediaUrl(sessionId: string, ref: MediaRef): Promise<string>;
+  /** `editor_import_media` — Rust opens its OWN native multi-file dialog
+   * (no path ever leaves this webview) and answers `{ jobId }` at once;
+   * every progress message, decoded, reaches `onProgress` through a
+   * per-job `Channel`, never an app-wide event. A message that fails to
+   * decode is logged and dropped — the store's `reconcile` (the job
+   * registry) recovers whatever it would have said. Messages can arrive
+   * BEFORE this promise resolves; the caller must be ready for that. */
+  importMedia(sessionId: string, onProgress: (message: JobProgressDto) => void): Promise<JobStarted>;
+  /** `editor_cancel_job` — stops a job's FUTURE work; finished work stays. */
+  cancelJob(sessionId: string, jobId: string): Promise<void>;
+  /** `editor_get_jobs` — the authoritative job states, oldest first. */
+  getJobs(sessionId: string): Promise<JobRecordDto[]>;
+}
+
+/** The per-job Channel (Tauri's ordered, subscriber-scoped delivery) —
+ * created here so no other file ever touches the IPC transport. */
+function progressChannel(onProgress: (message: JobProgressDto) => void): Channel<unknown> {
+  const channel = new Channel<unknown>();
+  channel.onmessage = (raw) => {
+    let message: JobProgressDto;
+    try {
+      message = decodeJobProgress(raw);
+    } catch (e) {
+      logWarning(`editor job progress dropped (undecodable): ${String(e)}`);
+      return;
+    }
+    onProgress(message);
+  };
+  return channel;
 }
 
 export function createTauriEditorPort(): EditorPort {
@@ -155,6 +191,20 @@ export function createTauriEditorPort(): EditorPort {
     },
     mediaUrl(sessionId, ref) {
       return call("editor_media_url", { sessionId, ref }, decodeMediaPath);
+    },
+    importMedia(sessionId, onProgress) {
+      const onProgressChannel = progressChannel(onProgress);
+      return call(
+        "editor_import_media",
+        { sessionId, onProgress: onProgressChannel },
+        decodeJobStarted,
+      );
+    },
+    async cancelJob(sessionId, jobId) {
+      await call("editor_cancel_job", { sessionId, jobId }, () => undefined);
+    },
+    getJobs(sessionId) {
+      return call("editor_get_jobs", { sessionId }, decodeJobRecords);
     },
   };
 }

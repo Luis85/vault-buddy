@@ -15,6 +15,8 @@ mod authz_guard;
 #[cfg(test)]
 mod capability_guard;
 pub mod media_commands;
+pub mod media_import;
+pub mod media_jobs;
 pub mod prefs_commands;
 pub mod project_store;
 pub mod save_commands;
@@ -72,10 +74,17 @@ use vault_buddy_core::editor::EditorSession;
 /// `save_locks` at all (fix round 2), so a save or discard on an unknown
 /// session id leaves the map untouched rather than minting an entry
 /// nothing would ever prune.
+///
+/// `jobs` (Task 25) is every background job this process started — the
+/// authoritative record `editor_get_jobs` answers from, and the registry a
+/// later shutdown gate asks `has_running`. A LEAF lock like `save_locks`'
+/// map: never held across I/O, a channel send, or while taking another
+/// lock (`media_jobs.rs`' own doc).
 #[derive(Default)]
 pub struct EditorState {
     pub open: Mutex<()>,
     pub sessions: Mutex<HashMap<String, EditorSession>>,
     pub by_project: Mutex<HashMap<String, String>>,
     pub save_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    pub jobs: Mutex<media_jobs::JobRegistry>,
 }

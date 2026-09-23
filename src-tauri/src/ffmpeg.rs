@@ -113,11 +113,10 @@ pub(crate) struct SourceFacts {
     pub height: u32,
     pub has_video: bool,
     pub has_audio: bool,
-    // Read by `parse_probe_output` but not yet consumed anywhere: Task 25
-    // (media import) is the field's first reader, converting this into
-    // the audio facts a plain-audio `Asset` needs. Until then it has no
-    // non-test caller, hence the scoped allow rather than a broader one.
-    #[allow(dead_code)]
+    /// The first audio stream's sample rate. Read by the media import
+    /// (`probe_media`): an audio-only file whose one stream reports no rate
+    /// is a stream ffprobe found but cannot describe — a damaged file —
+    /// and is refused rather than registered as a silent asset.
     pub audio_rate: Option<u32>,
 }
 
@@ -210,11 +209,8 @@ pub(crate) fn parse_probe_output(stdout: &str) -> Option<SourceFacts> {
 /// is `pub(crate)` here and carries `audio_rate`, a field `asset_from_probe`
 /// has no use for). `duration_ms` is separate because `SourceFacts` itself
 /// has no duration field — the export path never needed one, and Task 25
-/// (media import, this function's first caller) reads it from ffprobe's
-/// `format=duration` separately.
-// Task 25 is this function's first production caller (media import); until
-// it lands there is no non-test call site, hence the scoped allow.
-#[allow(dead_code)]
+/// (media import, this function's caller) reads it from ffprobe's
+/// `format=duration` separately (`parse_probe_duration_ms`).
 pub(crate) fn source_facts_to_probe_facts(
     facts: &SourceFacts,
     duration_ms: u64,
@@ -334,6 +330,64 @@ pub(crate) fn probe_source(tools: &FfmpegTools, path: &Path) -> Result<SourceFac
         return Err("The capture has no usable video stream.".to_string());
     }
     Ok(facts)
+}
+
+/// ffprobe's `format=duration` line (`duration=12.345000`, seconds) in
+/// whole milliseconds, rounded down. `None` for an absent line, `N/A`, a
+/// negative or non-finite value — a length ffprobe could not measure is
+/// unknown, never zero-by-default.
+pub(crate) fn parse_probe_duration_ms(stdout: &str) -> Option<u64> {
+    let seconds: f64 = stdout
+        .lines()
+        .filter_map(|l| l.trim().split_once('='))
+        .find(|(key, _)| *key == "duration")?
+        .1
+        .parse()
+        .ok()?;
+    if !seconds.is_finite() || seconds < 0.0 {
+        return None;
+    }
+    Some((seconds * 1000.0).floor() as u64)
+}
+
+/// Probe an IMPORTED file (Task 25): stream facts plus the container's
+/// duration, as the core `ProbeFacts` the asset builder reads.
+///
+/// `audio_only` adds `-select_streams a` for a file the allowlist named as
+/// audio: an MP3's or M4A's embedded cover art is a video stream to
+/// ffprobe, often with ODD dimensions, and `parse_probe_output` refuses a
+/// video stream it cannot encode — so without the selector every audio file
+/// with cover art would be refused as unusable video. The error strings are
+/// shown to the user beside the file's display name; they never carry a
+/// path.
+pub(crate) fn probe_media(
+    tools: &FfmpegTools,
+    path: &Path,
+    audio_only: bool,
+) -> Result<vault_buddy_core::editor::probe::ProbeFacts, String> {
+    let mut cmd = tool_command(&tools.ffprobe);
+    cmd.args(["-v", "error"]);
+    if audio_only {
+        cmd.args(["-select_streams", "a"]);
+    }
+    cmd.args([
+        "-show_entries",
+        "stream=codec_type,width,height,sample_rate:format=duration",
+    ])
+    .args(["-of", "default=noprint_wrappers=1"])
+    .arg(path);
+    let (ok, stdout) = run_capturing(cmd, PROBE_TIMEOUT, Capture::Stdout)
+        .map_err(|e| format!("Could not run ffprobe: {e}"))?;
+    if !ok {
+        return Err("ffprobe could not read the file; it may be damaged.".to_string());
+    }
+    let facts = parse_probe_output(&stdout)
+        .ok_or_else(|| "The file has no usable video or audio stream.".to_string())?;
+    if !facts.has_video && facts.audio_rate.is_none_or(|rate| rate == 0) {
+        return Err("The file's audio stream is unreadable; it may be damaged.".to_string());
+    }
+    let duration_ms = parse_probe_duration_ms(&stdout).unwrap_or(0);
+    Ok(source_facts_to_probe_facts(&facts, duration_ms))
 }
 
 /// The ffmpeg detection status the settings UI renders, mirroring
@@ -588,5 +642,135 @@ mod tests {
         assert_eq!(facts.height, None);
         assert!(!facts.has_video);
         assert!(facts.has_audio);
+    }
+
+    #[test]
+    fn the_format_duration_is_read_in_whole_milliseconds() {
+        let out = "codec_type=video
+width=1280
+height=720
+duration=12.3456
+";
+        assert_eq!(parse_probe_duration_ms(out), Some(12_345));
+        assert_eq!(
+            parse_probe_duration_ms(
+                "duration=N/A
+"
+            ),
+            None
+        );
+        assert_eq!(
+            parse_probe_duration_ms(
+                "duration=-1
+"
+            ),
+            None
+        );
+        assert_eq!(
+            parse_probe_duration_ms(
+                "duration=inf
+"
+            ),
+            None
+        );
+        assert_eq!(
+            parse_probe_duration_ms(
+                "codec_type=audio
+"
+            ),
+            None
+        );
+    }
+
+    fn run_ffmpeg(args: &[&str]) -> bool {
+        tool_command("ffmpeg")
+            .args(["-v", "error", "-y"])
+            .args(args)
+            .status()
+            .is_ok_and(|s| s.success())
+    }
+
+    // `probe_media` against a REAL ffprobe (Task 25): a synthesized video
+    // probes with its dimensions and length, and an MP3 carrying ODD-sized
+    // cover art -- a video stream `parse_probe_output` would refuse --
+    // still probes as audio, because an audio import selects audio streams
+    // only. Skips VISIBLY without ffmpeg (a skip proves nothing).
+    #[test]
+    fn probe_media_reads_real_files_and_ignores_cover_art() {
+        if !run_ffmpeg(&["-version"]) {
+            eprintln!("SKIP probe_media_reads_real_files_and_ignores_cover_art: no ffmpeg on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let tools = FfmpegTools {
+            ffmpeg: "ffmpeg".into(),
+            ffprobe: "ffprobe".into(),
+            version: (0, 0),
+            h264_encoder: None,
+            version_line: String::new(),
+        };
+        let video = dir.path().join("clip.mp4");
+        assert!(run_ffmpeg(&[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x180:rate=10",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=44100",
+            "-t",
+            "2",
+            "-c:v",
+            "mpeg4",
+            "-c:a",
+            "aac",
+            video.to_str().unwrap(),
+        ]));
+        let facts = probe_media(&tools, &video, false).unwrap();
+        assert_eq!((facts.width, facts.height), (Some(320), Some(180)));
+        assert!(facts.has_video && facts.has_audio);
+        assert!((1_900..=2_200).contains(&facts.duration_ms), "{facts:?}");
+
+        let cover = dir.path().join("cover.jpg");
+        assert!(run_ffmpeg(&[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:size=301x201",
+            "-frames:v",
+            "1",
+            cover.to_str().unwrap(),
+        ]));
+        let song = dir.path().join("song.mp3");
+        if !run_ffmpeg(&[
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=44100",
+            "-i",
+            cover.to_str().unwrap(),
+            "-map",
+            "0",
+            "-map",
+            "1",
+            "-t",
+            "1",
+            "-c:a",
+            "libmp3lame",
+            "-c:v",
+            "copy",
+            "-disposition:v",
+            "attached_pic",
+            song.to_str().unwrap(),
+        ]) {
+            eprintln!("SKIP the cover-art half: this ffmpeg cannot write an MP3 with a picture");
+            return;
+        }
+        let err = probe_media(&tools, &song, false).unwrap_err();
+        assert!(err.contains("no usable"), "cover art alone refuses: {err}");
+        let facts = probe_media(&tools, &song, true).unwrap();
+        assert!(facts.has_audio && !facts.has_video, "{facts:?}");
+        assert!(facts.duration_ms > 0);
     }
 }

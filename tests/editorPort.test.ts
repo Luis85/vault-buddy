@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { Channel } from "@tauri-apps/api/core";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -294,6 +295,51 @@ describe("EditorPort", () => {
       reply = bad;
       await expect(port.mediaUrl("ses-1", { assetId: "a1" })).rejects.toBeInstanceOf(EditorPortError);
     }
+  });
+
+  // Task 25: the import job. `onProgress` crosses as a Tauri `Channel`
+  // (created inside the port, never by a caller); each message is DECODED
+  // before the callback sees it, and an undecodable one is dropped rather
+  // than thrown into the Channel's own dispatch.
+  it("importMedia sends { sessionId, onProgress: Channel } and delivers decoded messages", async () => {
+    let channel: Channel<unknown> | null = null;
+    mockIPC((cmd, args) => {
+      if (cmd !== "editor_import_media") throw new Error(`unexpected command ${cmd}`);
+      const a = args as { sessionId: string; onProgress: Channel<unknown> };
+      expect(a.sessionId).toBe("ses-1");
+      expect(a.onProgress).toBeInstanceOf(Channel);
+      channel = a.onProgress;
+      return { jobId: "job-1" };
+    });
+    const received: unknown[] = [];
+    const port = createTauriEditorPort();
+    await expect(port.importMedia("ses-1", (m) => received.push(m))).resolves.toEqual({ jobId: "job-1" });
+
+    const good = {
+      sessionId: "ses-1", jobId: "job-1", kind: "import", sequence: 1,
+      phase: "queued", fraction: 0, terminal: null,
+    };
+    channel!.onmessage(good);
+    channel!.onmessage({ ...good, sequence: 2, phase: "exploded" });
+    expect(received).toEqual([good]);
+  });
+
+  it("cancelJob and getJobs send camelCased arguments and decode the rows", async () => {
+    const calls: { cmd: string; args: unknown }[] = [];
+    const rows = [{ jobId: "job-1", kind: "import", phase: "preparing", fraction: 0.5, terminal: null }];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "editor_cancel_job") return null;
+      if (cmd === "editor_get_jobs") return rows;
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    const port = createTauriEditorPort();
+    await port.cancelJob("ses-1", "job-1");
+    await expect(port.getJobs("ses-1")).resolves.toEqual(rows);
+    expect(calls).toEqual([
+      { cmd: "editor_cancel_job", args: { sessionId: "ses-1", jobId: "job-1" } },
+      { cmd: "editor_get_jobs", args: { sessionId: "ses-1" } },
+    ]);
   });
 
   it("converts a rejected invoke into EditorPortError", async () => {

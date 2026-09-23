@@ -41,6 +41,9 @@ function fakePort(overrides: Partial<EditorPort> = {}): EditorPort {
     getWorkspace: () => Promise.resolve({}),
     saveWorkspace: () => Promise.resolve(),
     mediaUrl: unimplemented("mediaUrl"),
+    importMedia: unimplemented("importMedia"),
+    cancelJob: unimplemented("cancelJob"),
+    getJobs: unimplemented("getJobs"),
     ...overrides,
   };
 }

@@ -99,6 +99,9 @@ function fakePort(overrides: Partial<EditorPort> = {}): EditorPort {
     getWorkspace: unimplemented("getWorkspace"),
     saveWorkspace: unimplemented("saveWorkspace"),
     mediaUrl: unimplemented("mediaUrl"),
+    importMedia: unimplemented("importMedia"),
+    cancelJob: unimplemented("cancelJob"),
+    getJobs: unimplemented("getJobs"),
     ...overrides,
   };
 }

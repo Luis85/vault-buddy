@@ -341,6 +341,9 @@ fn drop_session(state: &EditorState, session_id: &str) {
     // with sessions currently open rather than every session ever opened
     // in this process's life.
     lock_ignoring_poison(&state.save_locks).remove(session_id);
+    // A running import (Task 25) of a closing session stops before its next
+    // file; its results would have no session to land in.
+    lock_ignoring_poison(&state.jobs).cancel_session(session_id);
 }
 
 /// Close a session. `discardProject` UNPINS the staged capture first and

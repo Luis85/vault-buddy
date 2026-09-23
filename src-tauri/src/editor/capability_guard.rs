@@ -58,17 +58,21 @@ use std::path::{Path, PathBuf};
 
 use crate::structural_scan::code_only;
 
-/// The `editor_*` session, save/list/reopen and workspace commands — eleven as
-/// of Task 22 (`editor_media_url`). Add a new one here in the same commit that adds it to
+/// The `editor_*` session, save/list/reopen, workspace, media and job commands —
+/// fourteen as of Task 25 (`editor_import_media`, `editor_cancel_job`,
+/// `editor_get_jobs`). Add a new one here in the same commit that adds it to
 /// `generate_handler!` (`lib.rs`), `build.rs`'s `ALL_COMMANDS`, and
 /// `capabilities/editor.json`'s `permissions` — never to
 /// `capabilities/default.json`.
 const EXPECTED_EDITOR: &[&str] = &[
+    "editor_cancel_job",
     "editor_close_session",
     "editor_execute",
+    "editor_get_jobs",
     "editor_get_snapshot",
     "editor_get_workspace",
     "editor_hide_window",
+    "editor_import_media",
     "editor_list_projects",
     "editor_media_url",
     "editor_open_project",
