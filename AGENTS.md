@@ -213,7 +213,10 @@ vault-buddy/
 │   │                           #   screen_capture_paths (the NINTH vault write's naming —
 │   │                           #     in core because the one collision-suffix minter,
 │   │                           #     capture_paths::candidate, is pub(crate) to this crate),
-│   │                           #   app_diagnostics, vault_walk, crash, throttle, sync_util
+│   │                           #   app_diagnostics, vault_walk, crash, throttle, sync_util,
+│   │                           #   editor/ (the tutorial editor's pure model, commands,
+│   │                           #     validation; package.rs = the portable-package
+│   │                           #     validator/writer, the crate's ONE `zip` use, ADR R9)
 │   ├── capture/src/            # AUDIO engine: devices, mixer, encoder, session,
 │   │                           #   recovery, rename
 │   ├── mcp/src/                # MCP server: service (7 tools), http (guards+runner),
