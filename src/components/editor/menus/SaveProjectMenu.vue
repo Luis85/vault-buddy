@@ -10,7 +10,13 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 
 type SaveMenuItem = "save" | "portable" | "lightweight" | "open";
 
-defineProps<{ disabled: boolean }>();
+const props = defineProps<{
+  disabled: boolean;
+  /** Why the header's own Save button is disabled right now (a save in
+   * flight), or `null`: the menu's Save item carries the same state and
+   * reason, so it is never a second, enabled path to a disabled command. */
+  saveDisabledReason: string | null;
+}>();
 const emit = defineEmits<{ (e: "choose", item: SaveMenuItem): void }>();
 
 const ITEMS: readonly { id: SaveMenuItem; label: string }[] = [
@@ -29,7 +35,11 @@ function choose(item: SaveMenuItem): void {
   emit("choose", item);
 }
 
-function onEscape(): void {
+/** Escape closes an OPEN menu and stops there; while closed it is none of
+ * this menu's business and travels on to the shell (fix round 1). */
+function onEscape(event: KeyboardEvent): void {
+  if (!open.value) return;
+  event.stopPropagation();
   open.value = false;
   toggle.value?.focus();
 }
@@ -46,7 +56,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onPointerDown)
   <div
     ref="root"
     class="relative"
-    @keydown.esc.stop="onEscape"
+    @keydown.esc="onEscape"
   >
     <button
       ref="toggle"
@@ -73,7 +83,9 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onPointerDown)
         type="button"
         role="menuitem"
         :data-testid="`editor-header-menu-${item.id}`"
-        class="cursor-pointer rounded px-2 py-1 text-left text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        :disabled="item.id === 'save' && props.saveDisabledReason !== null"
+        :title="item.id === 'save' ? (props.saveDisabledReason ?? undefined) : undefined"
+        class="cursor-pointer rounded px-2 py-1 text-left text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
         @click="choose(item.id)"
       >
         {{ item.label }}

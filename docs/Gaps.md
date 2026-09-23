@@ -2583,30 +2583,40 @@ and it still counts toward `MAX_CAPTIONS`/`MAX_MARKERS`.
 **Fix:** list trimmed-away cues and markers under a "Not in the edit" group
 in each library (delete-only).
 
-### GAP-182 · Low · An imported project file guesses its sources' facts, and a portable file leaves unplaced library media behind
-`src-tauri/src/editor/package_import.rs` (`source_record`),
-`src-tauri/core/src/editor/package_plan.rs` (`assets_needing_media`).
-Found by Task 39. The package format (`vault-buddy-project-package/1`,
-Task 38) carries no `sources.json`, so an imported project rebuilds each
-source record from its ASSET: size (or 0 when the asset records none),
-duration, dimensions, and `hasAudio` assumed true for every non-image
-source. Two consequences:
-- A video with no sound track imports with `hasAudio: true`, so Detach
-  audio is offered for it and the waveform read fails with ffmpeg's error
-  rather than "This asset has no sound to draw". Nothing is lost.
-- A lightweight placeholder's expected size is 0 for an asset that never
-  recorded one, which weakens Task 40's reconnection match to name and
-  duration alone.
+### GAP-182 · Low · A project file from an older build or another editor carries no source facts, and a portable file leaves unplaced library media behind
+`src-tauri/src/editor/package_import.rs` (`facts_from_asset`),
+`src-tauri/core/src/editor/package_plan.rs` (`assets_needing_media`,
+`SOURCE_FACTS_KEY`), `src-tauri/src/editor/package_commands.rs`.
+Found by Task 39; re-graded by its fix round 1. The package format has no
+`sources.json`, so an import first guessed each source's facts from its
+asset and set `hasAudio: true` for every non-image source, which let a
+screen capture recorded WITHOUT an audio device detach an empty audio clip
+after a round trip (the edit Task 27's guard refuses). **Fixed for every
+file this build writes:** the export now carries each source's
+`hasAudio`/`hasVideo`/dimensions/`mediaKind`/size/duration in
+`record.extra.vaultBuddySourceFacts` (validated strictly and removed before
+anything is stored), and a portable export hashes the bytes it actually
+writes and fails if a source changed after the manifest was computed.
+What remains:
+- A file WITHOUT those facts (written before fix round 1, or by another
+  editor) gets them from its asset, and never invents audio: a video's
+  `hasAudio` is false. Such a video with a real sound track therefore cannot
+  detach its audio (or draw a waveform) until it is reconnected (Task 40)
+  and re-probed. The refusal is honest, and nothing is lost.
+- A lightweight placeholder's expected size is 0 when the file carried no
+  facts and the asset recorded no size, which weakens Task 40's match to
+  name and duration.
+- `package::cross_check` refuses packaged media that nothing in the project
+  or a retained snapshot references, so an original that is in the media
+  library but on no clip is NOT carried by a portable file. It imports as
+  missing (reported, never silently dropped).
+- A crash between the export's temp create and its rename leaves a
+  `<name>.part-<rand>` file in the user's chosen folder. Nothing sweeps user
+  folders.
 
-Separately, `package::cross_check` refuses packaged media that nothing in
-the project or a retained snapshot references, so an original that sits in
-the media library but on no clip is NOT carried by a portable file: it
-imports as missing (reported, never silently dropped).
-
-**Fix:** carry each packaged source's probed facts in the package (a
-manifest schema bump — the manifest is `deny_unknown_fields`), or re-probe
-extracted media with ffprobe when it is installed; and decide whether
-unplaced library media belongs in a portable file (a cross-check change).
+**Fix:** re-probe extracted media with ffprobe when it is installed; decide
+whether unplaced library media belongs in a portable file (a cross-check
+change).
 
 ## 9. Documentation & repo hygiene
 

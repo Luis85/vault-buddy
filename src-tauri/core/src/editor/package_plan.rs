@@ -206,6 +206,63 @@ pub fn suggested_file_name(title: &str, format: PackageFormat) -> String {
     format!("{stem}{}", format.suffix())
 }
 
+/// The `record.extra` key a project file carries its sources' facts under
+/// (Task 39 fix round 1; GAP-182): the package format has no source
+/// registry, and an import that GUESSED `hasAudio` would re-open Task 27's
+/// detach-audio guard for every silent capture. Transport only — the import
+/// takes it out of the envelope before anything is stored.
+pub const SOURCE_FACTS_KEY: &str = "vaultBuddySourceFacts";
+
+/// What kind of media a source is — `sources.json`'s `mediaKind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FactsMediaKind {
+    Video,
+    Audio,
+    Image,
+}
+
+/// One source's probed facts, as the exporting machine's `sources.json`
+/// recorded them. Closed (`deny_unknown_fields`): a fact this build cannot
+/// check is refused rather than half-read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourceFacts {
+    pub has_audio: bool,
+    pub has_video: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    pub media_kind: FactsMediaKind,
+    pub size: u64,
+    pub duration_ms: u64,
+}
+
+/// Put `facts` into the envelope's `record.extra` (an empty map adds
+/// nothing).
+pub fn attach_source_facts(env: &mut WorkspaceEnvelope, facts: &BTreeMap<String, SourceFacts>) {
+    if facts.is_empty() {
+        return;
+    }
+    let value = serde_json::to_value(facts).expect("source facts always serialize");
+    env.record.extra.insert(SOURCE_FACTS_KEY.to_string(), value);
+}
+
+/// Take the facts back OUT of an untrusted envelope: absent is an empty map
+/// (a lightweight file from a build before this, or another editor); a
+/// present value that is not exactly `{assetId: SourceFacts}` is an `Err`
+/// naming why, which the import refuses.
+pub fn take_source_facts(
+    env: &mut WorkspaceEnvelope,
+) -> Result<BTreeMap<String, SourceFacts>, String> {
+    match env.record.extra.remove(SOURCE_FACTS_KEY) {
+        None => Ok(BTreeMap::new()),
+        Some(value) => serde_json::from_value(value)
+            .map_err(|e| format!("The project file's source facts are not valid: {e}")),
+    }
+}
+
 /// Re-key an imported envelope onto `new_id` (the manifest's id already
 /// names a project in this store): the project, its record, each retained
 /// product's owner and each snapshot's own id.

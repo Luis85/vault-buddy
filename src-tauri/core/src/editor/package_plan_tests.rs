@@ -229,3 +229,59 @@ fn rekey_moves_the_project_record_products_and_snapshots_together() {
     );
     crate::editor::validate_envelope(&env).expect("still a valid envelope");
 }
+
+fn facts(has_audio: bool, kind: FactsMediaKind) -> SourceFacts {
+    SourceFacts {
+        has_audio,
+        has_video: kind != FactsMediaKind::Audio,
+        width: Some(1600),
+        height: Some(900),
+        media_kind: kind,
+        size: 47,
+        duration_ms: 61_500,
+    }
+}
+
+// Fix round 1 (GAP-182): the facts ride in `record.extra` and come back
+// out unchanged; taking them removes the transport key, so nothing of it
+// is ever stored.
+#[test]
+fn source_facts_round_trip_through_the_record_and_are_taken_out() {
+    let mut env = mixed();
+    let sent = BTreeMap::from([
+        ("screen".to_string(), facts(false, FactsMediaKind::Video)),
+        ("live".to_string(), facts(true, FactsMediaKind::Video)),
+    ]);
+    attach_source_facts(&mut env, &sent);
+    let wire: WorkspaceEnvelope =
+        serde_json::from_str(&serde_json::to_string(&env).unwrap()).unwrap();
+    let mut env = wire;
+    assert!(env.record.extra.contains_key(SOURCE_FACTS_KEY));
+    assert_eq!(take_source_facts(&mut env).unwrap(), sent);
+    assert!(!env.record.extra.contains_key(SOURCE_FACTS_KEY));
+    assert_eq!(take_source_facts(&mut env).unwrap(), BTreeMap::new());
+}
+
+#[test]
+fn the_source_facts_wire_shape_is_pinned() {
+    assert_eq!(
+        serde_json::to_value(facts(false, FactsMediaKind::Image)).unwrap(),
+        serde_json::json!({"hasAudio": false, "hasVideo": true, "width": 1600, "height": 900,
+                           "mediaKind": "image", "size": 47, "durationMs": 61500})
+    );
+}
+
+#[test]
+fn malformed_source_facts_are_refused() {
+    for bad in [
+        serde_json::json!("not a map"),
+        serde_json::json!({"live": {"hasAudio": "yes", "hasVideo": true, "mediaKind": "video", "size": 1, "durationMs": 1}}),
+        serde_json::json!({"live": {"hasAudio": true, "hasVideo": true, "mediaKind": "video", "size": 1, "durationMs": 1, "path": "C:/x"}}),
+    ] {
+        let mut env = mixed();
+        env.record
+            .extra
+            .insert(SOURCE_FACTS_KEY.to_string(), bad.clone());
+        assert!(take_source_facts(&mut env).is_err(), "{bad}");
+    }
+}

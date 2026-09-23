@@ -216,6 +216,7 @@ function onSaveMenu(item: "save" | "portable" | "lightweight" | "open") {
       </AppButton>
       <SaveProjectMenu
         :disabled="!editorProject.sessionId"
+        :save-disabled-reason="saveDisabledReason"
         @choose="onSaveMenu"
       />
       <span

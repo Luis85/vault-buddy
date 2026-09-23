@@ -22,6 +22,8 @@ pub mod media_jobs;
 pub mod media_probe;
 pub mod package_commands;
 pub mod package_import;
+#[cfg(test)]
+mod package_test_support;
 pub mod prefs_commands;
 pub mod project_store;
 pub mod recovery;

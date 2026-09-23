@@ -216,3 +216,44 @@ describe("EditorHeader — Save project menu", () => {
     expect(w.emitted("open-project-file")).toHaveLength(1);
   });
 });
+
+describe("SaveProjectMenu (fix round 1)", () => {
+  // Review Minor: the header's own Save button is disabled with "Saving..."
+  // while a save is in flight; the menu's Save item was a second, enabled
+  // path to the same command (R20: a disabled control has no back door).
+  it("disables the menu's Save item while a save is in flight, with the header's reason", async () => {
+    const pendingSave = deferred<never>();
+    const store = await openStore({ save: () => pendingSave.promise });
+    const w = mount(EditorShell, { attachTo: document.body });
+    const saving = store.save();
+    await flushPromises();
+    await w.get('[data-testid="editor-header-save-menu-toggle"]').trigger("click");
+    const item = w.get('[data-testid="editor-header-menu-save"]');
+    expect(item.attributes("disabled")).toBeDefined();
+    expect(item.attributes("title")).toBe(w.get('[data-testid="editor-header-save-reason"]').text());
+    pendingSave.reject(portError("internal", "stop"));
+    await saving;
+  });
+
+  // Review Minor: Escape was stopped at the menu's root even while it was
+  // CLOSED, so the shell's own Escape handling never saw it.
+  it("lets Escape through while closed and consumes it only to close an open menu", async () => {
+    await openStore({});
+    const w = mount(EditorShell, { attachTo: document.body });
+    const seen = vi.fn();
+    document.addEventListener("keydown", seen);
+    try {
+      const toggle = w.get('[data-testid="editor-header-save-menu-toggle"]');
+      await toggle.trigger("keydown", { key: "Escape" });
+      expect(seen).toHaveBeenCalledTimes(1);
+
+      await toggle.trigger("click");
+      expect(w.find('[role="menu"]').exists()).toBe(true);
+      await toggle.trigger("keydown", { key: "Escape" });
+      expect(w.find('[role="menu"]').exists()).toBe(false);
+      expect(seen).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener("keydown", seen);
+    }
+  });
+});

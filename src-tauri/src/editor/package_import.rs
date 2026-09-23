@@ -37,13 +37,15 @@
 //! (lightweight). The import never reads or writes any staged capture's
 //! sidecar, so it can never pin one.
 //!
-//! **What a project file cannot say.** The package format carries no
-//! `sources.json`, so every imported source's facts come from its asset (a
-//! packaged one adds its real size and SHA-256): size (or 0), duration,
-//! dimensions, and `hasAudio` assumed true for every non-image source — an
-//! imported project may therefore offer Detach audio
-//! on a video that has none, which fails harmlessly at the waveform read
-//! (docs/Gaps.md GAP-182).
+//! **Source facts.** The package format carries no `sources.json`, so the
+//! export puts each source's facts (`hasAudio`, `hasVideo`, dimensions,
+//! `mediaKind`, size, duration) in `record.extra` under
+//! `package_plan::SOURCE_FACTS_KEY` (fix round 1). They are validated
+//! strictly, taken OUT of the envelope before anything is stored, and used
+//! for each record, so Task 27's detach-audio guard survives a round trip.
+//! A file without them (an older build's, another editor's) gets its facts
+//! from the asset, and a video's `hasAudio` is then FALSE: sound is never
+//! invented (docs/Gaps.md GAP-182).
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -55,7 +57,7 @@ use vault_buddy_core::editor::package::{inspect_archive, validate_entry_name, Pa
 use vault_buddy_core::editor::package_extract::PackageExtractor;
 use vault_buddy_core::editor::package_plan::{
     asset_definitions, asset_id_problem, file_backed_asset_ids, placeholder_file_name,
-    rekey_envelope, PackageFormat,
+    rekey_envelope, take_source_facts, FactsMediaKind, PackageFormat, SourceFacts,
 };
 use vault_buddy_core::editor::{
     is_valid_id, limits, new_project_id, sanitize, validate_envelope, Asset, AssetKind,
@@ -294,25 +296,55 @@ fn dimension(value: Option<&serde_json::Number>) -> Option<u32> {
 
 /// A `sources.json` record for a file-backed asset: the extracted file when
 /// the package carried it, a placeholder otherwise (module doc).
-fn source_record(asset: &Asset, extracted: Option<&Extracted>) -> SourceRecord {
+/// The facts a source record needs when the file carried none for it (a
+/// build before fix round 1, or another editor): read off the asset, and
+/// `hasAudio` only for an AUDIO asset. A video's sound is never invented,
+/// or Task 27's detach-audio guard would accept an edit that makes an
+/// empty audio clip; an honest "no" is what a reconnect can lift.
+fn facts_from_asset(asset: &Asset) -> SourceFacts {
     let image = asset.media_type == Some(MediaType::Image);
+    SourceFacts {
+        has_audio: asset.kind == AssetKind::Audio && !image,
+        has_video: asset.kind == AssetKind::Video,
+        width: dimension(asset.width.as_ref()),
+        height: dimension(asset.height.as_ref()),
+        media_kind: match (image, asset.kind) {
+            (true, _) => FactsMediaKind::Image,
+            (false, AssetKind::Audio) => FactsMediaKind::Audio,
+            (false, AssetKind::Video) => FactsMediaKind::Video,
+        },
+        size: asset.size.unwrap_or(0),
+        duration_ms: asset.duration_ms,
+    }
+}
+
+/// A `sources.json` record for a file-backed asset: the extracted file when
+/// the package carried it, a placeholder otherwise; its facts are the
+/// exporting machine's when the file carried them (`SOURCE_FACTS_KEY`),
+/// else `facts_from_asset`.
+fn source_record(
+    asset: &Asset,
+    extracted: Option<&Extracted>,
+    carried: Option<&SourceFacts>,
+) -> SourceRecord {
+    let facts = carried.cloned().unwrap_or_else(|| facts_from_asset(asset));
     let (file, size, sha256) = match extracted {
         Some(x) => (x.file.clone(), x.size, Some(x.sha256.clone())),
-        None => (placeholder_file_name(asset), asset.size.unwrap_or(0), None),
+        None => (placeholder_file_name(asset), facts.size, None),
     };
     SourceRecord {
         locator: SourceLocator::Media { file },
         sha256,
         size,
-        duration_ms: asset.duration_ms,
-        width: dimension(asset.width.as_ref()),
-        height: dimension(asset.height.as_ref()),
-        has_audio: !image,
-        has_video: asset.kind == AssetKind::Video,
-        media_kind: match (image, asset.kind) {
-            (true, _) => SourceMediaKind::Image,
-            (false, AssetKind::Audio) => SourceMediaKind::Audio,
-            (false, AssetKind::Video) => SourceMediaKind::Video,
+        duration_ms: facts.duration_ms,
+        width: facts.width,
+        height: facts.height,
+        has_audio: facts.has_audio,
+        has_video: facts.has_video,
+        media_kind: match facts.media_kind {
+            FactsMediaKind::Image => SourceMediaKind::Image,
+            FactsMediaKind::Audio => SourceMediaKind::Audio,
+            FactsMediaKind::Video => SourceMediaKind::Video,
         },
     }
 }
@@ -320,13 +352,15 @@ fn source_record(asset: &Asset, extracted: Option<&Extracted>) -> SourceRecord {
 fn build_sources(
     env: &WorkspaceEnvelope,
     extracted: &BTreeMap<String, Extracted>,
+    facts: &BTreeMap<String, SourceFacts>,
 ) -> BTreeMap<String, SourceRecord> {
     let defs = asset_definitions(env);
     file_backed_asset_ids(env)
         .into_iter()
         .filter_map(|id| {
             let asset = *defs.get(id.as_str())?.first()?;
-            Some((id.clone(), source_record(asset, extracted.get(&id))))
+            let record = source_record(asset, extracted.get(&id), facts.get(&id));
+            Some((id, record))
         })
         .collect()
 }
@@ -365,6 +399,8 @@ fn import_file(
 
     let _open = lock_ignoring_poison(&state.open);
     let mut envelope = incoming.envelope;
+    // Transport only: taken OUT of the envelope before anything is stored.
+    let facts = take_source_facts(&mut envelope).map_err(invalid)?;
     let id = choose_id(root, &envelope.project.id);
     if id != envelope.project.id {
         rekey_envelope(&mut envelope, &id);
@@ -374,8 +410,17 @@ fn import_file(
         Some(manifest) => extract_all(&file, manifest, &envelope, &build)?,
         None => BTreeMap::new(),
     };
-    let sources = build_sources(&envelope, &extracted);
+    let sources = build_sources(&envelope, &extracted, &facts);
+    // `project.json` carries the SANITIZED blob too (fix round 1), exactly
+    // as `editor_save_project` embeds it: untrusted package content never
+    // lands in the store verbatim.
     let workspace = sanitize(&envelope.workspace);
+    envelope.workspace = serde_json::to_value(&workspace).map_err(|e| {
+        EditorError::new(
+            EditorErrorCode::Internal,
+            format!("Could not encode the workspace: {e}"),
+        )
+    })?;
     write_json(&build.dir, SOURCES_FILE, &sources)?;
     write_json(&build.dir, PROJECT_FILE, &envelope)?;
     write_json(&build.dir, WORKSPACE_FILE, &workspace)?;
@@ -405,3 +450,7 @@ pub(crate) fn import_package_in(
     };
     import_file(state, root, &path).map(Some)
 }
+
+#[cfg(test)]
+#[path = "package_import_tests.rs"]
+mod tests;

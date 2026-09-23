@@ -37,6 +37,47 @@ pub fn copy_hashing(reader: &mut dyn Read, writer: &mut dyn Write) -> io::Result
     Ok((total, hex(&hasher.finalize())))
 }
 
+/// The digest `hashing_reader` accumulates, readable after the reader
+/// itself has been handed away (Task 39 fix round 1: `write_package`
+/// consumes each media reader, and the export must still compare what it
+/// actually WROTE with the manifest it wrote first).
+pub struct StreamDigest(std::rc::Rc<std::cell::RefCell<(Sha256, u64)>>);
+
+/// A reader that hashes every byte read through it.
+pub struct HashingReader<R> {
+    inner: R,
+    state: std::rc::Rc<std::cell::RefCell<(Sha256, u64)>>,
+}
+
+pub fn hashing_reader<R: Read>(inner: R) -> (HashingReader<R>, StreamDigest) {
+    let state = std::rc::Rc::new(std::cell::RefCell::new((Sha256::new(), 0)));
+    (
+        HashingReader {
+            inner,
+            state: state.clone(),
+        },
+        StreamDigest(state),
+    )
+}
+
+impl<R: Read> Read for HashingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        let mut state = self.state.borrow_mut();
+        state.0.update(&buf[..n]);
+        state.1 += n as u64;
+        Ok(n)
+    }
+}
+
+impl StreamDigest {
+    /// `(bytes read so far, lowercase hex SHA-256 of them)`.
+    pub fn finish(&self) -> (u64, String) {
+        let state = self.0.borrow();
+        (state.1, hex(&state.0.clone().finalize()))
+    }
+}
+
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -103,6 +144,26 @@ pub fn settle_av_import(
 
 #[cfg(test)]
 mod tests {
+    // Fix round 1: the digest covers exactly the bytes that went through
+    // the reader, however the consumer chunked its reads.
+    #[test]
+    fn a_hashing_reader_digests_what_was_read() {
+        let bytes: Vec<u8> = (0..70_000u32).map(|i| (i % 251) as u8).collect();
+        let (mut reader, digest) = hashing_reader(&bytes[..]);
+        let mut sink = Vec::new();
+        let mut small = [0u8; 777];
+        loop {
+            let n = reader.read(&mut small).unwrap();
+            if n == 0 {
+                break;
+            }
+            sink.extend_from_slice(&small[..n]);
+        }
+        let expected = copy_hashing(&mut &bytes[..], &mut io::sink()).unwrap();
+        assert_eq!(digest.finish(), expected);
+        assert_eq!(sink, bytes);
+    }
+
     use super::*;
 
     fn facts(video: bool, audio: bool, duration_ms: u64) -> ProbeFacts {
