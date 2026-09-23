@@ -20,6 +20,7 @@ pub mod ids;
 pub mod migrate;
 pub mod model;
 pub mod model_cues;
+pub mod probe;
 pub mod projection;
 pub mod session;
 #[cfg(test)]

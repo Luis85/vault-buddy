@@ -101,29 +101,49 @@ pub(crate) fn pick_h264_encoder(encoders_stdout: &str) -> Option<String> {
 /// Read by the export worker: the encoder needs the real pixel dimensions
 /// and whether an audio track exists at all, and the companion note records
 /// the same dimensions -- the file's own, never the staged sidecar's
-/// hand-editable copies.
+/// hand-editable copies. `has_video`/`audio_rate` were added for the
+/// tutorial editor's media import (Task 24): a general import can probe a
+/// pure-audio file, which the screen-capture export path never could (a
+/// capture always has video) — see `probe_source` for how the export path
+/// keeps its own "no video, no export" refusal even though
+/// `parse_probe_output` itself now accepts an audio-only file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SourceFacts {
     pub width: u32,
     pub height: u32,
+    pub has_video: bool,
     pub has_audio: bool,
+    // Read by `parse_probe_output` but not yet consumed anywhere: Task 25
+    // (media import) is the field's first reader, converting this into
+    // the audio facts a plain-audio `Asset` needs. Until then it has no
+    // non-test caller, hence the scoped allow rather than a broader one.
+    #[allow(dead_code)]
+    pub audio_rate: Option<u32>,
 }
 
-/// Parse `ffprobe -show_entries stream=codec_type,width,height -of
-/// default=noprint_wrappers=1` output.
+/// Parse `ffprobe -show_entries stream=codec_type,width,height,sample_rate
+/// -of default=noprint_wrappers=1` output.
 ///
 /// Parsed by GROUPING on each `codec_type=` line rather than scanning for the
-/// first `width=` anywhere: ffprobe emits one block per stream and a file whose
-/// audio stream comes first would otherwise contribute its own (absent or
-/// `N/A`) dimensions to the video's. Width/height are read from the FIRST video
-/// group; `has_audio` is "any audio group at all".
+/// first `width=`/`sample_rate=` anywhere: ffprobe emits one block per stream
+/// and a file whose audio stream comes first would otherwise contribute its
+/// own (absent or `N/A`) dimensions to the video's. Width/height are read
+/// from the FIRST video group; `sample_rate` from the FIRST audio group;
+/// `has_audio` is "any audio group at all".
 ///
-/// Returns None — never a default — when there is no video stream, or its
-/// dimensions are absent, zero, or odd. H.264 4:2:0 requires even dimensions,
-/// and a zero would reach the encoder as an invalid frame size and fail deep in
-/// the filter graph with an unreadable error.
+/// Returns `None` only when there is NEITHER a usable video stream NOR any
+/// audio stream at all — a file this function can say nothing about. A video
+/// stream that IS present but whose dimensions are absent, zero, or odd is
+/// ALSO a hard `None` (never silently downgraded to "no video"): H.264 4:2:0
+/// requires even dimensions, and a zero would reach the encoder as an
+/// invalid frame size and fail deep in the filter graph with an unreadable
+/// error. A file with no video stream but a real audio one now succeeds with
+/// `has_video: false` (Task 24) — the export path's own "video required"
+/// rule lives in `probe_source`, not here, so this function can serve a
+/// general media-import probe too.
 pub(crate) fn parse_probe_output(stdout: &str) -> Option<SourceFacts> {
     let mut has_audio = false;
+    let mut audio_rate: Option<u32> = None;
     let mut kind: Option<&str> = None;
     let mut video: Option<(Option<u32>, Option<u32>)> = None;
     for line in stdout.lines() {
@@ -150,19 +170,62 @@ pub(crate) fn parse_probe_output(stdout: &str) -> Option<SourceFacts> {
                     }
                 }
             }
+            // Only the FIRST audio block's sample rate counts, mirroring
+            // the video dimensions' first-group rule.
+            "sample_rate" if kind == Some("audio") && audio_rate.is_none() => {
+                audio_rate = value.parse::<u32>().ok();
+            }
             _ => {}
         }
     }
-    let (width, height) = video?;
-    let (width, height) = (width?, height?);
-    if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
-        return None;
+    match video {
+        Some((Some(width), Some(height)))
+            if width != 0 && height != 0 && width % 2 == 0 && height % 2 == 0 =>
+        {
+            Some(SourceFacts {
+                width,
+                height,
+                has_video: true,
+                has_audio,
+                audio_rate,
+            })
+        }
+        // A video stream exists but is unusable (missing/zero/odd
+        // dimensions) — reject the whole file rather than reporting it as
+        // if it had no video at all.
+        Some(_) => None,
+        None if has_audio => Some(SourceFacts {
+            width: 0,
+            height: 0,
+            has_video: false,
+            has_audio,
+            audio_rate,
+        }),
+        None => None,
     }
-    Some(SourceFacts {
-        width,
-        height,
-        has_audio,
-    })
+}
+
+/// Convert this shell's own ffprobe facts into the core-owned `ProbeFacts`
+/// `asset_from_probe` reads (F22: `core` cannot name `SourceFacts`, which
+/// is `pub(crate)` here and carries `audio_rate`, a field `asset_from_probe`
+/// has no use for). `duration_ms` is separate because `SourceFacts` itself
+/// has no duration field — the export path never needed one, and Task 25
+/// (media import, this function's first caller) reads it from ffprobe's
+/// `format=duration` separately.
+// Task 25 is this function's first production caller (media import); until
+// it lands there is no non-test call site, hence the scoped allow.
+#[allow(dead_code)]
+pub(crate) fn source_facts_to_probe_facts(
+    facts: &SourceFacts,
+    duration_ms: u64,
+) -> vault_buddy_core::editor::probe::ProbeFacts {
+    vault_buddy_core::editor::probe::ProbeFacts {
+        duration_ms,
+        width: facts.has_video.then_some(facts.width),
+        height: facts.has_video.then_some(facts.height),
+        has_video: facts.has_video,
+        has_audio: facts.has_audio,
+    }
 }
 
 /// Probe one ffmpeg candidate: `<program> -version`, bounded by PROBE_TIMEOUT.
@@ -261,7 +324,16 @@ pub(crate) fn probe_source(tools: &FfmpegTools, path: &Path) -> Result<SourceFac
     if !ok {
         return Err("ffprobe could not read the capture.".to_string());
     }
-    parse_probe_output(&stdout).ok_or_else(|| "The capture has no usable video stream.".to_string())
+    let facts = parse_probe_output(&stdout)
+        .ok_or_else(|| "The capture has no usable video stream.".to_string())?;
+    // `parse_probe_output` now succeeds for an audio-only file too (Task
+    // 24, for the general media-import prober) — the screen-capture
+    // export path keeps its OWN "video required" refusal here rather than
+    // silently exporting an audio-only "capture" with a 0x0 frame.
+    if !facts.has_video {
+        return Err("The capture has no usable video stream.".to_string());
+    }
+    Ok(facts)
 }
 
 /// The ffmpeg detection status the settings UI renders, mirroring
@@ -411,7 +483,9 @@ mod tests {
             Some(SourceFacts {
                 width: 1920,
                 height: 1080,
-                has_audio: true
+                has_video: true,
+                has_audio: true,
+                audio_rate: None,
             })
         );
     }
@@ -425,24 +499,50 @@ mod tests {
             Some(SourceFacts {
                 width: 1280,
                 height: 720,
-                has_audio: false
+                has_video: true,
+                has_audio: false,
+                audio_rate: None,
             })
         );
     }
 
-    // No video stream means this is not a capture we can export, and a
-    // zero-size default would reach the encoder as an invalid frame size.
+    // Genuinely NO stream information at all (no codec_type line whatsoever,
+    // or a stray field with no codec_type context) means this function can
+    // say nothing about the file — a hard `None`. This used to also cover a
+    // literal "codec_type=audio\n" line; that sub-case moved to
+    // `probe_output_reports_audio_only_files` below once Task 24 taught this
+    // function to answer for an audio-only file instead of refusing it.
     #[test]
-    fn a_file_with_no_video_stream_probes_as_none() {
-        assert_eq!(parse_probe_output("codec_type=audio\n"), None);
+    fn a_file_with_no_stream_information_probes_as_none() {
         assert_eq!(parse_probe_output(""), None);
         assert_eq!(parse_probe_output("width=1920\n"), None);
+    }
+
+    // Task 24 (tutorial editor media import): a general import can probe a
+    // pure-audio file (no video stream), and this must now succeed rather
+    // than refuse — `probe_source` (the screen-capture export path) is what
+    // keeps requiring video, by checking `has_video` itself after this call.
+    #[test]
+    fn probe_output_reports_audio_only_files() {
+        let audio_only = "codec_type=audio\nsample_rate=44100\n";
+        assert_eq!(
+            parse_probe_output(audio_only),
+            Some(SourceFacts {
+                width: 0,
+                height: 0,
+                has_video: false,
+                has_audio: true,
+                audio_rate: Some(44_100),
+            })
+        );
     }
 
     #[test]
     fn an_odd_or_zero_dimension_is_refused_rather_than_reaching_the_encoder() {
         // H.264 4:2:0 requires even dimensions; ffmpeg would fail with an
-        // unreadable error deep in the filter graph.
+        // unreadable error deep in the filter graph. A video stream that
+        // exists but is unusable must stay a hard refusal, never silently
+        // read as "no video, but there's audio".
         assert_eq!(
             parse_probe_output("codec_type=video\nwidth=0\nheight=1080\n"),
             None
@@ -451,5 +551,42 @@ mod tests {
             parse_probe_output("codec_type=video\nwidth=1921\nheight=1080\n"),
             None
         );
+    }
+
+    // F22: the shell-side conversion must carry every field
+    // `asset_from_probe` reads — a width/height mixup or a dropped
+    // has_video/has_audio would silently misclassify an imported asset.
+    #[test]
+    fn source_facts_converts_to_probe_facts() {
+        let video = SourceFacts {
+            width: 1920,
+            height: 1080,
+            has_video: true,
+            has_audio: true,
+            audio_rate: None,
+        };
+        let facts = source_facts_to_probe_facts(&video, 12_345);
+        assert_eq!(facts.duration_ms, 12_345);
+        assert_eq!(facts.width, Some(1920));
+        assert_eq!(facts.height, Some(1080));
+        assert!(facts.has_video);
+        assert!(facts.has_audio);
+
+        // An audio-only source carries no real width/height (0x0 is a
+        // placeholder, not a real frame size) — the conversion must map
+        // those to `None`, never pass the placeholder zeros through.
+        let audio = SourceFacts {
+            width: 0,
+            height: 0,
+            has_video: false,
+            has_audio: true,
+            audio_rate: Some(44_100),
+        };
+        let facts = source_facts_to_probe_facts(&audio, 9_000);
+        assert_eq!(facts.duration_ms, 9_000);
+        assert_eq!(facts.width, None);
+        assert_eq!(facts.height, None);
+        assert!(!facts.has_video);
+        assert!(facts.has_audio);
     }
 }
