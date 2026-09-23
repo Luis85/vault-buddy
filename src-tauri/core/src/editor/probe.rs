@@ -116,9 +116,17 @@ fn sniff_jpeg(bytes: &[u8]) -> Option<(u32, u32)> {
             return None;
         }
         pos += 1;
-        // Fill bytes (0xFF padding between markers).
-        while bytes.get(pos) == Some(&0xFF) {
+        // Fill bytes (0xFF padding between markers, legal in arbitrary
+        // runs per Annex B.1.1.5). Bounded by `limit` like the outer
+        // loop: a run that never ends before the cap must fail the scan
+        // there rather than walking past it — an adversarial or corrupt
+        // file could otherwise carry the scan past `JPEG_SCAN_CAP` inside
+        // this one inner loop, defeating the bound entirely.
+        while pos < limit && bytes.get(pos) == Some(&0xFF) {
             pos += 1;
+        }
+        if pos >= limit {
+            return None;
         }
         let marker = *bytes.get(pos)?;
         pos += 1;
@@ -328,15 +336,26 @@ pub fn asset_from_probe(
 mod tests {
     use super::*;
 
-    fn png_fixture_dims(width: u32, height: u32) -> Vec<u8> {
+    // Generalized so the chunk-type/chunk-length rejection tests can build
+    // a deliberately WRONG header without duplicating the byte layout.
+    fn png_fixture_custom(
+        chunk_len: u32,
+        chunk_type: &[u8; 4],
+        width: u32,
+        height: u32,
+    ) -> Vec<u8> {
         let mut bytes = PNG_SIGNATURE.to_vec();
-        bytes.extend_from_slice(&13u32.to_be_bytes()); // IHDR chunk length
-        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&chunk_len.to_be_bytes());
+        bytes.extend_from_slice(chunk_type);
         bytes.extend_from_slice(&width.to_be_bytes());
         bytes.extend_from_slice(&height.to_be_bytes());
         bytes.extend_from_slice(&[8, 6, 0, 0, 0]); // depth/colour/compr/filter/interlace
         bytes.extend_from_slice(&[0, 0, 0, 0]); // CRC (never validated)
         bytes
+    }
+
+    fn png_fixture_dims(width: u32, height: u32) -> Vec<u8> {
+        png_fixture_custom(13, b"IHDR", width, height)
     }
 
     fn png_fixture() -> Vec<u8> {
@@ -359,6 +378,25 @@ mod tests {
         ]
     }
 
+    // SOI followed by a 0xFF fill run that runs PAST `JPEG_SCAN_CAP` before
+    // the first real marker byte, then a valid SOF0 segment. Finding this
+    // SOF would mean the fill-byte skip walked past the documented 256 KiB
+    // bound — the exact defect this fixture regression-tests.
+    fn jpeg_fill_run_past_cap_fixture() -> Vec<u8> {
+        let mut bytes = vec![0xFF, 0xD8];
+        bytes.extend(std::iter::repeat_n(0xFFu8, JPEG_SCAN_CAP + 1000));
+        bytes.extend_from_slice(&[
+            0xC0, // SOF0 marker byte (not 0xFF, ends the fill run)
+            0x00, 0x0B, // segment length = 11
+            0x08, // precision
+            0x01, 0xE0, // height = 480
+            0x03, 0x20, // width = 800
+            0x01, // 1 component
+            0x01, 0x22, 0x00, // component id/sampling/qtable
+        ]);
+        bytes
+    }
+
     fn webp_vp8x_fixture(width: u32, height: u32) -> Vec<u8> {
         let mut bytes = b"RIFF".to_vec();
         bytes.extend_from_slice(&0u32.to_le_bytes()); // RIFF size, unchecked
@@ -369,6 +407,38 @@ mod tests {
         bytes.extend_from_slice(&[0, 0, 0]); // reserved
         bytes.extend_from_slice(&(width - 1).to_le_bytes()[0..3]);
         bytes.extend_from_slice(&(height - 1).to_le_bytes()[0..3]);
+        bytes
+    }
+
+    // VP8L: a 1-byte signature (0x2F) then a packed 32-bit little-endian
+    // field: 14 bits width-minus-1, 14 bits height-minus-1, alpha bit,
+    // 3-bit version — none of which this reader validates but the width
+    // field.
+    fn webp_vp8l_fixture(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = b"RIFF".to_vec();
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(b"WEBP");
+        bytes.extend_from_slice(b"VP8L");
+        bytes.extend_from_slice(&5u32.to_le_bytes()); // 1 sig byte + 4 packed bytes
+        bytes.push(0x2F); // VP8L signature
+        let bits: u32 = ((width - 1) & 0x3FFF) | (((height - 1) & 0x3FFF) << 14);
+        bytes.extend_from_slice(&bits.to_le_bytes());
+        bytes
+    }
+
+    // VP8 (lossy — note the trailing space in the fourCC): a 3-byte frame
+    // tag (unchecked by this reader), the 3-byte sync code, then
+    // little-endian width/height each in the low 14 bits of a u16.
+    fn webp_vp8_lossy_fixture(width: u16, height: u16) -> Vec<u8> {
+        let mut bytes = b"RIFF".to_vec();
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(b"WEBP");
+        bytes.extend_from_slice(b"VP8 ");
+        bytes.extend_from_slice(&10u32.to_le_bytes()); // 3 tag + 3 sync + 2 w + 2 h
+        bytes.extend_from_slice(&[0x00, 0x00, 0x00]); // frame tag, unchecked
+        bytes.extend_from_slice(&[0x9d, 0x01, 0x2a]); // sync code
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
         bytes
     }
 
@@ -411,6 +481,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn webp_vp8l_dimensions() {
+        assert_eq!(
+            sniff_image(&webp_vp8l_fixture(300, 150)),
+            Some((ImageFormat::WebP, 300, 150))
+        );
+    }
+
+    #[test]
+    fn webp_vp8_lossy_dimensions() {
+        assert_eq!(
+            sniff_image(&webp_vp8_lossy_fixture(720, 480)),
+            Some((ImageFormat::WebP, 720, 480))
+        );
+    }
+
+    // The fill-byte run must not walk the scan past `JPEG_SCAN_CAP` — a
+    // valid SOF sitting beyond the cap must never be found. Regression
+    // test for a bug where only the OUTER loop was bounded: the inner
+    // "skip 0xFF padding" loop had no limit of its own, so a long enough
+    // fill run carried `pos` straight through the cap in one pass.
+    #[test]
+    fn a_jpeg_fill_byte_run_past_the_scan_cap_does_not_defeat_it() {
+        assert_eq!(sniff_image(&jpeg_fill_run_past_cap_fixture()), None);
+    }
+
+    // RST0 (a zero-length marker, skipped by exactly one byte) followed by
+    // EOI with no SOF ever seen — covers the "no length/payload" skip AND
+    // the EOI early-return in one fixture.
+    #[test]
+    fn jpeg_scan_skips_rst_markers_and_stops_cleanly_at_eoi() {
+        let no_sof = [0xFF, 0xD8, 0xFF, 0xD0, 0xFF, 0xD9];
+        assert_eq!(sniff_image(&no_sof), None);
+    }
+
+    // A byte that isn't 0xFF where the scan expects a marker introducer is
+    // a corrupt or foreign file — must return None, never panic.
+    #[test]
+    fn jpeg_scan_rejects_a_non_marker_byte_where_a_marker_is_expected() {
+        let misaligned = [0xFF, 0xD8, 0x00, 0x00];
+        assert_eq!(sniff_image(&misaligned), None);
+    }
+
     // Every prefix of the PNG fixture short of its full, declared 33
     // bytes must be REJECTED, never panic, and never decode to a
     // plausible-but-wrong answer — only the complete header (through its
@@ -432,6 +545,44 @@ mod tests {
     #[test]
     fn oversized_dimensions_are_rejected() {
         let bytes = png_fixture_dims(MAX_IMAGE_DIMENSION + 1, 100);
+        assert_eq!(sniff_image(&bytes), None);
+    }
+
+    // The width case above only exercises the first half of `dims_in_bounds`;
+    // an over-TALL image must be caught too, not just an over-wide one.
+    #[test]
+    fn oversized_height_is_also_rejected() {
+        let bytes = png_fixture_dims(100, MAX_IMAGE_DIMENSION + 1);
+        assert_eq!(sniff_image(&bytes), None);
+    }
+
+    // The brief's bound is "≤ 16384": the exact maximum must be ACCEPTED,
+    // and one past it REJECTED — an off-by-one in `dims_in_bounds` would
+    // pass every other test here.
+    #[test]
+    fn the_maximum_dimension_is_accepted_and_one_past_it_is_not() {
+        let at_max = png_fixture_dims(MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION);
+        assert_eq!(
+            sniff_image(&at_max),
+            Some((ImageFormat::Png, MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION))
+        );
+        let over_max = png_fixture_dims(MAX_IMAGE_DIMENSION + 1, MAX_IMAGE_DIMENSION);
+        assert_eq!(sniff_image(&over_max), None);
+    }
+
+    #[test]
+    fn png_with_the_wrong_chunk_type_is_rejected() {
+        // A well-formed length but a chunk that isn't IHDR at all — a PNG's
+        // first chunk is ALWAYS IHDR, so this is a foreign or corrupt file.
+        let bytes = png_fixture_custom(13, b"IDAT", 640, 360);
+        assert_eq!(sniff_image(&bytes), None);
+    }
+
+    #[test]
+    fn png_with_a_mismatched_ihdr_chunk_length_is_rejected() {
+        // IHDR's data is always exactly 13 bytes; a header that claims
+        // otherwise is not trustworthy even though the type field is right.
+        let bytes = png_fixture_custom(12, b"IHDR", 640, 360);
         assert_eq!(sniff_image(&bytes), None);
     }
 
