@@ -288,16 +288,26 @@ pub(crate) fn save_project_with(
             session.mark_saved(revision);
             session.snapshot().revision
         });
+    #[cfg(test)]
+    after_revision_read::run();
     // Task 37: a save of the session's CURRENT revision leaves nothing to
     // recover, so its journal goes (still under the save lock, so no
     // journal write can land after this delete). A save of an OLDER
     // revision (an edit landed during the write) keeps it: that edit exists
     // only in memory and in the journal.
+    //
+    // The pending journal entry is deliberately NOT forgotten here (fix
+    // round 1): `editor_execute` takes no save lock, so an edit can be
+    // acknowledged and scheduled right after `current` was read above, and
+    // forgetting would drop THAT edit's only journal write. A leftover entry
+    // for a session that really is clean costs nothing — the worker takes it
+    // under this same save lock and `write_locked` writes nothing for a
+    // clean session.
     if current == Some(revision) {
-        state.journal.forget(session_id);
         if let Err(e) = super::recovery::remove_journal(root, &project_id) {
             log::warn!(
-                "editor_save_project: saved {project_id:?} but could not remove its                  recovery journal: {e}"
+                "editor_save_project: saved {project_id:?} but could not remove its \
+                 recovery journal: {e}"
             );
         }
     }
@@ -306,6 +316,29 @@ pub(crate) fn save_project_with(
         saved_revision: revision,
         project_file_id: project_id,
     })
+}
+
+/// Test-only seam (Task 37 fix round 1): runs once, on the saving thread,
+/// right after the save has read the session's current revision and
+/// released `sessions` — the exact gap an `editor_execute` can land in,
+/// since execute takes no save lock.
+#[cfg(test)]
+pub(crate) mod after_revision_read {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    pub(crate) fn set(hook: impl FnOnce() + 'static) {
+        HOOK.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn run() {
+        if let Some(hook) = HOOK.with(|h| h.borrow_mut().take()) {
+            hook();
+        }
+    }
 }
 
 pub(crate) fn save_project_in(

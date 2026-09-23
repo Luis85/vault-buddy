@@ -611,8 +611,10 @@ pub fn run() {
             capture_commands::run_recovery(app.handle());
             document_commands::run_import_recovery(app.handle());
             screen_recovery::run_screen_recovery(app.handle());
-            // Task 37 (F34): reconcile the editor's project store against the
-            // staging state the sweep above settles, then start journaling.
+            // Task 37 (F34): re-pin the editor's project store against
+            // staging, then start journaling. Spawn order only -- the screen
+            // sweep above runs on its own thread and is not awaited; the two
+            // touch disjoint files (`recovery::spawn_startup_repin`'s doc).
             editor::recovery::spawn_startup_repin(app.handle());
             editor::recovery::spawn_journal_worker(app.handle());
             transcription::run_transcription(app.handle());

@@ -185,6 +185,42 @@ fn save_at_current_revision_removes_the_journal() {
     );
 }
 
+// Fix round 1 (review, Important): an edit acknowledged AFTER the save
+// read the current revision (execute takes no save lock) must keep its
+// pending journal write — the save must never forget a schedule it did not
+// cause, or that edit is dirty in memory with no recovery.json behind it.
+#[test]
+fn an_edit_landing_after_the_saves_revision_read_keeps_its_journal() {
+    let f = Fixture::new();
+    let state = std::sync::Arc::new(EditorState::default());
+    let (sid, pid) = dirty_session_with_journal(&f, &state);
+    let (hook_state, hook_root, hook_sid) = (
+        std::sync::Arc::clone(&state),
+        f.root().to_path_buf(),
+        sid.clone(),
+    );
+    crate::editor::save_commands::after_revision_read::set(move || {
+        rename(
+            &hook_state,
+            &hook_root,
+            &hook_sid,
+            2,
+            "cmd-racing",
+            "Racing",
+        );
+    });
+
+    save_project_in(&state, f.root(), &sid, 2).unwrap();
+
+    assert_eq!(snapshot_in(&state, &sid).unwrap().snapshot.revision, 3);
+    assert!(
+        state.journal.is_pending(&sid),
+        "the racing edit's journal write was dropped by the save"
+    );
+    flush_due(&state, Instant::now() + Duration::from_secs(5));
+    assert_eq!(read_journal(&f, &pid).session_revision, 3);
+}
+
 /// A writer that lands one more acknowledged edit while the save's own
 /// write is in flight — so the save commits an OLDER revision than the
 /// session ends up at.
@@ -471,6 +507,37 @@ fn startup_sweep_never_steals_a_pin_another_project_holds() {
     let report = run_startup_repin(f.root(), &f.staging());
 
     assert!(report.repinned.is_empty());
+    assert_eq!(report.orphaned, vec!["zz-second".to_string()]);
+    assert_eq!(f.pin_of(BASE).as_deref(), Some(pa.as_str()));
+}
+
+// Fix round 1 (review, pin integrity): the pin names an EXISTING project
+// whose sources.json cannot be read right now. It may well claim this
+// capture, so the pin is left alone and the unpinned claimant is reported --
+// an unreadable file is never proof the pin is free to take.
+#[test]
+fn startup_sweep_never_steals_a_pin_from_a_project_it_cannot_read() {
+    let f = Fixture::new();
+    f.stage(BASE);
+    let a = open_staged_session(&EditorState::default(), f.root(), &f.staging(), BASE).unwrap();
+    let pa = a.project.id.clone();
+    let (_, sources) = super::super::store_io::load_project(f.root(), &pa).unwrap();
+    create_project(
+        f.root(),
+        &super::super::project_store::minimal_project("zz-second"),
+        &sources,
+    )
+    .unwrap();
+    // The pin names A, whose sources.json is now unreadable.
+    std::fs::write(
+        project_dir(f.root(), &pa).unwrap().join("sources.json"),
+        b"{ not json",
+    )
+    .unwrap();
+
+    let report = run_startup_repin(f.root(), &f.staging());
+
+    assert!(report.repinned.is_empty(), "{:?}", report.repinned);
     assert_eq!(report.orphaned, vec!["zz-second".to_string()]);
     assert_eq!(f.pin_of(BASE).as_deref(), Some(pa.as_str()));
 }

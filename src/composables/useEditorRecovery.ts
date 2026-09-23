@@ -41,8 +41,10 @@ export function useEditorRecovery(onSessionChanged: () => void) {
       logWarning(`editor recovery: could not list projects: ${toEditorError(e).message}`);
       return;
     }
-    // The session may have changed while the listing was in flight.
-    if (project.snapshot?.sessionId !== snapshot.sessionId) return;
+    // The session may have changed while the listing was in flight — or
+    // taken an edit (fix round 1): a dirty session's journal is its own, and
+    // Resume's `keep` would flush it over the earlier run's file.
+    if (project.snapshot?.sessionId !== snapshot.sessionId || project.dirty) return;
     const row = rows.find((r) => r.projectFileId === snapshot.projectId && r.hasRecovery);
     if (!row) return;
     failure.value = null;

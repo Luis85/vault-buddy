@@ -362,14 +362,28 @@ enum Repin {
     Orphaned,
 }
 
-/// Does `project_id`'s own `sources.json` name staged capture `base`?
+/// MAY `project_id` claim staged capture `base`? A project directory that
+/// is gone cannot; one whose `sources.json` reads and names another base
+/// does not. One that exists but whose `sources.json` cannot be read right
+/// now (fix round 1) is treated as claiming it: an unreadable file is never
+/// proof its pin is free to take, so the sweep reports rather than steals.
 fn claims(root: &Path, project_id: &str, base: &str) -> bool {
-    project_dir(root, project_id).is_some_and(|d| d.is_dir())
-        && load_sources(root, project_id).is_ok_and(|sources| {
-            sources
-                .values()
-                .any(|r| matches!(&r.locator, SourceLocator::Staging { base: b } if b == base))
-        })
+    if !project_dir(root, project_id).is_some_and(|d| d.is_dir()) {
+        return false;
+    }
+    match load_sources(root, project_id) {
+        Ok(sources) => sources
+            .values()
+            .any(|r| matches!(&r.locator, SourceLocator::Staging { base: b } if b == base)),
+        Err(e) => {
+            log::warn!(
+                "editor-recovery-sweep: {project_id} holds a pin but its sources cannot be read, \
+                 leaving the pin alone: {}",
+                e.message
+            );
+            true
+        }
+    }
 }
 
 fn repin_one(root: &Path, staging_dir: &Path, project_id: &str, base: &str) -> Repin {
@@ -397,9 +411,12 @@ fn repin_one(root: &Path, staging_dir: &Path, project_id: &str, base: &str) -> R
 }
 
 /// Run `run_startup_repin` on the named `editor-recovery-sweep` thread
-/// (wired into `lib.rs`'s `setup`, right after `run_screen_recovery`, so the
-/// staging state that sweep settles is reconciled before the project store
-/// is). It holds the editor's `open` lock for the whole pass: an editor
+/// (wired into `lib.rs`'s `setup`, right after `run_screen_recovery`). That
+/// is SPAWN order only: the screen sweep runs on its own thread with its own
+/// retry loop and is not awaited. It does not need to be — it acts only on
+/// `.part` files, whose base was never published and so is named by no
+/// project, and a capture it promotes is `recovered`, which
+/// `editor_open_staged` refuses (F7), so no project can reference it. It holds the editor's `open` lock for the whole pass: an editor
 /// opening a capture in the same instant pins under that lock too, so the
 /// two can never write one sidecar's pin at once.
 pub fn spawn_startup_repin(app: &AppHandle) {
@@ -422,7 +439,8 @@ pub fn spawn_startup_repin(app: &AppHandle) {
             }
             if !report.orphaned.is_empty() {
                 log::warn!(
-                    "editor-recovery-sweep: {} project(s) left unpinned (their staged capture                      is gone or belongs to another project): {}",
+                    "editor-recovery-sweep: {} project(s) left unpinned (their staged capture \
+                     is gone or belongs to another project): {}",
                     report.orphaned.len(),
                     report.orphaned.join(", ")
                 );

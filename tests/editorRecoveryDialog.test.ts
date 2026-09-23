@@ -125,6 +125,20 @@ describe("RecoveryDialog", () => {
     expect(listProjects).not.toHaveBeenCalled();
   });
 
+  // Fix round 1: an edit acknowledged while the listing was in flight makes
+  // the session's journal its OWN — offering Resume then would have its
+  // `keep` flush the new edits over the earlier run's file.
+  it("stays hidden when the session became dirty while the projects were being listed", async () => {
+    const store = useEditorProjectStore();
+    const listProjects = vi.fn(async () => {
+      store.snapshot = snapshot({ revision: 3, persistedRevision: 2 });
+      return [summary()];
+    });
+    const { w } = await setup({ overrides: { listProjects } });
+    expect(listProjects).toHaveBeenCalledTimes(1);
+    expect(w.find('[data-testid="recovery-dialog"]').exists()).toBe(false);
+  });
+
   it("stays hidden when the project has no recovery file", async () => {
     const { w } = await setup({ rows: [summary({ hasRecovery: false }), summary({ projectFileId: "other" })] });
     expect(w.find('[data-testid="recovery-dialog"]').exists()).toBe(false);
