@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **20 rows** today (T1–T20), of which **0** carry a result. An
+This file carries **21 rows** today (T1–T21), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -232,3 +232,19 @@ or clicks a real WebView2 titlebar X.
 | --- | --- | --- | --- |
 | T19 | **Kill mid-edit, relaunch, Resume restores the last acknowledged edit** | Open a staged capture in the editor and make three distinct edits (e.g. rename the project, split the clip, nudge the second clip). Wait one second, then end the process from Task Manager (End task on Vault Buddy — no Save, no close). **Record**: that `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\recovery.json` exists and its `sessionRevision` is higher than `project.json`'s `record.revision`. Relaunch and open the same capture again. **Record**: whether the "Unsaved changes from last time" dialog names the project; press **Resume** and record whether all three edits are back and the header reads unsaved. Then save and **Record** that `recovery.json` is gone. Repeat once pressing **Discard** instead: record that the saved project opens without the three edits, `recovery.json` is gone and `project.json` is byte-identical to before (compare file hashes). | |
 | T20 | **Close with unsaved changes → Keep for later → reopen** | Open a staged capture, make one edit, and click the editor window's titlebar X. **Record**: the close guard shows **Save project**, **Keep for later**, **Discard changes** and **Cancel**. Press **Keep for later**: the window hides. Reopen the same capture from the capture bar's **Edit**. **Record**: the edit is still there, the header still reads unsaved, and NO recovery dialog appeared (the journal is this session's own). Then click the X on a CLEAN editor (after a save) and **Record** that it hides at once with no dialog; and with only the legacy editor showing (no new session), that the X still hides as it always did. | |
+
+## Task 39's rows
+
+Task 39 adds the portable and lightweight project files: `editor_export_package`
+(the header's Save project menu -> **Save a portable copy…** / **Save a
+lightweight copy…**, through `SaveProjectDialog` and Rust's own save dialog)
+and `editor_import_package` (**Open a project file…**, Rust's own open
+dialog). Rust tests cover the whole export/import round trip, the refusals and
+the crash-safe install on tempdirs, and Vitest the dialog; nothing automated
+opens the real native dialogs, moves a file between folders on a Windows
+volume, or plays the imported media in WebView2. (The brief called this row
+"T7"; that number was taken, so it is the next free one.)
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T21 | **Portable export, move, import, play** | Open a staged capture in the editor, import one more video (T11's steps) and place it on the timeline, rename the project, and do NOT save. (a) Header **▾** beside **Save project** -> **Save a portable copy…**. **Record**: the dialog explains that the portable file includes the originals (the amber warning), the radio buttons are full-size, the heading and buttons stay visible when the window is made short enough to scroll the dialog, and pressing the save button opens the NATIVE save dialog offering `<title>.vbproject.zip`. Save it to Documents. **Record**: the dialog reads "Saved to <that file name>" only after the native dialog closes, and no `.part-` file is left beside it. (b) Save again onto the SAME file (confirm the overwrite): **Record** it succeeds. Then save onto an unrelated existing `.zip` renamed to `x.vbproject.zip`: **Record** the message "Choose a new name — that file is not this project" and that the unrelated file is unchanged. (c) Move the saved `.vbproject.zip` to another folder (e.g. Desktop). Header **▾** -> **Open a project file…**, pick it. **Record**: the editor switches to the imported project (a COPY with a new id, since the original is still in the store — check `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\`), its title and clips match, the preview PLAYS both the screen capture and the imported video, no staged capture's sidecar gained a second `editorProjectId`, and no `.<id>.importing` directory is left in the store. (d) Repeat (a) and (c) with **Save a lightweight copy…**: **Record** that the imported copy lists both originals as missing and the preview shows them as unavailable. | |

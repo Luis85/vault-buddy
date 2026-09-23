@@ -100,9 +100,11 @@ import LibraryPanel from "../components/editor/library/LibraryPanel.vue";
 import PreviewSurface from "../components/editor/preview/PreviewSurface.vue";
 import EditorShell from "../components/editor/shell/EditorShell.vue";
 import TimelineView from "../components/editor/timeline/TimelineView.vue";
+import { importProjectPackage } from "../composables/useProjectPackage";
 import { logWarning } from "../logging";
 import { useEditorProjectStore } from "../stores/editorProject";
 import { useEditorWorkspaceStore } from "../stores/editorWorkspace";
+import { useNotificationsStore } from "../stores/notifications";
 
 /** Task 21 replaces this component with the real workspace UI and flips this
  * off; until then the legacy phase-4 surface is the only visible editor. Not
@@ -268,6 +270,24 @@ async function openRequested() {
   if (hydrateNewSession()) await recovery.value?.check();
 }
 
+/** Task 39: the header's "Open a project file". Rust opens its own dialog
+ * and installs the file as a project; `openedProjectId` is set in the SAME
+ * tick as the store's install (`importProjectPackage`'s own contract), so
+ * the shell's gate never drops the shell for a frame. A refusal is said in
+ * a toast and leaves the open project exactly as it was; a dismissed dialog
+ * says nothing. */
+async function openProjectFile() {
+  const outcome = await importProjectPackage((projectId) => {
+    openedProjectId.value = projectId;
+  });
+  if (outcome === "cancelled") return;
+  if (outcome !== "opened") {
+    useNotificationsStore().notify("error", `The project file could not be opened. ${outcome.message}`);
+    return;
+  }
+  if (hydrateNewSession()) await recovery.value?.check();
+}
+
 const unlisteners: (() => void)[] = [];
 
 onMounted(async () => {
@@ -297,7 +317,10 @@ onBeforeUnmount(() => {
          always render once mounted, so the v-if here (not inside the shell)
          is what makes it disappear on a failed open, exactly like the bar
          it replaces. -->
-    <EditorShell v-if="editorProject.snapshot && (sessionMatchesLegacy || sessionMatchesProject)">
+    <EditorShell
+      v-if="editorProject.snapshot && (sessionMatchesLegacy || sessionMatchesProject)"
+      @open-project-file="openProjectFile"
+    >
       <!-- Task 19: the inspector shell (six category tabs + the shared
            draft composable later sections build on) fills the shell's
            `inspector` slot from here, the same seam `PreviewToolbar`

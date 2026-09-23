@@ -20,6 +20,8 @@ pub mod media_derive;
 pub mod media_import;
 pub mod media_jobs;
 pub mod media_probe;
+pub mod package_commands;
+pub mod package_import;
 pub mod prefs_commands;
 pub mod project_store;
 pub mod recovery;

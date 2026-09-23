@@ -409,6 +409,20 @@ export interface SaveReceipt {
   projectFileId: string;
 }
 
+/** `editor_export_package`'s `format` (`core::editor::package_plan::
+ * PackageFormat`): a portable `.vbproject.zip` carries the available
+ * originals, a lightweight `.vbproject.json` the edit alone. */
+export type PackageFormat = "portable" | "lightweight";
+
+/** `editor_export_package`'s reply (`package_commands::PackageReceipt`,
+ * shell) — `null` on the wire when the save dialog was dismissed. */
+export interface PackageReceipt {
+  sessionId: string;
+  savedRevision: number;
+  fileName: string;
+  format: PackageFormat;
+}
+
 /** One row of `editor_list_projects` (`store_io::ProjectSummaryDto`, shell). */
 export interface ProjectSummaryDto {
   projectFileId: string;

@@ -31,6 +31,8 @@ import type {
   JobRecordDto,
   JobStarted,
   MediaRef,
+  PackageFormat,
+  PackageReceipt,
   ProjectSummaryDto,
   SaveReceipt,
   Workspace,
@@ -44,6 +46,8 @@ import {
   decodeJobStarted,
   decodeMediaPath,
   decodeMediaPeaks,
+  decodeNullableOpenResult,
+  decodeNullablePackageReceipt,
   decodeOpenResult,
   decodeProjection,
   decodeProjectSummaries,
@@ -151,6 +155,14 @@ export interface EditorPort {
    * as ONE edit; `replace` drops that clip's existing cues in the same
    * step. `null` when the dialog was cancelled. */
   importCaptions(sessionId: string, clipId: string, replace: boolean): Promise<CaptionImportResult | null>;
+  /** `editor_export_package` — Rust freezes `expectedRevision`, opens its
+   * OWN save dialog and writes the file; `null` when the dialog was
+   * dismissed. The receipt is the only proof the file exists. */
+  exportPackage(sessionId: string, expectedRevision: number, format: PackageFormat): Promise<PackageReceipt | null>;
+  /** `editor_import_package` — Rust opens its OWN open dialog, validates
+   * the whole file and installs it as a project (a copy when its id is
+   * taken); `null` when the dialog was dismissed. */
+  importPackage(): Promise<EditorOpenResult | null>;
 }
 
 /** The per-job Channel (Tauri's ordered, subscriber-scoped delivery) —
@@ -231,6 +243,16 @@ export function createTauriEditorPort(): EditorPort {
     },
     importCaptions(sessionId, clipId, replace) {
       return call("editor_import_captions", { sessionId, clipId, replace }, decodeCaptionImportResult);
+    },
+    exportPackage(sessionId, expectedRevision, format) {
+      return call(
+        "editor_export_package",
+        { sessionId, expectedRevision, format },
+        decodeNullablePackageReceipt,
+      );
+    },
+    importPackage() {
+      return call("editor_import_package", undefined, decodeNullableOpenResult);
     },
   };
 }

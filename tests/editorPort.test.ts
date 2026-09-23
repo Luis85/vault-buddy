@@ -321,6 +321,35 @@ describe("EditorPort", () => {
     await expect(port.importCaptions("ses-1", "c1", false)).resolves.toBeNull();
   });
 
+  // Task 39: the project files. Rust opens both dialogs; the port sends
+  // only the session, the revision it froze and the format.
+  it("exportPackage sends { sessionId, expectedRevision, format } and importPackage sends nothing", async () => {
+    const calls: { cmd: string; args: unknown }[] = [];
+    let exportReply: unknown = {
+      sessionId: "ses-1",
+      savedRevision: 2,
+      fileName: "Demo.vbproject.zip",
+      format: "portable",
+    };
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "editor_export_package") return exportReply;
+      if (cmd === "editor_import_package") return null;
+      throw new Error(`unexpected command ${cmd}`);
+    });
+
+    const port = createTauriEditorPort();
+    expect((await port.exportPackage("ses-1", 2, "portable"))?.fileName).toBe("Demo.vbproject.zip");
+    exportReply = null;
+    await expect(port.exportPackage("ses-1", 2, "lightweight")).resolves.toBeNull();
+    await expect(port.importPackage()).resolves.toBeNull();
+    expect(calls).toEqual([
+      { cmd: "editor_export_package", args: { sessionId: "ses-1", expectedRevision: 2, format: "portable" } },
+      { cmd: "editor_export_package", args: { sessionId: "ses-1", expectedRevision: 2, format: "lightweight" } },
+      { cmd: "editor_import_package", args: {} },
+    ]);
+  });
+
   // Task 25: the import job. `onProgress` crosses as a Tauri `Channel`
   // (created inside the port, never by a caller); each message is DECODED
   // before the callback sees it, and an undecodable one is dropped rather

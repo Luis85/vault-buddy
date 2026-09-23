@@ -6,6 +6,8 @@ import {
   decodeJobProgress,
   decodeJobRecords,
   decodeJobStarted,
+  decodeNullableOpenResult,
+  decodeNullablePackageReceipt,
   decodeOpenResult,
   decodeProject,
   decodeProjection,
@@ -345,5 +347,36 @@ describe("decodeCaptionImportResult", () => {
     expect(() => decodeCaptionImportResult({ projection, imported: 1.5, skipped: 0 })).toThrow(ProtocolError);
     expect(() => decodeCaptionImportResult({ projection, imported: 1 })).toThrow(ProtocolError);
     expect(() => decodeCaptionImportResult({ imported: 1, skipped: 0 })).toThrow(ProtocolError);
+  });
+});
+
+describe("decodeNullablePackageReceipt", () => {
+  it("accepts the Rust literal (package_commands_tests.rs package_receipt_wire_literal)", () => {
+    expect(
+      decodeNullablePackageReceipt({
+        sessionId: "ses-1",
+        savedRevision: 7,
+        fileName: "Demo.vbproject.zip",
+        format: "portable",
+      }),
+    ).toEqual({ sessionId: "ses-1", savedRevision: 7, fileName: "Demo.vbproject.zip", format: "portable" });
+  });
+
+  it("decodes a dismissed save dialog (null) as null", () => {
+    expect(decodeNullablePackageReceipt(null)).toBeNull();
+  });
+
+  it("rejects an unknown format, an empty file name and a fractional revision", () => {
+    const ok = { sessionId: "ses-1", savedRevision: 7, fileName: "Demo.vbproject.json", format: "lightweight" };
+    expect(() => decodeNullablePackageReceipt({ ...ok, format: "zip" })).toThrow(ProtocolError);
+    expect(() => decodeNullablePackageReceipt({ ...ok, fileName: "  " })).toThrow(ProtocolError);
+    expect(() => decodeNullablePackageReceipt({ ...ok, savedRevision: 7.5 })).toThrow(ProtocolError);
+  });
+});
+
+describe("decodeNullableOpenResult", () => {
+  it("decodes a dismissed open dialog (null) as null and refuses a malformed reply", () => {
+    expect(decodeNullableOpenResult(null)).toBeNull();
+    expect(() => decodeNullableOpenResult({ snapshot: SNAPSHOT_LITERAL })).toThrow(ProtocolError);
   });
 });

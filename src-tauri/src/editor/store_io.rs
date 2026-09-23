@@ -26,8 +26,8 @@ use vault_buddy_core::editor::{
 
 use super::project_store::{project_dir, store_dir, SourceRecord};
 
-const PROJECT_FILE: &str = "project.json";
-const SOURCES_FILE: &str = "sources.json";
+pub(crate) const PROJECT_FILE: &str = "project.json";
+pub(crate) const SOURCES_FILE: &str = "sources.json";
 pub(crate) const RECOVERY_FILE: &str = "recovery.json";
 
 fn invalid_id(id: &str) -> io::Error {
@@ -443,7 +443,7 @@ pub fn remove_project(root: &Path, id: &str) -> Result<(), EditorError> {
 /// Two passes on purpose: a symlink discovered partway through the walk
 /// must refuse the WHOLE removal, which is only possible when nothing has
 /// been unlinked yet.
-fn remove_dir_no_follow(dir: &Path) -> io::Result<()> {
+pub(crate) fn remove_dir_no_follow(dir: &Path) -> io::Result<()> {
     let mut files = Vec::new();
     let mut dirs = vec![dir.to_path_buf()];
     walk_no_follow(dir, &mut files, &mut dirs)?;

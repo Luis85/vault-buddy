@@ -66,6 +66,7 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 // every other command (the handler count's one-liner counts exactly those).
 use editor::caption_commands;
 use editor::media_commands;
+use editor::package_commands;
 use editor::prefs_commands;
 use editor::save_commands;
 use editor::session_commands;
@@ -519,6 +520,8 @@ pub fn run() {
             media_commands::editor_cancel_job,
             media_commands::editor_get_jobs,
             caption_commands::editor_import_captions,
+            package_commands::editor_export_package,
+            package_commands::editor_import_package,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to

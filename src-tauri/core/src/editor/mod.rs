@@ -24,6 +24,8 @@ pub mod model;
 pub mod model_cues;
 pub mod package;
 mod package_archive;
+pub mod package_extract;
+pub mod package_plan;
 pub mod peaks;
 pub mod probe;
 pub mod projection;

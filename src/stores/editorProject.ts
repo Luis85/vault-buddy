@@ -119,6 +119,11 @@ export const useEditorProjectStore = defineStore("editorProject", {
      * calls against each other, only guard which REPLY it installs. */
     pending: new Set<string>(),
     lastError: null as EditorError | null,
+    /** The last `save()` refusal, and only that (Task 39, carrying Task
+     * 16's minor): `lastError` is shared by every action, so the header's
+     * "Save failed" read an edit refusal as a failed save. Cleared by the
+     * next successful save and by every open/close. */
+    saveError: null as EditorError | null,
     /** The command a `revisionConflict` rejected, kept for an explicit
      * Retry. `execute` never re-sends it on its own. */
     conflictIntent: null as EditorCommand | null,
@@ -178,24 +183,35 @@ export const useEditorProjectStore = defineStore("editorProject", {
      * session over a picker mis-click.
      */
     async openWith(run: () => Promise<EditorOpenResult>): Promise<void> {
-      this.generation += 1;
-      const generation = this.generation;
-      this.pending.clear();
-      this.conflictIntent = null;
-      this.lastError = null;
-      this.saving = false;
+      const generation = this.beginOpen();
       try {
         const result = await run();
         if (generation !== this.generation) return;
-        this.sessionId = result.snapshot.sessionId;
-        this.snapshot = result.snapshot;
-        this.project = result.project;
-        this.missing = result.missing;
-        this.sourceBase = result.sourceBase;
+        this.install(result);
       } catch (e) {
         if (generation !== this.generation) return;
         this.lastError = toEditorError(e);
       }
+    },
+    /** Every open's first step: a new generation (see the module doc) and
+     * nothing left over from what was open before. Returns the generation. */
+    beginOpen(): number {
+      this.generation += 1;
+      this.pending.clear();
+      this.conflictIntent = null;
+      this.lastError = null;
+      this.saveError = null;
+      this.saving = false;
+      return this.generation;
+    },
+    /** Adopt an open reply. Callers that did not go through `openWith`
+     * (`useProjectPackage`'s import) call `beginOpen` first. */
+    install(result: EditorOpenResult): void {
+      this.sessionId = result.snapshot.sessionId;
+      this.snapshot = result.snapshot;
+      this.project = result.project;
+      this.missing = result.missing;
+      this.sourceBase = result.sourceBase;
     },
     openProject(id: string, useRecovery: boolean): Promise<void> {
       return this.openWith(() => this.port.openProject(id, useRecovery));
@@ -393,6 +409,7 @@ export const useEditorProjectStore = defineStore("editorProject", {
       if (!this.snapshot || receipt.savedRevision > this.snapshot.revision) return;
       this.snapshot = { ...this.snapshot, persistedRevision: receipt.savedRevision };
       this.lastError = null;
+      this.saveError = null;
     },
     /**
      * Persist the current revision. Installs `persistedRevision` from the
@@ -412,7 +429,10 @@ export const useEditorProjectStore = defineStore("editorProject", {
         const receipt = await this.port.save(sessionId, expectedRevision);
         this.applySaveReceipt(generation, receipt);
       } catch (e) {
-        if (generation === this.generation) this.lastError = toEditorError(e);
+        if (generation === this.generation) {
+          this.lastError = toEditorError(e);
+          this.saveError = this.lastError;
+        }
       } finally {
         // Guarded like every other post-await write in this file: a save
         // from a superseded generation must not clear `saving` for whatever
@@ -445,6 +465,7 @@ export const useEditorProjectStore = defineStore("editorProject", {
       this.missing = [];
       this.sourceBase = null;
       this.lastError = null;
+      this.saveError = null;
       this.saving = false;
       try {
         await this.port.closeSession(sessionId, disposition);

@@ -659,3 +659,37 @@ fn keep_and_discard_recovery_wait_for_the_save_lock() {
         assert!(snapshot_in(&state, &sid).is_err());
     }
 }
+
+// Task 39: an import builds its project in `.<id>.importing` and renames it
+// into place last, so a crash mid-import leaves that directory behind. The
+// sweep removes only such directories, only once they are an hour old
+// (an import running right now is younger), and nothing else in the store.
+#[test]
+fn stale_import_directories_are_swept_and_nothing_else() {
+    let f = Fixture::new();
+    let store = store_dir(f.root());
+    let stale = store.join(".abc123.importing");
+    std::fs::create_dir_all(stale.join("media")).unwrap();
+    std::fs::write(stale.join("media").join("src.mp4"), b"half an import").unwrap();
+    std::fs::write(stale.join("project.json"), b"{}").unwrap();
+    let keep_dirs = [".abc123.importing.bak", "abc123", ".bad!id.importing"];
+    for name in keep_dirs {
+        std::fs::create_dir_all(store.join(name)).unwrap();
+    }
+    std::fs::write(store.join(".def456.importing"), b"a file, not ours").unwrap();
+
+    let now = std::time::SystemTime::now();
+    assert!(
+        sweep_stale_imports(f.root(), now).is_empty(),
+        "a fresh import is left alone"
+    );
+    assert!(stale.is_dir());
+
+    let later = now + Duration::from_secs(2 * 60 * 60);
+    assert_eq!(sweep_stale_imports(f.root(), later), [".abc123.importing"]);
+    assert!(!stale.exists());
+    for name in keep_dirs {
+        assert!(store.join(name).is_dir(), "{name} is not an import's");
+    }
+    assert!(store.join(".def456.importing").is_file());
+}

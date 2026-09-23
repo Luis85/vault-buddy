@@ -81,6 +81,10 @@ import EditorHeader from "./EditorHeader.vue";
 import PreviewToolbar from "./PreviewToolbar.vue";
 
 /** SCREENS-AND-INTERACTIONS.md §12's own breakpoint. */
+/** Task 39: the header's "Open a project file", forwarded to `EditorRoot`,
+ * which owns which project the shell is showing. */
+const emit = defineEmits<{ (e: "open-project-file"): void }>();
+
 const COMPACT_BREAKPOINT = 1180;
 
 const viewportWidth = ref(window.innerWidth);
@@ -198,6 +202,7 @@ function onShellKeydown(event: KeyboardEvent) {
       @toggle-library="libraryOpen = !libraryOpen"
       @toggle-inspector="inspectorOpen = !inspectorOpen"
       @toggle-theme="toggleTheme"
+      @open-project-file="emit('open-project-file')"
     />
 
     <div

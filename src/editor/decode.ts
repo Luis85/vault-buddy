@@ -32,6 +32,8 @@ import type {
   JobStarted,
   JobTerminal,
   MissingMedia,
+  PackageFormat,
+  PackageReceipt,
   ProjectSummaryDto,
   SaveReceipt,
   Workspace,
@@ -224,6 +226,37 @@ export function decodeSaveReceipt(value: unknown): SaveReceipt {
     savedRevision: asInteger(v.savedRevision, "saveReceipt.savedRevision"),
     projectFileId: asId(v.projectFileId, "saveReceipt.projectFileId"),
   };
+}
+
+/** `editor_import_package`'s reply: `null` for a dismissed dialog. */
+export function decodeNullableOpenResult(value: unknown): EditorOpenResult | null {
+  return value === null ? null : decodeOpenResult(value);
+}
+
+const PACKAGE_FORMATS: readonly PackageFormat[] = ["portable", "lightweight"];
+
+/** `package_commands::PackageReceipt` — `editor_export_package`'s reply.
+ * `fileName` is a name, never a path, and must not be empty: it is the
+ * only thing the dialog's "Saved to …" line can show. */
+function decodePackageReceipt(value: unknown): PackageReceipt {
+  const v = asObject(value, "packageReceipt");
+  const fileName = asString(v.fileName, "packageReceipt.fileName");
+  if (fileName.trim() === "") fail("packageReceipt.fileName must not be empty");
+  const format = asString(v.format, "packageReceipt.format");
+  if (!PACKAGE_FORMATS.includes(format as PackageFormat)) {
+    fail(`packageReceipt.format ${JSON.stringify(format)} is not a package format`);
+  }
+  return {
+    sessionId: asId(v.sessionId, "packageReceipt.sessionId"),
+    savedRevision: asInteger(v.savedRevision, "packageReceipt.savedRevision"),
+    fileName,
+    format: format as PackageFormat,
+  };
+}
+
+/** `editor_export_package`'s reply: `null` for a dismissed dialog. */
+export function decodeNullablePackageReceipt(value: unknown): PackageReceipt | null {
+  return value === null ? null : decodePackageReceipt(value);
 }
 
 /** `editor_media_url`'s reply: the absolute path of a registered asset or

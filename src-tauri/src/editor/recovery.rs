@@ -1,8 +1,8 @@
 //! Project/session recovery (Task 37 Part A; F-44; ADR §4 "Recovery
 //! journal", R6; PERSISTENCE-AND-SECURITY.md "Recovery and garbage
 //! collection"): the `recovery.json` journal a dirty session leaves behind,
-//! and the startup re-pin sweep that reconciles the project store against
-//! staging.
+//! the startup re-pin sweep that reconciles the project store against
+//! staging, and the sweep of abandoned package imports (Task 39).
 //!
 //! **The journal.** After every acknowledged edit (`editor_execute`, a
 //! finished import's `AddAssets`, a caption import) the session is
@@ -43,14 +43,18 @@ use vault_buddy_core::editor::{
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_screen::staging;
 
+use super::package_import::importing_project_id;
 use super::project_store::{pin_staged, pinned_project, project_dir, store_dir, SourceLocator};
 use super::save_commands::session_save_lock;
-use super::store_io::{load_sources, read_bounded, RECOVERY_FILE};
+use super::store_io::{load_sources, read_bounded, remove_dir_no_follow, RECOVERY_FILE};
 use super::EditorState;
 use crate::editor_commands::is_safe_base;
 
 /// `recovery.json`'s schema identifier.
 pub const RECOVERY_SCHEMA: &str = "vault-buddy-recovery/1";
+
+/// An import build directory this old is an abandoned one (Task 39).
+const STALE_IMPORT_AFTER: Duration = Duration::from_secs(60 * 60);
 
 /// At most one journal write per session per this window (ADR §4).
 pub(crate) const JOURNAL_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -410,7 +414,47 @@ fn repin_one(root: &Path, staging_dir: &Path, project_id: &str, base: &str) -> R
     }
 }
 
-/// Run `run_startup_repin` on the named `editor-recovery-sweep` thread
+/// Task 39: remove every import build directory (`.<projectId>.importing`,
+/// `package_import`'s own name) whose last change is at least an hour
+/// before `now`. Nothing else in the store is touched.
+///
+/// Ownership is the NAME (`package_import::importing_project_id`: a leading
+/// dot, a valid project id, the `.importing` suffix) AND the kind: only a
+/// real directory, never a file or a link wearing the name. Removal is the
+/// store's own owned, no-follow walk (`store_io::remove_dir_no_follow`),
+/// never `remove_dir_all`. The hour is what keeps an import running in
+/// this very process safe — the sweep runs at startup, and an import is
+/// seconds to minutes long. A VIEW-style walk: a failure is logged and the
+/// sweep moves on.
+pub(crate) fn sweep_stale_imports(root: &Path, now: std::time::SystemTime) -> Vec<String> {
+    let mut removed = Vec::new();
+    let Ok(entries) = std::fs::read_dir(store_dir(root)) else {
+        return removed;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if importing_project_id(&name).is_none() {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let stale = meta
+            .modified()
+            .is_ok_and(|at| at + STALE_IMPORT_AFTER <= now);
+        if !meta.file_type().is_dir() || !stale {
+            continue;
+        }
+        match remove_dir_no_follow(&path) {
+            Ok(()) => removed.push(name),
+            Err(e) => log::warn!("editor-recovery-sweep: could not remove {name}: {e}"),
+        }
+    }
+    removed
+}
+
+/// Run `sweep_stale_imports` (Task 39), then `run_startup_repin`, on the named `editor-recovery-sweep` thread
 /// (wired into `lib.rs`'s `setup`, right after `run_screen_recovery`). That
 /// is SPAWN order only: the screen sweep runs on its own thread with its own
 /// retry loop and is not awaited. It does not need to be — it acts only on
@@ -430,6 +474,13 @@ pub fn spawn_startup_repin(app: &AppHandle) {
             };
             let state = app.state::<EditorState>();
             let _open = lock_ignoring_poison(&state.open);
+            let swept = sweep_stale_imports(&root, std::time::SystemTime::now());
+            if !swept.is_empty() {
+                log::info!(
+                    "editor-recovery-sweep: removed {} abandoned project import(s)",
+                    swept.len()
+                );
+            }
             let report = run_startup_repin(&root, &staging::staging_dir(&root));
             if !report.repinned.is_empty() {
                 log::info!(

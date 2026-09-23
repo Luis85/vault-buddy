@@ -78,7 +78,7 @@ pub struct SaveReceipt {
 /// vanished volume, a path that became invalid mid-write, …) degrades to
 /// `internal` — this task has no test evidence to classify it more
 /// precisely.
-fn map_write_error(e: io::Error) -> EditorError {
+pub(crate) fn map_write_error(e: io::Error) -> EditorError {
     #[cfg(windows)]
     let is_disk_full = e.kind() == io::ErrorKind::StorageFull || e.raw_os_error() == Some(112);
     #[cfg(not(windows))]

@@ -1206,6 +1206,81 @@ describe("EditorRoot", () => {
     );
   });
 
+  // ---- Task 39: "Open a project file" from the header's Save menu. The
+  // shell's gate names the project this root opened, so the import must set
+  // that id in the SAME tick the store installs the imported session — or
+  // the shell (and the menu that asked) vanishes. ----
+
+  function importPort(importPackage: () => Promise<EditorOpenResult | null>, reads: string[] = []) {
+    return fakeEditorPort({
+      openProject: (id) =>
+        Promise.resolve(
+          openResultFixture({
+            sourceBase: null,
+            snapshot: snapshotFixture({ projectId: id, title: "First" }),
+            project: projectFixture({ id }),
+          }),
+        ),
+      importPackage,
+      getWorkspace: (sessionId) => {
+        reads.push(sessionId);
+        return Promise.resolve({});
+      },
+      listProjects: () => Promise.resolve([]),
+    });
+  }
+
+  async function openFromMenu() {
+    mockIPC((cmd) => (cmd === "take_editor_request" ? { kind: "project", value: "proj1" } : undefined));
+    const w = mount(EditorRoot, { attachTo: document.body });
+    await flushPromises();
+    await w.get('[data-testid="editor-header-save-menu-toggle"]').trigger("click");
+    await w.get('[data-testid="editor-header-menu-open"]').trigger("click");
+    await flushPromises();
+    return w;
+  }
+
+  it("opens an imported project file into the shell and hydrates its new session", async () => {
+    const store = useEditorProjectStore();
+    const reads: string[] = [];
+    const imported = openResultFixture({
+      sourceBase: null,
+      snapshot: snapshotFixture({ sessionId: "ses-b", projectId: "imported1", title: "Imported" }),
+      project: projectFixture({ id: "imported1", title: "Imported" }),
+    });
+    const port = importPort(() => Promise.resolve(imported), reads);
+    store.setPort(port);
+    useEditorWorkspaceStore().setPort(port);
+    const w = await openFromMenu();
+
+    expect(w.find('[data-testid="editor-shell"]').exists()).toBe(true);
+    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("Imported");
+    expect(store.snapshot?.projectId).toBe("imported1");
+    expect(reads).toEqual(["ses-a", "ses-b"]);
+  });
+
+  it("a refused or cancelled project file leaves the open project exactly as it was", async () => {
+    const store = useEditorProjectStore();
+    const message = 'package entry "media/src.mp4" does not match its manifest';
+    store.setPort(
+      importPort(() =>
+        Promise.reject(
+          new EditorPortError({ code: "invalidProject", message, retryable: false, operationId: "op-1" }),
+        ),
+      ),
+    );
+    const w = await openFromMenu();
+    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("First");
+    expect(store.snapshot?.projectId).toBe("proj1");
+    expect(w.text()).toContain(message);
+
+    store.setPort(importPort(() => Promise.resolve(null)));
+    await w.get('[data-testid="editor-header-save-menu-toggle"]').trigger("click");
+    await w.get('[data-testid="editor-header-menu-open"]').trigger("click");
+    await flushPromises();
+    expect(store.snapshot?.projectId).toBe("proj1");
+  });
+
   // The paired negative for the fix above: an ordinary STAGED open must
   // still render exactly as it always has — through the `legacyBase` match,
   // with the legacy surface still mounted and visible beside the shell.

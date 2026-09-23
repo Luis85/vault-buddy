@@ -2583,6 +2583,31 @@ and it still counts toward `MAX_CAPTIONS`/`MAX_MARKERS`.
 **Fix:** list trimmed-away cues and markers under a "Not in the edit" group
 in each library (delete-only).
 
+### GAP-182 · Low · An imported project file guesses its sources' facts, and a portable file leaves unplaced library media behind
+`src-tauri/src/editor/package_import.rs` (`source_record`),
+`src-tauri/core/src/editor/package_plan.rs` (`assets_needing_media`).
+Found by Task 39. The package format (`vault-buddy-project-package/1`,
+Task 38) carries no `sources.json`, so an imported project rebuilds each
+source record from its ASSET: size (or 0 when the asset records none),
+duration, dimensions, and `hasAudio` assumed true for every non-image
+source. Two consequences:
+- A video with no sound track imports with `hasAudio: true`, so Detach
+  audio is offered for it and the waveform read fails with ffmpeg's error
+  rather than "This asset has no sound to draw". Nothing is lost.
+- A lightweight placeholder's expected size is 0 for an asset that never
+  recorded one, which weakens Task 40's reconnection match to name and
+  duration alone.
+
+Separately, `package::cross_check` refuses packaged media that nothing in
+the project or a retained snapshot references, so an original that sits in
+the media library but on no clip is NOT carried by a portable file: it
+imports as missing (reported, never silently dropped).
+
+**Fix:** carry each packaged source's probed facts in the package (a
+manifest schema bump — the manifest is `deny_unknown_fields`), or re-probe
+extracted media with ffprobe when it is installed; and decide whether
+unplaced library media belongs in a portable file (a cross-check change).
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md

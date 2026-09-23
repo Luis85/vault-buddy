@@ -26,7 +26,7 @@ use super::authz::{require_editor_window, require_session};
 use super::project_store::project_dir;
 use super::EditorState;
 
-const WORKSPACE_FILE: &str = "workspace.json";
+pub(crate) const WORKSPACE_FILE: &str = "workspace.json";
 
 /// The wire size cap this task's brief names. Checked against the RAW
 /// incoming payload before it is ever sanitized or written — a hostile or

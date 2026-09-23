@@ -26,11 +26,13 @@
  */
 import { computed, nextTick, ref } from "vue";
 
-import type { EditorCommand } from "../../../editorTypes";
+import type { EditorCommand, PackageFormat } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { formatDuration } from "../../../utils/formatDuration";
 import AppButton from "../../ui/AppButton.vue";
 import IconButton from "../../ui/IconButton.vue";
+import SaveProjectDialog from "../dialogs/SaveProjectDialog.vue";
+import SaveProjectMenu from "../menus/SaveProjectMenu.vue";
 
 const props = defineProps<{
   isCompact: boolean;
@@ -42,6 +44,7 @@ const emit = defineEmits<{
   (e: "toggle-library"): void;
   (e: "toggle-inspector"): void;
   (e: "toggle-theme"): void;
+  (e: "open-project-file"): void;
 }>();
 
 const editorProject = useEditorProjectStore();
@@ -73,16 +76,13 @@ const RENDER_DISABLED_REASON = "Rendering a video arrives in a later update.";
  * failed"), derived every render from the store's own fields — never a
  * timer (this task's mutation check: faking "Saved" from a `setTimeout`
  * must read wrong against a receipt that has not actually landed yet).
- * `lastError` is the store's one shared failure field (execute/open/save all
- * set it), so a non-save failure can in principle read as "Save failed"
- * here too; there is no separate save-only error flag to derive from
- * without adding state the brief did not ask for, and the project stays
- * dirty in exactly the cases this would misfire, so the worst case reads as
- * a (still correct) "Unsaved changes" delay of one attempted save.
+ * "Save failed" reads the store's save-only `saveError` (Task 39): the
+ * shared `lastError` is also set by a refused edit or open, which is not a
+ * failed save.
  */
 const status = computed<string>(() => {
   if (editorProject.saving) return "Saving…";
-  if (editorProject.lastError) return "Save failed";
+  if (editorProject.saveError) return "Save failed";
   return editorProject.dirty ? "Unsaved changes" : "Saved";
 });
 
@@ -113,6 +113,20 @@ function onTitleEnter() {
 
 function onSave() {
   void editorProject.save();
+}
+
+/** Task 39: the Save project menu. A copy opens `SaveProjectDialog` on the
+ * chosen format; opening a project file is `EditorRoot`'s (it owns which
+ * project the shell is showing). */
+const packageDialogOpen = ref(false);
+const packageFormat = ref<PackageFormat>("portable");
+function onSaveMenu(item: "save" | "portable" | "lightweight" | "open") {
+  if (item === "save") onSave();
+  else if (item === "open") emit("open-project-file");
+  else {
+    packageFormat.value = item;
+    packageDialogOpen.value = true;
+  }
 }
 </script>
 
@@ -200,6 +214,10 @@ function onSave() {
       >
         Save project
       </AppButton>
+      <SaveProjectMenu
+        :disabled="!editorProject.sessionId"
+        @choose="onSaveMenu"
+      />
       <span
         v-if="saveDisabledReason"
         data-testid="editor-header-save-reason"
@@ -230,5 +248,10 @@ function onSave() {
     >
       ⚙️
     </IconButton>
+    <SaveProjectDialog
+      :open="packageDialogOpen"
+      :initial-format="packageFormat"
+      @close="packageDialogOpen = false"
+    />
   </header>
 </template>

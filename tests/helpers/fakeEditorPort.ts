@@ -28,6 +28,8 @@ export function fakeEditorPort(overrides: Partial<EditorPort> = {}): EditorPort 
     cancelJob: unimplemented("cancelJob"),
     getJobs: unimplemented("getJobs"),
     importCaptions: unimplemented("importCaptions"),
+    exportPackage: unimplemented("exportPackage"),
+    importPackage: unimplemented("importPackage"),
     ...overrides,
   };
 }
