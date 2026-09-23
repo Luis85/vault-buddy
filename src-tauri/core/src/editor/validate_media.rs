@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::error::{EditorError, EditorErrorCode};
 use super::model::{Asset, AssetKind, Clip, MediaType};
-use super::model_cues::Transition;
+use super::model_cues::{Transition, TransitionKind};
 use super::validate::{output_duration_ms, speed_or_default};
 
 fn invalid(message: impl Into<String>) -> EditorError {
@@ -95,9 +95,68 @@ pub(super) fn check_linked_assets(assets: &[Asset]) -> Result<(), EditorError> {
     Ok(())
 }
 
+/// The geometry every installed transition must keep (`DATA-MODEL.md` §
+/// Fade and transition rules; Task 30, F-19): both clips on one track, the
+/// `from` clip ending exactly `duration_ms` AFTER the `to` clip starts --
+/// the overlap `addTransition` creates by shifting `to` (and everything
+/// after it on that track) earlier -- and a positive duration no longer
+/// than half the shorter clip. Returns the human reason, or `None`.
+///
+/// `pub(super)`: the ONE statement of this rule. `validate_project` wraps
+/// a failure as `invalidProject` (a graph that should never have been
+/// installed), while `commands::transitions::ensure_intact` wraps the same
+/// text as `invalidRequest` for a trim/move/split/ripple that would break
+/// an existing transition -- two callers, one geometry, never two copies.
+pub(super) fn transition_geometry_error(t: &Transition, from: &Clip, to: &Clip) -> Option<String> {
+    if from.track_id != to.track_id {
+        return Some(format!(
+            "transition {}: from clip {} and to clip {} are on different tracks",
+            t.id, from.id, to.id
+        ));
+    }
+    let from_duration = output_duration_ms(
+        from.in_ms,
+        from.out_ms,
+        speed_or_default(from.speed.as_ref()),
+    );
+    let to_duration = output_duration_ms(to.in_ms, to.out_ms, speed_or_default(to.speed.as_ref()));
+    let from_end = from.start_ms.saturating_add(from_duration);
+    if from_end.checked_sub(to.start_ms) != Some(t.duration_ms) {
+        return Some(format!(
+            "transition {}: clip {} must end exactly {} ms after clip {} starts (ends at {from_end}, starts at {})",
+            t.id, from.id, t.duration_ms, to.id, to.start_ms
+        ));
+    }
+    let shorter = from_duration.min(to_duration);
+    if t.duration_ms == 0 || t.duration_ms.saturating_mul(2) > shorter {
+        return Some(format!(
+            "transition {}: duration_ms {} must be positive and at most half the shorter clip ({shorter} ms)",
+            t.id, t.duration_ms
+        ));
+    }
+    None
+}
+
+/// The one transition kind a clip of `kind` may carry (F-19: "Explicit
+/// same-track video dissolve or equal-power audio crossfade").
+pub(super) fn transition_kind_for(kind: AssetKind) -> TransitionKind {
+    match kind {
+        AssetKind::Video => TransitionKind::Dissolve,
+        AssetKind::Audio => TransitionKind::EqualPower,
+    }
+}
+
 /// Pairwise transitions (`DATA-MODEL.md` § Fade and transition rules): no
 /// dangling, self-referential or cross-kind transition is valid, and the
-/// reference model permits one paired transition association per clip.
+/// reference model permits one paired transition association per clip
+/// SIDE (a clip may be the `to` of one and the `from` of another).
+///
+/// **Cross-kind is the transition's OWN kind against its clips' media**
+/// (Task 30): a `dissolve` joins video clips, an `equal-power` crossfade
+/// joins audio clips. The earlier from-asset-vs-to-asset comparison this
+/// replaced was unreachable (`check_clip` already ties a clip's asset kind
+/// to its track's kind, and both clips share one track), so it could never
+/// reject anything; this rule can.
 pub(super) fn check_transitions(
     transitions: &[Transition],
     clips: &HashMap<&str, &Clip>,
@@ -126,53 +185,18 @@ pub(super) fn check_transitions(
             ))
         })?;
 
-        if from.track_id != to.track_id {
-            return Err(invalid(format!(
-                "transition {}: from clip {} and to clip {} are on different tracks",
-                t.id, from.id, to.id
-            )));
+        if let Some(reason) = transition_geometry_error(t, from, to) {
+            return Err(invalid(reason));
         }
 
-        // Believed unreachable in practice: `validate::check_clip` (run on
-        // every clip before this function is ever called) already rejects
-        // a clip whose asset kind disagrees with its track's kind, and the
-        // `from.track_id != to.track_id` check just above already requires
-        // `from` and `to` to share one track — so two clips that get this
-        // far necessarily share one asset kind too. Kept anyway as
-        // defence: nothing in this function's own signature guarantees
-        // `check_clip` ran first (a future caller could construct `clips`/
-        // `assets` maps by hand), and the check is one cheap comparison.
-        if let (Some(from_asset), Some(to_asset)) = (
-            assets.get(from.asset_id.as_str()),
-            assets.get(to.asset_id.as_str()),
-        ) {
-            if from_asset.kind != to_asset.kind {
+        if let Some(asset) = assets.get(from.asset_id.as_str()) {
+            let expected = transition_kind_for(asset.kind);
+            if t.kind != expected {
                 return Err(invalid(format!(
-                    "transition {}: from clip {} and to clip {} use different asset kinds",
-                    t.id, from.id, to.id
+                    "transition {}: a {:?} clip needs a {expected:?} transition, not {:?}",
+                    t.id, asset.kind, t.kind
                 )));
             }
-        }
-
-        let from_speed = speed_or_default(from.speed.as_ref());
-        let to_speed = speed_or_default(to.speed.as_ref());
-        let from_duration = output_duration_ms(from.in_ms, from.out_ms, from_speed);
-        let to_duration = output_duration_ms(to.in_ms, to.out_ms, to_speed);
-
-        let from_end = from.start_ms.saturating_add(from_duration);
-        if from_end != to.start_ms {
-            return Err(invalid(format!(
-                "transition {}: clip {} must end exactly where clip {} starts (ends at {from_end}, starts at {})",
-                t.id, from.id, to.id, to.start_ms
-            )));
-        }
-
-        let shorter = from_duration.min(to_duration);
-        if t.duration_ms == 0 || t.duration_ms.saturating_mul(2) > shorter {
-            return Err(invalid(format!(
-                "transition {}: duration_ms {} must be positive and at most half the shorter clip ({shorter} ms)",
-                t.id, t.duration_ms
-            )));
         }
 
         if !from_seen.insert(t.from.as_str()) {
@@ -186,6 +210,55 @@ pub(super) fn check_transitions(
                 "transition {}: clip {} already has a transition on this side",
                 t.id, t.to
             )));
+        }
+    }
+    Ok(())
+}
+
+/// No two clips on one track may overlap, EXCEPT a transitioned pair by
+/// exactly its transition's window (F-19: "transitions cannot dangle or
+/// create unexplained overlaps", IMPLEMENTATION-PLAN.md). Runs AFTER
+/// `check_transitions`, so every transition's own geometry is already
+/// known good here -- this only has to ask "is this overlap one of them".
+/// Each clip is compared against the latest-ending clip seen so far on its
+/// track (sorted by start), which catches an overlap with ANY earlier clip,
+/// not only the immediately preceding one.
+pub(super) fn check_track_overlaps(
+    clips: &[Clip],
+    transitions: &[Transition],
+) -> Result<(), EditorError> {
+    let mut by_track: HashMap<&str, Vec<&Clip>> = HashMap::new();
+    for clip in clips {
+        by_track
+            .entry(clip.track_id.as_str())
+            .or_default()
+            .push(clip);
+    }
+    let end = |c: &Clip| {
+        c.start_ms.saturating_add(output_duration_ms(
+            c.in_ms,
+            c.out_ms,
+            speed_or_default(c.speed.as_ref()),
+        ))
+    };
+    for (track_id, mut list) in by_track {
+        list.sort_by(|a, b| a.start_ms.cmp(&b.start_ms).then_with(|| a.id.cmp(&b.id)));
+        let mut latest: Option<&Clip> = None;
+        for clip in list {
+            if let Some(prev) = latest {
+                let paired = transitions
+                    .iter()
+                    .any(|t| t.from == prev.id && t.to == clip.id);
+                if clip.start_ms < end(prev) && !paired {
+                    return Err(invalid(format!(
+                        "clip {} overlaps clip {} on track {track_id} without a transition between them",
+                        clip.id, prev.id
+                    )));
+                }
+            }
+            if latest.is_none_or(|prev| end(clip) > end(prev)) {
+                latest = Some(clip);
+            }
         }
     }
     Ok(())

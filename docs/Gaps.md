@@ -2436,6 +2436,31 @@ dedupes, with a Windows-only test that a `%SystemRoot%` entry comes back
 expanded; then re-check whether a child `cmd.exe` finds `ping` by name.
 The Task 28 test uses an absolute `%SystemRoot%\System32\PING.EXE` meanwhile.
 
+### GAP-178 · Low · Duplicating or pasting a crossfaded pair is refused as an overlap instead of carrying its transition
+`src-tauri/core/src/editor/commands/groups.rs` (`check_no_overlap`),
+`src/editor/fragment.ts` (`ClipboardFragment` has no `transitions`).
+Found by Task 30. A transition IS an overlap (`commands::transitions`): the
+two clips it joins share `durationMs` of the same track. `duplicateClips`
+and `pasteFragment` check every NEW clip against every other new clip in the
+batch, and the copies of a transitioned pair overlap each other exactly as
+their originals do — so selecting both clips of a crossfade and pressing
+Duplicate (or Copy then Paste) is refused with "clip … would overlap clip …"
+rather than landing a copy of the pair with its transition. Nothing is
+corrupted (the refusal is atomic, and `validate_project` would reject an
+unexplained overlap anyway since Task 30's `check_track_overlaps`), but the
+reference editor copies the transition along with both clips
+(`direct-edit.js`'s fragment carries `transitions` whose endpoints are both
+in the selection). Copying ONE clip of a pair, or any clip beside one, is
+unaffected.
+
+**Fix:** give `ClipboardFragment` a `transitions` array (the reference's
+"both endpoints in the selection" rule, `fragment.ts`), have
+`duplicate_clips`/`paste_fragment` re-point each carried transition at the
+fresh clip ids, and let `check_no_overlap` accept an overlap inside the
+batch exactly when a carried transition explains it — the
+`transitions::overlap_refusal` shape. A wire change to `ClipboardFragment`,
+so it needs the TS decoder/type and a literal-JSON pin in the same commit.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md

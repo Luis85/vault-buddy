@@ -5,8 +5,9 @@
 //! everything else -- the shared `ensure_unlocked` guard, overlap checks,
 //! and each command's own entity surgery -- stays here.
 //!
-//! Later tasks (8: groups, 29: fades, 30: transitions) extend THIS file
-//! with more clip commands rather than adding a new family module, so the
+//! Later tasks (8: groups, 29: fades) extend THIS file with more clip
+//! commands rather than adding a new family module (Task 30's transitions
+//! got `transitions.rs`, whose hooks the timing commands below call), so the
 //! shared helpers below (`ensure_unlocked`, `find_clip`/`find_track`/
 //! `find_asset`, `clip_span`/`clip_end`/`clip_duration`, `overlaps`) are
 //! deliberately free functions any later arm in this file can reuse.
@@ -26,6 +27,7 @@ use super::payloads::{
     DeleteClipsPayload, InsertClipPayload, MoveClipsPayload, ReorderClipPayload, ReorderDirection,
     SplitClipPayload, TrimClipPayload, UpdateClipPayload,
 };
+use super::transitions;
 use crate::editor::error::{EditorError, EditorErrorCode};
 use crate::editor::ids::new_entity_id;
 use crate::editor::limits;
@@ -364,6 +366,7 @@ pub(super) fn split_clip(
         cue_follow::split_captions(&mut captions.cues, &clip.id, &right_id, s);
     }
     cue_follow::repoint_transitions(&mut candidate.transitions, &clip.id, &right_id);
+    transitions::ensure_intact(&candidate, "Split")?;
 
     Ok((candidate, "Split clip".to_string()))
 }
@@ -428,12 +431,10 @@ pub(super) fn trim_clip(
         .iter()
         .filter(|c| c.track_id == clip.track_id && c.id != clip.id)
     {
-        let other_end = clip_end(other);
-        if overlaps(payload.start_ms, new_end, other.start_ms, other_end) {
-            return Err(invalid_request(format!(
-                "clip {} would overlap {} on track {}",
-                clip.id, other.id, clip.track_id
-            )));
+        if let Some(err) =
+            transitions::overlap_refusal(project, &clip.id, payload.start_ms, new_end, other)
+        {
+            return Err(err);
         }
     }
 
@@ -457,6 +458,7 @@ pub(super) fn trim_clip(
             }
         }
     }
+    transitions::ensure_intact(&candidate, "Trim")?;
     let label = if clamp_in || clamp_out {
         "Trim (fades adjusted)"
     } else {
@@ -474,8 +476,15 @@ pub(super) fn trim_clip(
 /// removed span precedes them. Refused, atomically (nothing installed),
 /// when a clip that WOULD shift is grouped with a clip on a different
 /// track (`"Ripple would break group <id>"` -- shifting it alone would
-/// desync the group), or when a deleted clip carries a transition (ripple
-/// would move one endpoint of an association that assumes fixed timing).
+/// desync the group).
+///
+/// **Transitions (Task 30, F12).** A transition touching a deleted clip is
+/// removed and its spacing restored FIRST (`transitions::
+/// detach_for_delete`, same candidate, one undo step, the label says so);
+/// the ripple then runs on that detached graph, so a pair it merely passes
+/// shifts together as ordinary adjacency. The one refusal left is a
+/// ripple that would SPLIT a surviving transition -- reachable only from a
+/// hand-edited graph once the detach has run.
 pub(super) fn delete_clips(
     project: &Project,
     payload: &DeleteClipsPayload,
@@ -495,19 +504,10 @@ pub(super) fn delete_clips(
     for track_id in &track_ids {
         ensure_unlocked(project, track_id)?;
     }
+    let (detached, removed_transition) = transitions::detach_for_delete(project, &ids)?;
+    let project = &detached;
 
     if payload.close_gap {
-        for id in &ids {
-            if project
-                .transitions
-                .iter()
-                .any(|t| t.from == *id || t.to == *id)
-            {
-                return Err(invalid_request(format!(
-                    "Ripple would cross a transition on clip {id}"
-                )));
-            }
-        }
         for track_id in &track_ids {
             let deleted: Vec<&Clip> = project
                 .clips
@@ -575,12 +575,20 @@ pub(super) fn delete_clips(
         .transitions
         .retain(|t| !ids.contains(t.from.as_str()) && !ids.contains(t.to.as_str()));
 
+    if payload.close_gap {
+        transitions::ensure_intact(&candidate, "Ripple")?;
+    }
     let label = if payload.close_gap {
         "Delete clips and close the gap"
     } else {
         "Delete clips"
     };
-    Ok((candidate, label.to_string()))
+    let suffix = if removed_transition {
+        " (transition removed)"
+    } else {
+        ""
+    };
+    Ok((candidate, format!("{label}{suffix}")))
 }
 
 // ---- moveClips ----------------------------------------------------------
@@ -721,12 +729,10 @@ pub(super) fn move_clips(
             .iter()
             .filter(|c| c.track_id == target_track && !ids.contains(c.id.as_str()))
         {
-            let other_end = clip_end(other);
-            if overlaps(new_start, new_end, other.start_ms, other_end) {
-                return Err(invalid_request(format!(
-                    "clip {} would overlap {} on track {target_track}",
-                    clip.id, other.id
-                )));
+            if let Some(err) =
+                transitions::overlap_refusal(project, &clip.id, new_start, new_end, other)
+            {
+                return Err(err);
             }
         }
     }
@@ -747,6 +753,7 @@ pub(super) fn move_clips(
             clip.track_id = dest.to_string();
         }
     }
+    transitions::ensure_intact(&candidate, "Move")?;
     Ok((candidate, "Move clips".to_string()))
 }
 
@@ -819,6 +826,7 @@ pub(super) fn reorder_clip(
             c.start_ms = a_new_start;
         }
     }
+    transitions::ensure_intact(&candidate, "Reorder")?;
     Ok((candidate, "Reorder clip".to_string()))
 }
 

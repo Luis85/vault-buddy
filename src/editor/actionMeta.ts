@@ -131,7 +131,7 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
 };
 
 /**
- * The exact twenty-two wire kinds this registry still gates. `undo`/
+ * The exact eighteen wire kinds this registry still gates. `undo`/
  * `redo`/`splitClip`/`deleteClips`/`cutClips`/`pasteFragment`/
  * `duplicateClips`/`groupClips`/`ungroupClips`/`reorderClip` are
  * deliberately absent (those ten of the sixteen pre-Task-23 kinds are the
@@ -173,7 +173,13 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * (0 <-> a default duration), independent of `FadesSection`/`ClipItem`'s
  * own gold-handle drag and numeric-entry paths, which call
  * `editorProject.execute` directly (the `AudioSection`/`MixerPopover`
- * precedent) and never go through this registry at all.
+ * precedent) and never go through this registry at all. **Task 30 removed
+ * `addTransition`/`setTransitionDuration`/`removeTransition`, WITH
+ * consumers**: the `transition` action ("Add transition", in the clip
+ * context menu and the Fades inspector) got its own `RESOLVERS`/`BUILDERS`
+ * entries over `transitionRules.ts`, and the Fades inspector's
+ * `TransitionRow.vue` sends the other two directly (no `ActionId` maps to
+ * either).
  *
  * **This is a hand-copy with nothing keeping it in sync with Rust's own
  * table**, and Rust's `commands/mod.rs` module doc names this exact
@@ -185,7 +191,6 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * direction.
  */
 export const UNIMPLEMENTED_KINDS: ReadonlySet<string> = new Set([
-  "addTransition", "setTransitionDuration", "removeTransition",
   "setSpeed", "setLayout", "setAdjustments", "setCanvas",
   "addCard", "updateCard", "insertIntro",
   "addEffect", "updateEffect", "removeEffect",

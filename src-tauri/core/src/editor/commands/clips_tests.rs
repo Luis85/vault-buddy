@@ -7,8 +7,7 @@
 use super::*;
 use crate::editor::model::{AssetKind, MediaType};
 use crate::editor::model_cues::{
-    CaptionCue, CaptionPosition, CaptionSettings, Effect, EffectKind, Marker, Transition,
-    TransitionKind,
+    CaptionCue, CaptionPosition, CaptionSettings, Effect, EffectKind, Marker,
 };
 use crate::editor::test_support::{asset, clip, minimal_project, track};
 
@@ -813,33 +812,11 @@ fn ripple_through_a_group_is_refused_atomically() {
     );
 }
 
-#[test]
-fn delete_close_gap_refuses_when_a_transition_spans_the_gap() {
-    let mut project = base_project();
-    project.tracks.push(track("v1", TrackKind::Video, false));
-    project.assets.push(asset("a1", AssetKind::Video, 5_000));
-    project.clips.push(clip("c1", "v1", "a1", 0, 0, 500));
-    project.clips.push(clip("c2", "v1", "a1", 500, 0, 500));
-    project.transitions.push(Transition {
-        id: "t1".into(),
-        from: "c1".into(),
-        to: "c2".into(),
-        duration_ms: 100,
-        kind: TransitionKind::Dissolve,
-        extra: Map::new(),
-    });
-
-    let err = delete_clips(
-        &project,
-        &DeleteClipsPayload {
-            clip_ids: vec!["c1".into()],
-            close_gap: true,
-        },
-    )
-    .unwrap_err();
-    assert_eq!(err.code, EditorErrorCode::InvalidRequest);
-    assert!(err.message.contains("transition"), "{}", err.message);
-}
+// Task 7's "delete_close_gap_refuses_when_a_transition_spans_the_gap" is
+// gone: Task 30 made deleting a transitioned clip remove the transition
+// and restore its spacing instead (controller ruling), and the only
+// refusal left -- a ripple that would SPLIT a transition -- is pinned in
+// `transitions_tests.rs` alongside every other transition rule.
 
 // moveClips and reorderClip tests (plus the locked-track table test that
 // spans all four track-locking commands) live in the sibling

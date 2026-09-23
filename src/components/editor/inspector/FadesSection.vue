@@ -24,6 +24,10 @@
  * but that is a preview clamp, never a substitute for Rust's own refusal —
  * `fades.rs`'s `set_fades` re-checks against the clip's CURRENT duration on
  * every commit regardless.
+ *
+ * **Transitions** (Task 30, F-19) sit below the edge fades, visibly
+ * separate from them — `ClipTransitions`, which owns its own action
+ * context and rows.
  */
 import { computed } from "vue";
 
@@ -32,6 +36,7 @@ import type { EditorCommand } from "../../../editor/editorCommandTypes";
 import { clipOutputDuration } from "../../../editor/timeMap";
 import type { FadeCurve } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
+import ClipTransitions from "./ClipTransitions.vue";
 
 const props = defineProps<{ clipIds: string[] }>();
 
@@ -149,6 +154,8 @@ function onCurveChange(event: Event): void {
         </option>
       </select>
     </label>
+
+    <ClipTransitions :clip-id="clip.id" />
   </div>
   <p
     v-else

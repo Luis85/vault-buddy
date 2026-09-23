@@ -12,12 +12,15 @@
  *
  * Static reference data (every `ActionId`, labels, reasons, the wire-kind
  * lookup, `UNIMPLEMENTED_KINDS`) lives in `./actionMeta` (fix round 1, split
- * at this file's own 500-line cap) and is re-exported below, so nothing
- * outside these two files needs to know the split exists.
+ * at this file's own 500-line cap), and WHO an action acts on — the
+ * `ActionContext`/`PointerTarget` shapes and the target/lock helpers every
+ * resolver shares — in `./actionTargets` (Task 30, the same cap); the
+ * public names are re-exported below, so nothing outside these files needs
+ * to know either split exists.
  *
- * **Which commands this task can send.** Twenty-five `EditorCommand` kinds
+ * **Which commands this task can send.** Twenty-eight `EditorCommand` kinds
  * are implemented in Rust today (`core::editor::commands::mod.rs`'s own
- * count, as of Task 29's `setFades`); the other twenty-one are rejected
+ * count, as of Task 30's three transition kinds); the other eighteen are rejected
  * with `invalidRequest` and a message of the shape `"<kind> is not available yet"`
  * (`unimplemented_kinds_are_invalid_request_not_panic`, that module's own
  * test — its own module doc names `UNIMPLEMENTED_KINDS` back as the
@@ -57,7 +60,7 @@
  * wiring a focused clip's Shift+F10/Menu-key handler are carried to Tasks
  * 20/21, once there is a real timeline/canvas to bind either to.
  */
-import type { Clip, ClipboardFragment, ClipSpan, EditorSnapshot, Project } from "../editorTypes";
+import type { Clip, ClipboardFragment, Project } from "../editorTypes";
 import type { ActionId } from "./actionMeta";
 import {
   ACTION_IDS,
@@ -72,36 +75,26 @@ import {
   unavailableReason,
   UNIMPLEMENTED_KINDS,
 } from "./actionMeta";
+import type { ActionContext, Verdict } from "./actionTargets";
+import {
+  clipSpanOf,
+  lockedTrackName,
+  OK,
+  primaryTargetClip,
+  requireUnlockedTargetClip,
+  targetClipIds,
+  targetGroupId,
+  targetTrackId,
+} from "./actionTargets";
 import type { EditorCommand } from "./editorCommandTypes";
 import { detachRefusal, freeAudioTrackFor } from "./mixRules";
 import { clipOutputEnd } from "./timeMap";
+import { addTransitionCommand, transitionRefusal } from "./transitionRules";
 
 export type { ActionId } from "./actionMeta";
 export { ACTION_IDS, SHORTCUT_DISPLAY, UNIMPLEMENTED_KINDS } from "./actionMeta";
-
-/** The right-clicked/keyboard-focused thing an edit acts on
- * (SCREENS-AND-INTERACTIONS.md §03: "Context targets include clip(s),
- * effect, video layer, track, asset and gap"). `timeMs` is the pointer's
- * OWN time — `commandFor` prefers it over the playhead for every
- * time-sensitive command (A14). */
-export interface PointerTarget {
-  kind: "clip" | "effect" | "track" | "asset" | "gap" | "layer";
-  id: string | null;
-  timeMs: number | null;
-}
-
-/** Everything `resolveActions`/`commandFor` read — a snapshot, never a live
- * store reference, so both functions stay pure. See the module doc for why
- * the clipboard is two fields. */
-export interface ActionContext {
-  project: Project | null;
-  snapshot: EditorSnapshot | null;
-  playheadMs: number;
-  selectedClipIds: string[];
-  pointerTarget: PointerTarget | null;
-  hasClipboard: boolean;
-  clipboardFragment: ClipboardFragment | null;
-}
+export type { ActionContext, PointerTarget } from "./actionTargets";
+export { targetClipIds } from "./actionTargets";
 
 export interface ResolvedAction {
   enabled: boolean;
@@ -110,92 +103,7 @@ export interface ResolvedAction {
   shortcut: string | null;
 }
 
-// ---- read-side helpers over the projection --------------------------------
-
-function clipSpanOf(clip: Clip): ClipSpan {
-  return { start_ms: clip.start_ms, in_ms: clip.in_ms, out_ms: clip.out_ms, speed: clip.speed ?? 1 };
-}
-
-function clipById(project: Project | null, id: string): Clip | null {
-  return project?.clips.find((c) => c.id === id) ?? null;
-}
-
-/** The pointer's own clip takes priority over selection (A14: right-click
- * must act on its actual target, not stale selection) — falls back to a
- * single selected clip so toolbar/shortcut invocations (no pointer target)
- * still resolve a target when exactly one clip is selected. */
-function primaryTargetClip(ctx: ActionContext): Clip | null {
-  const t = ctx.pointerTarget;
-  if (t?.kind === "clip" && t.id) return clipById(ctx.project, t.id);
-  if (ctx.selectedClipIds.length === 1) return clipById(ctx.project, ctx.selectedClipIds[0]);
-  return null;
-}
-
-/** The clip ids a multi-clip mutation (delete/cut/duplicate/group/copy)
- * acts on: the pointer's clip alone UNLESS it is already part of the
- * current selection, in which case the whole selection moves together
- * (the common "right-click inside your selection acts on the selection"
- * rule) — otherwise the current selection.
- *
- * Exported (Task 21): `../clipboard.ts`'s `activateEditorAction` needs the
- * exact same "which clips does Copy/Cut act on" answer `resolveClipMutation`/
- * `buildCut` already use here, so a keyboard- or menu-triggered Copy can
- * never select a different set of clips than the Cut/Delete that follows
- * the identical gesture. */
-export function targetClipIds(ctx: ActionContext): string[] {
-  const t = ctx.pointerTarget;
-  if (t?.kind === "clip" && t.id) {
-    return ctx.selectedClipIds.includes(t.id) ? ctx.selectedClipIds : [t.id];
-  }
-  return ctx.selectedClipIds;
-}
-
-/** The first locked track among the given clips' own tracks, by name —
- * `null` when none of them sit on a locked track. Mirrors
- * `core::editor::commands::clips::ensure_unlocked`'s own message shape
- * ("Track {name} is locked", `clips.rs`). */
-function lockedTrackName(project: Project | null, clipIds: string[]): string | null {
-  if (!project) return null;
-  for (const id of clipIds) {
-    const clip = project.clips.find((c) => c.id === id);
-    const track = clip ? project.tracks.find((t) => t.id === clip.track_id) : undefined;
-    if (track?.locked) return track.name;
-  }
-  return null;
-}
-
-/** The track a paste (or, in principle, any track-targeted insert) lands
- * on: the pointer's own track when it names one directly ("track"/"gap"),
- * or the track of a pointer/selected clip otherwise. */
-function targetTrackId(ctx: ActionContext): string | null {
-  const t = ctx.pointerTarget;
-  if (!t) return null;
-  if ((t.kind === "track" || t.kind === "gap") && t.id) return t.id;
-  if (t.kind === "clip" && t.id) return clipById(ctx.project, t.id)?.track_id ?? null;
-  return null;
-}
-
-function targetGroupId(ctx: ActionContext): string | null {
-  const clip = primaryTargetClip(ctx) ?? clipById(ctx.project, targetClipIds(ctx)[0] ?? "");
-  return clip?.group_id ?? null;
-}
-
 // ---- per-action resolvers (only for actions NOT gated as unimplemented) ---
-
-type Verdict = { enabled: boolean; reason: string | null };
-const OK: Verdict = { enabled: true, reason: null };
-
-/** Shared by `resolveSplit`/`resolveReorder`: the single target clip, or
- * the `Verdict` that already explains why there isn't a usable one (no
- * target, or its track is locked) — factored out so the two callers don't
- * carry an identical clip-lookup-then-lock-check block each. */
-function requireUnlockedTargetClip(ctx: ActionContext): { clip: Clip } | Verdict {
-  const clip = primaryTargetClip(ctx);
-  if (!clip) return { enabled: false, reason: NO_CLIP };
-  const locked = lockedTrackName(ctx.project, [clip.id]);
-  if (locked) return { enabled: false, reason: lockedReason(locked) };
-  return { clip };
-}
 
 function resolveSplit(ctx: ActionContext): Verdict {
   const target = requireUnlockedTargetClip(ctx);
@@ -283,6 +191,15 @@ function resolveFade(ctx: ActionContext): Verdict {
   return "clip" in target ? OK : target;
 }
 
+/** `transition` (Task 30): the target clip into the clip that starts where
+ * it ends, refused for `transitionRules`' graph-side reasons. */
+function resolveTransition(ctx: ActionContext): Verdict {
+  const target = requireUnlockedTargetClip(ctx);
+  if (!("clip" in target)) return target;
+  const reason = transitionRefusal(ctx.project as Project, target.clip);
+  return reason ? { enabled: false, reason } : OK;
+}
+
 function resolveUndo(ctx: ActionContext): Verdict {
   return ctx.snapshot?.canUndo ? OK : { enabled: false, reason: "Nothing to undo" };
 }
@@ -334,6 +251,7 @@ const RESOLVERS: Partial<Record<ActionId, (ctx: ActionContext) => Verdict>> = {
   detachAudio: resolveDetach,
   fadeIn: resolveFade,
   fadeOut: resolveFade,
+  transition: resolveTransition,
   save: resolveProjectGated,
   render: resolveRender,
   checks: resolveProjectGated,
@@ -526,6 +444,7 @@ const BUILDERS: Partial<Record<ActionId, Builder>> = {
   detachAudio: buildDetach,
   fadeIn: (ctx) => buildFade(ctx, "fadeIn"),
   fadeOut: (ctx) => buildFade(ctx, "fadeOut"),
+  transition: (ctx) => addTransitionCommand(ctx.project as Project, primaryTargetClip(ctx) as Clip),
 };
 
 /**

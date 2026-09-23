@@ -192,7 +192,7 @@ describe("resolveActions — disabled actions carry a reason", () => {
     });
     const context = ctx({ project: proj, snapshot: snapshot(), selectedClipIds: ["c1"] });
     const resolved = resolveActions(context);
-    for (const id of ["addText", "addCaption", "addMarker", "addTrackVideo", "transition", "ratio"] as const) {
+    for (const id of ["addText", "addCaption", "addMarker", "addTrackVideo", "ratio"] as const) {
       expect(resolved[id].enabled).toBe(false);
       expect(commandFor(id, context)).toBeNull();
     }
@@ -304,7 +304,6 @@ describe("resolveActions — disabled actions carry a reason", () => {
       addCaption: "Add caption arrives in a later update.",
       addMarker: "Add marker arrives in a later update.",
       addTrackVideo: "Add video track arrives in a later update.",
-      transition: "Add transition arrives in a later update.",
       ratio: "Aspect ratio arrives in a later update.",
     };
     for (const [id, expected] of Object.entries(expectedReasons)) {
@@ -595,8 +594,8 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
 });
 
 describe("UNIMPLEMENTED_KINDS", () => {
-  it("carries exactly the 21 kinds this registry still gates", () => {
-    expect(UNIMPLEMENTED_KINDS.size).toBe(21);
+  it("carries exactly the 18 kinds this registry still gates", () => {
+    expect(UNIMPLEMENTED_KINDS.size).toBe(18);
     // The ten kinds an ActionId in this registry maps to that ARE
     // implemented must be absent, or every action built on them would be
     // wrongly gated -- plus the four track kinds Task 23 implemented that
@@ -612,6 +611,8 @@ describe("UNIMPLEMENTED_KINDS", () => {
       "setClipMix", "setMasterGain", "detachAudio",
       // Task 29: fadeIn/fadeOut's own quick-toggle resolver/builder.
       "setFades",
+      // Task 30: the transition action, and TransitionRow's two direct calls.
+      "addTransition", "setTransitionDuration", "removeTransition",
     ]) {
       expect(UNIMPLEMENTED_KINDS.has(implemented)).toBe(false);
     }

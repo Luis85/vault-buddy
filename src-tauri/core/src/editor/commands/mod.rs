@@ -2,7 +2,7 @@
 //! `InternalCommand` (native-only, never `Deserialize`), plus their
 //! dispatch (`apply`/`apply_internal`) into family modules (R14, F-13, F31).
 //!
-//! TWENTY-FIVE kinds are implemented so far: `rename`/`setDestination`
+//! TWENTY-EIGHT kinds are implemented so far: `rename`/`setDestination`
 //! (Task 6, `meta.rs`), the two `EditorSession` intercepts before ever
 //! calling `apply` at all, `undo`/`redo` (see `session.rs`'s `execute`), the
 //! seven core clip commands `insertClip`/`updateClip`/`splitClip`/`trimClip`/
@@ -15,7 +15,10 @@
 //! one arm that reads `CommandContext`), and `setFades` (Task 29,
 //! `fades.rs` -- also the fade-clamp arm F11 adds to `clips::trim_clip`,
 //! which stays in `clips.rs` for the same "extend the owning file" reason
-//! `moveClips`' group expansion stayed in `clips.rs` under Task 8).
+//! `moveClips`' group expansion stayed in `clips.rs` under Task 8), and
+//! `addTransition`/`setTransitionDuration`/`removeTransition` (Task 30,
+//! `transitions.rs` -- plus the hooks `clips.rs`'s delete/trim/move/split/
+//! reorder call so they respect an existing transition).
 //! `moveClips`'s own group-EXPANSION behaviour also landed with Task 8, but
 //! stays in `clips.rs` (F13: Task 7 shipped `moveClips` before any group
 //! could exist to expand into). Every other kind falls through to the
@@ -58,6 +61,7 @@ mod meta;
 mod mix;
 pub mod payloads;
 mod tracks;
+mod transitions;
 
 use std::collections::BTreeSet;
 
@@ -211,6 +215,9 @@ pub fn apply(
         EditorCommand::SetMasterGain(p) => mix::set_master_gain(project, p),
         EditorCommand::DetachAudio(p) => mix::detach_audio(project, p, ctx),
         EditorCommand::SetFades(p) => fades::set_fades(project, p),
+        EditorCommand::AddTransition(p) => transitions::add_transition(project, p),
+        EditorCommand::SetTransitionDuration(p) => transitions::set_transition_duration(project, p),
+        EditorCommand::RemoveTransition(p) => transitions::remove_transition(project, p),
         EditorCommand::Undo | EditorCommand::Redo => Err(EditorError::new(
             EditorErrorCode::InvalidRequest,
             "undo/redo are dispatched by EditorSession::execute, never by apply",
@@ -251,31 +258,10 @@ mod tests {
     /// module doc). Each later task deletes its own row here as it
     /// replaces `apply`'s fallback with a real arm; report that removal
     /// explicitly in that task's own report rather than re-verifying the
-    /// whole table at once. Task 29 deleted `setFades`'s row.
+    /// whole table at once. Task 29 deleted `setFades`'s row; Task 30 deleted
+    /// `addTransition`/`setTransitionDuration`/`removeTransition`'s three.
     fn unimplemented_commands() -> Vec<(&'static str, EditorCommand)> {
         vec![
-            (
-                "addTransition",
-                EditorCommand::AddTransition(AddTransitionPayload {
-                    from_clip_id: "c1".into(),
-                    to_clip_id: "c2".into(),
-                    duration_ms: 500,
-                    kind: TransitionKind::Dissolve,
-                }),
-            ),
-            (
-                "setTransitionDuration",
-                EditorCommand::SetTransitionDuration(SetTransitionDurationPayload {
-                    transition_id: "tr1".into(),
-                    duration_ms: 500,
-                }),
-            ),
-            (
-                "removeTransition",
-                EditorCommand::RemoveTransition(RemoveTransitionPayload {
-                    transition_id: "tr1".into(),
-                }),
-            ),
             (
                 "setSpeed",
                 EditorCommand::SetSpeed(SetSpeedPayload {
@@ -443,16 +429,17 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_commands_table_has_twenty_one_rows() {
+    fn unimplemented_commands_table_has_eighteen_rows() {
         // A vacuity guard, the `shared_fixture_table_has_ten_cases`
         // precedent (`time.rs`): 46 total EditorCommand kinds minus the
-        // twenty-five implemented so far (rename, undo, redo, setDestination,
+        // twenty-eight implemented so far (rename, undo, redo, setDestination,
         // insertClip, updateClip, splitClip, trimClip, deleteClips,
         // moveClips, reorderClip, groupClips, ungroupClips,
         // duplicateClips, pasteFragment, cutClips, addTrack, renameTrack,
         // moveTrack, setTrackFlags, deleteTrack, setClipMix, setMasterGain,
-        // detachAudio, setFades).
-        assert_eq!(unimplemented_commands().len(), 21);
+        // detachAudio, setFades, addTransition, setTransitionDuration,
+        // removeTransition).
+        assert_eq!(unimplemented_commands().len(), 18);
     }
 
     #[test]

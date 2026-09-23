@@ -171,7 +171,8 @@ function onResizePointerDown(event: PointerEvent) {
 // ---- the one context menu ----------------------------------------------
 
 const CLIP_CONTEXT_ITEMS: ActionId[] = [
-  "split", "copy", "cut", "paste", "duplicate", "group", "ungroup", "earlier", "later", "deleteClose", "delete",
+  "split", "copy", "cut", "paste", "duplicate", "group", "ungroup", "earlier", "later", "transition", "deleteClose",
+  "delete",
 ];
 
 const menuOpen = ref(false);

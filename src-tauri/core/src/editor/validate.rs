@@ -443,6 +443,7 @@ pub fn validate_project(p: &Project) -> Result<(), EditorError> {
     }
 
     validate_media::check_transitions(&p.transitions, &clips_by_id, &assets_by_id)?;
+    validate_media::check_track_overlaps(&p.clips, &p.transitions)?;
     validate_media::check_linked_assets(&p.assets)?;
 
     Ok(())
