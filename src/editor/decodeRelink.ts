@@ -39,6 +39,16 @@ export function decodeRelinkReport(value: unknown): RelinkReport | null {
       const at = `relink.mismatched[${i}]`;
       return { assetId: asId(m.assetId, `${at}.assetId`), file: asString(m.file, `${at}.file`), reason: asString(m.reason, `${at}.reason`) };
     }),
+    failed: asArray(v.failed, "relink.failed").map((raw, i) => {
+      const f = asObject(raw, `relink.failed[${i}]`);
+      const at = `relink.failed[${i}]`;
+      return { assetId: asId(f.assetId, `${at}.assetId`), file: asString(f.file, `${at}.file`), error: asString(f.error, `${at}.error`) };
+    }),
+    unused: asArray(v.unused, "relink.unused").map((n, i) => asString(n, `relink.unused[${i}]`)),
+    excluded: asArray(v.excluded, "relink.excluded").map((raw, i) => {
+      const e = asObject(raw, `relink.excluded[${i}]`);
+      return { assetId: asId(e.assetId, `relink.excluded[${i}].assetId`), reason: asString(e.reason, `relink.excluded[${i}].reason`) };
+    }),
     perFile: asArray(v.perFile, "relink.perFile").map((raw, i) => {
       const p = asObject(raw, `relink.perFile[${i}]`);
       return { name: asString(p.name, `relink.perFile[${i}].name`), error: asString(p.error, `relink.perFile[${i}].error`) };

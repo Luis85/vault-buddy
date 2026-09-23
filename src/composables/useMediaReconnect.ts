@@ -11,9 +11,14 @@
  * one becomes a replacement only through a second call the user starts
  * with `confirmReplace`. A reply that lands after the session changed is
  * dropped, the store's own generation guard.
+ *
+ * A reconnect changes the file behind an asset id, so the timeline's
+ * derived media for it (and for any detached audio playing its sound) is
+ * forgotten (`mediaDerived.forgetDerived`), and the clips ask again.
  */
 import { ref } from "vue";
 
+import { forgetDerived } from "../editor/mediaDerived";
 import type { RelinkReport } from "../editorTypes";
 import { toEditorError, useEditorProjectStore } from "../stores/editorProject";
 
@@ -22,9 +27,11 @@ export type ReconnectOutcome =
   | { kind: "replaced"; file: string }
   | { kind: "ambiguous"; files: string[] }
   | { kind: "unmatched" }
-  | { kind: "mismatched"; file: string; reason: string };
+  | { kind: "mismatched"; file: string; reason: string }
+  | { kind: "failed"; file: string; error: string }
+  | { kind: "excluded"; reason: string };
 
-interface Status {
+interface ReconnectStatus {
   text: string;
   alert: boolean;
 }
@@ -37,18 +44,23 @@ function outcomesOf(report: RelinkReport): Record<string, ReconnectOutcome> {
     out[m.assetId] ??= { kind: "mismatched", file: m.file, reason: m.reason };
   }
   for (const id of report.unmatched) out[id] = { kind: "unmatched" };
+  for (const e of report.excluded) out[e.assetId] = { kind: "excluded", reason: e.reason };
+  for (const f of report.failed) out[f.assetId] = { kind: "failed", file: f.file, error: f.error };
   for (const a of report.ambiguous) out[a.assetId] = { kind: "ambiguous", files: a.files };
   for (const m of report.matched) out[m.assetId] = { kind: "matched", file: m.file };
   for (const r of report.replaced) out[r.assetId] = { kind: "replaced", file: r.file };
   return out;
 }
 
-function summary(report: RelinkReport): Status {
+function summary(report: RelinkReport): ReconnectStatus {
   const done = report.matched.length + report.replaced.length;
-  const open = report.ambiguous.length + report.mismatched.length + report.unmatched.length;
-  if (done === 0 && open === 0) return { text: "None of the chosen files could be examined.", alert: true };
-  const parts = [done === 1 ? "1 original reconnected." : `${done} originals reconnected.`];
+  const open = report.ambiguous.length + report.mismatched.length + report.unmatched.length + report.failed.length;
+  const left = report.excluded.length;
+  if (done + open + left === 0) return { text: "None of the chosen files could be examined.", alert: true };
+  const parts: string[] = [];
+  if (done > 0 || open > 0) parts.push(done === 1 ? "1 original reconnected." : `${done} originals reconnected.`);
   if (open > 0) parts.push(open === 1 ? "1 still needs your choice." : `${open} still need your choice.`);
+  if (left > 0) parts.push(left === 1 ? "1 cannot be reconnected here." : `${left} cannot be reconnected here.`);
   return { text: parts.join(" "), alert: false };
 }
 
@@ -56,12 +68,25 @@ export function useMediaReconnect() {
   const project = useEditorProjectStore();
   const outcomes = ref<Record<string, ReconnectOutcome>>({});
   const problems = ref<RelinkReport["perFile"]>([]);
-  const status = ref<Status | null>(null);
+  const unused = ref<string[]>([]);
+  const status = ref<ReconnectStatus | null>(null);
   const busy = ref(false);
+
+  /** The reconnected assets and every detached-audio asset that plays
+   * their sound — the ids whose derived media is now stale. */
+  function staleIds(report: RelinkReport): string[] {
+    const ids = new Set([...report.matched, ...report.replaced].map((r) => r.assetId));
+    for (const a of project.project?.assets ?? []) {
+      if (a.linked_asset && ids.has(a.linked_asset)) ids.add(a.id);
+    }
+    return [...ids];
+  }
 
   function install(report: RelinkReport): void {
     project.applyExecuteResult(project.generation, report.projection);
     project.$patch({ missing: report.missing });
+    forgetDerived(staleIds(report));
+    unused.value = report.unused;
     outcomes.value = { ...outcomes.value, ...outcomesOf(report) };
     problems.value = report.perFile;
     status.value = summary(report);
@@ -93,8 +118,9 @@ export function useMediaReconnect() {
   function reset(): void {
     outcomes.value = {};
     problems.value = [];
+    unused.value = [];
     status.value = null;
   }
 
-  return { outcomes, problems, status, busy, run, reset };
+  return { outcomes, problems, unused, status, busy, run, reset };
 }

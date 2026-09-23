@@ -14,7 +14,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { onMounted, ref, watch } from "vue";
 
-import { loadThumbnail } from "../../../editor/mediaDerived";
+import { loadThumbnail, mediaVersion } from "../../../editor/mediaDerived";
 import { EditorPortError } from "../../../editor/port";
 import { logWarning } from "../../../logging";
 import { useEditorProjectStore } from "../../../stores/editorProject";
@@ -42,7 +42,8 @@ async function load(): Promise<void> {
 }
 
 onMounted(load);
-watch(() => [props.assetId, props.atMs, editorProject.sessionId], load);
+// `mediaVersion`: a reconnect replaced the asset's file (Task 40).
+watch(() => [props.assetId, props.atMs, editorProject.sessionId, mediaVersion(props.assetId)], load);
 </script>
 
 <template>

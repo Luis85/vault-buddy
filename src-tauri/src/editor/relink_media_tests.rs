@@ -20,7 +20,12 @@ use crate::editor::store_io::{create_project, load_sources};
 const SESSION: &str = "ses-proj1";
 const ASSET: &str = "a-talk";
 
-struct FakeIo;
+/// `changes` in a picked file's name: its SECOND open (the copy) reads
+/// other bytes than its first (the hash) — a file edited mid-reconnect.
+#[derive(Default)]
+struct FakeIo {
+    opens: std::cell::Cell<u32>,
+}
 
 impl ImportIo for FakeIo {
     fn av_ready(&self) -> Result<(), EditorError> {
@@ -39,6 +44,13 @@ impl ImportIo for FakeIo {
                 has_video: true,
                 has_audio: false,
             }),
+            "AVIDEO" => Ok(ProbeFacts {
+                duration_ms,
+                width: Some(1920),
+                height: Some(1080),
+                has_video: true,
+                has_audio: true,
+            }),
             "AUDIO" => Ok(ProbeFacts {
                 duration_ms,
                 width: None,
@@ -51,6 +63,16 @@ impl ImportIo for FakeIo {
                 "ffprobe could not read the file; it may be damaged.",
             )),
         }
+    }
+
+    fn open_source(&self, path: &Path) -> io::Result<Box<dyn Read>> {
+        if path.to_string_lossy().contains("changes") {
+            self.opens.set(self.opens.get() + 1);
+            if self.opens.get() > 1 {
+                return Ok(Box::new(&b"VIDEO:31000 but edited"[..]));
+            }
+        }
+        Ok(Box::new(std::fs::File::open(path)?))
     }
 }
 
@@ -109,14 +131,18 @@ struct Fixture {
 
 impl Fixture {
     fn new(record: SourceRecord) -> Self {
-        let root = tempfile::tempdir().unwrap();
         let mut sources = BTreeMap::new();
         sources.insert(ASSET.to_string(), record);
-        create_project(root.path(), &project(), &sources).unwrap();
+        Self::with(project(), sources)
+    }
+
+    fn with(graph: Project, sources: BTreeMap<String, SourceRecord>) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        create_project(root.path(), &graph, &sources).unwrap();
         let state = EditorState::default();
         lock_ignoring_poison(&state.sessions).insert(
             SESSION.to_string(),
-            EditorSession::resume(SESSION, project(), 5),
+            EditorSession::resume(SESSION, graph, 5),
         );
         Self {
             root,
@@ -136,13 +162,24 @@ impl Fixture {
         files: &[PathBuf],
         confirm_replace: bool,
     ) -> Result<RelinkReportDto, EditorError> {
+        self.relink_ids(&[ASSET], files, confirm_replace)
+    }
+
+    fn relink_ids(
+        &self,
+        ids: &[&str],
+        files: &[PathBuf],
+        confirm_replace: bool,
+    ) -> Result<RelinkReportDto, EditorError> {
+        let io = FakeIo::default();
         let job = RelinkJob {
             state: &self.state,
             root: self.root.path(),
             session_id: SESSION,
-            io: &FakeIo,
+            io: &io,
         };
-        relink_in(&job, &[ASSET.to_string()], confirm_replace, files)
+        let ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
+        relink_in(&job, &ids, confirm_replace, files)
     }
 
     fn record(&self) -> SourceRecord {
@@ -366,7 +403,7 @@ fn only_a_missing_file_backed_source_can_be_reconnected() {
             state: &f.state,
             root: f.root.path(),
             session_id: SESSION,
-            io: &FakeIo,
+            io: &FakeIo::default(),
         };
         let e = targets(&job, &[ASSET.to_string()])
             .map(|_| ())
@@ -380,6 +417,13 @@ fn only_a_missing_file_backed_source_can_be_reconnected() {
 fn the_request_itself_is_checked() {
     let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     assert!(check_request(&ids(&["a"]), false).is_ok());
+    let too_many: Vec<String> = (0..=limits::MAX_ASSETS).map(|i| format!("a{i}")).collect();
+    let e = check_request(&too_many, false).unwrap_err();
+    assert!(
+        e.message.contains(&limits::MAX_ASSETS.to_string()),
+        "{}",
+        e.message
+    );
     assert!(check_request(&ids(&["a"]), true).is_ok());
     for (bad, confirm) in [
         (ids(&[]), false),
@@ -390,4 +434,146 @@ fn the_request_itself_is_checked() {
         let e = check_request(&bad, confirm).expect_err(&format!("{bad:?}"));
         assert_eq!(e.code, EditorErrorCode::InvalidRequest);
     }
+}
+
+fn staged_record() -> SourceRecord {
+    SourceRecord {
+        locator: SourceLocator::Staging {
+            base: "2026-09-23 1000 Capture".into(),
+        },
+        ..missing_record()
+    }
+}
+
+fn graph_asset(json: serde_json::Value) -> vault_buddy_core::editor::Asset {
+    serde_json::from_value(json).unwrap()
+}
+
+// Fix round 1 (review Minor 3): "Find all" names every missing original.
+// One that cannot be reconnected here — a staged capture, one only a
+// rendered snapshot still uses — is LEFT OUT with its reason instead of
+// refusing the whole batch; the rest reconnect.
+#[test]
+fn a_batch_leaves_out_what_cannot_be_reconnected_and_says_why() {
+    let mut graph = project();
+    graph.assets.push(graph_asset(serde_json::json!({
+        "id": "a-cap", "kind": "video", "name": "capture.mp4", "duration_ms": 9_000
+    })));
+    let mut sources = BTreeMap::new();
+    sources.insert(ASSET.to_string(), missing_record());
+    sources.insert("a-cap".to_string(), staged_record());
+    sources.insert("a-old".to_string(), missing_record());
+    let f = Fixture::with(graph, sources);
+
+    let report = f
+        .relink_ids(
+            &[ASSET, "a-cap", "a-old"],
+            &[f.pick("talk.mp4", ORIGINAL)],
+            false,
+        )
+        .expect("one unreconnectable source must not refuse the batch");
+
+    assert_eq!(report.matched.len(), 1, "{report:?}");
+    let excluded: Vec<&str> = report
+        .excluded
+        .iter()
+        .map(|e| e.asset_id.as_str())
+        .collect();
+    assert_eq!(excluded, vec!["a-cap", "a-old"]);
+    assert!(
+        report.excluded[0].reason.contains("capture.mp4"),
+        "{:?}",
+        report.excluded
+    );
+    assert!(!report.excluded[1].reason.is_empty());
+    // A batch with nothing reconnectable left reports why and changes
+    // nothing (the command opens no dialog for it).
+    let only_out = f.relink_ids(&["a-cap", "a-old"], &[], false).unwrap();
+    assert_eq!(only_out.excluded.len(), 2);
+    assert!(only_out.matched.is_empty() && only_out.unmatched.is_empty());
+    // One source alone is still refused outright, as before.
+    let e = f
+        .relink_ids(&["a-cap"], &[f.pick("x.mp4", ORIGINAL)], false)
+        .unwrap_err();
+    assert_eq!(e.code, EditorErrorCode::InvalidRequest);
+}
+
+// Fix round 1 (review Minor 6): a match whose copy fails is reported with
+// its real cause — never as "no file matched" — and changes nothing.
+#[test]
+fn a_failed_copy_is_reported_as_its_cause_not_as_unmatched() {
+    let f = Fixture::new(missing_record());
+    let report = f
+        .relink(&[f.pick("talk changes.mp4", ORIGINAL)], false)
+        .unwrap();
+
+    assert!(report.matched.is_empty(), "{report:?}");
+    assert!(report.unmatched.is_empty(), "{report:?}");
+    assert_eq!(report.failed.len(), 1);
+    assert_eq!(report.failed[0].asset_id, ASSET);
+    assert_eq!(report.failed[0].file, "talk changes.mp4");
+    assert!(
+        report.failed[0].error.contains("changed"),
+        "{:?}",
+        report.failed
+    );
+    assert_eq!(f.record(), missing_record());
+    assert!(f.media_files().is_empty());
+    assert_eq!(f.revision(), 5);
+}
+
+// Fix round 1 (review Minor 7): a detached-audio asset plays its video's
+// sound, so a replacement WITHOUT a sound track would leave that clip
+// referencing audio the file lacks. Refused; with sound it is accepted.
+#[test]
+fn a_replacement_without_sound_is_refused_while_detached_audio_depends_on_it() {
+    let mut graph = project();
+    graph.assets.push(graph_asset(serde_json::json!({
+        "id": "a-talk-audio", "kind": "audio", "name": "talk.mp4 audio",
+        "duration_ms": 31_000, "linked_asset": ASSET
+    })));
+    let mut sources = BTreeMap::new();
+    sources.insert(ASSET.to_string(), missing_record());
+    let f = Fixture::with(graph, sources);
+
+    let silent = f.pick("silent-long.mp4", b"VIDEO:40000");
+    let e = f.relink(&[silent], true).unwrap_err();
+    assert_eq!(e.code, EditorErrorCode::InvalidRequest);
+    assert!(e.message.contains("silent-long.mp4"), "{}", e.message);
+    assert_eq!(f.record(), missing_record());
+
+    let voiced = f.pick("voiced-long.mp4", b"AVIDEO:40000");
+    let report = f.relink(&[voiced], true).unwrap();
+    assert_eq!(report.replaced.len(), 1, "{report:?}");
+}
+
+// The unused list reaches the wire: with two sources unresolved, a picked
+// file nothing claimed is named rather than silently ignored.
+#[test]
+fn a_picked_file_nothing_claimed_is_reported_unused() {
+    let mut graph = project();
+    graph.assets.push(graph_asset(serde_json::json!({
+        "id": "a-two", "kind": "video", "name": "two.mp4", "duration_ms": 5_000
+    })));
+    let mut sources = BTreeMap::new();
+    sources.insert(ASSET.to_string(), missing_record());
+    sources.insert(
+        "a-two".to_string(),
+        SourceRecord {
+            locator: SourceLocator::Media {
+                file: "a-two.mp4".into(),
+            },
+            duration_ms: 5_000,
+            ..missing_record()
+        },
+    );
+    let f = Fixture::with(graph, sources);
+    let report = f
+        .relink_ids(&[ASSET, "a-two"], &[f.pick("stray.mp4", b"AUDIO:1")], false)
+        .unwrap();
+    assert_eq!(
+        report.unmatched,
+        vec![ASSET.to_string(), "a-two".to_string()]
+    );
+    assert_eq!(report.unused, vec!["stray.mp4".to_string()]);
 }

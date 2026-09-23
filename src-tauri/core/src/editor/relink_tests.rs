@@ -143,6 +143,53 @@ fn several_unresolved_sources_are_unmatched_not_paired_by_guess() {
     assert_eq!(report.matched, vec![("c".to_string(), 0)]);
     assert_eq!(report.unmatched, vec!["a".to_string(), "b".to_string()]);
     assert!(report.mismatched.is_empty());
+    assert_eq!(report.unused, vec![1], "the stray is reported, not dropped");
+}
+
+// Fix round 1 (review Minor 1): A19 both ways. One unhashed file that fits
+// TWO missing sources is not proof for either (two different originals of
+// the same size and length exist): it is ambiguous for both, never copied
+// in twice.
+#[test]
+fn one_unhashed_file_fitting_two_sources_is_ambiguous_for_both() {
+    let sources = vec![
+        ("a".to_string(), expected(None, 500, 4_000)),
+        ("b".to_string(), expected(None, 500, 4_020)),
+    ];
+    let report = match_candidates(&sources, &[candidate("take.mp4", "1", 500, 4_010)]);
+    assert!(report.matched.is_empty(), "{report:?}");
+    assert_eq!(
+        report.ambiguous,
+        vec![("a".to_string(), vec![0]), ("b".to_string(), vec![0])]
+    );
+}
+
+// ...but a file whose exact bytes BOTH hashed sources record is the same
+// original imported twice, and reconnects both.
+#[test]
+fn one_file_whose_hash_two_sources_share_reconnects_both() {
+    let sources = vec![
+        ("a".to_string(), expected(Some("ee"), 500, 4_000)),
+        ("b".to_string(), expected(Some("ee"), 500, 4_000)),
+    ];
+    let report = match_candidates(&sources, &[candidate("take.mp4", "EE", 500, 4_000)]);
+    assert_eq!(
+        report.matched,
+        vec![("a".to_string(), 0), ("b".to_string(), 0)]
+    );
+    assert!(report.ambiguous.is_empty());
+}
+
+#[test]
+fn a_stray_file_beside_resolved_sources_is_reported_unused() {
+    let sources = vec![("a".to_string(), expected(None, 100, 1_000))];
+    let files = [
+        candidate("a.mp4", "1", 100, 1_000),
+        candidate("extra.mp4", "2", 7, 7),
+    ];
+    let report = match_candidates(&sources, &files);
+    assert_eq!(report.matched, vec![("a".to_string(), 0)]);
+    assert_eq!(report.unused, vec![1]);
 }
 
 #[test]
@@ -199,6 +246,16 @@ fn relink_report_dto_wire_shape_is_pinned() {
             file: "c.mp4".into(),
             reason: "different size: 1 bytes vs 2 bytes".into(),
         }],
+        failed: vec![RelinkFailure {
+            asset_id: "e".into(),
+            file: "e.mp4".into(),
+            error: "disk full".into(),
+        }],
+        unused: vec!["stray.mp4".into()],
+        excluded: vec![ExcludedSource {
+            asset_id: "f".into(),
+            reason: "kept with your captures".into(),
+        }],
         per_file: vec![RelinkFileProblem {
             name: "d.mp4".into(),
             error: "damaged".into(),
@@ -217,6 +274,9 @@ fn relink_report_dto_wire_shape_is_pinned() {
             "ambiguous": [{ "assetId": "b", "files": ["b1.mp4", "b2.mp4"] }],
             "unmatched": [],
             "mismatched": [{ "assetId": "c", "file": "c.mp4", "reason": "different size: 1 bytes vs 2 bytes" }],
+            "failed": [{ "assetId": "e", "file": "e.mp4", "error": "disk full" }],
+            "unused": ["stray.mp4"],
+            "excluded": [{ "assetId": "f", "reason": "kept with your captures" }],
             "perFile": [{ "name": "d.mp4", "error": "damaged" }]
         })
     );
@@ -234,6 +294,7 @@ fn named_report_turns_indices_into_file_names() {
         ambiguous: vec![("b".into(), vec![1, 0])],
         unmatched: vec!["c".into()],
         mismatched: vec![("d".into(), 1, "why".into())],
+        unused: vec![0],
     };
     let named = NamedReport::of(&report, &files);
     assert_eq!(named.matched[0].file, "two.mp4");
@@ -241,4 +302,5 @@ fn named_report_turns_indices_into_file_names() {
     assert_eq!(named.unmatched, vec!["c".to_string()]);
     assert_eq!(named.mismatched[0].file, "one.mp4");
     assert_eq!(named.mismatched[0].reason, "why");
+    assert_eq!(named.unused, vec!["zero.mp4".to_string()]);
 }

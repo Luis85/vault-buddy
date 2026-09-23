@@ -36,7 +36,7 @@ const emit = defineEmits<{ (e: "close"): void }>();
 
 const project = useEditorProjectStore();
 const reconnect = useMediaReconnect();
-const { outcomes, problems, status, busy } = reconnect;
+const { outcomes, problems, unused, status, busy } = reconnect;
 
 /** The originals this dialog is about — captured when it opens, so a row
  * that gets reconnected stays and says so instead of vanishing. */
@@ -52,7 +52,12 @@ watch(
 );
 
 const stillMissing = computed(() => new Set(project.missing.map((m) => m.assetId)));
-const findAllIds = computed(() => listed.value.map((m) => m.assetId).filter((id) => stillMissing.value.has(id)));
+/** Still missing, and not one Rust already said it cannot reconnect here. */
+const findAllIds = computed(() =>
+  listed.value
+    .map((m) => m.assetId)
+    .filter((id) => stillMissing.value.has(id) && outcomes.value[id]?.kind !== "excluded"),
+);
 
 const statusText = computed(() => (busy.value ? "Checking the chosen files…" : (status.value?.text ?? "")));
 const statusRole = computed(() => (status.value?.alert ? "alert" : "status"));
@@ -112,6 +117,14 @@ function close(): void {
           “{{ p.name }}”: {{ p.error }}
         </li>
       </ul>
+
+      <p
+        v-if="unused.length > 0"
+        data-testid="reconnect-unused"
+        class="text-xs text-fg-secondary"
+      >
+        Not used — it matched none of the missing originals: {{ unused.map((n) => `“${n}”`).join(", ") }}
+      </p>
 
       <p
         data-testid="reconnect-status"

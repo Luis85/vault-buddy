@@ -22,7 +22,11 @@
 //!   the request is left unresolved, every candidate nothing claimed is
 //!   reported against it. With several unresolved sources and several stray
 //!   files there is no honest pairing, so those sources are simply
-//!   `unmatched`.
+//!   `unmatched` and the stray files are reported `unused`.
+//! - A19 holds both ways (fix round 1): one file claimed by two sources,
+//!   where either claim rests on size + length rather than a hash, is
+//!   ambiguous for BOTH. Two hashed sources claiming one file record the
+//!   same bytes (one original imported twice) and both reconnect.
 //!
 //! `RelinkReportDto` is the wire reply of `editor_relink_media` (ADR §3.3's
 //! `RelinkReport`): the report with each candidate index turned into the
@@ -66,6 +70,8 @@ pub struct RelinkReport {
     pub ambiguous: Vec<(String, Vec<usize>)>,
     pub unmatched: Vec<String>,
     pub mismatched: Vec<(String, usize, String)>,
+    /// Picked files no source claimed and none was blamed on.
+    pub unused: Vec<usize>,
 }
 
 fn same_identity(expected: &ExpectedSource, candidate: &CandidateFacts) -> bool {
@@ -132,25 +138,34 @@ pub fn match_candidates(
     candidates: &[CandidateFacts],
 ) -> RelinkReport {
     let mut report = RelinkReport::default();
-    let mut claimed = vec![false; candidates.len()];
-    let mut unresolved: Vec<&(String, ExpectedSource)> = Vec::new();
-    for entry in expected {
-        let hits: Vec<usize> = candidates
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| same_identity(&entry.1, c))
-            .map(|(i, _)| i)
-            .collect();
-        for &i in &hits {
-            claimed[i] = true;
+    let hits: Vec<Vec<usize>> = expected
+        .iter()
+        .map(|(_, source)| {
+            (0..candidates.len())
+                .filter(|&i| same_identity(source, &candidates[i]))
+                .collect()
+        })
+        .collect();
+    // A19 both ways (fix round 1): a file claimed by two sources where any
+    // claim rests on size + length alone proves neither.
+    let mut claims = vec![0usize; candidates.len()];
+    let mut by_shape = vec![false; candidates.len()];
+    for ((_, source), mine) in expected.iter().zip(&hits) {
+        for &i in mine {
+            claims[i] += 1;
+            by_shape[i] |= source.sha256.is_none();
         }
-        match hits.as_slice() {
+    }
+    let contested = |i: usize| claims[i] > 1 && by_shape[i];
+    let mut unresolved: Vec<&(String, ExpectedSource)> = Vec::new();
+    for (entry, mine) in expected.iter().zip(&hits) {
+        match mine.as_slice() {
             [] => unresolved.push(entry),
-            [one] => report.matched.push((entry.0.clone(), *one)),
+            [one] if !contested(*one) => report.matched.push((entry.0.clone(), *one)),
             many => report.ambiguous.push((entry.0.clone(), many.to_vec())),
         }
     }
-    let strays: Vec<usize> = (0..candidates.len()).filter(|&i| !claimed[i]).collect();
+    let strays: Vec<usize> = (0..candidates.len()).filter(|&i| claims[i] == 0).collect();
     match (unresolved.as_slice(), strays.is_empty()) {
         ([(asset_id, source)], false) => {
             for i in strays {
@@ -158,9 +173,12 @@ pub fn match_candidates(
                 report.mismatched.push((asset_id.clone(), i, reason));
             }
         }
-        _ => report
-            .unmatched
-            .extend(unresolved.iter().map(|(id, _)| id.clone())),
+        _ => {
+            report
+                .unmatched
+                .extend(unresolved.iter().map(|(id, _)| id.clone()));
+            report.unused = strays;
+        }
     }
     report
 }
@@ -190,6 +208,25 @@ pub struct MismatchedFile {
     pub reason: String,
 }
 
+/// A source whose matching file could not be copied in, and why — its
+/// real cause, never "no file matched" (fix round 1).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelinkFailure {
+    pub asset_id: String,
+    pub file: String,
+    pub error: String,
+}
+
+/// A source a batch left out because it cannot be reconnected here, and
+/// why (fix round 1: one such source must not refuse the whole batch).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExcludedSource {
+    pub asset_id: String,
+    pub reason: String,
+}
+
 /// A picked file that could not be examined at all.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -210,6 +247,9 @@ pub struct RelinkReportDto {
     pub ambiguous: Vec<AmbiguousSource>,
     pub unmatched: Vec<String>,
     pub mismatched: Vec<MismatchedFile>,
+    pub failed: Vec<RelinkFailure>,
+    pub unused: Vec<String>,
+    pub excluded: Vec<ExcludedSource>,
     pub per_file: Vec<RelinkFileProblem>,
 }
 
@@ -221,6 +261,7 @@ pub struct NamedReport {
     pub ambiguous: Vec<AmbiguousSource>,
     pub unmatched: Vec<String>,
     pub mismatched: Vec<MismatchedFile>,
+    pub unused: Vec<String>,
 }
 
 impl NamedReport {
@@ -253,6 +294,7 @@ impl NamedReport {
                     reason: reason.clone(),
                 })
                 .collect(),
+            unused: report.unused.iter().map(|&i| name(i)).collect(),
         }
     }
 }

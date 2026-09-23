@@ -394,6 +394,12 @@ export interface RelinkReport {
   ambiguous: { assetId: string; files: string[] }[];
   unmatched: string[];
   mismatched: { assetId: string; file: string; reason: string }[];
+  /** A matching file that could not be copied in, with the real cause. */
+  failed: { assetId: string; file: string; error: string }[];
+  /** Picked files no original claimed. */
+  unused: string[];
+  /** Originals a batch left out because they cannot be reconnected here. */
+  excluded: { assetId: string; reason: string }[];
   perFile: { name: string; error: string }[];
 }
 

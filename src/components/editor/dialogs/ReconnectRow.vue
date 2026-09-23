@@ -3,9 +3,10 @@
  * One missing original in `ReconnectDialog` (Task 40): what it was — name,
  * size, length, never a path — what the last reconnect said about it, and
  * the one or two ways forward. Presentational: the dialog runs the
- * reconnect. A reconnected or replaced row offers nothing more; a
- * mismatched one also offers **Replace…**; everything else (untried,
- * ambiguous, unmatched) only **Choose file…**, for this asset alone.
+ * reconnect. A reconnected or replaced row — or one Rust left out of a
+ * batch as not reconnectable here — offers nothing more; a mismatched one
+ * also offers **Replace…**; everything else (untried, ambiguous,
+ * unmatched, a failed copy) only **Choose file…**, for this asset alone.
  */
 import { computed } from "vue";
 
@@ -26,6 +27,8 @@ const facts = computed(() => {
 });
 const done = computed(() => props.outcome?.kind === "matched" || props.outcome?.kind === "replaced");
 const replaceable = computed(() => props.outcome?.kind === "mismatched");
+/** Rust left it out of a batch: no file choice would be accepted. */
+const actionable = computed(() => !done.value && props.outcome?.kind !== "excluded");
 const text = computed(() => describeOutcome(props.outcome));
 </script>
 
@@ -38,7 +41,7 @@ const text = computed(() => describeOutcome(props.outcome));
     <span class="text-fg-muted">{{ facts }}</span>
     <span :class="done ? 'text-success' : 'text-fg-secondary'">{{ text }}</span>
     <span
-      v-if="!done"
+      v-if="actionable"
       class="flex flex-wrap gap-2"
     >
       <AppButton

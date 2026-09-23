@@ -10,7 +10,9 @@
 //! not a disabled button, is the authority). On the named `editor-relink`
 //! thread, joined from the blocking pool: every requested source is checked
 //! BEFORE the dialog opens (`relink_media::targets`, so a present or
-//! builtin source never asks the user to pick a file for nothing), then the
+//! builtin source never asks the user to pick a file for nothing — in a
+//! batch such a source is left out and reported, and a batch with nothing
+//! left opens no dialog at all), then the
 //! native open dialog — multi-select for a batch, single for one source,
 //! filtered to the import's own allowlist — and then the pipeline. The
 //! dialog, never a frontend string, grants the path. The reply is the
@@ -117,7 +119,12 @@ pub async fn editor_relink_media(
                 session_id: &session_id,
                 io: &io,
             };
-            let (_, checked) = targets(&job, &asset_ids)?;
+            let (_, checked, _) = targets(&job, &asset_ids)?;
+            if checked.is_empty() {
+                // Every source of the batch was left out: say why, and
+                // never ask the user to pick files for nothing.
+                return relink_in(&job, &asset_ids, confirm_replace, &[]).map(Some);
+            }
             let names: Vec<String> = checked.into_iter().map(|t| t.name).collect();
             let title = dialog_title(&names, confirm_replace);
             let files = pick_files(&app, &window, &title, asset_ids.len() == 1);

@@ -16,7 +16,7 @@
  */
 import { computed, onMounted, ref, watch } from "vue";
 
-import { loadPeaks } from "../../../editor/mediaDerived";
+import { loadPeaks, mediaVersion } from "../../../editor/mediaDerived";
 import { EditorPortError } from "../../../editor/port";
 import { peakBucketsFor, waveformPoints } from "../../../editor/waveform";
 import { logWarning } from "../../../logging";
@@ -60,7 +60,8 @@ async function load(): Promise<void> {
 }
 
 onMounted(load);
-watch(() => [props.assetId, props.assetDurationMs, editorProject.sessionId], load);
+// `mediaVersion`: a reconnect replaced the asset's file (Task 40).
+watch(() => [props.assetId, props.assetDurationMs, editorProject.sessionId, mediaVersion(props.assetId)], load);
 
 const points = computed(() =>
   peaks.value

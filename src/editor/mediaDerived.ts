@@ -15,7 +15,13 @@
  * first-rendered-first-evicted, and hand a remounted clip a path to a file
  * that was since deleted, with nothing ever retrying. Asking again costs
  * one stat and one touch on a hit, and re-renders an evicted frame.
+ *
+ * **A reconnect** (Task 40) changes the file behind an asset id, which
+ * nothing above can see: `forgetDerived` drops that asset's memo entries
+ * and bumps its `mediaVersion`, which `ClipWaveform`/`ClipThumbnail` watch.
  */
+import { reactive } from "vue";
+
 import type { EditorPort } from "./port";
 
 const MAX_ENTRIES = 256;
@@ -57,8 +63,34 @@ export function loadThumbnail(port: EditorPort, sessionId: string, assetId: stri
   return request;
 }
 
+/** How many times each asset's FILE changed under it this process — a
+ * reconnect bumps it (Task 40 fix round 1). Reactive, so a mounted clip
+ * that reads it in its watch source asks for its media again. */
+const versions = reactive(new Map<string, number>());
+
+export function mediaVersion(assetId: string): number {
+  return versions.get(assetId) ?? 0;
+}
+
+function dropAssets(memo: Map<string, unknown>, ids: ReadonlySet<string>): void {
+  for (const key of [...memo.keys()]) {
+    if (ids.has(key.split("|")[1] ?? "")) memo.delete(key);
+  }
+}
+
+/** A reconnect replaced these assets' files (GAP-176, webview half): drop
+ * their memoized waveforms and shared in-flight thumbnail requests, and
+ * bump their version so every mounted clip re-requests. */
+export function forgetDerived(assetIds: readonly string[]): void {
+  const ids = new Set(assetIds);
+  dropAssets(peaks, ids);
+  dropAssets(thumbnailsInFlight, ids);
+  for (const id of ids) versions.set(id, mediaVersion(id) + 1);
+}
+
 /** Test-only: every suite starts with an empty memo. */
 export function clearMediaDerivedForTest(): void {
   peaks.clear();
   thumbnailsInFlight.clear();
+  versions.clear();
 }

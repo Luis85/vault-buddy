@@ -2453,9 +2453,20 @@ exactly `<recordId>-<digits>.jpg` or `<recordId>.peaks.<digits>.json` for each
 relinked record (`derived_of`; no-follow, so a directory or link wearing the
 name stays, and another asset whose id merely starts with this one's —
 `a-talk-2` beside `a-talk` — keeps its cache). Pinned by
-`a_relink_purges_the_assets_cached_thumbnails_and_waveforms`. The thumbnail
-itself is still not fingerprinted; a future path that changes the file behind
-an asset id must purge the same way.
+`a_relink_purges_the_assets_cached_thumbnails_and_waveforms`. That was the
+Rust half only; its fix round 1 closed the WEBVIEW half the first pass
+missed: `mediaDerived.ts` memoizes a settled waveform per (session, asset,
+buckets) for the session's life, and `ClipWaveform`/`ClipThumbnail` reload
+only when their asset id, time or session changes — none of which a
+reconnect changes — so a replaced asset kept drawing the OLD file's waveform
+and a clip whose thumbnail failed while missing stayed blank.
+`useMediaReconnect` now calls `mediaDerived.forgetDerived` for every
+reconnected asset AND every detached-audio asset that plays its sound: their
+memo entries are dropped and their `mediaVersion` bumped, which both clip
+components watch (tests in `tests/editorReconnect.test.ts`, "the timeline
+after a reconnect"). The thumbnail file itself is still not fingerprinted; a
+future path that changes the file behind an asset id must purge `cache\` AND
+call `forgetDerived` the same way.
 
 ### GAP-177 · Low (unverified cause) · The registry-fresh PATH carries unexpanded `%SystemRoot%` entries, and a child `cmd.exe` spawned with it did not find `ping`
 `src-tauri/src/external_tool.rs` (`registry_path_entries`, `augmented_path`).
@@ -2616,8 +2627,12 @@ What remains:
   this: a reconnected record is rewritten from the chosen file's OWN probe
   and hash, so its `hasAudio` is then the truth.
 - A lightweight placeholder's expected size is 0 when the file carried no
-  facts and the asset recorded no size, which weakens Task 40's match to
-  name and duration.
+  facts and the asset recorded no size. Task 40's match never uses a name,
+  and an unhashed record needs size AND length AND kind to agree, so a zero
+  size matches NO file: such an original can come back only as a confirmed
+  REPLACEMENT (at least as long, same kind), whose `replacedFrom` then
+  records the zero-size placeholder rather than a real prior identity. The
+  reconnect dialog shows it as "size unknown".
 - `package::cross_check` refuses packaged media that nothing in the project
   or a retained snapshot references, so an original that is in the media
   library but on no clip is NOT carried by a portable file. It imports as
@@ -2647,10 +2662,29 @@ it must be at least as long, but a replacement with other dimensions is
 placed by the old ones until re-imported. Nothing is lost in any case; the
 refusals are honest.
 
+Since Task 40's fix round 1 these refusals no longer block a batch: "Find
+all…" leaves such an original out, reports it in `excluded` with its reason,
+and the dialog offers it no file choice; asked for alone, it is still
+refused.
+
 **Fix:** decide whether a staged capture's replacement should be copied into
 `media\` and unpin, or re-staged; let a snapshot-only source be reconnected
 by record id; refresh an asset's dimensions on a confirmed replacement
 through an explicit graph command.
+
+### GAP-184 · Low (by design) · A reconnect marks a clean project unsaved and journals an identical graph
+`src-tauri/src/editor/relink_media.rs` (`commit`), found by Task 40's review.
+A reconnect rewrites `sources.json` directly and then applies ONE
+`InternalCommand::RelinkAssets`, which the brief requires to bump the
+revision — but it leaves the project graph byte-identical. So a project that
+was saved reads "unsaved" after a reconnect, the close guard offers to save
+it, and the recovery journal records a graph equal to the saved one (a
+later crash then offers Resume for "changes" that are only the reconnect).
+This is not a bug: saving writes the same graph, Resume restores the same
+graph, and nothing is lost either way; the revision bump is what tells every
+other surface that the project's sources changed. **Fix (only if it
+confuses users):** give a sources-only revision its own flag so the header
+does not call it an unsaved edit.
 
 ## 9. Documentation & repo hygiene
 

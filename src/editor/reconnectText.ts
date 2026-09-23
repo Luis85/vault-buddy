@@ -12,11 +12,18 @@ export function describeOutcome(outcome: ReconnectOutcome | undefined): string {
     case "replaced":
       return `Replaced with “${outcome.file}”.`;
     case "ambiguous": {
+      if (outcome.files.length === 1) {
+        return `“${outcome.files[0]}” fits more than one missing original, so it was not used. Choose the right file for this one.`;
+      }
       const files = outcome.files.map((f) => `“${f}”`).join(", ");
       return `${outcome.files.length} chosen files match equally well: ${files}. Choose the right one.`;
     }
     case "mismatched":
       return `“${outcome.file}” is not this original — ${outcome.reason}. Choose another file, or replace it: you pick the file again, and your edit stays as it is.`;
+    case "failed":
+      return `“${outcome.file}” is this original, but it could not be brought in: ${outcome.error}`;
+    case "excluded":
+      return outcome.reason;
     case "unmatched":
       return "None of the chosen files is this original.";
     default:

@@ -16,7 +16,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ReconnectDialog from "../src/components/editor/dialogs/ReconnectDialog.vue";
 import MediaLibrary from "../src/components/editor/library/MediaLibrary.vue";
 import PreviewSurface from "../src/components/editor/preview/PreviewSurface.vue";
+import ClipThumbnail from "../src/components/editor/timeline/ClipThumbnail.vue";
+import ClipWaveform from "../src/components/editor/timeline/ClipWaveform.vue";
+import { useMediaReconnect } from "../src/composables/useMediaReconnect";
 import { decodeRelinkReport } from "../src/editor/decodeRelink";
+import { clearMediaDerivedForTest, mediaVersion } from "../src/editor/mediaDerived";
 import { createTauriEditorPort, EditorPortError } from "../src/editor/port";
 import type { AudioContextLike } from "../src/editor/previewController";
 import { PreviewController } from "../src/editor/previewController";
@@ -29,6 +33,7 @@ enableAutoUnmount(afterEach);
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  clearMediaDerivedForTest();
 });
 
 afterEach(() => {
@@ -86,6 +91,9 @@ function report(overrides: Partial<RelinkReport> = {}): RelinkReport {
     ambiguous: [],
     unmatched: [],
     mismatched: [],
+    failed: [],
+    unused: [],
+    excluded: [],
     perFile: [],
     ...overrides,
   };
@@ -116,6 +124,9 @@ describe("the relink wire", () => {
       ambiguous: [{ assetId: "a-x", files: ["x.mp4", "x (1).mp4"] }],
       unmatched: ["a-y"],
       mismatched: [{ assetId: "a-z", file: "z.mp4", reason: "different duration: 12.4 s vs 31.0 s" }],
+      failed: [{ assetId: "a-f", file: "f.mp4", error: "disk full" }],
+      unused: ["stray.mp4"],
+      excluded: [{ assetId: "a-c", reason: "kept with your captures" }],
       perFile: [{ name: "broken.mp4", error: "damaged" }],
     };
     const decoded = decodeRelinkReport(raw);
@@ -124,6 +135,11 @@ describe("the relink wire", () => {
     expect(decoded?.ambiguous[0].files).toEqual(["x.mp4", "x (1).mp4"]);
     expect(decoded?.mismatched[0].reason).toBe("different duration: 12.4 s vs 31.0 s");
     expect(decoded?.perFile).toEqual([{ name: "broken.mp4", error: "damaged" }]);
+    expect(decoded?.failed).toEqual([{ assetId: "a-f", file: "f.mp4", error: "disk full" }]);
+    expect(decoded?.unused).toEqual(["stray.mp4"]);
+    expect(decoded?.excluded).toEqual([{ assetId: "a-c", reason: "kept with your captures" }]);
+    const { excluded: _gone, ...withoutExcluded } = raw;
+    expect(() => decodeRelinkReport(withoutExcluded)).toThrow();
     expect(decodeRelinkReport(null)).toBeNull();
     expect(() => decodeRelinkReport({ ...raw, ambiguous: [{ assetId: "a-x", files: "x.mp4" }] })).toThrow();
     const { perFile: _omitted, ...withoutPerFile } = raw;
@@ -241,6 +257,126 @@ describe("ReconnectDialog", () => {
     expect(store.missing).toEqual([LOGO]);
     expect(w.text()).toContain("broken.mp4");
     expect(w.text()).toContain("ffprobe could not read the file.");
+  });
+});
+
+describe("ReconnectDialog, fix round 1", () => {
+  // Review Minor 3: an original Rust left out of a batch (a staged capture,
+  // one only a snapshot uses) says why, offers no file choice, and is not
+  // sent again by the next "Find all".
+  it("a left-out original says why and is not asked for again", async () => {
+    const relink = vi
+      .fn<Relink>()
+      .mockResolvedValueOnce(report({ excluded: [{ assetId: "a-logo", reason: "“logo.png” is kept with your captures." }], unmatched: ["a-talk"] }))
+      .mockResolvedValueOnce(report({ unmatched: ["a-talk"] }));
+    await openStore(relink);
+    const w = mountDialog();
+    await w.get('[data-testid="reconnect-find-all"]').trigger("click");
+    await flushPromises();
+    const logo = row(w, "a-logo");
+    expect(logo.text()).toContain("“logo.png” is kept with your captures.");
+    expect(logo.find('[data-testid="reconnect-choose"]').exists()).toBe(false);
+    await w.get('[data-testid="reconnect-find-all"]').trigger("click");
+    await flushPromises();
+    expect(relink).toHaveBeenLastCalledWith("ses-a", ["a-talk"], false);
+  });
+
+  // Review Minor 6/5: a failed copy reads as its cause, and a picked file
+  // nothing claimed is named rather than silently ignored.
+  it("a failed copy reads as its cause, and unused files are named", async () => {
+    const relink = vi.fn<Relink>().mockResolvedValueOnce(
+      report({
+        failed: [{ assetId: "a-talk", file: "talk.mp4", error: "Not enough disk space to import the file." }],
+        unused: ["holiday.mp4"],
+        unmatched: ["a-logo"],
+      }),
+    );
+    await openStore(relink);
+    const w = mountDialog();
+    await w.get('[data-testid="reconnect-find-all"]').trigger("click");
+    await flushPromises();
+    const talk = row(w, "a-talk").text();
+    expect(talk).toContain("Not enough disk space to import the file.");
+    expect(talk).not.toMatch(/none of the chosen files/i);
+    expect(w.text()).toContain("holiday.mp4");
+  });
+
+  it("one file that fits two originals is shown as such", async () => {
+    const relink = vi.fn<Relink>().mockResolvedValueOnce(
+      report({ ambiguous: [{ assetId: "a-talk", files: ["take.mp4"] }, { assetId: "a-logo", files: ["take.mp4"] }] }),
+    );
+    await openStore(relink);
+    const w = mountDialog();
+    await w.get('[data-testid="reconnect-find-all"]').trigger("click");
+    await flushPromises();
+    expect(row(w, "a-talk").text()).toMatch(/“take\.mp4” fits more than one missing original/);
+    expect(row(w, "a-talk").text()).not.toMatch(/reconnected/i);
+  });
+});
+
+// Review Important 1: the timeline's derived media must follow a reconnect.
+describe("the timeline after a reconnect", () => {
+  const replacedTalk = () =>
+    report({
+      projection: { snapshot: snapshot(5), project: project() },
+      replaced: [{ assetId: "a-talk", file: "talk-long.mp4" }],
+      missing: [LOGO],
+    });
+
+  it("a mounted waveform asks again and draws the replacement's peaks, and only its own", async () => {
+    const mediaPeaks = vi.fn((_s: string, assetId: string) =>
+      Promise.resolve(assetId === "a-talk" && mediaPeaks.mock.calls.length > 2 ? [1, 1, 1, 1] : [0.1, 0.1, 0.1, 0.1]),
+    );
+    await openStore(vi.fn<Relink>().mockResolvedValue(replacedTalk()), [TALK, LOGO], { mediaPeaks });
+    const lane = { assetDurationMs: 62_500, inMs: 0, outMs: 62_500, widthPx: 4 };
+    const talk = mount(ClipWaveform, { props: { ...lane, assetId: "a-talk" } });
+    mount(ClipWaveform, { props: { ...lane, assetId: "a-logo" } });
+    await flushPromises();
+    const before = talk.get("polyline").attributes("points");
+    expect(mediaPeaks).toHaveBeenCalledTimes(2);
+
+    await useMediaReconnect().run(["a-talk"], true);
+    await flushPromises();
+
+    expect(mediaPeaks).toHaveBeenCalledTimes(3);
+    expect(mediaPeaks.mock.calls[2][1]).toBe("a-talk");
+    expect(talk.get("polyline").attributes("points")).not.toBe(before);
+  });
+
+  // A detached-audio asset plays its video's sound: its waveform is stale
+  // too, although its own id was never reconnected.
+  it("a detached audio asset's waveform is forgotten with its video's", async () => {
+    const withAudio: Project = {
+      ...project(),
+      assets: [...project().assets, { id: "a-talk-audio", kind: "audio", name: "talk audio", duration_ms: 62_500, linked_asset: "a-talk" }],
+    };
+    await openStore(vi.fn<Relink>().mockResolvedValue({ ...replacedTalk(), projection: { snapshot: snapshot(5), project: withAudio } }));
+    const before = { talk: mediaVersion("a-talk"), audio: mediaVersion("a-talk-audio"), logo: mediaVersion("a-logo") };
+    await useMediaReconnect().run(["a-talk"], true);
+    expect(mediaVersion("a-talk")).toBe(before.talk + 1);
+    expect(mediaVersion("a-talk-audio")).toBe(before.audio + 1);
+    expect(mediaVersion("a-logo")).toBe(before.logo);
+  });
+
+  it("a clip whose thumbnail failed while its file was missing asks again", async () => {
+    mockConvertFileSrc("windows");
+    let found = false;
+    const mediaThumbnail = vi.fn(() =>
+      found
+        ? Promise.resolve("C:\\cache\\a-talk-1000.jpg")
+        : Promise.reject(new EditorPortError({ code: "sourceMissing", message: "gone", retryable: false, operationId: "op" })),
+    );
+    await openStore(vi.fn<Relink>().mockResolvedValue(replacedTalk()), [TALK, LOGO], { mediaThumbnail });
+    const w = mount(ClipThumbnail, { props: { assetId: "a-talk", atMs: 1_000 } });
+    await flushPromises();
+    expect(w.find("img").exists()).toBe(false);
+
+    found = true;
+    await useMediaReconnect().run(["a-talk"], true);
+    await flushPromises();
+
+    expect(mediaThumbnail).toHaveBeenCalledTimes(2);
+    expect(w.find("img").attributes("src")).toContain("a-talk-1000.jpg");
   });
 });
 

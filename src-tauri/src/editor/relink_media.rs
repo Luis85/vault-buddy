@@ -8,7 +8,9 @@
 //!    missing. A present source is not "reconnected" over; a builtin has no
 //!    file; a staged capture's file belongs to the capture staging folder,
 //!    and moving its record into `media\` would cut the project's link to
-//!    that capture (its pin, its `sourceBase`) — refused (GAP-183).
+//!    that capture (its pin, its `sourceBase`) — refused (GAP-183). One
+//!    such source alone refuses the call; in a batch it is left out and
+//!    reported in `excluded` with its reason (fix round 1).
 //! 2. `examine` — each picked file probed (the import's own `describe`, so
 //!    a still image's length is the same default an import records) and
 //!    SHA-256 hashed, on the caller's `editor-relink` thread. A file that
@@ -19,10 +21,13 @@
 //!    file), and even then only when the replacement cannot break the edit:
 //!    the same kind, and at least as long as the asset the graph describes —
 //!    the graph keeps its asset (id, length, every clip and cue on it), so a
-//!    shorter file would leave clips pointing past its end.
+//!    shorter file would leave clips pointing past its end; and one with no
+//!    sound track while a detached-audio asset plays this one's sound
+//!    (fix round 1).
 //! 5. Each applied file is copied into `media\<assetId>.<ext>` through the
 //!    import's owned `.part` + `rename_noreplace`, and the copy's hash must
-//!    equal the one matched (a file changed in between is not reconnected).
+//!    equal the one matched (a file changed in between is not reconnected,
+//!    and is reported in `failed` with that cause, fix round 1).
 //! 6. Under the session's SAVE lock: `sources.json` is rewritten from the
 //!    chosen file's own probe (never the old record's facts), then ONE
 //!    `InternalCommand::RelinkAssets` bumps the revision — rolled back
@@ -40,8 +45,8 @@ use vault_buddy_core::editor::commands::payloads::RelinkAssetsPayload;
 use vault_buddy_core::editor::import_io::{copy_hashing, display_name};
 use vault_buddy_core::editor::probe::{classify_extension, ImportKind};
 use vault_buddy_core::editor::relink::{
-    match_candidates, CandidateFacts, ExpectedSource, NamedReport, RelinkFileProblem,
-    RelinkReportDto, RelinkedFile, DURATION_TOLERANCE_MS,
+    match_candidates, CandidateFacts, ExcludedSource, ExpectedSource, NamedReport, RelinkFailure,
+    RelinkFileProblem, RelinkReport, RelinkReportDto, RelinkedFile, DURATION_TOLERANCE_MS,
 };
 use vault_buddy_core::editor::{
     is_valid_id, limits, EditorError, EditorErrorCode, EditorProjection, InternalCommand,
@@ -87,6 +92,9 @@ pub(crate) struct Target {
     pub record: SourceRecord,
     /// The length the GRAPH gives the asset: a replacement must cover it.
     graph_duration_ms: u64,
+    /// A detached-audio asset plays this one's sound (fix round 1): a
+    /// replacement must then carry a sound track.
+    has_detached_audio: bool,
 }
 
 /// The request's own shape, before anything is read.
@@ -95,9 +103,10 @@ pub(crate) fn check_request(
     confirm_replace: bool,
 ) -> Result<(), EditorError> {
     if asset_ids.is_empty() || asset_ids.len() > limits::MAX_ASSETS {
-        return Err(invalid(
-            "Name between one and 200 media items to reconnect.",
-        ));
+        return Err(invalid(format!(
+            "Name between one and {} media items to reconnect.",
+            limits::MAX_ASSETS
+        )));
     }
     let mut seen = HashSet::new();
     if !asset_ids
@@ -122,55 +131,94 @@ fn to_import_kind(kind: SourceMediaKind) -> ImportKind {
     }
 }
 
+/// Why one requested source cannot be reconnected here, or `None`.
+fn refusal(
+    job: &RelinkJob,
+    project_id: &str,
+    name: &str,
+    record: Option<&SourceRecord>,
+) -> Option<String> {
+    let Some(record) = record else {
+        return Some(format!("“{name}” has no file of its own to reconnect."));
+    };
+    match record.locator {
+        SourceLocator::Builtin => return Some(format!("“{name}” has no file to reconnect.")),
+        SourceLocator::Staging { .. } => {
+            return Some(format!(
+                "“{name}” is a screen recording kept with your captures, so it cannot be reconnected here."
+            ))
+        }
+        SourceLocator::Media { .. } | SourceLocator::Takes { .. } => {}
+    }
+    resolve_source(job.root, project_id, record)
+        .is_some_and(|p| p.is_file())
+        .then(|| format!("“{name}” is not missing."))
+}
+
+/// What the graph says about each asset: display name, length, and
+/// whether a detached-audio asset depends on it.
+type GraphFacts = BTreeMap<String, (String, u64, bool)>;
+
+fn graph_facts(job: &RelinkJob) -> Result<GraphFacts, EditorError> {
+    let sessions = require_session(job.state, job.session_id)?;
+    let Some(session) = sessions.get(job.session_id) else {
+        return Ok(BTreeMap::new());
+    };
+    let assets = &session.project().assets;
+    Ok(assets
+        .iter()
+        .map(|a| {
+            let detached = assets
+                .iter()
+                .any(|d| d.linked_asset.as_deref() == Some(a.id.as_str()));
+            (a.id.clone(), (a.name.clone(), a.duration_ms, detached))
+        })
+        .collect())
+}
+
+const SNAPSHOT_ONLY: &str =
+    "Only an earlier rendered version still uses this original, so it cannot be reconnected here.";
+
 /// Every requested source, checked (step 1 of the module doc), with the
-/// project it belongs to.
+/// project it belongs to. ONE source that cannot be reconnected refuses
+/// the call; in a BATCH it is left out and reported with its reason
+/// instead (fix round 1), so one staged capture or snapshot-only original
+/// never blocks "Find all".
 pub(crate) fn targets(
     job: &RelinkJob,
     asset_ids: &[String],
-) -> Result<(String, Vec<Target>), EditorError> {
+) -> Result<(String, Vec<Target>, Vec<ExcludedSource>), EditorError> {
     let project_id = project_id_for(job.state, job.session_id)?;
-    let graph: BTreeMap<String, (String, u64)> = require_session(job.state, job.session_id)?
-        .get(job.session_id)
-        .map(|s| {
-            s.project()
-                .assets
-                .iter()
-                .map(|a| (a.id.clone(), (a.name.clone(), a.duration_ms)))
-                .collect()
-        })
-        .unwrap_or_default();
+    let graph = graph_facts(job)?;
     let mut sources = load_sources(job.root, &project_id)?;
-    let mut out = Vec::new();
+    let (mut out, mut excluded) = (Vec::new(), Vec::new());
     for id in asset_ids {
-        let (name, graph_duration_ms) = graph
-            .get(id)
-            .cloned()
-            .ok_or_else(|| invalid("That media is not part of this project."))?;
-        let record = sources
-            .remove(id)
-            .ok_or_else(|| invalid(format!("“{name}” has no file of its own to reconnect.")))?;
-        match record.locator {
-            SourceLocator::Builtin => {
-                return Err(invalid(format!("“{name}” has no file to reconnect.")))
+        let checked = match graph.get(id) {
+            None => Err(SNAPSHOT_ONLY.to_string()),
+            Some((name, duration, detached)) => {
+                let record = sources.remove(id);
+                match (refusal(job, &project_id, name, record.as_ref()), record) {
+                    (None, Some(record)) => Ok(Target {
+                        asset_id: id.clone(),
+                        name: name.clone(),
+                        record,
+                        graph_duration_ms: *duration,
+                        has_detached_audio: *detached,
+                    }),
+                    (reason, _) => Err(reason.unwrap_or_default()),
+                }
             }
-            SourceLocator::Staging { .. } => {
-                return Err(invalid(format!(
-                    "“{name}” is a screen recording kept with your captures, so it cannot be reconnected here."
-                )))
-            }
-            SourceLocator::Media { .. } | SourceLocator::Takes { .. } => {}
+        };
+        match checked {
+            Ok(target) => out.push(target),
+            Err(reason) if asset_ids.len() == 1 => return Err(invalid(reason)),
+            Err(reason) => excluded.push(ExcludedSource {
+                asset_id: id.clone(),
+                reason,
+            }),
         }
-        if resolve_source(job.root, &project_id, &record).is_some_and(|p| p.is_file()) {
-            return Err(invalid(format!("“{name}” is not missing.")));
-        }
-        out.push(Target {
-            asset_id: id.clone(),
-            name,
-            record,
-            graph_duration_ms,
-        });
     }
-    Ok((project_id, out))
+    Ok((project_id, out, excluded))
 }
 
 /// One picked file, examined: what it is, the record it would get, and
@@ -243,7 +291,8 @@ struct Apply {
 }
 
 /// Step 4: the confirmed mismatch, if it cannot break the edit.
-fn confirmed_replacement(target: &Target, candidate: &CandidateFacts) -> Result<(), EditorError> {
+fn confirmed_replacement(target: &Target, examined: &Examined) -> Result<(), EditorError> {
+    let candidate = &examined.facts;
     let (file, name) = (&candidate.name, &target.name);
     if to_import_kind(target.record.media_kind) != candidate.kind {
         return Err(invalid(format!(
@@ -253,6 +302,11 @@ fn confirmed_replacement(target: &Target, candidate: &CandidateFacts) -> Result<
     if candidate.duration_ms + DURATION_TOLERANCE_MS < target.graph_duration_ms {
         return Err(invalid(format!(
             "“{file}” is shorter than “{name}”, so your edit could run past its end. Choose a file at least as long."
+        )));
+    }
+    if target.has_detached_audio && !examined.record.has_audio {
+        return Err(invalid(format!(
+            "“{file}” has no sound, and the detached audio of “{name}” plays its sound. Choose a file with sound."
         )));
     }
     Ok(())
@@ -392,22 +446,12 @@ fn commit(
     Ok(())
 }
 
-/// Run one reconnect over the files the user picked (module doc).
-pub(crate) fn relink_in(
-    job: &RelinkJob,
-    asset_ids: &[String],
-    confirm_replace: bool,
-    files: &[PathBuf],
-) -> Result<RelinkReportDto, EditorError> {
-    check_request(asset_ids, confirm_replace)?;
-    if confirm_replace && files.len() != 1 {
-        return Err(invalid("Choose exactly one file as the replacement."));
-    }
-    let (project_id, targets) = targets(job, asset_ids)?;
-    let mut examined = Vec::new();
-    let mut per_file = Vec::new();
+/// Examine every picked file; one that cannot be read is a `perFile`
+/// problem, never the whole call's.
+fn examine_all(io: &dyn ImportIo, files: &[PathBuf]) -> (Vec<Examined>, Vec<RelinkFileProblem>) {
+    let (mut examined, mut per_file) = (Vec::new(), Vec::new());
     for path in files {
-        match examine(job.io, path) {
+        match examine(io, path) {
             Ok(one) => examined.push(one),
             Err(e) => per_file.push(RelinkFileProblem {
                 name: display_name(&file_name_of(path)),
@@ -415,7 +459,11 @@ pub(crate) fn relink_in(
             }),
         }
     }
-    let expected: Vec<(String, ExpectedSource)> = targets
+    (examined, per_file)
+}
+
+fn expected_of(targets: &[Target]) -> Vec<(String, ExpectedSource)> {
+    targets
         .iter()
         .map(|t| {
             (
@@ -428,9 +476,17 @@ pub(crate) fn relink_in(
                 },
             )
         })
-        .collect();
-    let facts: Vec<CandidateFacts> = examined.iter().map(|e| e.facts.clone()).collect();
-    let mut report = match_candidates(&expected, &facts);
+        .collect()
+}
+
+/// Steps 3–4: what to apply — every unique match, plus the one confirmed
+/// replacement (taken out of `mismatched`), if it cannot break the edit.
+fn plan_applies(
+    report: &mut RelinkReport,
+    targets: &[Target],
+    examined: &[Examined],
+    confirm_replace: bool,
+) -> Result<Vec<Apply>, EditorError> {
     let index = |id: &str| targets.iter().position(|t| t.asset_id == id);
     let mut applies: Vec<Apply> = report
         .matched
@@ -443,45 +499,74 @@ pub(crate) fn relink_in(
             })
         })
         .collect();
-    if confirm_replace {
-        if let Some((id, c, _)) = report.mismatched.first().cloned() {
-            let target = index(&id).ok_or_else(|| internal("a report named an unknown asset"))?;
-            confirmed_replacement(&targets[target], &facts[c])?;
-            report.mismatched.clear();
-            applies.push(Apply {
-                target,
-                candidate: c,
-                replace: true,
-            });
-        }
+    if let (true, Some((id, c, _))) = (confirm_replace, report.mismatched.first().cloned()) {
+        let target = index(&id).ok_or_else(|| internal("a report named an unknown asset"))?;
+        confirmed_replacement(&targets[target], &examined[c])?;
+        report.mismatched.clear();
+        applies.push(Apply {
+            target,
+            candidate: c,
+            replace: true,
+        });
     }
-    let mut copied = Vec::new();
-    let mut replaced = Vec::new();
-    let mut matched_names = NamedReport::of(&report, &facts);
-    for a in &applies {
-        let target = &targets[a.target];
-        match copy_in(job, &project_id, target, &examined[a.candidate], a.replace) {
+    Ok(applies)
+}
+
+/// Step 5 for every apply. A copy that fails is reported with its real
+/// cause in `failed` (fix round 1) — never as "no file matched".
+fn copy_all(
+    job: &RelinkJob,
+    project_id: &str,
+    targets: &[Target],
+    examined: &[Examined],
+    applies: &[Apply],
+    named: &mut NamedReport,
+) -> (Vec<Copied>, Vec<RelinkedFile>, Vec<RelinkFailure>) {
+    let (mut copied, mut replaced, mut failed) = (Vec::new(), Vec::new(), Vec::new());
+    for a in applies {
+        let (target, file) = (&targets[a.target], &examined[a.candidate]);
+        match copy_in(job, project_id, target, file, a.replace) {
             Ok(c) => {
                 copied.push(c);
                 if a.replace {
                     replaced.push(RelinkedFile {
                         asset_id: target.asset_id.clone(),
-                        file: facts[a.candidate].name.clone(),
+                        file: file.facts.name.clone(),
                     });
                 }
             }
             Err(e) => {
-                matched_names
-                    .matched
-                    .retain(|m| m.asset_id != target.asset_id);
-                matched_names.unmatched.push(target.asset_id.clone());
-                per_file.push(RelinkFileProblem {
-                    name: facts[a.candidate].name.clone(),
+                named.matched.retain(|m| m.asset_id != target.asset_id);
+                failed.push(RelinkFailure {
+                    asset_id: target.asset_id.clone(),
+                    file: file.facts.name.clone(),
                     error: e.message,
                 });
             }
         }
     }
+    (copied, replaced, failed)
+}
+
+/// Run one reconnect over the files the user picked (module doc).
+pub(crate) fn relink_in(
+    job: &RelinkJob,
+    asset_ids: &[String],
+    confirm_replace: bool,
+    files: &[PathBuf],
+) -> Result<RelinkReportDto, EditorError> {
+    check_request(asset_ids, confirm_replace)?;
+    if confirm_replace && files.len() != 1 {
+        return Err(invalid("Choose exactly one file as the replacement."));
+    }
+    let (project_id, targets, excluded) = targets(job, asset_ids)?;
+    let (examined, per_file) = examine_all(job.io, files);
+    let facts: Vec<CandidateFacts> = examined.iter().map(|e| e.facts.clone()).collect();
+    let mut report = match_candidates(&expected_of(&targets), &facts);
+    let applies = plan_applies(&mut report, &targets, &examined, confirm_replace)?;
+    let mut named = NamedReport::of(&report, &facts);
+    let (copied, replaced, failed) =
+        copy_all(job, &project_id, &targets, &examined, &applies, &mut named);
     if !copied.is_empty() {
         if let Err(e) = commit(job, &project_id, &targets, &copied) {
             for c in &copied {
@@ -491,31 +576,45 @@ pub(crate) fn relink_in(
         }
         super::recovery::note_acknowledged(job.state, job.root, job.session_id);
     }
-    reply(job, &project_id, matched_names, replaced, per_file)
-}
-
-fn reply(
-    job: &RelinkJob,
-    project_id: &str,
-    named: NamedReport,
-    replaced: Vec<RelinkedFile>,
-    per_file: Vec<RelinkFileProblem>,
-) -> Result<RelinkReportDto, EditorError> {
-    let sources = load_sources(job.root, project_id)?;
-    let sessions = require_session(job.state, job.session_id)?;
-    let session = sessions
-        .get(job.session_id)
-        .ok_or_else(|| internal("session vanished under its own lock"))?;
+    let (projection, missing) = after(job, &project_id)?;
     Ok(RelinkReportDto {
-        projection: EditorProjection::of(session),
-        missing: missing_media(job.root, session.project(), &sources),
+        projection,
+        missing,
         matched: named.matched,
         replaced,
         ambiguous: named.ambiguous,
         unmatched: named.unmatched,
         mismatched: named.mismatched,
+        failed,
+        unused: named.unused,
+        excluded,
         per_file,
     })
+}
+
+/// The projection now, and what is still missing. The projection is taken
+/// under the `sessions` lock; the missing list — a stat per source file —
+/// is computed after it is released (review Minor 8).
+fn after(
+    job: &RelinkJob,
+    project_id: &str,
+) -> Result<
+    (
+        EditorProjection,
+        Vec<vault_buddy_core::editor::MissingMedia>,
+    ),
+    EditorError,
+> {
+    let sources = load_sources(job.root, project_id)?;
+    let projection = {
+        let sessions = require_session(job.state, job.session_id)?;
+        let session = sessions
+            .get(job.session_id)
+            .ok_or_else(|| internal("session vanished under its own lock"))?;
+        EditorProjection::of(session)
+    };
+    let missing = missing_media(job.root, &projection.project, &sources);
+    Ok((projection, missing))
 }
 
 #[cfg(test)]
