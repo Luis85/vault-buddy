@@ -63,6 +63,17 @@ export function sourceAt(clip: ClipSpan, t: number): number | null {
   return Math.min(clip.out_ms - 1, Math.max(clip.in_ms, s));
 }
 
+/** The source instant output `t` plays on `clip`, clamped to the INCLUSIVE
+ * `[in_ms, out_ms]` — for a teaching cue's END, which may sit exactly on
+ * `out_ms` (`cues.rs`'s `check_cue_range`), where `sourceAt` stops at
+ * `out_ms - 1`. The effect inspector's commit path (Task 35). TS-only, like
+ * `frame_timestamp` is Rust-only: the wire already carries source times, so
+ * Rust never makes this conversion and there is no twin to fixture. */
+export function sourceAtClamped(clip: ClipSpan, t: number): number {
+  const s = clip.in_ms + roundHalfAway((t - clip.start_ms) * clip.speed);
+  return Math.min(clip.out_ms, Math.max(clip.in_ms, s));
+}
+
 /** Maps a source instant back to the output instant it appears at, for
  * `source` in the clip's half-open `[in_ms, out_ms)` range; `null`
  * outside it. */

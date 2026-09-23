@@ -31,10 +31,10 @@ import { selectedEffectOf } from "../../../editor/cueActions";
 import type { CueHandle, CuePatch } from "../../../editor/cueDrag";
 import { changedPatch, dragPatch, handleSpots } from "../../../editor/cueDrag";
 import type { NormPoint, ZoomTransform } from "../../../editor/cueGeometry";
-import { activeCues, svgZoomTransform, unzoomPoint } from "../../../editor/cueGeometry";
+import { activeCues, pointerToCanvas, svgZoomTransform } from "../../../editor/cueGeometry";
 import { hitShape } from "../../../editor/cueShapes";
 import type { Box, Size } from "../../../editor/previewGeometry";
-import { boxStyle, clientToCanvas } from "../../../editor/previewGeometry";
+import { boxStyle } from "../../../editor/previewGeometry";
 import type { Effect } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -113,9 +113,7 @@ function outline(id: string, tag: string): string {
 
 /** A pointer as a canvas fraction: letterbox undone, then the zoom. */
 function pointAt(event: PointerEvent): NormPoint {
-  const rect = rootRef.value?.getBoundingClientRect() ?? { left: 0, top: 0, width: 0, height: 0 };
-  const p = clientToCanvas(event, rect, props.canvas);
-  return unzoomPoint(props.zoom, { x: p.x / props.canvas.width, y: p.y / props.canvas.height });
+  return pointerToCanvas(event, rootRef.value?.getBoundingClientRect(), props.canvas, props.zoom);
 }
 
 function stop(): void {

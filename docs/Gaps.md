@@ -2288,10 +2288,18 @@ render produces, and it says so nowhere on screen yet. What it does NOT show:
    approximations: text is not wrapped (only the user's own newlines break
    a line) and a step's pill is sized from an average glyph width, where
    libass measures real glyphs; the zoom ramp follows the preview's 10 Hz
-   time report, so it steps rather than glides; and whether the render
-   applies a zoom to the burned-in cues as the preview does (the reference
-   compositor draws cues under the same camera) is Task 42/43's to match or
-   record.
+   time report, so it steps rather than glides. The ramp itself matches the
+   reference editor's `camera` (Task 35 fix round 1): the LAST active zoom
+   wins, an unset/zero `easing` means 600 ms, and the ease is capped at half
+   the cue's span so full zoom is always reached. Two zoom questions remain
+   for Task 42/43 to match or record: (a) SCOPE — the preview (like the
+   ADR's "crop+scale on the composed canvas") magnifies the whole composed
+   stage, every track's media and every clip's cues, while the reference's
+   `camera` is PER CLIP (applied to the zoom cue's own clip before it is
+   drawn into its box), so a zoom on a screen recording also magnifies a
+   webcam picture-in-picture here but not in the reference; and (b) whether
+   the burned-in cues sit under the zoom as the preview draws them (the
+   reference draws cues under the same camera).
 3. **Layout and colour.** Rotation, mirror/flip, crop (`crop_zoom`/
    `crop_x`/`crop_y`), fit and frame shape ARE applied (tutorial-editor
    Task 31): each visual layer sits in a clipping frame at its box, rounded

@@ -175,9 +175,9 @@ function clientAt(nx: number, ny: number): { clientX: number; clientY: number } 
   };
 }
 
-function mountHandles() {
+function mountHandles(zoom: { scale: number; tx: number; ty: number } = { scale: 1, tx: 0, ty: 0 }) {
   const w = mount(LayoutHandles, {
-    props: { frame: FRAME, canvas: LANDSCAPE },
+    props: { frame: FRAME, canvas: LANDSCAPE, zoom },
     attachTo: document.body,
   });
   const root = w.get('[data-testid="layout-handles"]').element as HTMLElement;
@@ -258,6 +258,27 @@ describe("LayoutHandles", () => {
     await body.trigger("pointerup", { pointerId: 1, ...clientAt(0.95, 0.25) });
     await flushPromises();
     expect(executed).toEqual([{ kind: "setLayout", clipIds: ["pip"], x: 0.7, y: 0.15, w: 0.3, h: 0.4 }]);
+  });
+
+  // Task 35 fix round 1: a zoom cue magnifies the picture, so the box must
+  // sit on the MAGNIFIED clip and a drag must move the clip by the pointer's
+  // delta in CANVAS terms -- unzoomed, it moved the clip factor-times faster
+  // than the pointer and was drawn over the wrong part of the picture.
+  it("under an active zoom the box follows the magnified picture and drags at pointer speed", async () => {
+    await openProject();
+    // 2x about the centre: a canvas point p lands at 2p - 0.5 on screen.
+    const w = mountHandles({ scale: 2, tx: -0.5, ty: -0.5 });
+    const box = w.get('[data-testid="layout-box"]').element as HTMLElement;
+    expect(parseFloat(box.style.left)).toBeCloseTo(FRAME.left + (2 * 0.5 - 0.5) * FRAME.width, 6);
+    expect(parseFloat(box.style.top)).toBeCloseTo(FRAME.top + (2 * 0.2 - 0.5) * FRAME.height, 6);
+    expect(parseFloat(box.style.width)).toBeCloseTo(2 * 0.3 * FRAME.width, 6);
+    const body = w.get('[data-testid="layout-box"]');
+    // A 0.2-of-the-screen move is 0.1 of the canvas at 2x.
+    await body.trigger("pointerdown", { button: 0, pointerId: 1, ...clientAt(0.7, 0.3) });
+    await body.trigger("pointermove", { pointerId: 1, ...clientAt(0.9, 0.4) });
+    await body.trigger("pointerup", { pointerId: 1, ...clientAt(0.9, 0.4) });
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "setLayout", clipIds: ["pip"], x: 0.6, y: 0.25, w: 0.3, h: 0.4 }]);
   });
 
   it("a click without movement sends nothing", async () => {

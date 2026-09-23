@@ -11,9 +11,11 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { clipSpanOf } from "../src/editor/actionTargets";
 import { changedPatch, dragPatch, handleSpots } from "../src/editor/cueDrag";
 import { cueShapes, hitShape } from "../src/editor/cueShapes";
-import { fieldsFor, outputToSource } from "../src/editor/effectFields";
+import { fieldsFor } from "../src/editor/effectFields";
+import { sourceAtClamped } from "../src/editor/timeMap";
 import type { Clip, Effect } from "../src/editorTypes";
 
 /** Output 1000..4000 plays source 500..6500 at 2×. */
@@ -116,12 +118,16 @@ describe("cueDrag", () => {
 });
 
 describe("effectFields", () => {
-  it("outputToSource maps through the speed and clamps to the source range", () => {
-    const c = clip(); // start 1000, in 500, out 6500, speed 2
-    expect(outputToSource(c, 1_600)).toBe(1_700);
-    expect(outputToSource(c, 0)).toBe(500);
-    expect(outputToSource(c, 99_000)).toBe(6_500);
-    expect(outputToSource({ ...c, speed: undefined }, 1_600)).toBe(1_100);
+  // Fix round 1: the inspector's output->source conversion lives in
+  // timeMap beside `sourceAt` (one mapping module, one rounding rule), not
+  // as a second copy in effectFields.
+  it("sourceAtClamped maps through the speed and clamps to the INCLUSIVE source range", () => {
+    const c = clipSpanOf(clip()); // start 1000, in 500, out 6500, speed 2
+    expect(sourceAtClamped(c, 1_600)).toBe(1_700);
+    expect(sourceAtClamped(c, 0)).toBe(500);
+    // A cue END may sit exactly on out_ms, which `sourceAt` never returns.
+    expect(sourceAtClamped(c, 99_000)).toBe(6_500);
+    expect(sourceAtClamped(clipSpanOf(clip({ speed: undefined })), 1_600)).toBe(1_100);
   });
 
   it("every kind lists its own wire props; spotlight and zoom have no colour", () => {

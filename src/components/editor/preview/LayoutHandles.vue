@@ -27,21 +27,32 @@ import { computed, ref } from "vue";
 
 import { clipSpanOf } from "../../../editor/actionTargets";
 import { selectedEffectOf } from "../../../editor/cueActions";
+import type { ZoomTransform } from "../../../editor/cueGeometry";
+import { IDENTITY_ZOOM, pointerToCanvas, zoomedFrame } from "../../../editor/cueGeometry";
 import type { Handle, NormBox } from "../../../editor/layoutGeometry";
 import { HANDLES, moveBox, resizeFromHandle, roundBox } from "../../../editor/layoutGeometry";
 import type { Box, Size } from "../../../editor/previewGeometry";
-import { boxStyle as styleOfBox, clientToCanvas, clipBox } from "../../../editor/previewGeometry";
+import { boxStyle as styleOfBox, clipBox } from "../../../editor/previewGeometry";
 import { clipIsActive } from "../../../editor/timeMap";
 import type { Clip, Project } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 
-const props = defineProps<{
-  /** The canvas's letterboxed box inside the stage, in stage pixels. */
-  frame: Box;
-  /** The output canvas, in output pixels. */
-  canvas: Size;
-}>();
+const props = withDefaults(
+  defineProps<{
+    /** The canvas's letterboxed box inside the stage, in stage pixels. */
+    frame: Box;
+    /** The output canvas, in output pixels. */
+    canvas: Size;
+    /** An active zoom cue's stage transform (Task 35 fix round 1): the
+     * picture is magnified, so the box is drawn against the zoomed frame
+     * and pointers are mapped back through the inverse, or the box sits
+     * over the wrong part of the picture and a drag moves the clip
+     * factor-times faster than the pointer. */
+    zoom?: ZoomTransform;
+  }>(),
+  { zoom: () => IDENTITY_ZOOM },
+);
 const emit = defineEmits<{
   /** A transient project to preview while dragging, `null` to stop. */
   (e: "preview", project: Project | null): void;
@@ -90,7 +101,7 @@ const box = computed<NormBox | null>(() => {
 
 const boxStyle = computed(() => {
   if (!box.value) return {};
-  return styleOfBox(clipBox(props.frame, box.value));
+  return styleOfBox(clipBox(zoomedFrame(props.frame, props.zoom), box.value));
 });
 
 const isCircle = computed(() => target.value?.frame_shape === "circle");
@@ -109,9 +120,7 @@ function handleStyle(h: Handle) {
 
 /** A pointer as a fraction of the output canvas, letterbox undone. */
 function pointAt(event: PointerEvent): { x: number; y: number } {
-  const rect = rootRef.value?.getBoundingClientRect() ?? { left: 0, top: 0, width: 0, height: 0 };
-  const p = clientToCanvas(event, rect, props.canvas);
-  return { x: p.x / props.canvas.width, y: p.y / props.canvas.height };
+  return pointerToCanvas(event, rootRef.value?.getBoundingClientRect(), props.canvas, props.zoom);
 }
 
 function withBox(project: Project, clipId: string, b: NormBox): Project {

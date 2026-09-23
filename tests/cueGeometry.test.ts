@@ -192,10 +192,15 @@ describe("zoomTransform", () => {
     expect(zoomTransform(cue, 2_400).scale).toBeCloseTo(1.5, 12);
     expect(zoomTransform(cue, 2_800).scale).toBe(2);
     expect(zoomTransform(cue, 5_600).scale).toBeCloseTo(1.5, 12);
-    // No ramp at all: full zoom for the whole span.
-    expect(zoomTransform(zoomCue({ easing: 0 }), 2_000).scale).toBe(2);
-    // A ramp longer than half the span never reaches full zoom.
-    expect(zoomTransform(zoomCue({ easing: 10_000 }), 4_000).scale).toBeLessThan(2);
+    // Fix round 1 (the reference editor's `camera`, which the render
+    // follows): an unset/zero easing falls back to the reference's 600 ms
+    // ramp -- halfway through it, 300 ms in, smoothstep(0.5) = 0.5 ...
+    expect(zoomTransform(zoomCue({ easing: 0 }), 2_300).scale).toBeCloseTo(1.5, 12);
+    expect(zoomTransform(zoomCue({ easing: undefined }), 5_700).scale).toBeCloseTo(1.5, 12);
+    // ... and the ramp is capped at half the span, so a long ease still
+    // reaches full zoom at the span's midpoint (4000 in 2000..6000).
+    expect(zoomTransform(zoomCue({ easing: 10_000 }), 4_000).scale).toBe(2);
+    expect(zoomTransform(zoomCue({ easing: 10_000 }), 3_000).scale).toBeCloseTo(1.5, 12);
   });
 
   it("a centred focal point zooms straight in", () => {
@@ -203,10 +208,15 @@ describe("zoomTransform", () => {
     expect(z).toEqual({ scale: 3, tx: -1, ty: -1 });
   });
 
-  it("activeZoom takes the first active zoom cue, identity otherwise", () => {
+  // Fix round 1: the reference's `camera` takes the LAST active zoom
+  // (`.at(-1)`), i.e. the one later in the project's order wins.
+  it("activeZoom takes the LAST active zoom cue, identity otherwise", () => {
     expect(activeZoom([], 3_000)).toEqual(IDENTITY_ZOOM);
     const other = { ...zoomCue(), effect: effect() };
-    expect(activeZoom([other, zoomCue({ x: 0.5, y: 0.5, factor: 3 })], 4_000).scale).toBe(3);
+    const earlier = zoomCue({ x: 0.5, y: 0.5, factor: 3 });
+    const later = zoomCue({ x: 0.5, y: 0.5, factor: 2 });
+    expect(activeZoom([earlier, other, later], 4_000).scale).toBe(2);
+    expect(activeZoom([later, earlier, other], 4_000).scale).toBe(3);
   });
 
   it("unzoomPoint maps a point on the zoomed stage back to canvas fractions", () => {

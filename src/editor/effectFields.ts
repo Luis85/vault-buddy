@@ -16,10 +16,10 @@
  * typed as percentages.
  *
  * A cue's times are SOURCE time; the inspector shows them in OUTPUT time
- * (where the user sees them on the timeline) and `outputToSource` converts
- * back on commit, at the clip's current speed.
+ * (where the user sees them on the timeline) and `timeMap.sourceAtClamped`
+ * converts back on commit, at the clip's current speed.
  */
-import type { Clip, EffectKind } from "../editorTypes";
+import type { EffectKind } from "../editorTypes";
 
 /** `core::editor::limits::MAX_EFFECT_TEXT_CHARS`. */
 export const MAX_EFFECT_TEXT_CHARS = 1_000;
@@ -84,11 +84,3 @@ export const EFFECT_NAMES: Record<EffectKind, string> = {
   step: "Numbered step",
   mask: "Privacy cover",
 };
-
-/** The source instant an OUTPUT instant `t` plays on `clip`, clamped to
- * the clip's own source range `[in_ms, out_ms]` (inclusive of `out_ms`: a
- * cue's END may sit exactly on it — `cues.rs`'s `check_cue_range`). */
-export function outputToSource(clip: Clip, t: number): number {
-  const source = clip.in_ms + Math.round((t - clip.start_ms) * (clip.speed ?? 1));
-  return Math.min(clip.out_ms, Math.max(clip.in_ms, source));
-}

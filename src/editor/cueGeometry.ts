@@ -30,12 +30,16 @@
  * margins"). At scale `s` the visible window is `1/s` wide; its centre is
  * the focal point CLAMPED to `[1/(2s), 1 − 1/(2s)]`, so the scaled canvas
  * always covers the whole frame — the reference compositor's own
- * `bounds()` clamp for a zoom. The ramp is a smoothstep over `easing` ms of
- * OUTPUT time at each end of the cue's span.
+ * `bounds()` clamp for a zoom. The ramp follows the reference editor's
+ * `camera` (the render follows it too): a smoothstep over `easing` ms of
+ * OUTPUT time at each end of the cue's span — 600 ms when `easing` is unset
+ * or zero, and never more than half the span, so full zoom is always
+ * reached — and the LAST active zoom wins where zooms overlap.
  */
 import type { Clip, Effect, Project } from "../editorTypes";
 import { clipSpanOf } from "./actionTargets";
-import type { Size } from "./previewGeometry";
+import type { Box, Size } from "./previewGeometry";
+import { clientToCanvas } from "./previewGeometry";
 import { cueOutputSpan } from "./timeMap";
 
 /** A cue on screen now: its effect, its clip, and its OUTPUT span. */
@@ -163,6 +167,10 @@ export function spotlightRects(box: NormRect): NormRect[] {
   ];
 }
 
+/** The reference editor's ramp when a zoom's `easing` is unset or zero
+ * (`camera`'s `e.easing||600`). */
+const DEFAULT_ZOOM_EASING_MS = 600;
+
 /** 0..1 ramp → smoothstep, the preview's own ease (a `smooth` fade uses it too). */
 function smoothstep(k: number): number {
   return k * k * (3 - 2 * k);
@@ -170,9 +178,9 @@ function smoothstep(k: number): number {
 
 /** How far in (0..1) the zoom is at `t`, with `easing` ms ramps at each end. */
 function zoomAmount(cue: ActiveCue, t: number): number {
-  const easing = cue.effect.easing ?? 0;
-  if (easing <= 0) return 1;
-  return smoothstep(Math.min(1, (t - cue.startMs) / easing, (cue.endMs - t) / easing));
+  const ease = Math.min(cue.effect.easing || DEFAULT_ZOOM_EASING_MS, (cue.endMs - cue.startMs) / 2);
+  if (ease <= 0) return 1;
+  return smoothstep(Math.min(1, (t - cue.startMs) / ease, (cue.endMs - t) / ease));
 }
 
 /**
@@ -190,11 +198,38 @@ export function zoomTransform(cue: ActiveCue, t: number): ZoomTransform {
   return { scale, tx: 0.5 - scale * cx, ty: 0.5 - scale * cy };
 }
 
-/** The first active zoom cue's transform (the project's order decides
- * between overlapping zooms), or identity. */
+/** The LAST active zoom cue's transform — later in the project's order
+ * wins between overlapping zooms, the reference `camera`'s `.at(-1)` — or
+ * identity. */
 export function activeZoom(cues: ActiveCue[], t: number): ZoomTransform {
-  const zoom = cues.find((c) => c.effect.kind === "zoom");
+  const zooms = cues.filter((c) => c.effect.kind === "zoom");
+  const zoom = zooms[zooms.length - 1];
   return zoom ? zoomTransform(zoom, t) : IDENTITY_ZOOM;
+}
+
+/** A pointer on a (possibly zoomed) preview layer as a canvas fraction:
+ * the layer's letterbox undone (`clientToCanvas`), then the zoom
+ * (`unzoomPoint`). Shared by `LayoutHandles` and `CueHandles`, which sit
+ * over the same stage rect and must agree on where a pointer lands. */
+export function pointerToCanvas(
+  event: { clientX: number; clientY: number },
+  layerRect: { left: number; top: number; width: number; height: number } | undefined,
+  canvas: Size,
+  zoom: ZoomTransform,
+): NormPoint {
+  const p = clientToCanvas(event, layerRect ?? { left: 0, top: 0, width: 0, height: 0 }, canvas);
+  return unzoomPoint(zoom, { x: p.x / canvas.width, y: p.y / canvas.height });
+}
+
+/** The letterboxed canvas box as the ZOOMED stage shows it (stage px): what
+ * a layer drawn in canvas fractions must be placed against while zoomed. */
+export function zoomedFrame(frame: Box, zoom: ZoomTransform): Box {
+  return {
+    left: frame.left + zoom.tx * frame.width,
+    top: frame.top + zoom.ty * frame.height,
+    width: frame.width * zoom.scale,
+    height: frame.height * zoom.scale,
+  };
 }
 
 /** A point on the ZOOMED stage (canvas fractions) back to the canvas point

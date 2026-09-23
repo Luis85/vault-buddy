@@ -277,6 +277,7 @@ function onPointerDown(event: PointerEvent): void {
       <LayoutHandles
         :frame="frame"
         :canvas="canvas"
+        :zoom="zoom"
         @preview="onLayoutPreview"
       />
       <CueHandles

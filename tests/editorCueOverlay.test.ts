@@ -378,8 +378,18 @@ describe("PreviewSurface layers cues against the layout handles", () => {
 
   it("a zoom cue transforms the picture layers, not the stage", async () => {
     const w = await mountSurface(project({ effects: [effect({ id: "z", kind: "zoom", x: 0.5, y: 0.5, factor: 2, easing: 0 })] }));
+    // The cue plays at output 1500..2000; with the reference's ramp capped
+    // at half the span, its midpoint (1750) is always at full zoom.
+    useEditorWorkspaceStore().setPlayhead(1_750);
+    await flushPromises();
     const layers = w.get('[data-testid="preview-layers"]').element as HTMLElement;
     expect(layers.style.transform).toContain("scale(2)");
+    // Fix round 1: the selected full-frame clip's layout box is drawn over
+    // the MAGNIFIED picture (centred 2x: it starts half a frame to the left
+    // and is twice as wide), not at the unzoomed geometry.
+    const box = w.get('[data-testid="layout-box"]').element as HTMLElement;
+    expect(parseFloat(box.style.left)).toBeCloseTo(FRAME.left - 0.5 * FRAME.width, 6);
+    expect(parseFloat(box.style.width)).toBeCloseTo(2 * FRAME.width, 6);
     // Zoomed in, the layers are clipped to the canvas frame (pillarboxed
     // here: 55.6 px bars left and right), never spilling into the bars.
     const clip = (layers.parentElement as HTMLElement).style.clipPath;
@@ -498,7 +508,7 @@ describe("EffectSection", () => {
   // not a dismissible hint — F-33 "Warn about motion/layers and uncensored
   // originals".
   it("mask inspector always shows the limitation warning", async () => {
-    await openProject(project({ effects: [effect({ id: "m", kind: "mask", w: 0.25, h: 0.1 })] }));
+    await openProject(project({ effects: [effect({ id: "m", kind: "mask", w: 0.25, h: 0.1 }), effect()] }));
     const w = mountSection("m");
     expect(w.get('[data-testid="effect-mask-warning"]').text()).toBe(MASK_WARNING);
     await type(w, "effect-field-w", "30");
@@ -506,8 +516,9 @@ describe("EffectSection", () => {
     expect(w.get('[data-testid="effect-mask-warning"]').text()).toBe(MASK_WARNING);
     // No close control exists for it.
     expect(w.find('[data-testid="effect-mask-warning"] button').exists()).toBe(false);
-    // Only the mask carries it.
-    expect(mountSection("m").find('[data-testid="effect-mask-warning"]').exists()).toBe(true);
+    // Only the mask carries it: the arrow's section, same project, does not
+    // (fix round 1 -- this used to re-mount the MASK and assert presence).
+    expect(mountSection("arr").find('[data-testid="effect-mask-warning"]').exists()).toBe(false);
   });
 
   it("no warning for any other kind", async () => {

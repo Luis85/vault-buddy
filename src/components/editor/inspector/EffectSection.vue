@@ -15,7 +15,7 @@
  * **Times.** A cue's `start_ms`/`end_ms` are SOURCE time (Task 34); here they
  * are shown in OUTPUT time — where the user sees the cue on the timeline,
  * `timeMap.cueOutputSpan` at the clip's speed — and converted back with
- * `effectFields.outputToSource` on commit. A span Rust refuses (start not
+ * `timeMap.sourceAtClamped` on commit. A span Rust refuses (start not
  * before end) reverts the field to the committed value.
  *
  * **A privacy cover** always shows F-33's limitation notice — permanent,
@@ -34,9 +34,8 @@ import {
   fieldsFor,
   MASK_WARNING,
   MAX_EFFECT_TEXT_CHARS,
-  outputToSource,
 } from "../../../editor/effectFields";
-import { clipOutputEnd, cueOutputSpan } from "../../../editor/timeMap";
+import { clipOutputEnd, cueOutputSpan, sourceAtClamped } from "../../../editor/timeMap";
 import type { Clip, Effect } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -86,10 +85,10 @@ function timeField(label: string, index: 0 | 1): InspectorField<number> {
   };
 }
 const startField = useInspectorDraft(timeField("Start", 0), (t) =>
-  clip.value ? send({ startMs: outputToSource(clip.value, t) }) : false,
+  clip.value ? send({ startMs: sourceAtClamped(clipSpanOf(clip.value), t) }) : false,
 );
 const endField = useInspectorDraft(timeField("End", 1), (t) =>
-  clip.value ? send({ endMs: outputToSource(clip.value, t) }) : false,
+  clip.value ? send({ endMs: sourceAtClamped(clipSpanOf(clip.value), t) }) : false,
 );
 
 // ---- the kind's own props ----------------------------------------------------
