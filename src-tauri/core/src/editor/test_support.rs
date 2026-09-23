@@ -23,6 +23,9 @@
 //! `#[cfg(test)] pub(crate)`: this exists only for `core`'s own test builds
 //! and is never part of the crate's public API.
 
+use std::collections::BTreeSet;
+
+use super::commands::CommandContext;
 use super::model::{
     Asset, AssetKind, Canvas, Clip, Destination, FadeCurve, Project, Track, TrackKind,
 };
@@ -112,6 +115,16 @@ pub(crate) fn clip(
         adjustments: None,
         card: None,
         extra: Map::new(),
+    }
+}
+
+/// No asset has audio: the context for every command that never consults
+/// `sources.json` facts (Task 27) -- a `static` so the borrow is `'static`.
+static NO_AUDIO: BTreeSet<String> = BTreeSet::new();
+
+pub(crate) fn no_context() -> CommandContext<'static> {
+    CommandContext {
+        assets_with_audio: &NO_AUDIO,
     }
 }
 

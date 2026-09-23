@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **11 rows** today (T1–T11), of which **0** carry a result. An
+This file carries **13 rows** today (T1–T13), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -129,3 +129,17 @@ the WebView2 library column. This row is that proof.
 | # | Check | Steps | Result |
 | --- | --- | --- | --- |
 | T11 | **A mixed batch with one corrupt file imports everything else** | With ffmpeg installed (Buddy settings → Integrations shows it), open a staged capture in the editor. Prepare a folder with: one ordinary `.mp4` video, one `.mp3` WITH embedded cover art (most music files have it), one `.png` screenshot, and one CORRUPT file — a plain `.txt` renamed to `broken.mov` (a truncated `.mp4` is NOT a reliable stand-in: a fast-start file keeps its index at the front, so ffprobe can still read its streams and length from the first few KB). In the library column press **Import…**; the Windows file dialog opens (parented to the editor window, filtered to video/audio/image types). Multi-select all four and press Open. **Record**: (a) the progress bar appears and finishes; (b) the summary line's imported count, and that the per-file list names ONLY the corrupt file (by its file name, with no folder path in the message); (c) that the three good files appear as cards with the right kind (Video / Audio / Image) and a plausible duration (the image reads 0:05); (d) the files under `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\media\` — exactly three `<assetId>.<ext>` files, and NO `.part` file and no copy of the corrupt one; (e) that ONE Ctrl+Z (or the header's Undo) removes all three cards at once; (f) run it again and press **Cancel** while a large file is copying: the files already imported stay, and the summary reads "Import stopped". | |
+
+## Task 27's rows
+
+Task 27 adds the mixer (per-track volume/mute/solo and the master gain), the
+Audio inspector (clip volume and mute) and **Detach audio**. The Rust suite
+proves the commands and the `sources.json` wiring; the Vitest suite proves
+every control sends one command (or, for the monitoring mute, none), over a
+faked Web Audio graph. Nothing automated plays a detached clip through a real
+WebView2 `<audio>` element or reads a real `AnalyserNode`.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T12 | **Detach audio from an imported video plays the sound on its own clip** | Import an `.mp4` WITH sound (T11's steps) and add it to a video track. Select the clip, open the inspector's **Audio** tab and press **Detach audio**. **Record**: (a) a new clip named "… · audio" appears on an audio track at the SAME start and length; (b) the original clip's Audio tab reads **Unmute clip audio** (it is muted); (c) pressing play, the sound is audible exactly once (not doubled) and in sync with the picture; (d) muting the NEW audio clip silences the sound while the picture keeps playing; (e) ONE Ctrl+Z removes the audio clip and unmutes the original. Then import a SILENT video (e.g. a screen recording made with no microphone) and press **Detach audio** on it: **Record** the error shown (expected: "<name> has no audio to detach") and that nothing changed. Note GAP-175: a staged capture's OWN picture is not shown in the new preview yet, so use an imported video for (c). | |
+| T13 | **The mixer's levels, solo and preview peak** | During T12's playback open **Audio mixer** (beside the transport's speaker). **Record**: (a) the **Preview peak** bar moves with the sound and its dBFS figure is at or below 0.0; (b) with **Mute preview (does not affect the video)** ticked the sound stops and the peak reads −∞ dBFS, while the header's Undo label does NOT change; (c) **Solo** on the audio track labels every other track "Silenced by solo" and only that track is heard; (d) dragging the master slider changes the readout while dragging but the Undo label changes only ONCE, on release. | |

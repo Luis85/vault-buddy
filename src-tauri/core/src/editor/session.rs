@@ -23,7 +23,7 @@ use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
-use super::commands::{self, EditorCommand, InternalCommand};
+use super::commands::{self, CommandContext, EditorCommand, InternalCommand};
 use super::error::{EditorError, EditorErrorCode};
 use super::history::History;
 use super::ids::is_valid_id;
@@ -118,7 +118,14 @@ impl EditorSession {
         }
     }
 
-    pub fn execute(&mut self, req: &ExecuteRequest) -> Result<EditorSnapshot, EditorError> {
+    /// `ctx` carries the facts a command needs from outside the graph
+    /// (`commands::CommandContext`, Task 27 F15) -- the shell builds it
+    /// from the project's `sources.json` before calling in.
+    pub fn execute(
+        &mut self,
+        req: &ExecuteRequest,
+        ctx: &CommandContext<'_>,
+    ) -> Result<EditorSnapshot, EditorError> {
         if req.session_id != self.session_id {
             return Err(EditorError::new(
                 EditorErrorCode::SessionGone,
@@ -160,7 +167,7 @@ impl EditorSession {
                 self.project = restored;
             }
             other => {
-                let (candidate, label) = commands::apply(&self.project, other)?;
+                let (candidate, label) = commands::apply(&self.project, other, ctx)?;
                 validate_project(&candidate)?;
                 let previous = std::mem::replace(&mut self.project, candidate);
                 self.history.push(previous, label);
@@ -245,7 +252,7 @@ impl EditorSession {
 mod tests {
     use super::*;
     use crate::editor::commands::payloads::{RenamePayload, SplitClipPayload};
-    use crate::editor::test_support::minimal_project;
+    use crate::editor::test_support::{minimal_project, no_context};
 
     fn new_session() -> EditorSession {
         EditorSession::new("s1", minimal_project())
@@ -273,7 +280,10 @@ mod tests {
         assert_eq!(session.revision, 1);
 
         let snap = session
-            .execute(&rename_request("s1", 1, "cmd-1", "New Title"))
+            .execute(
+                &rename_request("s1", 1, "cmd-1", "New Title"),
+                &no_context(),
+            )
             .unwrap();
 
         assert_eq!(snap.revision, 2);
@@ -293,7 +303,10 @@ mod tests {
         // comparison in `execute` makes this assertion fail (the command
         // would apply instead of erroring).
         let err = session
-            .execute(&rename_request("s1", 99, "cmd-1", "New Title"))
+            .execute(
+                &rename_request("s1", 99, "cmd-1", "New Title"),
+                &no_context(),
+            )
             .unwrap_err();
 
         assert_eq!(err.code, EditorErrorCode::RevisionConflict);
@@ -309,12 +322,12 @@ mod tests {
         let mut session = new_session();
         let req = rename_request("s1", 1, "cmd-1", "New Title");
 
-        let first = session.execute(&req).unwrap();
+        let first = session.execute(&req, &no_context()).unwrap();
         assert_eq!(first.revision, 2);
 
         // Same commandId, same (now-stale) expectedRevision -- an
         // at-least-once retry, not a second edit.
-        let second = session.execute(&req).unwrap();
+        let second = session.execute(&req, &no_context()).unwrap();
         assert_eq!(
             second.revision, 2,
             "a replayed commandId must not advance the revision again"
@@ -326,7 +339,10 @@ mod tests {
     fn wrong_session_is_session_gone() {
         let mut session = new_session();
         let err = session
-            .execute(&rename_request("wrong-session", 1, "cmd-1", "New Title"))
+            .execute(
+                &rename_request("wrong-session", 1, "cmd-1", "New Title"),
+                &no_context(),
+            )
             .unwrap_err();
         assert_eq!(err.code, EditorErrorCode::SessionGone);
     }
@@ -335,7 +351,10 @@ mod tests {
     fn undo_advances_the_revision() {
         let mut session = new_session();
         session
-            .execute(&rename_request("s1", 1, "cmd-1", "New Title"))
+            .execute(
+                &rename_request("s1", 1, "cmd-1", "New Title"),
+                &no_context(),
+            )
             .unwrap();
         assert_eq!(session.revision, 2);
 
@@ -345,7 +364,7 @@ mod tests {
             command_id: "cmd-2".to_string(),
             command: EditorCommand::Undo,
         };
-        let snap = session.execute(&undo_req).unwrap();
+        let snap = session.execute(&undo_req, &no_context()).unwrap();
 
         assert_eq!(snap.revision, 3, "undo still advances the revision");
         assert_eq!(
@@ -361,20 +380,23 @@ mod tests {
     fn redo_after_new_edit_is_cleared() {
         let mut session = new_session();
         session
-            .execute(&rename_request("s1", 1, "cmd-1", "First"))
+            .execute(&rename_request("s1", 1, "cmd-1", "First"), &no_context())
             .unwrap();
         session
-            .execute(&ExecuteRequest {
-                session_id: "s1".to_string(),
-                expected_revision: 2,
-                command_id: "cmd-undo".to_string(),
-                command: EditorCommand::Undo,
-            })
+            .execute(
+                &ExecuteRequest {
+                    session_id: "s1".to_string(),
+                    expected_revision: 2,
+                    command_id: "cmd-undo".to_string(),
+                    command: EditorCommand::Undo,
+                },
+                &no_context(),
+            )
             .unwrap();
 
         // A new edit, not a redo, must clear the redo stack.
         let snap = session
-            .execute(&rename_request("s1", 3, "cmd-2", "Second"))
+            .execute(&rename_request("s1", 3, "cmd-2", "Second"), &no_context())
             .unwrap();
         assert!(!snap.can_redo, "a fresh edit must clear redo");
         assert_eq!(snap.redo_label, None);
@@ -390,7 +412,7 @@ mod tests {
                 &format!("cmd-{i}"),
                 &format!("Title {i}"),
             );
-            session.execute(&req).unwrap();
+            session.execute(&req, &no_context()).unwrap();
         }
 
         let mut undone = 0;
@@ -401,7 +423,7 @@ mod tests {
                 command_id: format!("undo-{undone}"),
                 command: EditorCommand::Undo,
             };
-            match session.execute(&req) {
+            match session.execute(&req, &no_context()) {
                 Ok(_) => undone += 1,
                 Err(_) => break,
             }
@@ -421,7 +443,7 @@ mod tests {
         // -- `session.project` would already carry the too-long title by
         // the time the error is returned.
         let err = session
-            .execute(&rename_request("s1", 1, "cmd-1", &too_long))
+            .execute(&rename_request("s1", 1, "cmd-1", &too_long), &no_context())
             .unwrap_err();
 
         assert_eq!(err.code, EditorErrorCode::InvalidProject);
@@ -470,7 +492,7 @@ mod tests {
                 at_ms: 1_000,
             }),
         };
-        let snap = session.execute(&paste_req).unwrap();
+        let snap = session.execute(&paste_req, &no_context()).unwrap();
         assert_eq!(
             session.project.clips.len(),
             2,
@@ -484,7 +506,7 @@ mod tests {
             command_id: "cmd-undo".to_string(),
             command: EditorCommand::Undo,
         };
-        session.execute(&undo_req).unwrap();
+        session.execute(&undo_req, &no_context()).unwrap();
         assert_eq!(
             session.project, before,
             "undo must restore the WHOLE operation -- the project must be \
@@ -550,10 +572,10 @@ mod tests {
     fn mark_saved_never_moves_persisted_revision_backwards() {
         let mut session = new_session();
         session
-            .execute(&rename_request("s1", 1, "cmd-1", "First"))
+            .execute(&rename_request("s1", 1, "cmd-1", "First"), &no_context())
             .unwrap();
         session
-            .execute(&rename_request("s1", 2, "cmd-2", "Second"))
+            .execute(&rename_request("s1", 2, "cmd-2", "Second"), &no_context())
             .unwrap();
         assert_eq!(session.revision, 3);
 

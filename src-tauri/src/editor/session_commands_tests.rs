@@ -3,8 +3,7 @@
 //! exactly as in production).
 
 use super::*;
-use vault_buddy_core::editor::commands::payloads::RenamePayload;
-use vault_buddy_core::editor::EditorCommand;
+use vault_buddy_core::editor::commands::payloads::{DetachAudioPayload, RenamePayload};
 use vault_buddy_screen::staging::StagedSidecar;
 
 const BASE: &str = "2026-09-20 1432 Demo";
@@ -221,7 +220,7 @@ fn execute_in_applies_to_the_named_session_and_refuses_a_stale_one() {
             title: "Renamed".into(),
         }),
     };
-    let p = execute_in(&state, &request).unwrap();
+    let p = execute_in(&state, f.root(), &request).unwrap();
     assert_eq!(p.project.title, "Renamed");
     assert_eq!(p.snapshot.revision, open.snapshot.revision + 1);
     assert_eq!(snapshot_in(&state, &open.snapshot.session_id).unwrap(), p);
@@ -231,9 +230,62 @@ fn execute_in_applies_to_the_named_session_and_refuses_a_stale_one() {
         ..request
     };
     assert_eq!(
-        execute_in(&state, &gone).unwrap_err().code,
+        execute_in(&state, f.root(), &gone).unwrap_err().code,
         EditorErrorCode::SessionGone
     );
+}
+
+fn detach_request(open: &EditorOpenResult, command_id: &str) -> ExecuteRequest {
+    ExecuteRequest {
+        session_id: open.snapshot.session_id.clone(),
+        expected_revision: open.snapshot.revision,
+        command_id: command_id.into(),
+        command: EditorCommand::DetachAudio(DetachAudioPayload {
+            clip_id: open.project.clips[0].id.clone(),
+            audio_track_id: None,
+        }),
+    }
+}
+
+// F15: `detachAudio` through `execute_in` succeeds only when the SESSION'S
+// `sources.json` says the asset has audio -- proving the shell fills
+// `CommandContext` from the project store, not just that the pure `apply`
+// honours whatever set it is handed. A staged capture's record carries
+// what its sidecar recorded (audio inputs or none), so the same wiring
+// agrees with reality for a capture made with no audio device.
+#[test]
+fn session_execute_builds_the_context_from_sources_json() {
+    let f = Fixture::new();
+    f.stage(&sidecar(BASE, "vaultA"));
+    let state = EditorState::default();
+    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let pid = open.project.id.clone();
+
+    // Rewrite `sources.json` to say the capture is SILENT: the sidecar
+    // still lists a microphone, so only a context read from sources.json
+    // can refuse this.
+    let mut sources = load_sources(f.root(), &pid).unwrap();
+    sources.get_mut(STAGED_ASSET_ID).unwrap().has_audio = false;
+    super::super::store_io::write_sources(f.root(), &pid, &sources).unwrap();
+    let err = execute_in(&state, f.root(), &detach_request(&open, "cmd-silent")).unwrap_err();
+    assert_eq!(err.code, EditorErrorCode::InvalidRequest);
+    assert!(err.message.contains("no audio"), "{}", err.message);
+
+    sources.get_mut(STAGED_ASSET_ID).unwrap().has_audio = true;
+    super::super::store_io::write_sources(f.root(), &pid, &sources).unwrap();
+    let p = execute_in(&state, f.root(), &detach_request(&open, "cmd-audible")).unwrap();
+    let linked = format!("{STAGED_ASSET_ID}-audio");
+    assert!(p.project.assets.iter().any(|a| a.id == linked));
+    assert!(p.project.clips[0].muted, "the capture's own clip is muted");
+
+    // A capture recorded with NO audio input is registered silent at open.
+    let silent_base = "2026-09-20 1500 Silent";
+    let mut silent = sidecar(silent_base, "vaultA");
+    silent.inputs.clear();
+    f.stage(&silent);
+    let open = open_staged_session(&state, f.root(), &f.staging(), silent_base).unwrap();
+    let err = execute_in(&state, f.root(), &detach_request(&open, "cmd-none")).unwrap_err();
+    assert!(err.message.contains("no audio"), "{}", err.message);
 }
 
 #[test]

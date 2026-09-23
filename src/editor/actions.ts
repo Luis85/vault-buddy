@@ -15,9 +15,9 @@
  * at this file's own 500-line cap) and is re-exported below, so nothing
  * outside these two files needs to know the split exists.
  *
- * **Which commands this task can send.** Twenty-one `EditorCommand` kinds
+ * **Which commands this task can send.** Twenty-four `EditorCommand` kinds
  * are implemented in Rust today (`core::editor::commands::mod.rs`'s own
- * count, as of Task 23's five track commands); the other twenty-five are
+ * count, as of Task 27's three mix commands); the other twenty-two are
  * rejected with `invalidRequest` and a message of the
  * shape `"<kind> is not available yet"`
  * (`unimplemented_kinds_are_invalid_request_not_panic`, that module's own
@@ -74,6 +74,7 @@ import {
   UNIMPLEMENTED_KINDS,
 } from "./actionMeta";
 import type { EditorCommand } from "./editorCommandTypes";
+import { detachRefusal, freeAudioTrackFor } from "./mixRules";
 import { clipOutputEnd } from "./timeMap";
 
 export type { ActionId } from "./actionMeta";
@@ -267,6 +268,16 @@ function resolveReorder(ctx: ActionContext, direction: "earlier" | "later"): Ver
   return OK;
 }
 
+/** `detachAudio` (Task 27): the single target clip, then `mixRules`'
+ * graph-side refusals. Whether the source HAS sound is Rust's to answer
+ * (`sources.json`), so an enabled Detach can still come back refused. */
+function resolveDetach(ctx: ActionContext): Verdict {
+  const target = requireUnlockedTargetClip(ctx);
+  if (!("clip" in target)) return target;
+  const reason = detachRefusal(ctx.project as Project, target.clip);
+  return reason ? { enabled: false, reason } : OK;
+}
+
 function resolveUndo(ctx: ActionContext): Verdict {
   return ctx.snapshot?.canUndo ? OK : { enabled: false, reason: "Nothing to undo" };
 }
@@ -315,6 +326,7 @@ const RESOLVERS: Partial<Record<ActionId, (ctx: ActionContext) => Verdict>> = {
   ungroup: resolveUngroup,
   earlier: (ctx) => resolveReorder(ctx, "earlier"),
   later: (ctx) => resolveReorder(ctx, "later"),
+  detachAudio: resolveDetach,
   save: resolveProjectGated,
   render: resolveRender,
   checks: resolveProjectGated,
@@ -469,6 +481,13 @@ function buildPaste(ctx: ActionContext): EditorCommand {
   };
 }
 
+/** Lands on the first free unlocked audio track, or asks Rust for a new
+ * one (`audioTrackId: null`) — never onto a track the clip would overlap. */
+function buildDetach(ctx: ActionContext): EditorCommand {
+  const clip = primaryTargetClip(ctx) as Clip;
+  return { kind: "detachAudio", clipId: clip.id, audioTrackId: freeAudioTrackFor(ctx.project as Project, clip) };
+}
+
 const BUILDERS: Partial<Record<ActionId, Builder>> = {
   split: buildSplit,
   delete: buildDelete,
@@ -482,6 +501,7 @@ const BUILDERS: Partial<Record<ActionId, Builder>> = {
   undo: buildUndo,
   redo: buildRedo,
   paste: buildPaste,
+  detachAudio: buildDetach,
 };
 
 /**

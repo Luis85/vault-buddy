@@ -19,7 +19,10 @@
  *   is logged once per overflow episode rather than silently;
  * - an `AudioContext` with one `GainNode` per media element for MONITORING
  *   (the workspace's `monitor_muted` and the transport's volume). Local
- *   only: nothing here ever sends an editor command;
+ *   only: nothing here ever sends an editor command. Every gain feeds ONE
+ *   `AnalyserNode` before the speakers (Task 27, F-25), so `readPeak()` is
+ *   the SAMPLE PEAK of what the preview is playing — a peak, never a
+ *   loudness measure, and never part of the project;
  * - the clock: `play()` runs a rAF loop from a wall-clock anchor, `pause()`
  *   stops it, `seek(ms)` cancels any older pending seek (a token) so a
  *   scrub never lands on a stale frame.
@@ -50,9 +53,16 @@ export interface GainLike {
   gain: { value: number };
   connect(target: unknown): unknown;
 }
+export interface AnalyserLike {
+  fftSize: number;
+  getFloatTimeDomainData(buffer: Float32Array): void;
+  connect(target: unknown): unknown;
+}
 export interface AudioContextLike {
   readonly destination: unknown;
   createGain(): GainLike;
+  /** Optional: without it there is no peak reading, only playback. */
+  createAnalyser?(): AnalyserLike;
   createMediaElementSource(el: HTMLMediaElement): { connect(target: unknown): unknown };
   resume?(): Promise<void>;
   close?(): Promise<void>;
@@ -111,6 +121,8 @@ export class PreviewController {
   private readonly free: Slot[] = [];
   private readonly urls = new Map<string, string | null>();
   private audio: AudioContextLike | null | undefined = undefined;
+  /** `undefined` until the first layer is routed; `null` = no analyser. */
+  private meter: AnalyserLike | null | undefined = undefined;
   private project: Project | null = null;
   private stage: Size = { width: 0, height: 0 };
   private monitor: MonitorState = { muted: false, volume: 1 };
@@ -224,6 +236,7 @@ export class PreviewController {
       ?.close?.()
       ?.catch((e: unknown) => logWarning(`preview: closing the AudioContext failed (${String(e)})`));
     this.audio = null;
+    this.meter = null;
   }
 
   // ---- internals -----------------------------------------------------------
@@ -374,13 +387,42 @@ export class PreviewController {
     return this.audio;
   }
 
+  /** Where every layer's gain connects: the shared analyser when the
+   * context offers one (it forwards to the destination), else the
+   * destination itself. A failed analyser only costs the meter. */
+  private output(ctx: AudioContextLike): unknown {
+    if (this.meter === undefined) {
+      try {
+        this.meter = ctx.createAnalyser?.() ?? null;
+        this.meter?.connect(ctx.destination);
+      } catch (e) {
+        logWarning(`preview: no peak meter (${String(e)})`);
+        this.meter = null;
+      }
+    }
+    return this.meter ?? ctx.destination;
+  }
+
+  /** The preview output's current sample peak, linear `0..1`+, or `null`
+   * when nothing is measured (no Web Audio analyser, or no layer routed
+   * yet). Read on demand by the mixer; never stored anywhere. */
+  readPeak(): number | null {
+    const meter = this.meter;
+    if (!meter) return null;
+    const buffer = new Float32Array(meter.fftSize);
+    meter.getFloatTimeDomainData(buffer);
+    let peak = 0;
+    for (const sample of buffer) peak = Math.max(peak, Math.abs(sample));
+    return peak;
+  }
+
   private connect(el: HTMLMediaElement): GainLike | null {
     const ctx = this.audioContext();
     if (!ctx) return null;
     try {
       const gain = ctx.createGain();
       ctx.createMediaElementSource(el).connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(this.output(ctx));
       return gain;
     } catch (e) {
       logWarning(`preview: could not route a layer through Web Audio (${String(e)})`);

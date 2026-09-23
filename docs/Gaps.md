@@ -2319,6 +2319,33 @@ the registry, prune a session's TERMINAL records when the session closes
 (`drop_session`), keeping running ones until their terminal lands; Task 46
 should decide this before it adds render jobs.
 
+### GAP-175 · Medium · The preview skips a migrated staged capture's own video, because migration marks its asset `builtin: screen`
+`src/editor/previewLayers.ts` (tutorial-editor Task 22) +
+`src-tauri/core/src/editor/migrate.rs` (Task 4). Found while wiring Task 27's
+detached audio through the preview. `computeLayers` skips every asset with a
+`builtin` value — right for the reference editor's synthesized builtins
+(cards, cues), which have no file. But `migrate::from_staged` gives the
+staged capture's own asset `builtin: Some(Builtin::Screen)`, and THAT asset
+has a real file: `sources.json` registers it as a `Staging` locator and
+`editor_media_url` resolves it (`a_staged_asset_resolves_into_the_staging_
+directory`). So the preview lays out NO layer for the one clip every
+migrated project starts with — no picture and no sound — and the
+"Not shown in the preview" status line stays empty because nothing was ever
+asked for. No automated test combines the two halves (the preview suite
+feeds non-builtin fixtures; the Rust suite never runs the preview), so every
+gate is green. Verification row T8 would observe it on hardware.
+
+Task 27 does not widen this: a detached audio asset (`<id>-audio`) carries
+no `builtin`, so a staged capture's DETACHED audio does play in the preview
+(its lookup follows `linked_asset` to the capture's `Staging` record) while
+the capture's picture still does not.
+
+**Fix:** decide "has no file" from `sources.json`, not from `builtin` — e.g.
+skip only `builtin` values with no file by construction (`card`/`cues`/
+synthesized audio), or have the projection mark which assets are backed by
+a registered source. The `builtin: screen` marker itself is load-bearing
+for the reference format and should stay.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md

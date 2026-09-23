@@ -300,13 +300,19 @@ fn a_batch_is_one_undo_step() {
     let session = sessions.get_mut(SESSION).unwrap();
     let snap = session.snapshot();
     assert!(snap.can_undo);
+    let no_audio = std::collections::BTreeSet::new();
     session
-        .execute(&ExecuteRequest {
-            session_id: SESSION.into(),
-            expected_revision: snap.revision,
-            command_id: "cmd-undo".into(),
-            command: EditorCommand::Undo,
-        })
+        .execute(
+            &ExecuteRequest {
+                session_id: SESSION.into(),
+                expected_revision: snap.revision,
+                command_id: "cmd-undo".into(),
+                command: EditorCommand::Undo,
+            },
+            &vault_buddy_core::editor::commands::CommandContext {
+                assets_with_audio: &no_audio,
+            },
+        )
         .unwrap();
     assert!(session.project().assets.is_empty());
 }

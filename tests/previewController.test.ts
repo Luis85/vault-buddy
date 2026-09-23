@@ -271,6 +271,52 @@ describe("monitoring", () => {
   });
 });
 
+// Task 27 (F-25): the mixer's "peak" is the SAMPLE PEAK of what the preview
+// is sending to the speakers — every layer's gain routed through ONE
+// analyser before the destination — and never a loudness figure. With no
+// analyser (no Web Audio, or none yet) there is nothing measured to show.
+describe("preview peak meter", () => {
+  function meteredAudio(samples: number[]) {
+    const { ctx, gains } = fakeAudio();
+    const targets: unknown[] = [];
+    const analyser = {
+      fftSize: samples.length,
+      connect: (t: unknown) => targets.push(["analyser", t]),
+      getFloatTimeDomainData: (buf: Float32Array) => buf.set(samples),
+    };
+    ctx.createAnalyser = () => analyser;
+    ctx.createGain = () => {
+      const g: GainLike = { gain: { value: 1 }, connect: (t: unknown) => targets.push(["gain", t]) };
+      gains.push(g);
+      return g;
+    };
+    return { ctx, analyser, targets };
+  }
+
+  it("reads the largest absolute sample from the one analyser every layer feeds", () => {
+    const { ctx, analyser, targets } = meteredAudio([0.1, -0.62, 0.4, 0]);
+    const { c } = controller({ createAudioContext: () => ctx });
+    expect(c.readPeak()).toBeNull();
+    c.layout(project([track("v"), track("w")], [clip("a", "v"), clip("b", "w")]), 0);
+    expect(targets).toEqual([
+      ["analyser", ctx.destination],
+      ["gain", analyser],
+      ["gain", analyser],
+    ]);
+    expect(c.readPeak()).toBeCloseTo(0.62, 6);
+  });
+
+  it("without an analyser the gains go straight to the destination and there is no reading", () => {
+    const { ctx } = fakeAudio();
+    const connected: unknown[] = [];
+    ctx.createGain = () => ({ gain: { value: 1 }, connect: (t: unknown) => connected.push(t) });
+    const { c } = controller({ createAudioContext: () => ctx });
+    c.layout(project([track("v")], [clip("a", "v")]), 0);
+    expect(connected).toEqual([ctx.destination]);
+    expect(c.readPeak()).toBeNull();
+  });
+});
+
 describe("pooling and fallbacks", () => {
   it("an element released when its clip ends is reused for a later clip, and a known URL is not re-resolved", async () => {
     const resolveUrl = vi.fn((id: string) => Promise.resolve(`asset://${id}`));

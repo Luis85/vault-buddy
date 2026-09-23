@@ -2,7 +2,7 @@
 //! `InternalCommand` (native-only, never `Deserialize`), plus their
 //! dispatch (`apply`/`apply_internal`) into family modules (R14, F-13, F31).
 //!
-//! TWENTY-ONE kinds are implemented so far: `rename`/`setDestination`
+//! TWENTY-FOUR kinds are implemented so far: `rename`/`setDestination`
 //! (Task 6, `meta.rs`), the two `EditorSession` intercepts before ever
 //! calling `apply` at all, `undo`/`redo` (see `session.rs`'s `execute`), the
 //! seven core clip commands `insertClip`/`updateClip`/`splitClip`/`trimClip`/
@@ -10,7 +10,9 @@
 //! reassignment for `splitClip` lives in the sibling `cue_follow.rs`),
 //! `groupClips`/`ungroupClips`/`duplicateClips`/`pasteFragment`/`cutClips`
 //! (Task 8, `groups.rs`), and `addTrack`/`renameTrack`/`moveTrack`/
-//! `setTrackFlags`/`deleteTrack` (Task 23, `tracks.rs`). `moveClips`'s own
+//! `setTrackFlags`/`deleteTrack` (Task 23, `tracks.rs`), and `setClipMix`/
+//! `setMasterGain`/`detachAudio` (Task 27, `mix.rs` -- `detachAudio` is the
+//! one arm that reads `CommandContext`). `moveClips`'s own
 //! group-EXPANSION behaviour also landed with Task 8, but stays in
 //! `clips.rs` (F13: Task 7 shipped `moveClips` before any group could exist
 //! to expand into). Every other kind falls through to the shared "not
@@ -49,8 +51,11 @@ mod clips;
 mod cue_follow;
 mod groups;
 mod meta;
+mod mix;
 pub mod payloads;
 mod tracks;
+
+use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
@@ -132,6 +137,22 @@ pub enum InternalCommand {
     RelinkAssets(RelinkAssetsPayload),
 }
 
+/// Facts a command needs that live OUTSIDE the interchange graph (Task 27,
+/// F15). Today that is one: which assets' source media carry an audio
+/// stream -- a fact `sources.json` records (`SourceRecord.has_audio`) and
+/// `Project` deliberately does not, since the graph is the portable edit
+/// and `sources.json` is where the bytes (and what was probed about them)
+/// live. `core` stays Tauri-free: the SHELL reads `sources.json` and fills
+/// this in (`session_commands::execute_in`), which is the only place shell
+/// state crosses into a core call. Borrowed, so a caller that has the set
+/// already never copies it per command.
+#[derive(Debug, Clone, Copy)]
+pub struct CommandContext<'a> {
+    /// Ids of assets whose source media has an audio stream. `detachAudio`
+    /// refuses a clip whose asset is not in this set.
+    pub assets_with_audio: &'a BTreeSet<String>,
+}
+
 fn not_yet(kind: &str) -> EditorError {
     EditorError::new(
         EditorErrorCode::InvalidRequest,
@@ -157,7 +178,11 @@ fn kind_of(cmd: &EditorCommand) -> String {
 /// would be schema-invalid never reaches a live session (see that module's
 /// doc for why `meta::rename` deliberately does not duplicate
 /// `validate_project`'s own title-length check).
-pub fn apply(project: &Project, cmd: &EditorCommand) -> Result<(Project, String), EditorError> {
+pub fn apply(
+    project: &Project,
+    cmd: &EditorCommand,
+    ctx: &CommandContext<'_>,
+) -> Result<(Project, String), EditorError> {
     match cmd {
         EditorCommand::Rename(p) => meta::rename(project, p),
         EditorCommand::SetDestination(p) => meta::set_destination(project, p),
@@ -178,6 +203,9 @@ pub fn apply(project: &Project, cmd: &EditorCommand) -> Result<(Project, String)
         EditorCommand::MoveTrack(p) => tracks::move_track(project, p),
         EditorCommand::SetTrackFlags(p) => tracks::set_track_flags(project, p),
         EditorCommand::DeleteTrack(p) => tracks::delete_track(project, p),
+        EditorCommand::SetClipMix(p) => mix::set_clip_mix(project, p),
+        EditorCommand::SetMasterGain(p) => mix::set_master_gain(project, p),
+        EditorCommand::DetachAudio(p) => mix::detach_audio(project, p, ctx),
         EditorCommand::Undo | EditorCommand::Redo => Err(EditorError::new(
             EditorErrorCode::InvalidRequest,
             "undo/redo are dispatched by EditorSession::execute, never by apply",
@@ -207,7 +235,7 @@ mod tests {
     use super::*;
     use crate::editor::model::{CardPreset, TrackKind};
     use crate::editor::model_cues::{EffectKind, TransitionKind};
-    use crate::editor::test_support::minimal_project;
+    use crate::editor::test_support::{minimal_project, no_context};
 
     fn num(v: i64) -> crate::editor::Num {
         crate::editor::Num::from(v)
@@ -221,25 +249,6 @@ mod tests {
     /// whole table at once.
     fn unimplemented_commands() -> Vec<(&'static str, EditorCommand)> {
         vec![
-            (
-                "setClipMix",
-                EditorCommand::SetClipMix(SetClipMixPayload {
-                    clip_ids: vec!["c1".into()],
-                    volume: Some(num(1)),
-                    muted: None,
-                }),
-            ),
-            (
-                "setMasterGain",
-                EditorCommand::SetMasterGain(SetMasterGainPayload { gain: 0.8 }),
-            ),
-            (
-                "detachAudio",
-                EditorCommand::DetachAudio(DetachAudioPayload {
-                    clip_id: "c1".into(),
-                    audio_track_id: None,
-                }),
-            ),
             (
                 "setFades",
                 EditorCommand::SetFades(SetFadesPayload {
@@ -438,22 +447,23 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_commands_table_has_twenty_five_rows() {
+    fn unimplemented_commands_table_has_twenty_two_rows() {
         // A vacuity guard, the `shared_fixture_table_has_ten_cases`
         // precedent (`time.rs`): 46 total EditorCommand kinds minus the
-        // twenty-one implemented so far (rename, undo, redo, setDestination,
+        // twenty-four implemented so far (rename, undo, redo, setDestination,
         // insertClip, updateClip, splitClip, trimClip, deleteClips,
         // moveClips, reorderClip, groupClips, ungroupClips,
         // duplicateClips, pasteFragment, cutClips, addTrack, renameTrack,
-        // moveTrack, setTrackFlags, deleteTrack).
-        assert_eq!(unimplemented_commands().len(), 25);
+        // moveTrack, setTrackFlags, deleteTrack, setClipMix, setMasterGain,
+        // detachAudio).
+        assert_eq!(unimplemented_commands().len(), 22);
     }
 
     #[test]
     fn unimplemented_kinds_are_invalid_request_not_panic() {
         let project = minimal_project();
         for (kind, cmd) in unimplemented_commands() {
-            let err = apply(&project, &cmd)
+            let err = apply(&project, &cmd, &no_context())
                 .err()
                 .unwrap_or_else(|| panic!("{kind}: apply() must reject an unimplemented kind"));
             assert_eq!(
@@ -478,7 +488,7 @@ mod tests {
         // fallback's.
         let project = minimal_project();
         for cmd in [EditorCommand::Undo, EditorCommand::Redo] {
-            let err = apply(&project, &cmd).unwrap_err();
+            let err = apply(&project, &cmd, &no_context()).unwrap_err();
             assert_eq!(err.code, EditorErrorCode::InvalidRequest);
             assert!(!err.message.contains("is not available yet"));
         }
@@ -492,6 +502,7 @@ mod tests {
             &EditorCommand::Rename(RenamePayload {
                 title: "New Title".to_string(),
             }),
+            &no_context(),
         )
         .unwrap();
         assert_eq!(renamed.title, "New Title");
@@ -504,6 +515,7 @@ mod tests {
                 folder: "Tutorials".to_string(),
                 dated: true,
             }),
+            &no_context(),
         )
         .unwrap();
         assert_eq!(redirected.destination.vault, "vault-1");

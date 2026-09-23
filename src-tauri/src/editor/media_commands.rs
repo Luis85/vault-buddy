@@ -7,7 +7,8 @@
 //! answers with an absolute path only when that id is REGISTERED to the
 //! caller's own session's project:
 //! - an asset must be in the live session's project graph AND have an entry
-//!   in the project's `sources.json`, resolved through
+//!   in the project's `sources.json` (a detached audio asset: its
+//!   `linked_asset` root's entry, Task 27), resolved through
 //!   `project_store::resolve_source` (so a hand-edited `file` that tries to
 //!   escape its directory resolves to nothing);
 //! - a product must be in the project's saved `record.products`, and its
@@ -132,15 +133,25 @@ fn asset_path(
 ) -> Result<PathBuf, EditorError> {
     // In the live graph first: a stale `sources.json` entry for an asset
     // the project no longer holds is not something the preview can ask for.
-    let in_project = require_session(state, session_id)?
+    // A detached audio asset (Task 27) has no record of its own -- its
+    // bytes ARE its video's -- so its lookup key is the `linked_asset` root
+    // (`validate_media` guarantees the root is itself unlinked and in the
+    // graph, so one hop is the whole chain).
+    let record_id = require_session(state, session_id)?
         .get(session_id)
-        .is_some_and(|s| s.project().assets.iter().any(|a| a.id == asset_id));
-    if !in_project {
-        return Err(unregistered("asset", asset_id));
-    }
+        .and_then(|s| {
+            let asset = s.project().assets.iter().find(|a| a.id == asset_id)?;
+            Some(
+                asset
+                    .linked_asset
+                    .clone()
+                    .unwrap_or_else(|| asset.id.clone()),
+            )
+        })
+        .ok_or_else(|| unregistered("asset", asset_id))?;
     let sources = load_sources(root, project_id)?;
     let record = sources
-        .get(asset_id)
+        .get(&record_id)
         .ok_or_else(|| unregistered("asset", asset_id))?;
     let path =
         resolve_source(root, project_id, record).ok_or_else(|| unregistered("asset", asset_id))?;
@@ -497,6 +508,57 @@ mod tests {
             root.path(),
             &session,
             &MediaRef::Asset("stale".into()),
+        )
+        .unwrap_err();
+        assert_eq!(e.code, EditorErrorCode::UnauthorizedSource);
+    }
+
+    // Task 27: a detached audio asset has no `sources.json` record of its
+    // own -- its bytes ARE its video's -- so the preview's lookup follows
+    // `linked_asset` to the root's record. Without this the detached clip
+    // would play silently while claiming to be the video's sound (R20).
+    #[test]
+    fn a_detached_audio_asset_resolves_to_its_videos_file() {
+        let root = tempfile::tempdir().unwrap();
+        let state = EditorState::default();
+        let mut sources = BTreeMap::new();
+        sources.insert(
+            "real".to_string(),
+            record(SourceLocator::Media {
+                file: "real.mp4".into(),
+            }),
+        );
+        let mut project = minimal_project("proj1");
+        let mut linked = asset("real-audio");
+        linked.kind = AssetKind::Audio;
+        linked.linked_asset = Some("real".into());
+        let mut orphan = asset("ghost-audio");
+        orphan.kind = AssetKind::Audio;
+        orphan.linked_asset = Some("ghost".into());
+        project.assets = vec![asset("real"), linked, asset("ghost"), orphan];
+        create_project(root.path(), &project, &sources).unwrap();
+        let session = "ses-proj1".to_string();
+        state.sessions.lock().unwrap().insert(
+            session.clone(),
+            EditorSession::resume(session.clone(), project, 1),
+        );
+        let expected = write_media(root.path(), "real.mp4");
+
+        let path = media_path_in(
+            &state,
+            root.path(),
+            &session,
+            &MediaRef::Asset("real-audio".into()),
+        )
+        .expect("a linked asset resolves through its root");
+        assert_eq!(path, expected);
+
+        // A root with no record of its own is still unregistered.
+        let e = media_path_in(
+            &state,
+            root.path(),
+            &session,
+            &MediaRef::Asset("ghost-audio".into()),
         )
         .unwrap_err();
         assert_eq!(e.code, EditorErrorCode::UnauthorizedSource);

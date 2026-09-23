@@ -10,6 +10,9 @@
  * `editorWorkspace` view state: muting the preview or slowing it down is
  * not an edit, so nothing here ever reaches `editorProject.execute`.
  *
+ * The audio mixer (Task 27, `MixerPopover`) opens from this row too, beside
+ * the speaker, and receives the preview's `readPeak` for its peak meter.
+ *
  * The monitoring VOLUME is a prop/`update:volume` pair, not a workspace
  * field: R16's sanitized `workspace.json` has no volume field, so it lives
  * for the window's lifetime only rather than being quietly dropped on save.
@@ -26,6 +29,7 @@ import { onBeforeUnmount, onMounted } from "vue";
 import { shouldHandle } from "../../../editor/shortcuts";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import { formatDuration } from "../../../utils/formatDuration";
+import MixerPopover from "../shell/MixerPopover.vue";
 
 defineProps<{
   playing: boolean;
@@ -33,6 +37,8 @@ defineProps<{
   durationMs: number;
   /** Monitoring volume, 0..1. */
   volume: number;
+  /** The preview's sample peak, for the mixer's meter. */
+  readPeak?: () => number | null;
 }>();
 const emit = defineEmits<{
   (e: "toggle-play"): void;
@@ -92,6 +98,7 @@ function onVolume(event: Event) {
       <span data-testid="transport-total">{{ formatDuration(durationMs) }}</span>
     </span>
     <span class="ml-auto flex items-center gap-2">
+      <MixerPopover :read-peak="readPeak" />
       <button
         type="button"
         data-testid="transport-mute"

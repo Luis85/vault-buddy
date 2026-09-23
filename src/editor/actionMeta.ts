@@ -131,7 +131,7 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
 };
 
 /**
- * The exact twenty-five wire kinds this registry still gates. `undo`/
+ * The exact twenty-two wire kinds this registry still gates. `undo`/
  * `redo`/`splitClip`/`deleteClips`/`cutClips`/`pasteFragment`/
  * `duplicateClips`/`groupClips`/`ungroupClips`/`reorderClip` are
  * deliberately absent (those ten of the sixteen pre-Task-23 kinds are the
@@ -142,7 +142,11 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * `editorProject.execute` directly, never through this registry), so
  * removing them changes nothing here and keeps `mod.rs`'s own invariant
  * ("delete the matching entry or every action that maps to that kind stays
- * wrongly disabled") satisfied for the part of it that applies.
+ * wrongly disabled") satisfied for the part of it that applies. Task 27
+ * removed `setClipMix`/`setMasterGain`/`detachAudio` the same way, WITH a
+ * consumer each: `AudioSection`/`MixerPopover` call `editorProject.execute`
+ * directly for the two mix kinds (no `ActionId` maps to either), and the
+ * `detachAudio` action got its own `RESOLVERS`/`BUILDERS` entries.
  *
  * **`addTrack` was the one exception through Task 23** — kept gated even
  * though Rust already implemented it, because the two `ActionId`s that map
@@ -175,7 +179,7 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * direction.
  */
 export const UNIMPLEMENTED_KINDS: ReadonlySet<string> = new Set([
-  "setClipMix", "setMasterGain", "detachAudio", "setFades",
+  "setFades",
   "addTransition", "setTransitionDuration", "removeTransition",
   "setSpeed", "setLayout", "setAdjustments", "setCanvas",
   "addCard", "updateCard", "insertIntro",

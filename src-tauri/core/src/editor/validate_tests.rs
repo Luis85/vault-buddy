@@ -162,6 +162,63 @@ fn cyclic_linked_assets_are_rejected() {
     assert!(err.message.contains("cycle"), "message: {}", err.message);
 }
 
+/// Task 27 (F-24; the reference editor's own linked-audio rule): a
+/// `linked_asset` is DETACHED AUDIO -- an audio asset whose root is a direct
+/// (itself unlinked) video of the same duration. Each case breaks exactly
+/// one of those, on an otherwise-valid pair, so a check that is missing
+/// cannot hide behind another one firing first.
+#[test]
+fn a_linked_asset_is_audio_detached_from_a_video_of_the_same_duration() {
+    let pair = |audio: serde_json::Value| {
+        let mut project = base_project();
+        project.assets.push(serde_json::from_value(audio).unwrap());
+        project
+    };
+    let ok = serde_json::json!({
+        "id": "a1-audio", "kind": "audio", "name": "A", "duration_ms": 5000,
+        "linked_asset": "a1"
+    });
+    validate_project(&pair(ok.clone())).expect("a well-formed detached audio asset");
+
+    let mut not_audio = ok.clone();
+    not_audio["kind"] = serde_json::json!("video");
+    let mut other_length = ok.clone();
+    other_length["duration_ms"] = serde_json::json!(4999);
+    for (what, bad) in [("kind", not_audio), ("duration", other_length)] {
+        let err = validate_project(&pair(bad)).unwrap_err();
+        assert!(err.message.contains("a1-audio"), "{what}: {}", err.message);
+    }
+
+    // A root that is not a video (an audio root), and a root that is itself
+    // linked (a chain), are both refused, naming the linked asset.
+    let mut audio_root = base_project();
+    audio_root.assets = vec![
+        serde_json::from_value(serde_json::json!({
+            "id": "m1", "kind": "audio", "name": "M", "duration_ms": 5000
+        }))
+        .unwrap(),
+        serde_json::from_value(serde_json::json!({
+            "id": "m1-audio", "kind": "audio", "name": "A", "duration_ms": 5000,
+            "linked_asset": "m1"
+        }))
+        .unwrap(),
+    ];
+    audio_root.clips.clear();
+    let err = validate_project(&audio_root).unwrap_err();
+    assert!(err.message.contains("m1-audio"), "{}", err.message);
+
+    let mut chain = pair(ok);
+    chain.assets.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "a1-audio-audio", "kind": "audio", "name": "B", "duration_ms": 5000,
+            "linked_asset": "a1-audio"
+        }))
+        .unwrap(),
+    );
+    let err = validate_project(&chain).unwrap_err();
+    assert!(err.message.contains("a1-audio-audio"), "{}", err.message);
+}
+
 #[test]
 fn self_transition_is_rejected() {
     let mut project = base_project();

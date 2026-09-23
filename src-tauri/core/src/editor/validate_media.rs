@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::error::{EditorError, EditorErrorCode};
-use super::model::{Asset, Clip};
+use super::model::{Asset, AssetKind, Clip, MediaType};
 use super::model_cues::Transition;
 use super::validate::{output_duration_ms, speed_or_default};
 
@@ -19,6 +19,17 @@ fn invalid(message: impl Into<String>) -> EditorError {
 /// A white/gray/black-marked DFS catches an indirect cycle (a→b→c→a), not
 /// only a direct one (`DATA-MODEL.md` § Validation order step 5: "Reject
 /// cyclic/dangling linked assets").
+///
+/// Then its IDENTITY (Task 27, F-24; the reference editor's own rule,
+/// `session-safety.js`): a link is detached audio, so the linked asset is
+/// `audio`, its root is a direct (itself unlinked) non-image `video`, and
+/// the two share one duration -- `commands::mix::detach_audio` makes
+/// exactly that, and a hand-edited project claiming anything else would
+/// point the render at media that is not what the asset says it is.
+/// Deliberately NOT the reference's "root is not builtin": a staged
+/// capture's asset is `builtin: screen` here AND has a real file in
+/// `sources.json`, which the reference's synthesized builtins never had.
+/// Checked AFTER the cycle walk, so a cycle is still reported as one.
 pub(super) fn check_linked_assets(assets: &[Asset]) -> Result<(), EditorError> {
     let by_id: HashMap<&str, &Asset> = assets.iter().map(|a| (a.id.as_str(), a)).collect();
     for asset in assets {
@@ -64,6 +75,22 @@ pub(super) fn check_linked_assets(assets: &[Asset]) -> Result<(), EditorError> {
     let mut colour: HashMap<&str, Colour> = by_id.keys().map(|id| (*id, Colour::White)).collect();
     for id in by_id.keys().copied().collect::<Vec<_>>() {
         visit(id, &by_id, &mut colour)?;
+    }
+
+    for asset in assets {
+        let Some(root) = asset.linked_asset.as_deref().map(|id| by_id[id]) else {
+            continue;
+        };
+        let root_is_video = root.kind == AssetKind::Video
+            && !matches!(root.media_type, Some(MediaType::Image))
+            && root.linked_asset.is_none();
+        if asset.kind != AssetKind::Audio || !root_is_video || asset.duration_ms != root.duration_ms
+        {
+            return Err(invalid(format!(
+                "asset {}: a linked asset must be audio detached from a direct video of the same duration ({} is not)",
+                asset.id, root.id
+            )));
+        }
     }
     Ok(())
 }

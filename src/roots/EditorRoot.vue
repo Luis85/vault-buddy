@@ -45,6 +45,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
+import AudioSection from "../components/editor/inspector/AudioSection.vue";
 import ClipSection from "../components/editor/inspector/ClipSection.vue";
 import InspectorPanel from "../components/editor/inspector/InspectorPanel.vue";
 import LegacyCaptureEditor from "../components/editor/LegacyCaptureEditor.vue";
@@ -206,6 +207,13 @@ onBeforeUnmount(() => {
         <InspectorPanel>
           <template #clip="{ clipIds }">
             <ClipSection
+              :key="clipIds.join(',')"
+              :clip-ids="clipIds"
+            />
+          </template>
+          <!-- Task 27: the Audio category, keyed the same way. -->
+          <template #audio="{ clipIds }">
+            <AudioSection
               :key="clipIds.join(',')"
               :clip-ids="clipIds"
             />

@@ -14,13 +14,14 @@
 //! across disk I/O: every function here does its disk work first and takes
 //! them only for the in-memory register/apply/remove.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::Deserialize;
 use tauri::{AppHandle, Manager, WebviewWindow};
+use vault_buddy_core::editor::commands::CommandContext;
 use vault_buddy_core::editor::{
-    migrate, new_entity_id, new_project_id, sanitize, validate_project, EditorError,
+    migrate, new_entity_id, new_project_id, sanitize, validate_project, EditorCommand, EditorError,
     EditorErrorCode, EditorOpenResult, EditorProjection, EditorSession, ExecuteRequest,
     MissingMedia, Project, WorkspaceEnvelope,
 };
@@ -28,6 +29,7 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_screen::staging;
 
 use super::authz::{require_editor_window, require_session};
+use super::prefs_commands::project_id_for;
 use super::project_store::{
     pin_staged, pinned_project, project_dir, resolve_source, unpin_staged, SourceLocator,
     SourceMediaKind, SourceRecord,
@@ -293,17 +295,50 @@ pub(crate) fn open_staged_session(
     })
 }
 
-/// The in-memory apply behind `editor_execute`: the session mutex is held
+/// The ids of every asset whose `sources.json` record has an audio stream
+/// — `CommandContext::assets_with_audio` (Task 27, F15), the ONE place a
+/// shell fact crosses into a core call. A staged capture's record says
+/// what its sidecar recorded (`hasAudio` = it had audio inputs), an
+/// imported file's what ffprobe found, so a detach agrees with the media
+/// either way.
+///
+/// Read only for a command that consults it (today `detachAudio`): every
+/// other edit keeps working when `sources.json` is unreadable, and a
+/// detach against an unreadable one is refused with the read's own error
+/// rather than a misleading "no audio".
+fn assets_with_audio(
+    root: &Path,
+    project_id: &str,
+    command: &EditorCommand,
+) -> Result<BTreeSet<String>, EditorError> {
+    if !matches!(command, EditorCommand::DetachAudio(_)) {
+        return Ok(BTreeSet::new());
+    }
+    Ok(load_sources(root, project_id)?
+        .into_iter()
+        .filter(|(_, record)| record.has_audio)
+        .map(|(id, _)| id)
+        .collect())
+}
+
+/// The apply behind `editor_execute`: `sources.json` is read (when the
+/// command needs it) BEFORE the session mutex is taken, which is then held
 /// for the apply and the projection clone, nothing else.
 pub(crate) fn execute_in(
     state: &EditorState,
+    root: &Path,
     request: &ExecuteRequest,
 ) -> Result<EditorProjection, EditorError> {
+    let project_id = project_id_for(state, &request.session_id)?;
+    let with_audio = assets_with_audio(root, &project_id, &request.command)?;
+    let ctx = CommandContext {
+        assets_with_audio: &with_audio,
+    };
     let mut sessions = require_session(state, &request.session_id)?;
     let session = sessions
         .get_mut(&request.session_id)
         .ok_or_else(|| internal("session vanished under its own lock"))?;
-    session.execute(request)?;
+    session.execute(request, &ctx)?;
     Ok(EditorProjection::of(session))
 }
 
@@ -463,7 +498,8 @@ pub async fn editor_execute(
     request: ExecuteRequest,
 ) -> Result<EditorProjection, EditorError> {
     require_editor_window(&window)?;
-    blocking(move || execute_in(&app.state::<EditorState>(), &request)).await
+    let root = local_data(&app)?;
+    blocking(move || execute_in(&app.state::<EditorState>(), &root, &request)).await
 }
 
 /// ASYNC: `discardProject` unlinks a project directory.

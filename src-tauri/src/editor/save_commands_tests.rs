@@ -113,20 +113,25 @@ fn permission_denied_error() -> io::Error {
     io::Error::from(io::ErrorKind::PermissionDenied)
 }
 
-fn rename_request(
+/// An acknowledged rename through `execute_in`: most tests here only need
+/// an edit to save.
+fn rename(
+    state: &EditorState,
+    root: &Path,
     session_id: &str,
     expected_revision: u64,
     command_id: &str,
     title: &str,
-) -> ExecuteRequest {
-    ExecuteRequest {
+) -> vault_buddy_core::editor::EditorProjection {
+    let request = ExecuteRequest {
         session_id: session_id.to_string(),
         expected_revision,
         command_id: command_id.to_string(),
         command: EditorCommand::Rename(RenamePayload {
             title: title.to_string(),
         }),
-    }
+    };
+    execute_in(state, root, &request).unwrap()
 }
 
 #[test]
@@ -138,7 +143,7 @@ fn save_commits_the_acknowledged_revision() {
     let sid = open.snapshot.session_id.clone();
     let pid = open.project.id.clone();
 
-    let renamed = execute_in(&state, &rename_request(&sid, 1, "cmd-1", "Tutorial")).unwrap();
+    let renamed = rename(&state, f.root(), &sid, 1, "cmd-1", "Tutorial");
     assert_eq!(renamed.snapshot.revision, 2);
 
     let receipt = save_project_in(&state, f.root(), &sid, 2).unwrap();
@@ -164,7 +169,7 @@ fn save_with_a_stale_revision_is_a_conflict_and_writes_nothing() {
     let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
     let sid = open.snapshot.session_id.clone();
     let pid = open.project.id.clone();
-    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "Renamed")).unwrap();
+    rename(&state, f.root(), &sid, 1, "cmd-1", "Renamed");
 
     let path = f.project_json_path(&pid);
     let before = std::fs::read(&path).unwrap();
@@ -200,7 +205,7 @@ fn injected_write_failure_keeps_the_last_good_file() {
     let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
     let sid = open.snapshot.session_id.clone();
     let pid = open.project.id.clone();
-    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "Renamed")).unwrap();
+    rename(&state, f.root(), &sid, 1, "cmd-1", "Renamed");
 
     let path = f.project_json_path(&pid);
     let before = std::fs::read(&path).unwrap();
@@ -274,6 +279,7 @@ fn reopen_after_save_restores_clips_and_cues() {
 
     let split = execute_in(
         &state,
+        f.root(),
         &ExecuteRequest {
             session_id: sid.clone(),
             expected_revision: 1,
@@ -301,6 +307,7 @@ fn reopen_after_save_restores_clips_and_cues() {
 
     let trimmed = execute_in(
         &state,
+        f.root(),
         &ExecuteRequest {
             session_id: sid.clone(),
             expected_revision: split.snapshot.revision,
@@ -353,12 +360,12 @@ fn edit_after_save_stays_dirty() {
     let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
     let sid = open.snapshot.session_id.clone();
 
-    let renamed = execute_in(&state, &rename_request(&sid, 1, "cmd-1", "First")).unwrap();
+    let renamed = rename(&state, f.root(), &sid, 1, "cmd-1", "First");
     assert_eq!(renamed.snapshot.revision, 2);
 
     save_project_in(&state, f.root(), &sid, 2).unwrap();
 
-    let renamed_again = execute_in(&state, &rename_request(&sid, 2, "cmd-2", "Second")).unwrap();
+    let renamed_again = rename(&state, f.root(), &sid, 2, "cmd-2", "Second");
     assert_eq!(renamed_again.snapshot.revision, 3);
     assert_eq!(
         renamed_again.snapshot.persisted_revision,
@@ -404,7 +411,7 @@ fn list_projects_reflects_a_save_and_stays_sorted_newest_first() {
     let sid = open.snapshot.session_id.clone();
     let pid = open.project.id.clone();
 
-    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "Renamed")).unwrap();
+    rename(&state, f.root(), &sid, 1, "cmd-1", "Renamed");
     save_project_in(&state, f.root(), &sid, 2).unwrap();
 
     let rows = store_io::list_projects(f.root());
@@ -429,7 +436,7 @@ fn a_corrupt_project_json_refuses_the_save_rather_than_overwriting_it() {
     let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
     let sid = open.snapshot.session_id.clone();
     let pid = open.project.id.clone();
-    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "Renamed")).unwrap();
+    rename(&state, f.root(), &sid, 1, "cmd-1", "Renamed");
 
     let path = f.project_json_path(&pid);
     let json = std::fs::read_to_string(&path).unwrap();
@@ -548,7 +555,7 @@ fn a_missing_project_json_degrades_to_a_fresh_workspace_rather_than_failing() {
     let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
     let sid = open.snapshot.session_id.clone();
     let pid = open.project.id.clone();
-    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "Renamed")).unwrap();
+    rename(&state, f.root(), &sid, 1, "cmd-1", "Renamed");
 
     // Directory stays (so the write below can still land); only the file
     // this save would otherwise read the last-saved envelope from is gone.
@@ -599,7 +606,7 @@ fn concurrent_saves_on_one_session_serialize_and_leave_persisted_revision_matchi
     let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
     let sid = open.snapshot.session_id.clone();
     let pid = open.project.id.clone();
-    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "First")).unwrap();
+    rename(&state, f.root(), &sid, 1, "cmd-1", "First");
 
     let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
     let (proceed_tx, proceed_rx) = std::sync::mpsc::channel::<()>();
@@ -625,7 +632,7 @@ fn concurrent_saves_on_one_session_serialize_and_leave_persisted_revision_matchi
         // While A still holds the lock: a concurrent edit (revision 2 ->
         // 3), then a second save racing for the SAME session, targeting
         // the NEW revision.
-        execute_in(&state, &rename_request(&sid, 2, "cmd-2", "Second")).unwrap();
+        rename(&state, f.root(), &sid, 2, "cmd-2", "Second");
         let b = std::thread::Builder::new()
             .name("editor-save-b".into())
             .spawn_scoped(scope, || save_project_in(&state, f.root(), &sid, 3))
@@ -679,9 +686,9 @@ fn record_revision_is_monotonic_across_a_close_and_reopen() {
     let sid = open.snapshot.session_id.clone();
     let pid = open.project.id.clone();
 
-    let r2 = execute_in(&state, &rename_request(&sid, 1, "cmd-1", "First")).unwrap();
+    let r2 = rename(&state, f.root(), &sid, 1, "cmd-1", "First");
     assert_eq!(r2.snapshot.revision, 2);
-    let r3 = execute_in(&state, &rename_request(&sid, 2, "cmd-2", "Second")).unwrap();
+    let r3 = rename(&state, f.root(), &sid, 2, "cmd-2", "Second");
     assert_eq!(r3.snapshot.revision, 3);
     save_project_in(&state, f.root(), &sid, 3).unwrap();
 
@@ -698,7 +705,7 @@ fn record_revision_is_monotonic_across_a_close_and_reopen() {
     assert_eq!(reopened.snapshot.persisted_revision, Some(3));
 
     let new_sid = reopened.snapshot.session_id.clone();
-    let r4 = execute_in(&state, &rename_request(&new_sid, 3, "cmd-3", "Third")).unwrap();
+    let r4 = rename(&state, f.root(), &new_sid, 3, "cmd-3", "Third");
     assert_eq!(r4.snapshot.revision, 4);
     save_project_in(&state, f.root(), &new_sid, 4).unwrap();
 
@@ -723,8 +730,8 @@ fn open_staged_resumes_a_pinned_project_at_its_saved_revision_not_1() {
     let first = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
     let sid = first.snapshot.session_id.clone();
 
-    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "First")).unwrap();
-    let r3 = execute_in(&state, &rename_request(&sid, 2, "cmd-2", "Second")).unwrap();
+    rename(&state, f.root(), &sid, 1, "cmd-1", "First");
+    let r3 = rename(&state, f.root(), &sid, 2, "cmd-2", "Second");
     assert_eq!(r3.snapshot.revision, 3);
     save_project_in(&state, f.root(), &sid, 3).unwrap();
     close_in(&state, f.root(), &f.staging(), &sid, CloseDisposition::Keep).unwrap();
@@ -759,7 +766,7 @@ fn an_unreadable_project_json_refuses_the_save_rather_than_overwriting_it() {
     let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
     let sid = open.snapshot.session_id.clone();
     let pid = open.project.id.clone();
-    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "Renamed")).unwrap();
+    rename(&state, f.root(), &sid, 1, "cmd-1", "Renamed");
 
     let path = f.project_json_path(&pid);
     std::fs::remove_file(&path).unwrap();
@@ -786,7 +793,7 @@ fn a_corrupt_sources_json_refuses_the_save_rather_than_overwriting_the_valid_pro
     let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
     let sid = open.snapshot.session_id.clone();
     let pid = open.project.id.clone();
-    execute_in(&state, &rename_request(&sid, 1, "cmd-1", "Renamed")).unwrap();
+    rename(&state, f.root(), &sid, 1, "cmd-1", "Renamed");
 
     let project_path = f.project_json_path(&pid);
     let before = std::fs::read(&project_path).unwrap();

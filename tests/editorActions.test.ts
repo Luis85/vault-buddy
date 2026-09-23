@@ -192,9 +192,63 @@ describe("resolveActions — disabled actions carry a reason", () => {
     });
     const context = ctx({ project: proj, snapshot: snapshot(), selectedClipIds: ["c1"] });
     const resolved = resolveActions(context);
-    for (const id of ["addText", "addCaption", "addMarker", "addTrackVideo", "fadeIn", "transition", "detachAudio", "ratio"] as const) {
+    for (const id of ["addText", "addCaption", "addMarker", "addTrackVideo", "fadeIn", "transition", "ratio"] as const) {
       expect(resolved[id].enabled).toBe(false);
       expect(commandFor(id, context)).toBeNull();
+    }
+  });
+
+  // Task 27: `detachAudio` left UNIMPLEMENTED_KINDS with a real resolver and
+  // builder. The detached clip lands on the first FREE unlocked audio track
+  // (a busy or locked one is skipped), or asks Rust for a new one.
+  it("detachAudio targets the first free unlocked audio track, else asks for a new one", () => {
+    const tracks = [
+      track("v1"),
+      track("busy", { kind: "audio" }),
+      track("locked", { kind: "audio", locked: true }),
+      track("free", { kind: "audio" }),
+    ];
+    // c1 plays 2000..3300 (in 400, out 1700); the music on `busy` at
+    // 3200..4200 overlaps its last 100 ms, so `busy` is not free.
+    const c1 = clip("c1", "v1", { start_ms: 2_000, in_ms: 400, out_ms: 1_700 });
+    const music = clip("m", "busy", { asset_id: "m1", start_ms: 3_200 });
+    const assets = [
+      { id: "a1", kind: "video" as const, name: "a1", duration_ms: 30_000 },
+      { id: "m1", kind: "audio" as const, name: "m1", duration_ms: 30_000 },
+    ];
+    const context = ctx({ project: project({ tracks, clips: [c1, music], assets }), snapshot: snapshot(), selectedClipIds: ["c1"] });
+    expect(resolveActions(context).detachAudio).toMatchObject({ enabled: true, reason: null });
+    expect(commandFor("detachAudio", context)).toEqual({ kind: "detachAudio", clipId: "c1", audioTrackId: "free" });
+
+    const noFree = ctx({
+      project: project({ tracks: tracks.slice(0, 3), clips: [c1, music], assets }),
+      snapshot: snapshot(),
+      selectedClipIds: ["c1"],
+    });
+    expect(commandFor("detachAudio", noFree)).toEqual({ kind: "detachAudio", clipId: "c1", audioTrackId: null });
+  });
+
+  it("detachAudio is refused, with a reason, for a still, an audio clip or an already-detached clip", () => {
+    const still = project({
+      assets: [{ id: "a1", kind: "video", name: "a1", duration_ms: 5_000, media_type: "image" }],
+      tracks: [track("v1")],
+      clips: [clip("c1", "v1")],
+    });
+    const detached = project({
+      assets: [
+        { id: "a1", kind: "video", name: "a1", duration_ms: 30_000 },
+        { id: "a1-audio", kind: "audio", name: "a1 · audio", duration_ms: 30_000, linked_asset: "a1" },
+      ],
+      tracks: [track("v1"), track("au", { kind: "audio" })],
+      clips: [clip("c1", "v1", { muted: true }), clip("d", "au", { asset_id: "a1-audio" })],
+    });
+    for (const [proj, reason] of [
+      [still, "Only a video clip's audio can be detached"],
+      [detached, "This clip's audio is already detached"],
+    ] as const) {
+      const context = ctx({ project: proj, snapshot: snapshot(), selectedClipIds: ["c1"] });
+      expect(resolveActions(context).detachAudio).toMatchObject({ enabled: false, reason });
+      expect(commandFor("detachAudio", context)).toBeNull();
     }
   });
 
@@ -215,7 +269,6 @@ describe("resolveActions — disabled actions carry a reason", () => {
       addTrackVideo: "Add video track arrives in a later update.",
       fadeIn: "Fade in arrives in a later update.",
       transition: "Add transition arrives in a later update.",
-      detachAudio: "Detach audio arrives in a later update.",
       ratio: "Aspect ratio arrives in a later update.",
     };
     for (const [id, expected] of Object.entries(expectedReasons)) {
@@ -506,8 +559,8 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
 });
 
 describe("UNIMPLEMENTED_KINDS", () => {
-  it("carries exactly the 25 kinds this registry still gates", () => {
-    expect(UNIMPLEMENTED_KINDS.size).toBe(25);
+  it("carries exactly the 22 kinds this registry still gates", () => {
+    expect(UNIMPLEMENTED_KINDS.size).toBe(22);
     // The ten kinds an ActionId in this registry maps to that ARE
     // implemented must be absent, or every action built on them would be
     // wrongly gated -- plus the four track kinds Task 23 implemented that
@@ -518,6 +571,9 @@ describe("UNIMPLEMENTED_KINDS", () => {
       "undo", "redo", "splitClip", "deleteClips", "cutClips", "pasteFragment",
       "duplicateClips", "groupClips", "ungroupClips", "reorderClip",
       "renameTrack", "moveTrack", "setTrackFlags", "deleteTrack",
+      // Task 27: the three mix kinds, each with a consumer (AudioSection/
+      // MixerPopover, and the detachAudio action).
+      "setClipMix", "setMasterGain", "detachAudio",
     ]) {
       expect(UNIMPLEMENTED_KINDS.has(implemented)).toBe(false);
     }

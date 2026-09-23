@@ -166,6 +166,11 @@ watch(
   },
 );
 
+/** The mixer's peak meter reads the live controller, never a copy. */
+function readPeak(): number | null {
+  return controller?.readPeak() ?? null;
+}
+
 function togglePlay(): void {
   if (!controller) return;
   if (controller.playing) controller.pause();
@@ -219,6 +224,7 @@ function onPointerDown(event: PointerEvent): void {
       :playing="playing"
       :current-ms="currentMs"
       :duration-ms="editorProject.durationMs"
+      :read-peak="readPeak"
       @toggle-play="togglePlay"
     />
   </div>

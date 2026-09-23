@@ -927,6 +927,12 @@ describe("EditorRoot", () => {
           hydrateCalls.push(id);
           return Promise.resolve({});
         },
+        // The `setPlayhead` below arms the store's 750ms persist debounce,
+        // which outlives this test: unstubbed, it threw "saveWorkspace not
+        // stubbed" into whichever later test was running when it fired —
+        // an unhandled error that surfaced only when the file ran slowly
+        // enough (Task 27's heavier editor mount made that common).
+        saveWorkspace: () => Promise.resolve(),
       }),
     );
 
