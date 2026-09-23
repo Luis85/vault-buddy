@@ -9,6 +9,10 @@
  * time (what the wire carries) and its OUTPUT time (what the list shows)
  * are never the same number, and confusing them shows.
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -16,7 +20,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import CaptionsLibrary from "../src/components/editor/library/CaptionsLibrary.vue";
 import LibraryPanel from "../src/components/editor/library/LibraryPanel.vue";
 import CaptionOverlay from "../src/components/editor/preview/CaptionOverlay.vue";
-import { captionNotices, captionRows, DENSITY_LIMIT_CPS } from "../src/editor/captionRules";
+import {
+  addCaptionAt,
+  addMarkerAt,
+  captionNotices,
+  captionRows,
+  DENSITY_LIMIT_CPS,
+} from "../src/editor/captionRules";
 import type {
   CaptionCue,
   CaptionImportResult,
@@ -102,7 +112,11 @@ function project(captionCues: CaptionCue[] = cues(), clips: Clip[] = [clip()]): 
   } as Project;
 }
 
+const REFUSAL = { code: "invalidRequest", message: "Refused by Rust", retryable: false, operationId: "op-1" };
+
 let executed: EditorCommand[] = [];
+/** When set, every `execute` is refused the way Rust refuses one. */
+let refuse = false;
 let importCalls: { sessionId: string; clipId: string; replace: boolean }[] = [];
 
 function snapshot(revision: number): EditorOpenResult["snapshot"] {
@@ -130,6 +144,7 @@ async function open(
   setActivePinia(createPinia());
   executed = [];
   importCalls = [];
+  refuse = false;
   const port = fakeEditorPort({
     openStaged: () =>
       Promise.resolve({
@@ -142,6 +157,7 @@ async function open(
       }),
     execute: (req): Promise<EditorProjection> => {
       executed.push(req.command);
+      if (refuse) return Promise.reject(REFUSAL);
       return Promise.resolve({ snapshot: snapshot(2), project: p });
     },
     importCaptions: (sessionId, clipId, replace) => {
@@ -234,6 +250,39 @@ describe("captionRules", () => {
   });
 });
 
+// Fix round 1: the frontend's MAX_CAPTIONS/MAX_MARKERS are hand copies of
+// `core::editor::limits`; this reads the Rust source so the two can never
+// drift -- the button must disable exactly where Rust starts refusing.
+function rustLimit(name: string): number {
+  const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src-tauri/core/src/editor/mod.rs");
+  const match = new RegExp(`pub const ${name}: usize = ([0-9_]+);`).exec(readFileSync(file, "utf8"));
+  if (!match) throw new Error(`${name} not found in core::editor::limits`);
+  return Number(match[1].replace(/_/g, ""));
+}
+
+describe("captionRules limits match core::editor::limits", () => {
+  it("Add caption disables exactly at MAX_CAPTIONS", () => {
+    const max = rustLimit("MAX_CAPTIONS");
+    const filled = (n: number) => project(Array.from({ length: n }, (_, i) => cue(`k${i}`, 2_000, 2_100, "x")));
+    expect("command" in addCaptionAt(filled(max - 1), [], 1_500)).toBe(true);
+    expect(addCaptionAt(filled(max), [], 1_500)).toEqual({
+      reason: `This project already has the maximum of ${max} captions`,
+    });
+  });
+
+  it("Add chapter disables exactly at MAX_MARKERS", () => {
+    const max = rustLimit("MAX_MARKERS");
+    const withMarkers = (n: number) => ({
+      ...project([]),
+      markers: Array.from({ length: n }, (_, i) => ({ id: `m${i}`, clip_id: "c1", source_ms: 2_000, title: "M" })),
+    });
+    expect("command" in addMarkerAt(withMarkers(max - 1), 1_500)).toBe(true);
+    expect(addMarkerAt(withMarkers(max), 1_500)).toEqual({
+      reason: `This project already has the maximum of ${max} chapters`,
+    });
+  });
+});
+
 // ---- authoring --------------------------------------------------------------
 
 describe("CaptionsLibrary authoring", () => {
@@ -282,6 +331,22 @@ describe("CaptionsLibrary authoring", () => {
       { kind: "updateCaption", captionId: "capA", text: "Hello, world" },
       { kind: "updateCaption", captionId: "capA", startMs: 2_500 },
     ]);
+  });
+
+  // Fix round 1: a value Rust refused must not stay in the field -- the
+  // projection did not change, so Vue would never re-patch `:value`, and
+  // the field would show a caption that is not the one stored.
+  it("a refused edit puts the committed text and time back in the field", async () => {
+    const w = await mountLibrary();
+    refuse = true;
+    const text = w.get('[data-testid="caption-text-capA"]');
+    await text.setValue("Rejected words");
+    const end = w.get('[data-testid="caption-end-capA"]');
+    await end.setValue("0.500");
+    await flushPromises();
+    expect(executed).toHaveLength(2);
+    expect((text.element as HTMLTextAreaElement).value).toBe("Hello there");
+    expect((end.element as HTMLInputElement).value).toBe("2.000");
   });
 
   it("deletes a cue", async () => {

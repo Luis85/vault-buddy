@@ -216,3 +216,60 @@ fn error_display_names_the_line() {
     };
     assert_eq!(whole.to_string(), "bad");
 }
+
+// ---- fix round 1: markup stripping never deletes caption words -------------
+//
+// A tutorial caption names keys and compares numbers. Stripping every `<…>`
+// silently turned "Press <Ctrl> + <S> to save" into "Press  +  to save",
+// and an unclosed `<` swallowed the rest of its line -- a shortened caption
+// the user believes arrived whole, exactly what this module refuses to do.
+// Only the tags each format actually defines are markup; anything else,
+// and an unclosed `<`, is literal text.
+
+#[test]
+fn srt_keeps_angle_bracket_words_and_strips_only_srt_tags() {
+    let text = "1\n00:00:01,000 --> 00:00:02,000\nPress <Ctrl> + <S> to <i>save</i> <FONT color=\"#ff0\">now</font>\n";
+    assert_eq!(
+        parse_srt(text).unwrap(),
+        vec![cue(1_000, 2_000, "Press <Ctrl> + <S> to save now")]
+    );
+}
+
+#[test]
+fn srt_keeps_an_unclosed_angle_bracket() {
+    let text = "1\n00:00:01,000 --> 00:00:02,000\nx < 5 means small\n";
+    assert_eq!(
+        parse_srt(text).unwrap(),
+        vec![cue(1_000, 2_000, "x < 5 means small")]
+    );
+}
+
+#[test]
+fn vtt_keeps_angle_bracket_words_and_strips_only_cue_tags() {
+    let text = "WEBVTT\n\n00:01.000 --> 00:02.000\n<v Ann>Press <Ctrl> + <S></v> <00:01.500><lang en>to</lang> <ruby>save<rt>s</rt></ruby>\n";
+    assert_eq!(
+        parse_vtt(text).unwrap(),
+        vec![cue(1_000, 2_000, "Press <Ctrl> + <S> to saves")]
+    );
+}
+
+#[test]
+fn vtt_keeps_an_unclosed_angle_bracket() {
+    let text = "WEBVTT\n\n00:01.000 --> 00:02.000\nx < 5 means small\n";
+    assert_eq!(
+        parse_vtt(text).unwrap(),
+        vec![cue(1_000, 2_000, "x < 5 means small")]
+    );
+}
+
+#[test]
+fn srt_does_not_treat_webvtt_voice_tags_as_markup() {
+    // `<v …>`/`</v>` are WebVTT's, not SubRip's: in an SRT file they are
+    // text. (The bare closing `</v>` is what pins the tag LIST: `<v Ann>`
+    // alone is also kept by the "no attributes except on font" rule.)
+    let text = "1\n00:00:01,000 --> 00:00:02,000\n<v Ann>Hi</v>\n";
+    assert_eq!(
+        parse_srt(text).unwrap(),
+        vec![cue(1_000, 2_000, "<v Ann>Hi</v>")]
+    );
+}

@@ -2512,9 +2512,16 @@ or delete it, and it still counts toward `MAX_CAPTIONS`/`MAX_MARKERS`.
 Separately, the commands enforce the reference's bounds (caption font size
 18-56, text non-empty and at most 500 characters, chapter titles at most
 160) but `validate_project` does not, so a hand-edited `project.json` can
-carry values the commands would refuse -- nothing crashes (they render or
-are rejected downstream), it is just not the single authority it is for
-every other field.
+carry values the commands would refuse. Today the only consumer is the
+preview's `CaptionOverlay`, whose CSS degrades harmlessly (an absurd font
+size is just a huge or invisible caption); nothing downstream rejects
+them, because nothing downstream exists yet. Teaching cues' own
+`font_size` IS bounded (`check_effect`), so captions are the inconsistent
+case.
+
+**Deadline:** before **Task 43** (the ASS burn-in reads caption
+`font_size` and text into the render) and before **Task 39** (package
+import makes `project.json` untrusted input), whichever lands first.
 
 **Fix:** list trimmed-away cues and markers under a "Not in the edit" group
 in each library (delete-only), and fold the three bounds into

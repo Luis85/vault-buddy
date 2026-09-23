@@ -35,6 +35,7 @@ use vault_buddy_core::editor::commands::payloads::ImportCaptionsPayload;
 use vault_buddy_core::editor::{
     limits, CaptionImportResult, EditorError, EditorErrorCode, EditorProjection, InternalCommand,
 };
+use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::{require_editor_window, require_session};
 use super::prefs_commands::blocking;
@@ -121,6 +122,29 @@ pub(crate) fn import_captions_in(
     })
 }
 
+/// Claims the session's one caption-import slot, refusing a second import
+/// while one is still running there (the `editor_import_media` posture:
+/// Rust, not the UI's disabled button, is the authority). Paired with
+/// `release_caption_import`, which `editor_import_captions` calls on every
+/// way out.
+pub(crate) fn claim_caption_import(
+    state: &EditorState,
+    session_id: &str,
+) -> Result<(), EditorError> {
+    let mut running = lock_ignoring_poison(&state.caption_imports);
+    if !running.insert(session_id.to_string()) {
+        return Err(err(
+            EditorErrorCode::InvalidRequest,
+            "A caption import is already running for this project.",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn release_caption_import(state: &EditorState, session_id: &str) {
+    lock_ignoring_poison(&state.caption_imports).remove(session_id);
+}
+
 /// The one file the user picked, or `None` for a dismissed dialog.
 /// Blocking, so it runs on the `editor-captions` thread, never the main
 /// thread.
@@ -134,8 +158,7 @@ fn pick_caption_file(app: &AppHandle, window: &WebviewWindow) -> Option<PathBuf>
         .blocking_pick_file()?;
     match picked.into_path() {
         Ok(path) => Some(path),
-        Err(e) => {
-            let _ = e;
+        Err(_) => {
             log::warn!("editor captions: the picked file has no local path");
             None
         }
@@ -143,7 +166,8 @@ fn pick_caption_file(app: &AppHandle, window: &WebviewWindow) -> Option<PathBuf>
 }
 
 /// ASYNC (ADR §3.3). The session is checked BEFORE the dialog opens, so a
-/// closed session never asks the user to pick a file for nothing; the
+/// closed session never asks the user to pick a file for nothing, and a
+/// second import while one runs is refused (`claim_caption_import`); the
 /// dialog, the read and the edit then run on the named `editor-captions`
 /// thread, joined from the blocking pool.
 #[tauri::command]
@@ -156,7 +180,9 @@ pub async fn editor_import_captions(
 ) -> Result<Option<CaptionImportResult>, EditorError> {
     require_editor_window(&window)?;
     drop(require_session(&app.state::<EditorState>(), &session_id)?);
-    blocking(move || {
+    claim_caption_import(&app.state::<EditorState>(), &session_id)?;
+    let (release_app, release_id) = (app.clone(), session_id.clone());
+    let result = blocking(move || {
         let worker = move || -> Result<Option<CaptionImportResult>, EditorError> {
             let Some(path) = pick_caption_file(&app, &window) else {
                 return Ok(None);
@@ -183,7 +209,9 @@ pub async fn editor_import_captions(
             )
         })?
     })
-    .await
+    .await;
+    release_caption_import(&release_app.state::<EditorState>(), &release_id);
+    result
 }
 
 #[cfg(test)]

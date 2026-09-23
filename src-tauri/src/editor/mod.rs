@@ -26,7 +26,7 @@ pub mod save_commands;
 pub mod session_commands;
 pub mod store_io;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use vault_buddy_core::editor::EditorSession;
@@ -87,6 +87,11 @@ use vault_buddy_core::editor::EditorSession;
 /// `thumbnails` (Task 28 fix round 1) is every thumbnail render in flight,
 /// by session, with its cancel flag — `media_derive::ThumbnailRenders`. A
 /// leaf lock too, for the same reasons.
+///
+/// `caption_imports` (Task 36 fix round 1) is the sessions with a caption
+/// import in flight (`caption_commands::claim_caption_import`), so a second
+/// one is refused rather than opening a second dialog. A leaf lock: taken
+/// only to insert or remove one id.
 #[derive(Default)]
 pub struct EditorState {
     pub open: Mutex<()>,
@@ -95,4 +100,5 @@ pub struct EditorState {
     pub save_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     pub jobs: Mutex<media_jobs::JobRegistry>,
     pub thumbnails: media_derive::ThumbnailRenders,
+    pub caption_imports: Mutex<HashSet<String>>,
 }

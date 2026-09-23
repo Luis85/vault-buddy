@@ -5,7 +5,11 @@
  * user committed (on `change`, i.e. blur or Enter, never per keystroke)
  * and `CaptionsLibrary` turns that into the `updateCaption`, converting
  * output time back to the clip's source time. A time that does not parse
- * is not emitted; the field just shows the stored time again.
+ * is not emitted; the field just shows the stored time again. Each emit
+ * carries a `revert` that puts the stored value back, which the parent
+ * calls when Rust refuses the edit (fix round 1: the projection does not
+ * change then, so Vue would never re-patch `:value` and the field would
+ * keep showing a value that is not the stored one).
  */
 import type { CaptionRow } from "../../../editor/captionRules";
 
@@ -15,10 +19,13 @@ const props = defineProps<{
   height: number;
 }>();
 
+/** Puts the stored value back into the field that emitted. */
+export type Revert = () => void;
+
 const emit = defineEmits<{
-  (e: "text", value: string): void;
-  (e: "start", outputMs: number): void;
-  (e: "end", outputMs: number): void;
+  (e: "text", value: string, revert: Revert): void;
+  (e: "start", outputMs: number, revert: Revert): void;
+  (e: "end", outputMs: number, revert: Revert): void;
   (e: "remove"): void;
 }>();
 
@@ -32,7 +39,8 @@ function onText(event: Event): void {
     (event.target as HTMLTextAreaElement).value = props.row.cue.text;
     return;
   }
-  emit("text", value);
+  const input = event.target as HTMLTextAreaElement;
+  emit("text", value, () => (input.value = props.row.cue.text));
 }
 
 function onTime(which: "start" | "end", event: Event): void {
@@ -43,8 +51,9 @@ function onTime(which: "start" | "end", event: Event): void {
     input.value = seconds(current);
     return;
   }
-  if (which === "start") emit("start", ms);
-  else emit("end", ms);
+  const revert = () => (input.value = seconds(current));
+  if (which === "start") emit("start", ms, revert);
+  else emit("end", ms, revert);
 }
 </script>
 

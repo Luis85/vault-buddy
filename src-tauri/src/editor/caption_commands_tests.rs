@@ -154,3 +154,20 @@ fn read_caption_file_reports_a_vanished_file_without_its_path() {
     let err = read_caption_file(&path).unwrap_err();
     assert!(!err.message.contains("gone-away"), "{}", err.message);
 }
+
+// Fix round 1: like `editor_import_media`, Rust -- not the UI's disabled
+// button -- refuses a second import while one is running in the same
+// session, so two quick invocations never open two dialogs over one clip.
+#[test]
+fn a_second_concurrent_caption_import_is_refused() {
+    let state = state_with_session();
+    claim_caption_import(&state, SESSION).unwrap();
+    let err = claim_caption_import(&state, SESSION).unwrap_err();
+    assert_eq!(err.code, EditorErrorCode::InvalidRequest);
+    assert!(err.message.contains("already"), "{}", err.message);
+    // Another session is independent.
+    claim_caption_import(&state, "ses-other").unwrap();
+    // Released: the next import may start.
+    release_caption_import(&state, SESSION);
+    claim_caption_import(&state, SESSION).unwrap();
+}

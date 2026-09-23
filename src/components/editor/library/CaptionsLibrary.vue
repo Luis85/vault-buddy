@@ -34,6 +34,7 @@ import {
 import { sourceAtClamped } from "../../../editor/timeMap";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import type { Revert } from "./CaptionCueRow.vue";
 import CaptionCueRow from "./CaptionCueRow.vue";
 import CaptionNotices from "./CaptionNotices.vue";
 import type { CaptionSettingsPatch } from "./CaptionSettingsPanel.vue";
@@ -41,6 +42,8 @@ import CaptionSettingsPanel from "./CaptionSettingsPanel.vue";
 import CaptionsToolbar from "./CaptionsToolbar.vue";
 
 const ROW_HEIGHT = 76;
+
+type UpdateCaption = { captionId: string; startMs?: number; endMs?: number; text?: string };
 
 const project = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
@@ -105,16 +108,22 @@ function toSource(row: CaptionRow, outputMs: number): number {
   return sourceAtClamped(clipSpanOf(row.clip), outputMs);
 }
 
-function updateText(row: CaptionRow, text: string): void {
-  void project.execute({ kind: "updateCaption", captionId: row.cue.id, text });
+/** One `updateCaption`; a refusal (`execute` resolves `false`) puts the
+ * field back to the stored value -- the `useInspectorDraft` rule. */
+async function update(patch: UpdateCaption, revert: Revert): Promise<void> {
+  if (!(await project.execute({ kind: "updateCaption", ...patch }))) revert();
 }
 
-function updateStart(row: CaptionRow, outputMs: number): void {
-  void project.execute({ kind: "updateCaption", captionId: row.cue.id, startMs: toSource(row, outputMs) });
+function updateText(row: CaptionRow, text: string, revert: Revert): void {
+  void update({ captionId: row.cue.id, text }, revert);
 }
 
-function updateEnd(row: CaptionRow, outputMs: number): void {
-  void project.execute({ kind: "updateCaption", captionId: row.cue.id, endMs: toSource(row, outputMs) });
+function updateStart(row: CaptionRow, outputMs: number, revert: Revert): void {
+  void update({ captionId: row.cue.id, startMs: toSource(row, outputMs) }, revert);
+}
+
+function updateEnd(row: CaptionRow, outputMs: number, revert: Revert): void {
+  void update({ captionId: row.cue.id, endMs: toSource(row, outputMs) }, revert);
 }
 
 function remove(row: CaptionRow): void {
@@ -195,9 +204,9 @@ function selectCue(row: CaptionRow): void {
           :row="row"
           :height="ROW_HEIGHT"
           :selected="row.cue.id === selectedId"
-          @text="updateText(row, $event)"
-          @start="updateStart(row, $event)"
-          @end="updateEnd(row, $event)"
+          @text="(value, revert) => updateText(row, value, revert)"
+          @start="(ms, revert) => updateStart(row, ms, revert)"
+          @end="(ms, revert) => updateEnd(row, ms, revert)"
           @remove="remove(row)"
         />
       </ul>

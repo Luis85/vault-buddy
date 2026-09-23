@@ -21,10 +21,13 @@
 //!
 //! **Plain WebVTT only**: the header, optional cue identifiers and
 //! `-->` timing lines (any cue settings after the end time are ignored);
-//! `NOTE`, `STYLE` and `REGION` blocks are skipped; inline tags (`<b>`,
-//! `<v Speaker>`, `<c.class>`, `<00:00:01.000>`) are stripped to their text
-//! and the five common entities decoded. SRT gets the same tag stripping,
-//! since SRT authoring tools write `<i>`/`<font>` freely.
+//! `NOTE`, `STYLE` and `REGION` blocks are skipped; WebVTT's own cue tags
+//! (`c`, `i`, `b`, `u`, `v`, `lang`, `ruby`, `rt` and `<00:00:01.000>`
+//! timestamps) are stripped to their text and the five common entities
+//! decoded. SRT strips only ITS tags (`i`, `b`, `u`, `font …`), since SRT
+//! authoring tools write those freely. **Any other `<…>`, and an unclosed
+//! `<`, is caption text in both formats** -- "Press <Ctrl> + <S>" and
+//! "x < 5" must survive whole, never be quietly shortened.
 
 use std::fmt;
 
@@ -157,19 +160,60 @@ fn bad_timestamp(line: usize, token: &str) -> CaptionParseError {
     }
 }
 
-/// Removes every `<...>` tag, then decodes the five common entities --
-/// `&amp;` LAST, so `&amp;lt;` stays the literal text `&lt;`.
-fn strip_markup(line: &str) -> String {
+/// Which format's markup a cue line may carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Format {
+    Srt,
+    Vtt,
+}
+
+/// SubRip's own tags: what SRT authoring tools actually write.
+const SRT_TAGS: [&str; 4] = ["i", "b", "u", "font"];
+/// WebVTT's cue-text tags (a `<hh:mm:ss.ttt>` timestamp tag is the one
+/// other kind, checked by `parse_timestamp`).
+const VTT_TAGS: [&str; 8] = ["c", "i", "b", "u", "v", "lang", "ruby", "rt"];
+
+/// Whether `inner` (what sits between one `<` and the next `>`) is a tag
+/// `format` defines. The name ends at a `.` class suffix (WebVTT) or at
+/// whitespace before attributes/annotations, and a closing `/` is allowed
+/// -- but `<b>` may carry nothing after its name in SRT except for
+/// `<font …>`'s attributes. Anything else (`<Ctrl>`, `<S>`, a WebVTT
+/// `<v …>` inside an SRT file) is caption TEXT.
+fn is_tag(inner: &str, format: Format) -> bool {
+    if format == Format::Vtt && parse_timestamp(inner).is_some() {
+        return true;
+    }
+    let body = inner.strip_prefix('/').unwrap_or(inner);
+    let end = body
+        .find(|c: char| c == '.' || c.is_whitespace())
+        .unwrap_or(body.len());
+    let (name, rest) = body.split_at(end);
+    let name = name.to_ascii_lowercase();
+    match format {
+        Format::Srt => SRT_TAGS.contains(&name.as_str()) && (rest.is_empty() || name == "font"),
+        Format::Vtt => VTT_TAGS.contains(&name.as_str()),
+    }
+}
+
+/// Removes the tags `format` defines, keeping every other `<…>` and any
+/// unclosed `<` as literal text, then decodes the five common entities --
+/// `&amp;` LAST, so `&amp;lt;` stays the literal text `&lt;`. A caption
+/// word is never deleted: "Press <Ctrl> + <S>" and "x < 5" survive whole.
+fn strip_markup(line: &str, format: Format) -> String {
     let mut out = String::with_capacity(line.len());
-    let mut in_tag = false;
-    for ch in line.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' if in_tag => in_tag = false,
-            _ if !in_tag => out.push(ch),
-            _ => {}
+    let mut rest = line;
+    while let Some(open) = rest.find('<') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        match after.find('>') {
+            Some(close) if is_tag(&after[..close], format) => rest = &after[close + 1..],
+            _ => {
+                out.push('<');
+                rest = after;
+            }
         }
     }
+    out.push_str(rest);
     out.replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&nbsp;", " ")
@@ -179,10 +223,14 @@ fn strip_markup(line: &str) -> String {
 
 /// The cue text after the timing line: each line stripped and trimmed,
 /// blank results dropped, joined by `\n`, bounded in characters.
-fn cue_text(timing_line: usize, lines: &[(usize, &str)]) -> Result<String, CaptionParseError> {
+fn cue_text(
+    timing_line: usize,
+    lines: &[(usize, &str)],
+    format: Format,
+) -> Result<String, CaptionParseError> {
     let text = lines
         .iter()
-        .map(|(_, l)| strip_markup(l).trim().to_string())
+        .map(|(_, l)| strip_markup(l, format).trim().to_string())
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
@@ -202,7 +250,10 @@ fn cue_text(timing_line: usize, lines: &[(usize, &str)]) -> Result<String, Capti
 }
 
 /// One cue block: an optional identifier line, the timing line, the text.
-fn parse_cue_block(block: &[(usize, &str)]) -> Result<ParsedCue, CaptionParseError> {
+fn parse_cue_block(
+    block: &[(usize, &str)],
+    format: Format,
+) -> Result<ParsedCue, CaptionParseError> {
     let timing_at = if block[0].1.contains("-->") {
         0
     } else if block.len() > 1 && block[1].1.contains("-->") {
@@ -215,7 +266,7 @@ fn parse_cue_block(block: &[(usize, &str)]) -> Result<ParsedCue, CaptionParseErr
     };
     let (line, value) = block[timing_at];
     let (start_ms, end_ms) = parse_timing(line, value)?;
-    let text = cue_text(line, &block[timing_at + 1..])?;
+    let text = cue_text(line, &block[timing_at + 1..], format)?;
     Ok(ParsedCue {
         start_ms,
         end_ms,
@@ -225,7 +276,7 @@ fn parse_cue_block(block: &[(usize, &str)]) -> Result<ParsedCue, CaptionParseErr
 
 /// Parses every cue block in order, refusing a 2001st cue at its own line
 /// and an input with none at all.
-fn parse_blocks(blocks: &[Block<'_>]) -> Result<Vec<ParsedCue>, CaptionParseError> {
+fn parse_blocks(blocks: &[Block<'_>], format: Format) -> Result<Vec<ParsedCue>, CaptionParseError> {
     let mut cues = Vec::new();
     for block in blocks {
         if cues.len() == limits::MAX_CAPTIONS {
@@ -237,7 +288,7 @@ fn parse_blocks(blocks: &[Block<'_>]) -> Result<Vec<ParsedCue>, CaptionParseErro
                 ),
             );
         }
-        cues.push(parse_cue_block(block)?);
+        cues.push(parse_cue_block(block, format)?);
     }
     if cues.is_empty() {
         return fail(0, "The file holds no subtitle cues.");
@@ -247,7 +298,7 @@ fn parse_blocks(blocks: &[Block<'_>]) -> Result<Vec<ParsedCue>, CaptionParseErro
 
 /// SubRip (`.srt`): blocks of an index line, a timing line and text.
 pub fn parse_srt(text: &str) -> Result<Vec<ParsedCue>, CaptionParseError> {
-    parse_blocks(&blocks_of(text)?)
+    parse_blocks(&blocks_of(text)?, Format::Srt)
 }
 
 /// `true` when `first` is a WebVTT header line: `WEBVTT` alone or followed
@@ -280,7 +331,7 @@ pub fn parse_vtt(text: &str) -> Result<Vec<ParsedCue>, CaptionParseError> {
         .skip(1)
         .filter(|b| !is_vtt_metadata(b[0].1))
         .collect();
-    parse_blocks(&cues)
+    parse_blocks(&cues, Format::Vtt)
 }
 
 /// Either format, decided by the header: a `.txt` names no format, and a

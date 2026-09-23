@@ -82,10 +82,14 @@ const MARKERS = [
   marker("m3", "c1", 1_000, "Trimmed away"),
 ];
 
+const REFUSAL = { code: "invalidRequest", message: "Refused by Rust", retryable: false, operationId: "op-1" };
+
 let executed: EditorCommand[] = [];
+let refuse = false;
 
 async function mountLibrary(markers: Marker[] = MARKERS, playheadMs = 3_500) {
   executed = [];
+  refuse = false;
   const p = project(markers);
   const snapshot = {
     sessionId: "ses-a",
@@ -106,6 +110,7 @@ async function mountLibrary(markers: Marker[] = MARKERS, playheadMs = 3_500) {
         Promise.resolve({ snapshot, project: p, workspace: {}, missing: [], sourceBase: "b", recovered: false }),
       execute: (req): Promise<EditorProjection> => {
         executed.push(req.command);
+        if (refuse) return Promise.reject(REFUSAL);
         return Promise.resolve({ snapshot: { ...snapshot, revision: 2 }, project: p });
       },
     }),
@@ -176,5 +181,16 @@ describe("ChaptersLibrary", () => {
     ]);
     await w.get('[data-testid="chapter-jump-m1"]').trigger("click");
     expect(useEditorWorkspaceStore().playheadMs).toBe(5_000);
+  });
+
+  // Fix round 1: a title Rust refused goes back to the stored one.
+  it("a refused rename puts the stored title back", async () => {
+    const w = await mountLibrary();
+    refuse = true;
+    const title = w.get('[data-testid="chapter-title-m1"]');
+    await title.setValue("Too long for Rust, say");
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "updateMarker", markerId: "m1", title: "Too long for Rust, say" }]);
+    expect((title.element as HTMLInputElement).value).toBe("Wrap up");
   });
 });

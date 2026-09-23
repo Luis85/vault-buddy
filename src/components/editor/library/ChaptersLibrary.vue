@@ -10,8 +10,8 @@
  * authority -- a locked track or an over-long title comes back as the
  * store's error); jumping moves the playhead only, which is view state.
  * A rename commits on `change` (blur/Enter), never per keystroke, and a
- * blank or unchanged title is not sent: the field just shows the stored
- * title again.
+ * blank or unchanged title is not sent, and one Rust refuses is not kept:
+ * either way the field shows the stored title again (fix round 1).
  */
 import { computed } from "vue";
 
@@ -30,14 +30,11 @@ function add(): void {
   if ("command" in draft.value) void project.execute(draft.value.command);
 }
 
-function rename(markerId: string, current: string, event: Event): void {
+async function rename(markerId: string, current: string, event: Event): Promise<void> {
   const input = event.target as HTMLInputElement;
   const title = input.value.trim();
-  if (!title || title === current) {
-    input.value = current;
-    return;
-  }
-  void project.execute({ kind: "updateMarker", markerId, title });
+  if (title && title !== current && (await project.execute({ kind: "updateMarker", markerId, title }))) return;
+  input.value = current;
 }
 
 function remove(markerId: string): void {

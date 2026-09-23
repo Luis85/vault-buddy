@@ -226,8 +226,9 @@ pub(super) fn update_caption(
 /// Divides `text`'s words in the same proportion as the time: the left
 /// half gets `round(words · fraction)` of them, clamped so each half keeps
 /// at least one. A single word cannot be divided, so both halves keep it
-/// rather than one being left with nothing (`validate_project` would, and
-/// `checked_text` does, refuse an empty caption).
+/// rather than one being left with nothing -- the commands refuse an empty
+/// caption (`checked_text`); `validate_project` does not (docs/Gaps.md
+/// GAP-179), so this is where an empty half would have to be stopped.
 fn split_words(text: &str, fraction: f64) -> (String, String) {
     let words: Vec<&str> = text.split_whitespace().collect();
     if words.len() < 2 {
