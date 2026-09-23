@@ -31,15 +31,16 @@
 //! there is only ever one seven-way "which field belongs to which kind"
 //! match in this file, not two independently-maintained copies of it.
 //!
-//! **Geometry range checks are new to `validate.rs`, not new to this
-//! file.** `x`/`y` (every kind) mirror `check_clip`'s own `[0,1]` range;
-//! `w`/`h` (the four box-shaped kinds) get the LOOSER `(0,1]`
-//! `check_positive_fraction` rather than `check_clip`'s `0.1` floor -- a
-//! cue's box can be far thinner than a video frame ever should, and the
-//! reference workspace fixture proves it (`validate.rs`'s own doc); and
-//! `spotlight`'s `dim` mirrors `opacity`'s `[0,1]`. Every default here
-//! already lands inside these, so a caller who omits every optional field
-//! still gets a `validate_project`-clean effect.
+//! **Every numeric field `workspace.schema.json` bounds is now enforced in
+//! `validate.rs`, not new to this file.** `x`/`y`/`x2`/`y2`/`dim` `[0,1]`;
+//! `w`/`h` `[0.01,1]` (NOT `check_clip`'s own `0.1` floor -- a cue's box
+//! can be far thinner than a video frame ever should, and the reference
+//! workspace fixture proves it, down to `h: 0.05`); `factor` `[1,4]`;
+//! `font_size` `[12,100]`; `stroke` `[1,20]`; `easing` `[0,10000]`;
+//! `number` `[1,99]` -- see `validate.rs`'s own doc on `check_effect` for
+//! the schema citation. Every default here already lands inside these, so
+//! a caller who omits every optional field still gets a
+//! `validate_project`-clean effect.
 
 use crate::editor::commands::clips::{ensure_unlocked, find_clip, invalid_request};
 use crate::editor::commands::payloads::{

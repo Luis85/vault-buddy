@@ -583,6 +583,88 @@ fn step_effect_missing_text_is_rejected() {
     );
 }
 
+/// Task 34 fix round 1 (review Important #1/#2): every numeric field
+/// `workspace.schema.json` bounds for the `effect` shape
+/// (`contracts/workspace.schema.json`'s `effect` definition) gets its own
+/// row here -- `x`/`y`/`x2`/`y2`/`dim` `[0,1]`, `w`/`h` `[0.01,1]`
+/// (NOT `check_clip`'s `0.1` floor -- see `validate.rs`'s own doc on
+/// `check_effect`), `factor` `[1,4]`, `fontSize`/`font_size` `[12,100]`,
+/// `stroke` `[1,20]`, `easing` `[0,10000]`, `number` `[1,99]`. The base
+/// fixture's `kind` is `"mask"` throughout: `check_effect`'s own per-kind
+/// match requires nothing extra for `mask` (`Highlight | Spotlight | Mask
+/// => {}`), and `Effect`'s own `Deserialize` has no per-kind
+/// `deny_unknown_fields` (only the WIRE `EffectProps` structs do), so
+/// setting every field regardless of `kind` deserializes cleanly and the
+/// range checks below fire unconditionally, not gated on `effect.kind` --
+/// which is exactly what lets one kind cover all twelve rows.
+#[test]
+fn effect_numeric_fields_are_bounded_to_the_schema() {
+    let base = serde_json::json!({
+        "id": "e1", "clip_id": "c1", "kind": "mask",
+        "start_ms": 0, "end_ms": 100,
+        "x": 0.5, "y": 0.5, "color": "#ffffff",
+        "w": 0.5, "h": 0.5, "x2": 0.5, "y2": 0.5,
+        "factor": 2.0, "fontSize": 50, "stroke": 5,
+        "dim": 0.5, "easing": 10.0, "number": 3
+    });
+    // (JSON key on the wire, the field name `check_range`'s message
+    // names, lower bound, upper bound).
+    let cases: [(&str, &str, f64, f64); 12] = [
+        ("x", "x", 0.0, 1.0),
+        ("y", "y", 0.0, 1.0),
+        ("w", "w", 0.01, 1.0),
+        ("h", "h", 0.01, 1.0),
+        ("x2", "x2", 0.0, 1.0),
+        ("y2", "y2", 0.0, 1.0),
+        ("factor", "factor", 1.0, 4.0),
+        ("fontSize", "font_size", 12.0, 100.0),
+        ("stroke", "stroke", 1.0, 20.0),
+        ("dim", "dim", 0.0, 1.0),
+        ("easing", "easing", 0.0, 10_000.0),
+        ("number", "number", 1.0, 99.0),
+    ];
+    let mut checked = 0;
+    for (json_key, message_field, lo, hi) in cases {
+        let build = |value: f64| -> Project {
+            let mut json = base.clone();
+            json[json_key] = serde_json::json!(value);
+            let mut project = base_project();
+            project.effects.push(serde_json::from_value(json).unwrap());
+            project
+        };
+
+        let err = validate_project(&build(lo - 0.001)).unwrap_err();
+        assert!(
+            err.message.contains("e1") && err.message.contains(message_field),
+            "{json_key} below its {lo} lower bound: message {:?} does not name the field",
+            err.message
+        );
+
+        let err = validate_project(&build(hi + 0.001)).unwrap_err();
+        assert!(
+            err.message.contains("e1") && err.message.contains(message_field),
+            "{json_key} above its {hi} upper bound: message {:?} does not name the field",
+            err.message
+        );
+
+        // The bounds themselves are inclusive.
+        validate_project(&build(lo)).unwrap_or_else(|e| {
+            panic!("{json_key} at its own lower bound {lo} must validate: {e:?}")
+        });
+        validate_project(&build(hi)).unwrap_or_else(|e| {
+            panic!("{json_key} at its own upper bound {hi} must validate: {e:?}")
+        });
+        checked += 1;
+    }
+    // Vacuity guard, the `shared_fixture_table_has_ten_cases` precedent
+    // (`time.rs`): every one of the twelve fields `workspace.schema.json`
+    // bounds on `effect` must contribute a row.
+    assert_eq!(
+        checked, 12,
+        "only {checked} numeric-bound rows were checked"
+    );
+}
+
 #[test]
 fn transition_side_reused_is_rejected() {
     // c1 (from `base_project`) is 0..1000ms on t1, output duration 1000ms,
@@ -715,98 +797,8 @@ fn track_volume_out_of_range_is_rejected() {
     );
 }
 
-// ---- Task 30: transition geometry, kind and same-track overlap ------------
-
-/// `base_project`'s c1 (0..1000ms on t1) plus a c2 on the same track, and
-/// an audio track/asset pair for the kind rule. c2 is 1400ms long -- NOT
-/// c1's 1000ms -- so a duration bound computed from the wrong clip fails.
-fn project_with_second_clip(c2_start: u64) -> Project {
-    let mut project = base_project();
-    project.clips.push(
-        serde_json::from_value(serde_json::json!({
-            "id": "c2", "asset_id": "a1", "track_id": "t1", "name": "Clip Two",
-            "start_ms": c2_start, "in_ms": 200, "out_ms": 1600,
-            "fade_in_ms": 0, "fade_out_ms": 0, "fade_curve": "linear",
-            "opacity": 1, "volume": 1, "muted": false,
-            "x": 0, "y": 0, "w": 1, "h": 1
-        }))
-        .unwrap(),
-    );
-    project
-}
-
-fn dissolve(from: &str, to: &str, duration_ms: u64) -> crate::editor::model_cues::Transition {
-    serde_json::from_value(serde_json::json!({
-        "id": "tr1", "from": from, "to": to, "duration_ms": duration_ms, "kind": "dissolve"
-    }))
-    .unwrap()
-}
-
-#[test]
-fn a_transition_is_an_overlap_of_exactly_its_duration_not_mere_adjacency() {
-    // Regression (Task 30): before, validation demanded from's end ==
-    // to's start, so the very overlap `addTransition` creates would have
-    // been rejected as invalid on the next command.
-    let mut overlapping = project_with_second_clip(700);
-    overlapping.transitions.push(dissolve("c1", "c2", 300));
-    validate_project(&overlapping).expect("a 300ms overlap carrying a 300ms transition is valid");
-
-    let mut adjacent = project_with_second_clip(1000);
-    adjacent.transitions.push(dissolve("c1", "c2", 300));
-    let err = validate_project(&adjacent).unwrap_err();
-    assert!(
-        err.message.contains("tr1") && err.message.contains("300 ms after"),
-        "message: {}",
-        err.message
-    );
-
-    // A transition longer than half the SHORTER clip (c1, 1000ms) is out.
-    let mut too_long = project_with_second_clip(400);
-    too_long.transitions.push(dissolve("c1", "c2", 600));
-    let err = validate_project(&too_long).unwrap_err();
-    assert!(err.message.contains("1000 ms"), "message: {}", err.message);
-}
-
-#[test]
-fn a_transition_kind_must_match_its_clips_media() {
-    let mut project = project_with_second_clip(700);
-    let mut t = dissolve("c1", "c2", 300);
-    t.kind = crate::editor::model_cues::TransitionKind::EqualPower;
-    project.transitions.push(t);
-    let err = validate_project(&project).unwrap_err();
-    assert!(
-        err.message.contains("tr1") && err.message.contains("Dissolve"),
-        "message: {}",
-        err.message
-    );
-}
-
-#[test]
-fn same_track_clips_may_overlap_only_by_their_transition() {
-    // The same 300ms overlap as the valid case above, but with no
-    // transition to explain it.
-    let project = project_with_second_clip(700);
-    let err = validate_project(&project).unwrap_err();
-    assert!(
-        err.message.contains("c2") && err.message.contains("without a transition"),
-        "message: {}",
-        err.message
-    );
-
-    // The allowance is the transitioned PAIR's alone: a third clip placed
-    // inside the c1->c2 window is still an unexplained overlap.
-    let mut project = project_with_second_clip(700);
-    project.transitions.push(dissolve("c1", "c2", 300));
-    project.clips.push(
-        serde_json::from_value(serde_json::json!({
-            "id": "c3", "asset_id": "a1", "track_id": "t1", "name": "Clip Three",
-            "start_ms": 800, "in_ms": 0, "out_ms": 200,
-            "fade_in_ms": 0, "fade_out_ms": 0, "fade_curve": "linear",
-            "opacity": 1, "volume": 1, "muted": false,
-            "x": 0, "y": 0, "w": 1, "h": 1
-        }))
-        .unwrap(),
-    );
-    let err = validate_project(&project).unwrap_err();
-    assert!(err.message.contains("c3"), "message: {}", err.message);
-}
+// Task 30's own transition-geometry/kind/overlap tests live in the
+// nested `mod transitions` sibling file, split out at the 800-line Rust
+// cap (Task 34 fix round 1) -- see that file's own module doc.
+#[path = "validate_transitions_tests.rs"]
+mod transitions;

@@ -44,22 +44,6 @@ fn check_range(id: &str, field: &str, value: f64, lo: f64, hi: f64) -> Result<()
     Ok(())
 }
 
-/// `(0,1]` -- unlike `check_clip`'s own `w`/`h` floor of `0.1` (a video
-/// FRAME can't usefully shrink below a tenth of the canvas), a teaching
-/// cue's box can legitimately be much thinner: the reference workspace
-/// fixture's own text/highlight/step cues carry `h` as low as `0.05`
-/// (`reference-workspace.example.json`, caught by this exact check when it
-/// first shipped with `check_clip`'s floor copied verbatim). Zero and
-/// negative are still refused -- a box with no extent paints nothing.
-fn check_positive_fraction(id: &str, field: &str, value: f64) -> Result<(), EditorError> {
-    if !(value > 0.0 && value <= 1.0) {
-        return Err(invalid(format!(
-            "{id}: {field} {value} must be within (0,1]"
-        )));
-    }
-    Ok(())
-}
-
 /// `speed`'s effective value for arithmetic: the clip's own value when set
 /// (already range-checked by `check_clip` before any caller outside this
 /// module's clip loop can see it), else the reference format's implicit
@@ -328,29 +312,50 @@ fn check_effect(effect: &Effect, clips: &HashMap<&str, &Clip>) -> Result<(), Edi
             effect.id, effect.start_ms, effect.end_ms
         )));
     }
-    // Task 34: `x`/`y` mirror `check_clip`'s own `[0,1]` range for every
-    // kind (both are required fields on `Effect` regardless of kind); `w`/
-    // `h` (the four box-shaped kinds that carry them at all) use the
-    // looser `(0,1]` `check_positive_fraction` -- see its own doc for why
-    // `check_clip`'s `0.1` floor is wrong here; `dim` (spotlight only)
-    // mirrors `opacity`'s own `[0,1]` range just above. Every one of
-    // `cues::default_shell`'s own defaults already lands inside these, so
-    // omitting a field never trips them.
+    // Task 34 (fix round 1): every numeric field `workspace.schema.json`
+    // bounds for the `effect` shape (`contracts/workspace.schema.json`,
+    // the `effect` definition) is mirrored here exactly, the same
+    // `check_clip`/`Track.volume`/`crop_zoom` convention this file already
+    // applies field-by-field -- `x`/`y` `[0,1]` (required on every kind);
+    // `w`/`h` `[0.01,1]` (NOT `check_clip`'s own `0.1` floor: the reference
+    // workspace fixture's own text/highlight/step cues carry `h` as low as
+    // `0.05`, well inside the schema's `0.01` but below `check_clip`'s
+    // `0.1` -- a first pass here copied `check_clip`'s bound verbatim and
+    // it broke `reference_example_is_valid`, which is how this exact
+    // number was confirmed against the schema rather than guessed); `x2`/
+    // `y2` `[0,1]`; `factor` `[1,4]`; `font_size` (wire `fontSize`)
+    // `[12,100]`; `stroke` `[1,20]`; `dim` `[0,1]`; `easing` `[0,10000]`;
+    // `number` `[1,99]`. Every one of `cues::default_shell`'s own defaults
+    // already lands inside these, so omitting a field never trips them.
     let x = as_f64(&effect.id, "x", &effect.x)?;
     check_range(&effect.id, "x", x, 0.0, 1.0)?;
     let y = as_f64(&effect.id, "y", &effect.y)?;
     check_range(&effect.id, "y", y, 0.0, 1.0)?;
     if let Some(w) = &effect.w {
         let w = as_f64(&effect.id, "w", w)?;
-        check_positive_fraction(&effect.id, "w", w)?;
+        check_range(&effect.id, "w", w, 0.01, 1.0)?;
     }
     if let Some(h) = &effect.h {
         let h = as_f64(&effect.id, "h", h)?;
-        check_positive_fraction(&effect.id, "h", h)?;
+        check_range(&effect.id, "h", h, 0.01, 1.0)?;
     }
     if let Some(dim) = &effect.dim {
         let dim = as_f64(&effect.id, "dim", dim)?;
         check_range(&effect.id, "dim", dim, 0.0, 1.0)?;
+    }
+    for (field, value, lo, hi) in [
+        ("x2", effect.x2.as_ref(), 0.0, 1.0),
+        ("y2", effect.y2.as_ref(), 0.0, 1.0),
+        ("factor", effect.factor.as_ref(), 1.0, 4.0),
+        ("font_size", effect.font_size.as_ref(), 12.0, 100.0),
+        ("stroke", effect.stroke.as_ref(), 1.0, 20.0),
+        ("easing", effect.easing.as_ref(), 0.0, 10000.0),
+        ("number", effect.number.as_ref(), 1.0, 99.0),
+    ] {
+        if let Some(value) = value {
+            let v = as_f64(&effect.id, field, value)?;
+            check_range(&effect.id, field, v, lo, hi)?;
+        }
     }
     match effect.kind {
         EffectKind::Text => require_text(effect)?,
