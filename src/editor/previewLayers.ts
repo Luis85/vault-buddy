@@ -29,25 +29,39 @@ import { sourceAt } from "./timeMap";
 export type LayerKind = "video" | "image" | "audio";
 
 /**
- * Builtins THIS codebase backs with a real file (docs/Gaps.md GAP-175).
- * `core::editor::migrate::from_staged` is the one place that mints a
- * `builtin: screen` asset, and it deliberately diverges from the reference
- * format: that asset has a real `sources.json` record, resolvable through
- * `editor_media_url` (`validate_media.rs`'s own module doc — "a staged
- * capture's asset is builtin: screen here AND has a real file … which the
- * reference's synthesized builtins never had"). Every other builtin this
- * enum names — card, cues, presenter, detail, ambient — is procedurally
- * supplied with no file, per the reference format, and nothing in this
- * codebase mints one with a registered source; skip those, never lay them
- * out, or the controller would ask Rust for media that cannot exist. An
- * asset with NO `builtin` at all is always file-backed (an import).
+ * Which `Builtin` variants THIS codebase backs with a real file
+ * (docs/Gaps.md GAP-175). `core::editor::migrate::from_staged` is the one
+ * place that mints a `builtin: screen` asset (see its own one-line
+ * cross-reference comment at the mint site), and it deliberately diverges
+ * from the reference format: that asset has a real `sources.json` record,
+ * resolvable through `editor_media_url` (`validate_media.rs`'s own module
+ * doc — "a staged capture's asset is builtin: screen here AND has a real
+ * file … which the reference's synthesized builtins never had"). Every
+ * other builtin is procedurally supplied with no file, per the reference
+ * format, and nothing in this codebase mints one with a registered source.
+ *
+ * Deliberately a `Record`, not a `Set` of the file-backed few: fix round 1
+ * of GAP-175 replaced the original `Set<Builtin>(["screen"])` because a set
+ * only needed vigilance to stay a superset of whatever `migrate.rs` mints
+ * next — a future file-backed builtin could reproduce this gap silently. A
+ * `Record<Builtin, boolean>` must enumerate every member of the `Builtin`
+ * union (`editorTypes.ts`) or the object literal fails to type-check, so
+ * the compiler itself refuses to build the moment a new `Builtin` variant
+ * is added here without an explicit `true`/`false` decision.
  */
-const FILE_BACKED_BUILTINS: ReadonlySet<Builtin> = new Set<Builtin>(["screen"]);
+const BUILTIN_HAS_FILE: Record<Builtin, boolean> = {
+  screen: true,
+  presenter: false,
+  detail: false,
+  cues: false,
+  ambient: false,
+  card: false,
+};
 
 /** Has this asset a real file the preview could show — as opposed to a
  * synthesized builtin with none (GAP-175)? */
 function hasPreviewSource(asset: Asset): boolean {
-  return asset.builtin === undefined || FILE_BACKED_BUILTINS.has(asset.builtin);
+  return asset.builtin === undefined || BUILTIN_HAS_FILE[asset.builtin];
 }
 
 /** Local preview monitoring — never part of the project. */

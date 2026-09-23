@@ -138,6 +138,9 @@ pub fn from_staged(input: &StagedInput<'_>, project_id: &str) -> MigrationResult
         width: Some(Num::from(input.width)),
         height: Some(Num::from(input.height)),
         size: None,
+        // GAP-175: this is the one `Builtin` this codebase mints with a real
+        // `sources.json` record — keep `src/editor/previewLayers.ts`'s
+        // `BUILTIN_HAS_FILE` in sync with any change here.
         builtin: Some(Builtin::Screen),
         media_type: None,
         linked_asset: None,
