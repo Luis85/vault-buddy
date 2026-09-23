@@ -16,7 +16,7 @@ use crate::editor::model_cues::{Marker, TransitionKind};
 use crate::editor::session::{EditorSession, ExecuteRequest};
 use crate::editor::test_support::{asset, clip, effect, minimal_project, no_context, track};
 use crate::editor::time::{cue_output_span, ClipSpan};
-use crate::editor::{validate_project, Map, Num};
+use crate::editor::{limits, validate_project, Map, Num};
 
 fn n(v: f64) -> Num {
     Num::from_f64(v).expect("finite test fixture value")
@@ -502,4 +502,276 @@ fn validation_backstops_a_crop_anchor_outside_the_frame() {
         assert_eq!(err.code, EditorErrorCode::InvalidProject);
         assert!(err.message.contains("crop_"), "{}", err.message);
     }
+}
+
+// ---- setCanvas (Task 32; F-38) ---------------------------------------------
+
+// Named test 5 (brief).
+#[test]
+fn only_the_four_canvases_are_accepted() {
+    let p = project(); // starts at 1280x720 (minimal_project's default)
+    for (w, h) in [(1920, 1080), (100, 100), (720, 721), (0, 0)] {
+        let err = refusal(set_canvas(
+            &p,
+            &SetCanvasPayload {
+                width: w,
+                height: h,
+            },
+        ));
+        assert!(
+            err.message.contains(&format!("{w}x{h}")),
+            "{w}x{h}: {}",
+            err.message
+        );
+    }
+    // Every one of the four presets OTHER than the project's own starting
+    // canvas is accepted, keeps fps untouched, and is itself schema-valid.
+    for &(w, h) in limits::CANVASES
+        .iter()
+        .filter(|&&(w, h)| (w, h) != (p.canvas.width, p.canvas.height))
+    {
+        let (candidate, label) = set_canvas(
+            &p,
+            &SetCanvasPayload {
+                width: w,
+                height: h,
+            },
+        )
+        .unwrap();
+        assert_eq!((candidate.canvas.width, candidate.canvas.height), (w, h));
+        assert_eq!(
+            candidate.canvas.fps, p.canvas.fps,
+            "fps is not a setCanvas field"
+        );
+        assert_eq!(label, "Change canvas");
+        validate_project(&candidate).expect("every preset is a valid canvas");
+    }
+}
+
+#[test]
+fn set_canvas_to_the_current_pair_is_refused_as_a_no_op() {
+    let p = project(); // 1280x720
+    let err = refusal(set_canvas(
+        &p,
+        &SetCanvasPayload {
+            width: 1280,
+            height: 720,
+        },
+    ));
+    assert!(err.message.contains("already"), "{}", err.message);
+}
+
+#[test]
+fn set_canvas_preserves_forward_compat_extra() {
+    let mut p = project();
+    p.canvas
+        .extra
+        .insert("future".to_string(), serde_json::json!(true));
+    let (candidate, _) = set_canvas(
+        &p,
+        &SetCanvasPayload {
+            width: 720,
+            height: 1280,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        candidate.canvas.extra.get("future"),
+        Some(&serde_json::json!(true)),
+        "an edit here must not drop an unrelated forward-compat field (R3)"
+    );
+}
+
+// ---- setAdjustments (Task 32; F-39) ----------------------------------------
+
+fn adjustments(
+    brightness: f64,
+    contrast: f64,
+    saturation: f64,
+    sepia: f64,
+    grayscale: f64,
+) -> Adjustments {
+    Adjustments {
+        brightness: n(brightness),
+        contrast: n(contrast),
+        saturation: n(saturation),
+        sepia: n(sepia),
+        grayscale: n(grayscale),
+        extra: Map::new(),
+    }
+}
+
+/// A fixture dedicated to `setAdjustments`, independent of the shared
+/// `project()` above (the fixture-flaw rule: piling a card asset and a
+/// second locked track onto the speed/layout fixture risks tripping one of
+/// ITS guards instead of this one's). `cam`/`v1`: ordinary footage. `mic`/
+/// `a1`: audio, no colour. `v2` (locked): `locked1`. `cardAsset`/`card1`: a
+/// title card -- `builtin: Card` is what makes it one, never `Clip.card`
+/// (unset here on purpose, so the test cannot pass by accident from the
+/// wrong field).
+fn color_project() -> Project {
+    let mut p = minimal_project();
+    p.assets.push(asset("cam", AssetKind::Video, 10_000));
+    p.assets.push(asset("mic", AssetKind::Audio, 10_000));
+    let mut card_asset = asset("cardAsset", AssetKind::Video, 1_000);
+    card_asset.builtin = Some(Builtin::Card);
+    p.assets.push(card_asset);
+    p.tracks.push(track("v1", TrackKind::Video, false));
+    p.tracks.push(track("v2", TrackKind::Video, true));
+    p.tracks.push(track("a1", TrackKind::Audio, false));
+    p.clips.push(clip("c1", "v1", "cam", 0, 0, 2_000));
+    p.clips.push(clip("c2", "v1", "cam", 3_000, 0, 1_000));
+    p.clips.push(clip("locked1", "v2", "cam", 0, 0, 1_000));
+    p.clips.push(clip("aud1", "a1", "mic", 0, 0, 1_000));
+    p.clips
+        .push(clip("card1", "v1", "cardAsset", 5_000, 0, 500));
+    validate_project(&p).expect("the color fixture itself is valid");
+    p
+}
+
+// Named test 6 (brief).
+#[test]
+fn adjustments_ranges_are_enforced() {
+    let p = color_project();
+    let cases: Vec<(&str, Adjustments)> = vec![
+        ("brightness", adjustments(0.2, 1.0, 1.0, 0.0, 0.0)),
+        ("brightness", adjustments(2.1, 1.0, 1.0, 0.0, 0.0)),
+        ("contrast", adjustments(1.0, 0.24, 1.0, 0.0, 0.0)),
+        ("contrast", adjustments(1.0, 2.01, 1.0, 0.0, 0.0)),
+        ("saturation", adjustments(1.0, 1.0, -0.1, 0.0, 0.0)),
+        ("saturation", adjustments(1.0, 1.0, 2.01, 0.0, 0.0)),
+        ("sepia", adjustments(1.0, 1.0, 1.0, -0.1, 0.0)),
+        ("sepia", adjustments(1.0, 1.0, 1.0, 1.01, 0.0)),
+        ("grayscale", adjustments(1.0, 1.0, 1.0, 0.0, -0.1)),
+        ("grayscale", adjustments(1.0, 1.0, 1.0, 0.0, 1.01)),
+    ];
+    for (field, adj) in cases {
+        let err = refusal(set_adjustments(
+            &p,
+            &SetAdjustmentsPayload {
+                clip_ids: vec!["c1".into()],
+                adjustments: Some(adj),
+            },
+        ));
+        assert!(err.message.contains(field), "{field}: {}", err.message);
+    }
+    // The inclusive bounds are accepted, and land on the clip untouched.
+    let edges = adjustments(0.25, 2.0, 0.0, 1.0, 1.0);
+    let (candidate, label) = set_adjustments(
+        &p,
+        &SetAdjustmentsPayload {
+            clip_ids: vec!["c1".into()],
+            adjustments: Some(edges.clone()),
+        },
+    )
+    .unwrap();
+    assert_eq!(by_id(&candidate, "c1").adjustments.as_ref(), Some(&edges));
+    assert_eq!(label, "Change colour");
+    validate_project(&candidate).unwrap();
+}
+
+// Named test 7 (brief).
+#[test]
+fn cards_refuse_adjustments() {
+    let p = color_project();
+    let attempt = adjustments(1.2, 1.0, 1.0, 0.0, 0.0);
+
+    for payload in [
+        SetAdjustmentsPayload {
+            clip_ids: vec!["card1".into()],
+            adjustments: Some(attempt.clone()),
+        },
+        // Clearing is refused the same way -- a card can never carry
+        // adjustments, so there is nothing to clear either.
+        SetAdjustmentsPayload {
+            clip_ids: vec!["card1".into()],
+            adjustments: None,
+        },
+        // One card among several targets refuses the WHOLE command --
+        // `check_color_targets`' own atomic-multi-target discipline.
+        SetAdjustmentsPayload {
+            clip_ids: vec!["c1".into(), "card1".into()],
+            adjustments: Some(attempt.clone()),
+        },
+    ] {
+        let err = refusal(set_adjustments(&p, &payload));
+        assert_eq!(err.message, "Colour applies to footage, not title cards");
+    }
+}
+
+#[test]
+fn adjustments_refuse_an_audio_clip_and_a_locked_track() {
+    let p = color_project();
+    let attempt = Some(adjustments(1.2, 1.0, 1.0, 0.0, 0.0));
+
+    let err = refusal(set_adjustments(
+        &p,
+        &SetAdjustmentsPayload {
+            clip_ids: vec!["aud1".into()],
+            adjustments: attempt.clone(),
+        },
+    ));
+    assert!(err.message.contains("audio"), "{}", err.message);
+
+    let err = refusal(set_adjustments(
+        &p,
+        &SetAdjustmentsPayload {
+            clip_ids: vec!["locked1".into()],
+            adjustments: attempt,
+        },
+    ));
+    assert!(err.message.contains("locked"), "{}", err.message);
+}
+
+#[test]
+fn adjustments_apply_to_every_target_and_none_clears_only_the_targeted_clip() {
+    let p = color_project();
+    let (candidate, label) = set_adjustments(
+        &p,
+        &SetAdjustmentsPayload {
+            clip_ids: vec!["c1".into(), "c2".into()],
+            adjustments: Some(adjustments(1.3, 1.1, 1.3, 0.0, 0.0)),
+        },
+    )
+    .unwrap();
+    assert!(by_id(&candidate, "c1").adjustments.is_some());
+    assert!(by_id(&candidate, "c2").adjustments.is_some());
+    assert_eq!(label, "Change colour (2 clips)");
+
+    let (cleared, label) = set_adjustments(
+        &candidate,
+        &SetAdjustmentsPayload {
+            clip_ids: vec!["c1".into()],
+            adjustments: None,
+        },
+    )
+    .unwrap();
+    assert!(by_id(&cleared, "c1").adjustments.is_none());
+    assert!(
+        by_id(&cleared, "c2").adjustments.is_some(),
+        "an untargeted clip is left alone"
+    );
+    assert_eq!(label, "Reset colour");
+}
+
+#[test]
+fn adjustments_with_no_clips_or_an_unresolved_clip_is_refused() {
+    let p = color_project();
+    let err = refusal(set_adjustments(
+        &p,
+        &SetAdjustmentsPayload {
+            clip_ids: vec![],
+            adjustments: None,
+        },
+    ));
+    assert!(err.message.contains("at least one clip"), "{}", err.message);
+
+    let err = refusal(set_adjustments(
+        &p,
+        &SetAdjustmentsPayload {
+            clip_ids: vec!["nope".into()],
+            adjustments: None,
+        },
+    ));
+    assert!(err.message.contains("does not resolve"), "{}", err.message);
 }

@@ -2279,15 +2279,24 @@ render produces, and it says so nowhere on screen yet. What it does NOT show:
 2. **Effects, captions, markers and cards** — nothing clip-linked is
    drawn; a `card` (and every other `builtin` asset) has no file and is not
    laid out at all.
-3. **Colour adjustments.** Rotation, mirror/flip, crop (`crop_zoom`/
+3. **Layout and colour.** Rotation, mirror/flip, crop (`crop_zoom`/
    `crop_x`/`crop_y`), fit and frame shape ARE applied (tutorial-editor
    Task 31): each visual layer sits in a clipping frame at its box, rounded
    or circular per its shape, and `src/editor/previewTransform.ts` places
    the picture inside it with the reference compositor's arithmetic. One
    approximation remains there: an asset with no recorded `width`/`height`
    is treated as frame-shaped and falls back to CSS `object-fit`, so its
-   crop anchor and zoom are not exact. Nothing has compared any of it to a
-   render yet (the render is a later task).
+   crop anchor and zoom are not exact. **Colour (brightness/contrast/
+   saturation/sepia/grayscale) IS also applied now** (tutorial-editor
+   Task 32): `src/editor/colorPresets.ts`'s `adjustmentsFilter` maps a
+   clip's `adjustments` to a CSS `filter:` string, and `previewController.ts`
+   assigns it to the media element's own style — a card or an audio layer
+   always reads `"none"` (no picture to colour). This is still only an
+   APPROXIMATION of the render: the render (a later task) applies ffmpeg's
+   `eq`/`hue`/`colorchannelmixer` filters to the same five values, which are
+   not guaranteed to render bit-identically to a CSS `filter:` (different
+   colour-space handling, gamma, and rounding), and nothing has compared any
+   of it — layout or colour — to a render yet.
 4. **Timing** — sync is element-seek accurate, not frame accurate: a
    playing element is re-seeked only past 250 ms of drift, a cut shows as a
    seek, and audio/video from different elements are not sample-locked.

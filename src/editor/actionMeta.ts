@@ -114,7 +114,13 @@ export const ACTION_KIND: Partial<Record<ActionId, string>> = {
   addCaption: "addCaption", addMarker: "addMarker",
   addTrackVideo: "addTrack", addTrackAudio: "addTrack",
   fadeIn: "setFades", fadeOut: "setFades", transition: "addTransition",
-  detachAudio: "detachAudio", ratio: "setCanvas",
+  detachAudio: "detachAudio",
+  // `ratio` deliberately carries NO entry here (Task 32): it needs an
+  // extra user choice (which of the four presets) this table cannot
+  // pre-build, so it is resolved by its own `RESOLVERS` entry
+  // (`resolveProjectGated`, `actions.ts`) and sends `setCanvas` directly
+  // from `PreviewToolbar.vue`'s own ratio control -- never through
+  // `commandFor`/`BUILDERS`. See that file's module doc.
 };
 
 /** The human-readable shortcut shown beside an action's label/tooltip —
@@ -190,10 +196,15 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * delete the matching entry here in the SAME commit, or every action that
  * maps to that kind stays wrongly disabled after Rust can already accept
  * it. There is no test or build step that catches a divergence in either
- * direction.
+ * direction. **Task 32 removed `setAdjustments`/`setCanvas`, WITH
+ * consumers**: no `ActionId` maps to `setAdjustments` at all (`ColorSection`
+ * calls `editorProject.execute` directly, the `AudioSection`/
+ * `MixerPopover` precedent), and `ratio` — the one `ActionId` that used to
+ * name `setCanvas` here purely to stay gated — now has its own `RESOLVERS`
+ * entry and sends `setCanvas` directly from its ratio control in
+ * `PreviewToolbar.vue`, never through `commandFor`.
  */
 export const UNIMPLEMENTED_KINDS: ReadonlySet<string> = new Set([
-  "setAdjustments", "setCanvas",
   "addCard", "updateCard", "insertIntro",
   "addEffect", "updateEffect", "removeEffect",
   "setCaptionSettings", "addCaption", "updateCaption", "splitCaption", "removeCaptions",

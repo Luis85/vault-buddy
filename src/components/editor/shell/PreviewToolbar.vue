@@ -31,6 +31,29 @@
  * labeled overflow, not a second toolbar"). happy-dom implements no real
  * layout engine, so `overflowCount` is also a prop: a test drives it
  * directly, production leaves it unset and the observer computes it.
+ *
+ * **The ratio control (Task 32; F-38)** is the one item in `TOOLBAR_ITEMS`
+ * that is not a plain button: it is a native `<select>` over the four
+ * canvas presets (`CANVAS_RATIOS`, mirroring `core::editor::limits::
+ * CANVASES` — read from the Rust source, the `useInspectorDraft.ts` rule —
+ * through this one TS constant). A native select needs no popup-positioning
+ * code of its own (no clipping-by-an-`overflow-hidden`-ancestor risk the
+ * way a custom dropdown would have), so it fits directly into the same
+ * `v-for` as every other item, just rendered differently for `id ===
+ * "ratio"`. Choosing an option sends `setCanvas` DIRECTLY (`onRatioChange`,
+ * never through `commandFor`/`BUILDERS` — see `actions.ts`'s own module
+ * doc for why); a re-pick of the CURRENT ratio fires no `change` event at
+ * all (native select semantics), which is also Rust's own no-op refusal
+ * for a `setCanvas` naming the project's current canvas, so there is
+ * nothing to guard against twice.
+ *
+ * A successful `setCanvas` shows a one-time toast (F-38: "crop/caption
+ * warnings prompt a review") naming Checks — a plain flow-layout sibling
+ * of the toolbar row, not absolutely positioned, so it can never be
+ * clipped by the row's own `overflow-hidden` (used to move overflowing
+ * buttons into "More") the way an absolutely-positioned popup nested
+ * inside that row would risk being. It auto-dismisses after
+ * `CANVAS_TOAST_MS` or on its own Dismiss button, whichever comes first.
  */
 import type { ComponentPublicInstance } from "vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -40,6 +63,8 @@ import type { ActionContext, ActionId } from "../../../editor/actions";
 import { commandFor, resolveActions } from "../../../editor/actions";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import RatioSelect from "./RatioSelect.vue";
+import ToolbarOverflowMenu from "./ToolbarOverflowMenu.vue";
 
 /** Fixed order: teaching tools, then ratio/review, then the panel/focus
  * toggles (SCREENS-AND-INTERACTIONS.md §02's own ordering). */
@@ -132,6 +157,49 @@ function onWindowPointerDown(event: PointerEvent) {
 }
 onMounted(() => window.addEventListener("pointerdown", onWindowPointerDown));
 onBeforeUnmount(() => window.removeEventListener("pointerdown", onWindowPointerDown));
+
+// ---- the ratio control + its one-time toast (Task 32; F-38) -----------------
+// The control itself (the four options, the native <select>) lives in the
+// sibling `RatioSelect.vue` — see that file's own doc for why it was split
+// out (fallow complexity: this template used to inline it twice).
+
+const canvasValue = computed(() => {
+  const canvas = editorProject.project?.canvas;
+  return canvas ? `${canvas.width}x${canvas.height}` : "";
+});
+
+const CANVAS_TOAST_MS = 5_000;
+const canvasToastVisible = ref(false);
+let canvasToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showCanvasToast(): void {
+  canvasToastVisible.value = true;
+  if (canvasToastTimer) clearTimeout(canvasToastTimer);
+  canvasToastTimer = setTimeout(() => {
+    canvasToastVisible.value = false;
+    canvasToastTimer = null;
+  }, CANVAS_TOAST_MS);
+}
+function dismissCanvasToast(): void {
+  canvasToastVisible.value = false;
+  if (canvasToastTimer) {
+    clearTimeout(canvasToastTimer);
+    canvasToastTimer = null;
+  }
+}
+onBeforeUnmount(() => {
+  if (canvasToastTimer) clearTimeout(canvasToastTimer);
+});
+
+/** `RatioSelect`'s own `change` handler — bypasses `commandFor`/`BUILDERS`
+ * entirely (see the module doc): `ratio` needs the CHOSEN pair, which
+ * `commandFor` has no way to be handed. */
+async function onRatioChange(value: string): Promise<void> {
+  const [width, height] = value.split("x").map(Number);
+  closeMore();
+  const ok = await editorProject.execute({ kind: "setCanvas", width, height });
+  if (ok) showCanvasToast();
+}
 
 // ---- activation + roving tabindex over the visible row ----------------------
 
@@ -230,22 +298,36 @@ function itemClass(id: ActionId): string {
     class="flex h-8 w-full shrink-0 items-center gap-1 overflow-hidden rounded-control border border-line bg-raised px-2 text-micro text-fg-subtle"
     @keydown="onRowKeydown"
   >
-    <button
+    <template
       v-for="(id, i) in visibleItems"
       :key="id"
-      :ref="(el) => setItemRef(i, el)"
-      type="button"
-      :data-testid="`preview-toolbar-${id}`"
-      :tabindex="i === activeIndex ? 0 : -1"
-      :aria-disabled="!resolved[id].enabled"
-      :aria-pressed="ariaPressedFor(id)"
-      :title="itemTitle(id)"
-      class="shrink-0 cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      :class="itemClass(id)"
-      @click="onActivate(id)"
     >
-      {{ resolved[id].label }}
-    </button>
+      <RatioSelect
+        v-if="id === 'ratio'"
+        :ref="(el) => setItemRef(i, el)"
+        testid="preview-toolbar-ratio"
+        :select-tabindex="i === activeIndex ? 0 : -1"
+        :disabled="!resolved.ratio.enabled"
+        :title="itemTitle('ratio')"
+        :value="canvasValue"
+        @change="onRatioChange"
+      />
+      <button
+        v-else
+        :ref="(el) => setItemRef(i, el)"
+        type="button"
+        :data-testid="`preview-toolbar-${id}`"
+        :tabindex="i === activeIndex ? 0 : -1"
+        :aria-disabled="!resolved[id].enabled"
+        :aria-pressed="ariaPressedFor(id)"
+        :title="itemTitle(id)"
+        class="shrink-0 cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        :class="itemClass(id)"
+        @click="onActivate(id)"
+      >
+        {{ resolved[id].label }}
+      </button>
+    </template>
 
     <div
       v-if="overflowCount > 0"
@@ -263,29 +345,34 @@ function itemClass(id: ActionId): string {
       >
         More
       </button>
-      <div
+      <ToolbarOverflowMenu
         v-if="moreOpen"
-        role="menu"
-        aria-label="More tools"
-        data-testid="preview-toolbar-more-menu"
-        class="absolute right-0 top-full z-10 mt-1 flex min-w-36 flex-col gap-0.5 rounded-control border border-white/10 bg-slate-800 p-1 shadow-lg"
-        @click.stop
-      >
-        <button
-          v-for="id in overflowItems"
-          :key="id"
-          type="button"
-          role="menuitem"
-          :data-testid="`preview-toolbar-${id}`"
-          :aria-disabled="!resolved[id].enabled"
-          :title="itemTitle(id)"
-          class="cursor-pointer rounded px-1.5 py-0.5 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-          :class="itemClass(id)"
-          @click="onActivate(id)"
-        >
-          {{ resolved[id].label }}
-        </button>
-      </div>
+        :items="overflowItems"
+        :resolved="resolved"
+        :canvas-value="canvasValue"
+        @activate="onActivate"
+        @ratio-change="onRatioChange"
+      />
     </div>
+  </div>
+
+  <!-- The one-time toast after a successful setCanvas (F-38) -- a plain flow
+       sibling of the toolbar row, never clipped by its overflow-hidden
+       (see the module doc). -->
+  <div
+    v-if="canvasToastVisible"
+    data-testid="preview-toolbar-canvas-toast"
+    role="status"
+    class="flex shrink-0 items-center gap-2 rounded-control border border-line bg-raised px-2 py-1 text-micro text-fg-subtle"
+  >
+    <span>Canvas changed. Review crop, text and caption placement in Checks.</span>
+    <button
+      type="button"
+      data-testid="preview-toolbar-canvas-toast-dismiss"
+      class="cursor-pointer text-fg-subtle hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      @click="dismissCanvasToast"
+    >
+      Dismiss
+    </button>
   </div>
 </template>

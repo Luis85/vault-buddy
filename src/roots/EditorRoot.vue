@@ -47,6 +47,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import AudioSection from "../components/editor/inspector/AudioSection.vue";
 import ClipSection from "../components/editor/inspector/ClipSection.vue";
+import ColorSection from "../components/editor/inspector/ColorSection.vue";
 import FadesSection from "../components/editor/inspector/FadesSection.vue";
 import InspectorPanel from "../components/editor/inspector/InspectorPanel.vue";
 import LayoutSection from "../components/editor/inspector/LayoutSection.vue";
@@ -237,6 +238,13 @@ onBeforeUnmount(() => {
           </template>
           <template #speed="{ clipIds }">
             <SpeedSection
+              :key="clipIds.join(',')"
+              :clip-ids="clipIds"
+            />
+          </template>
+          <!-- Task 32: the Color category, keyed the same way. -->
+          <template #color="{ clipIds }">
+            <ColorSection
               :key="clipIds.join(',')"
               :clip-ids="clipIds"
             />

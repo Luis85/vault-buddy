@@ -192,7 +192,10 @@ describe("resolveActions — disabled actions carry a reason", () => {
     });
     const context = ctx({ project: proj, snapshot: snapshot(), selectedClipIds: ["c1"] });
     const resolved = resolveActions(context);
-    for (const id of ["addText", "addCaption", "addMarker", "addTrackVideo", "ratio"] as const) {
+    // Task 32: `ratio` left this list -- it is no longer gated by an
+    // unimplemented wire kind (`setCanvas` shipped), so with a project open
+    // it is now enabled; see "sends setCanvas..." below for its own coverage.
+    for (const id of ["addText", "addCaption", "addMarker", "addTrackVideo"] as const) {
       expect(resolved[id].enabled).toBe(false);
       expect(commandFor(id, context)).toBeNull();
     }
@@ -298,13 +301,14 @@ describe("resolveActions — disabled actions carry a reason", () => {
     // EditorHeader's "Rendering a video arrives in a later update."
     const context = ctx({ project: project(), snapshot: snapshot() });
     const resolved = resolveActions(context);
+    // Task 32: `ratio` left this map too -- with a project open (as this
+    // context has) it is now enabled and carries no reason at all.
     const expectedReasons: Partial<Record<string, string>> = {
       addText: "Text arrives in a later update.",
       addArrow: "Arrow arrives in a later update.",
       addCaption: "Add caption arrives in a later update.",
       addMarker: "Add marker arrives in a later update.",
       addTrackVideo: "Add video track arrives in a later update.",
-      ratio: "Aspect ratio arrives in a later update.",
     };
     for (const [id, expected] of Object.entries(expectedReasons)) {
       expect(resolved[id as keyof typeof resolved].reason).toBe(expected);
@@ -594,8 +598,8 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
 });
 
 describe("UNIMPLEMENTED_KINDS", () => {
-  it("carries exactly the 16 kinds this registry still gates", () => {
-    expect(UNIMPLEMENTED_KINDS.size).toBe(16);
+  it("carries exactly the 14 kinds this registry still gates", () => {
+    expect(UNIMPLEMENTED_KINDS.size).toBe(14);
     // The ten kinds an ActionId in this registry maps to that ARE
     // implemented must be absent, or every action built on them would be
     // wrongly gated -- plus the four track kinds Task 23 implemented that
@@ -615,6 +619,10 @@ describe("UNIMPLEMENTED_KINDS", () => {
       "addTransition", "setTransitionDuration", "removeTransition",
       // Task 31: the Speed/Layout inspector sections and LayoutHandles.
       "setSpeed", "setLayout",
+      // Task 32: ColorSection (no ActionId maps to setAdjustments at all)
+      // and the ratio control (sends setCanvas directly, never through
+      // commandFor).
+      "setAdjustments", "setCanvas",
     ]) {
       expect(UNIMPLEMENTED_KINDS.has(implemented)).toBe(false);
     }

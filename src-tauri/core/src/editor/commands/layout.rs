@@ -1,8 +1,37 @@
-//! `setSpeed{clipId, speed, preservePitch}` and `setLayout{clipIds, …}`
-//! (Task 31; F-16, F-21, F-23; DATA-MODEL.md § Timing rules, § Layout and
-//! compositing properties). ADR §3 names this file `commands::layout` for
-//! the whole speed/layout/canvas/colour family: `setCanvas` and
-//! `setAdjustments` (Task 32) land here beside these two.
+//! `setSpeed{clipId, speed, preservePitch}`, `setLayout{clipIds, …}`,
+//! `setCanvas{width, height}` and `setAdjustments{clipIds, adjustments}`
+//! (Tasks 31-32; F-16, F-21, F-23, F-38, F-39; DATA-MODEL.md § Timing
+//! rules, § Layout and compositing properties). ADR §3 names this file
+//! `commands::layout` for the whole speed/layout/canvas/colour family.
+//!
+//! **`setCanvas` accepts only the four supported presets** (F-38,
+//! `limits::CANVASES` -- the SAME list `migrate::nearest_canvas` and
+//! `validate::check_canvas` already read, never re-grown here) and refuses
+//! a pair equal to the project's current canvas as a no-op (the
+//! `setSpeed`/mandatory-field precedent). "Review crop, text and caption
+//! placement" is deliberately NOT a flag this command writes: whether a
+//! text/caption/effect box now sits outside the safe area, or a source's
+//! aspect no longer matches, is a COMPUTED check (Task 54) evaluated
+//! against whatever canvas is current, so there is nothing here that could
+//! go stale. The frontend shows a one-time toast after a successful call
+//! instead, pointing at Checks.
+//!
+//! **`setAdjustments` sets or clears brightness/contrast/saturation/sepia/
+//! grayscale identically on every target** (F-39), the `setLayout` whole-
+//! selection/atomic discipline: every target is resolved, confirmed on an
+//! unlocked VIDEO track, and confirmed NOT a title-card clip before
+//! anything changes. A clip is a "card" by its ASSET's `builtin` kind
+//! (`Builtin::Card`) -- never by the clip's own inline `Card` content
+//! (`Clip.card`, which is what a card LOOKS like, not what makes it one) --
+//! the same identification `src/editor/previewLayers.ts`'s
+//! `BUILTIN_HAS_FILE` makes on the frontend (task brief): colour treats
+//! footage, and a card has none. `adjustments: None` CLEARS -- the whole
+//! object is nullable on the wire, never merged field by field, so a
+//! clip's `adjustments` is simply replaced with whatever the payload
+//! carries, `None` included. Ranges (`model::Adjustments`'s own doc:
+//! every field required once the object is present at all) mirror
+//! DATA-MODEL.md: brightness/contrast `[0.25, 2]`, saturation `[0, 2]`,
+//! sepia/grayscale `[0, 1]`.
 //!
 //! **Speed changes the OUTPUT span, never the source range or any cue.**
 //! A clip's output duration is `round((out_ms - in_ms) / speed)`
@@ -41,13 +70,15 @@
 
 use std::collections::HashSet;
 
-use super::clips::{checked_output_end, ensure_unlocked, find_clip, find_track, invalid_request};
+use super::clips::{
+    checked_output_end, ensure_unlocked, find_asset, find_clip, find_track, invalid_request,
+};
 use super::fades::fade_limit;
-use super::payloads::{SetLayoutPayload, SetSpeedPayload};
+use super::payloads::{SetAdjustmentsPayload, SetCanvasPayload, SetLayoutPayload, SetSpeedPayload};
 use super::transitions;
 use crate::editor::error::EditorError;
 use crate::editor::limits;
-use crate::editor::model::{Clip, Project, TrackKind};
+use crate::editor::model::{Adjustments, Builtin, Canvas, Clip, Project, TrackKind};
 use crate::editor::time::{self, ClipSpan};
 use crate::editor::validate::speed_or_default;
 use crate::editor::Num;
@@ -281,6 +312,112 @@ pub(super) fn set_layout(
     let label = match targets.len() {
         1 => "Change layout".to_string(),
         n => format!("Change layout ({n} clips)"),
+    };
+    Ok((candidate, label))
+}
+
+// ---- setCanvas ----------------------------------------------------------
+
+/// `setCanvas{width, height}` (F-38): accepts only the four supported
+/// presets and refuses a pair equal to the current canvas as a no-op. See
+/// the module doc for why nothing about crop/caption placement is stored
+/// here.
+pub(super) fn set_canvas(
+    project: &Project,
+    payload: &SetCanvasPayload,
+) -> Result<(Project, String), EditorError> {
+    let pair = (payload.width, payload.height);
+    if !limits::CANVASES.contains(&pair) {
+        return Err(invalid_request(format!(
+            "canvas {}x{} is not one of the four supported presets",
+            payload.width, payload.height
+        )));
+    }
+    if pair == (project.canvas.width, project.canvas.height) {
+        return Err(invalid_request(format!(
+            "project canvas is already {}x{}",
+            payload.width, payload.height
+        )));
+    }
+    let mut candidate = project.clone();
+    candidate.canvas = Canvas {
+        width: payload.width,
+        height: payload.height,
+        // fps is not a setCanvas field (Contract reference); the current
+        // value and any forward-compat extra keys ride through untouched.
+        fps: project.canvas.fps,
+        extra: project.canvas.extra.clone(),
+    };
+    Ok((candidate, "Change canvas".to_string()))
+}
+
+// ---- setAdjustments -------------------------------------------------------
+
+fn validate_adjustments(adjustments: &Adjustments) -> Result<(), EditorError> {
+    in_range("brightness", &adjustments.brightness, 0.25, 2.0)?;
+    in_range("contrast", &adjustments.contrast, 0.25, 2.0)?;
+    in_range("saturation", &adjustments.saturation, 0.0, 2.0)?;
+    in_range("sepia", &adjustments.sepia, 0.0, 1.0)?;
+    in_range("grayscale", &adjustments.grayscale, 0.0, 1.0)?;
+    Ok(())
+}
+
+/// Every target of `setAdjustments` resolves, sits on an unlocked VIDEO
+/// track (colour has no meaning for an audio clip, `check_targets`'s own
+/// video-track rule for `setLayout`) and is not a title-card clip -- see
+/// the module doc for how "is a card" is decided. Checked for every target
+/// BEFORE anything changes, so a multi-clip `setAdjustments` is atomic like
+/// `setLayout`.
+fn check_color_targets(project: &Project, clip_ids: &[String]) -> Result<(), EditorError> {
+    if clip_ids.is_empty() {
+        return Err(invalid_request("setAdjustments needs at least one clip"));
+    }
+    for id in clip_ids {
+        let clip = find_clip(project, id)?;
+        if find_track(project, &clip.track_id)?.kind != TrackKind::Video {
+            return Err(invalid_request(format!(
+                "clip {id} is an audio clip and has no colour"
+            )));
+        }
+        ensure_unlocked(project, &clip.track_id)?;
+        if find_asset(project, &clip.asset_id)?.builtin == Some(Builtin::Card) {
+            return Err(invalid_request(
+                "Colour applies to footage, not title cards",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `setAdjustments{clipIds, adjustments: Adjustments|null}` (F-39): sets or
+/// clears every target's colour identically. See the module doc for why
+/// `None` clears rather than being merged field by field.
+pub(super) fn set_adjustments(
+    project: &Project,
+    payload: &SetAdjustmentsPayload,
+) -> Result<(Project, String), EditorError> {
+    if let Some(adjustments) = &payload.adjustments {
+        validate_adjustments(adjustments)?;
+    }
+    check_color_targets(project, &payload.clip_ids)?;
+
+    let targets: HashSet<&str> = payload.clip_ids.iter().map(String::as_str).collect();
+    let mut candidate = project.clone();
+    for c in candidate
+        .clips
+        .iter_mut()
+        .filter(|c| targets.contains(c.id.as_str()))
+    {
+        c.adjustments = payload.adjustments.clone();
+    }
+    let verb = if payload.adjustments.is_some() {
+        "Change colour"
+    } else {
+        "Reset colour"
+    };
+    let label = match targets.len() {
+        1 => verb.to_string(),
+        n => format!("{verb} ({n} clips)"),
     };
     Ok((candidate, label))
 }

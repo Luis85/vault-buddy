@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **15 rows** today (T1–T15), of which **0** carry a result. An
+This file carries **16 rows** today (T1–T16), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -172,3 +172,19 @@ playing `<video>` to a rounded or circular frame, rotating it, or honouring
 | # | Check | Steps | Result |
 | --- | --- | --- | --- |
 | T15 | **Picture-in-picture handles, transforms and speed in the real window** | Open a staged capture, import a second video (T11's steps) and place it on a new video track ABOVE the capture, so both show at once. Select the upper clip. (a) In the preview, drag its body, then its bottom-right handle, then its left edge handle; press Escape once while still holding a handle. (b) In the inspector's **Layout** tab press **Top right**, then choose **Circle**, then **Fill** with crop zoom 2 and Focus X 20, then rotation 90 and **Mirror**. (c) In the **Speed** tab press **2×**, play, then untick **Preserve pitch** and play again; then try **0.5×** where the next clip on the same track is close behind. **Record**: for (a), that the picture moved with the handles during each drag, that each drag is ONE Undo step (the header's Undo label reads "Change layout"), and that Escape put the box back with nothing committed; for (b), that the circle looks round (not an oval) and stays inside its frame edge while cropped, rotated and mirrored, and that the handles' box outline sits exactly on the picture; for (c), that playback is twice as fast with the voice at normal pitch, then higher-pitched with the box unticked, and that 0.5× is refused with a message naming the clip in the way (nothing else moved). | |
+
+## Task 32's row
+
+Task 32 adds canvas formats and basic colour treatment: `setCanvas`/
+`setAdjustments` (`core::editor::commands::layout`), the ratio control (a
+native `<select>` in `PreviewToolbar.vue`) and the Color inspector category
+(`ColorSection.vue`, six presets plus five sliders mapped to a CSS
+`filter:` via `src/editor/colorPresets.ts`). Vitest measures the command
+refusals and the exact CSS filter STRING in happy-dom; nothing automated
+shows WebView2 actually reflowing a playing `<video>` at a new canvas
+aspect ratio or rendering `brightness()`/`contrast()`/`saturate()`/
+`sepia()`/`grayscale()` visibly correctly.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T16 | **Canvas ratio and colour presets in the real window** | Open a staged capture (landscape source). (a) In the preview toolbar's **Aspect ratio** control, pick **9:16 Portrait**, then **1:1 Square**, then **4:3 Classic**, then back to **16:9 Landscape**. **Record**: that the stage letterboxes/pillarboxes correctly at each pick, that a small toast appears each time naming Checks and disappears on its own after a few seconds (or on its own Dismiss button), and that re-picking the CURRENTLY active ratio does nothing (no toast, no Undo entry). (b) Select a video clip, open the inspector's **Color** tab, and click through **Vivid**, **Warm**, **Cool**, **Mono** and **Sepia** while the clip plays. **Record**: that each preset visibly changes the picture (Vivid punchier, Warm more orange, Cool slightly desaturated, Mono black-and-white, Sepia brown-toned) and that the teaching-tool overlays (if any are on screen) are NOT tinted — only the source picture. (c) Drag the Saturation slider to its two extremes (0 and 2) and the Sepia/Grayscale sliders to 1: **Record** that the picture responds live as you drag, with no flash or a lag longer than a frame or two. (d) Select a title-card clip (Insert intro, or any `addCard` clip once one exists) and open **Color**: **Record** that the tab shows "Colour applies to footage, not title cards." instead of controls. | |

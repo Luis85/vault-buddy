@@ -2,7 +2,7 @@
 //! `InternalCommand` (native-only, never `Deserialize`), plus their
 //! dispatch (`apply`/`apply_internal`) into family modules (R14, F-13, F31).
 //!
-//! THIRTY kinds are implemented so far: `rename`/`setDestination`
+//! THIRTY-TWO kinds are implemented so far: `rename`/`setDestination`
 //! (Task 6, `meta.rs`), the two `EditorSession` intercepts before ever
 //! calling `apply` at all, `undo`/`redo` (see `session.rs`'s `execute`), the
 //! seven core clip commands `insertClip`/`updateClip`/`splitClip`/`trimClip`/
@@ -21,7 +21,10 @@
 //! reorder call so they respect an existing transition), and `setSpeed`/
 //! `setLayout` (Task 31, `layout.rs` -- `setSpeed` reuses the fade clamp and
 //! both transition hooks, because it changes a clip's output duration the
-//! way a trim does).
+//! way a trim does), and `setCanvas`/`setAdjustments` (Task 32, `layout.rs`
+//! beside their two Task 31 siblings -- `setAdjustments` reuses
+//! `check_targets`'s video-track/unlocked discipline for its own
+//! `check_color_targets`, adding the title-card refusal).
 //! `moveClips`'s own group-EXPANSION behaviour also landed with Task 8, but
 //! stays in `clips.rs` (F13: Task 7 shipped `moveClips` before any group
 //! could exist to expand into). Every other kind falls through to the
@@ -224,6 +227,8 @@ pub fn apply(
         EditorCommand::RemoveTransition(p) => transitions::remove_transition(project, p),
         EditorCommand::SetSpeed(p) => layout::set_speed(project, p),
         EditorCommand::SetLayout(p) => layout::set_layout(project, p),
+        EditorCommand::SetAdjustments(p) => layout::set_adjustments(project, p),
+        EditorCommand::SetCanvas(p) => layout::set_canvas(project, p),
         EditorCommand::Undo | EditorCommand::Redo => Err(EditorError::new(
             EditorErrorCode::InvalidRequest,
             "undo/redo are dispatched by EditorSession::execute, never by apply",
@@ -266,23 +271,10 @@ mod tests {
     /// explicitly in that task's own report rather than re-verifying the
     /// whole table at once. Task 29 deleted `setFades`'s row; Task 30 deleted
     /// `addTransition`/`setTransitionDuration`/`removeTransition`'s three;
-    /// Task 31 deleted `setSpeed`/`setLayout`'s two.
+    /// Task 31 deleted `setSpeed`/`setLayout`'s two; Task 32 deleted
+    /// `setAdjustments`/`setCanvas`'s two.
     fn unimplemented_commands() -> Vec<(&'static str, EditorCommand)> {
         vec![
-            (
-                "setAdjustments",
-                EditorCommand::SetAdjustments(SetAdjustmentsPayload {
-                    clip_ids: vec!["c1".into()],
-                    adjustments: None,
-                }),
-            ),
-            (
-                "setCanvas",
-                EditorCommand::SetCanvas(SetCanvasPayload {
-                    width: 1280,
-                    height: 720,
-                }),
-            ),
             (
                 "addCard",
                 EditorCommand::AddCard(AddCardPayload {
@@ -409,17 +401,17 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_commands_table_has_sixteen_rows() {
+    fn unimplemented_commands_table_has_fourteen_rows() {
         // A vacuity guard, the `shared_fixture_table_has_ten_cases`
         // precedent (`time.rs`): 46 total EditorCommand kinds minus the
-        // thirty implemented so far (rename, undo, redo, setDestination,
+        // thirty-two implemented so far (rename, undo, redo, setDestination,
         // insertClip, updateClip, splitClip, trimClip, deleteClips,
         // moveClips, reorderClip, groupClips, ungroupClips,
         // duplicateClips, pasteFragment, cutClips, addTrack, renameTrack,
         // moveTrack, setTrackFlags, deleteTrack, setClipMix, setMasterGain,
         // detachAudio, setFades, addTransition, setTransitionDuration,
-        // removeTransition, setSpeed, setLayout).
-        assert_eq!(unimplemented_commands().len(), 16);
+        // removeTransition, setSpeed, setLayout, setAdjustments, setCanvas).
+        assert_eq!(unimplemented_commands().len(), 14);
     }
 
     #[test]

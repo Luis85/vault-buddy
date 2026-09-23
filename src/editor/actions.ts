@@ -18,10 +18,11 @@
  * public names are re-exported below, so nothing outside these files needs
  * to know either split exists.
  *
- * **Which commands this task can send.** Twenty-eight `EditorCommand` kinds
+ * **Which commands this task can send.** Thirty-two `EditorCommand` kinds
  * are implemented in Rust today (`core::editor::commands::mod.rs`'s own
- * count, as of Task 30's three transition kinds); the other eighteen are rejected
- * with `invalidRequest` and a message of the shape `"<kind> is not available yet"`
+ * count, as of Task 32's `setAdjustments`/`setCanvas`); the other fourteen
+ * are rejected with `invalidRequest` and a message of the shape
+ * `"<kind> is not available yet"`
  * (`unimplemented_kinds_are_invalid_request_not_panic`, that module's own
  * test — its own module doc names `UNIMPLEMENTED_KINDS` back as the
  * frontend twin a task implementing a kind must also update). That message
@@ -35,10 +36,14 @@
  * `editorProject.save()` (a distinct IPC call, not `editor_execute`), the
  * `render`/`checks`/`help`/`importMedia`/`webcam` surfaces and the panel/
  * focus toggles are a later task's job or local view state, and `ratio`
- * opens a picker whose eventual choice becomes a `setCanvas` call this task
- * cannot pre-build. `commandFor` returns `null` for all of these — a caller
- * must special-case them (see `PreviewToolbar.vue`'s `onActivate`), never
- * send a `null` command to Rust.
+ * needs an extra user choice (which of the four canvas presets) this
+ * table cannot pre-build — `resolveActions` still gates it (its own
+ * `RESOLVERS` entry, `resolveProjectGated`: enabled whenever a project is
+ * open), but Task 32's ratio control in `PreviewToolbar.vue` sends
+ * `setCanvas` directly, never through `commandFor`. `commandFor` returns
+ * `null` for all of these — a caller must special-case them (see
+ * `PreviewToolbar.vue`'s `onActivate`), never send a `null` command to
+ * Rust.
  *
  * **`copy`/`paste` and the clipboard.** `ActionContext` carries the
  * clipboard as TWO fields on purpose: `hasClipboard` is the literal
@@ -258,6 +263,10 @@ const RESOLVERS: Partial<Record<ActionId, (ctx: ActionContext) => Verdict>> = {
   help: resolveAlways,
   importMedia: resolveProjectGated,
   webcam: resolveProjectGated,
+  // Task 32: no wire kind gates `ratio` any more (see the module doc) --
+  // it needs only a project to change canvas of, the `checks`/`importMedia`
+  // precedent.
+  ratio: resolveProjectGated,
   toggleLibrary: resolveAlways,
   toggleInspector: resolveAlways,
   focusPreview: resolveAlways,

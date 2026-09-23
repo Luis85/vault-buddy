@@ -467,11 +467,16 @@ export class PreviewController {
   }
 
   /** The frame takes the clip's box and shape; the element inside it
-   * takes `mediaPlacement`'s rect and turn (Task 31). */
+   * takes `mediaPlacement`'s rect and turn (Task 31), plus its colour
+   * (Task 32) — `layer.filter` is already the whole CSS `filter:` string
+   * (`colorPresets.adjustmentsFilter`), assigned here unconditionally
+   * (`"none"` is a real, valid value, not a special case). Teaching cues
+   * stay unaffected because they paint ABOVE this element, never inside it. */
   private place(slot: Slot, layer: PreviewLayer): void {
     const style = slot.el.style;
     style.zIndex = String(layer.z);
     style.opacity = String(layer.opacity);
+    style.filter = layer.filter;
     if (!layer.box || !slot.frame) return;
     const box = layer.box;
     const frame = slot.frame.style;

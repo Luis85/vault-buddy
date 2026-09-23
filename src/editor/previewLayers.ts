@@ -29,15 +29,26 @@
  * `previewTransform.mediaPlacement` turns into the media element's place
  * inside the layer's clipping frame. The frame IS the clip's box, the same
  * `clipBox` `LayoutHandles.vue` draws its handles around, so the handles
- * and the picture cannot disagree. What this deliberately still does NOT
- * model (docs/Gaps.md GAP-173 — the preview approximates the render):
- * transitions, effects, captions, cards and other SYNTHESIZED builtin
- * assets (they have no file to show), colour adjustments, and
- * frame-accurate sync. The fade CURVE SHAPE is itself only
- * an approximation for `smooth` — GAP-173 records that the preview's
+ * and the picture cannot disagree.
+ *
+ * **Colour** (Task 32; F-39) is modeled as a CSS `filter:` string, one per
+ * visual layer, via `colorPresets.adjustmentsFilter(clip.adjustments)` —
+ * `previewController.ts` assigns it straight to the media element's own
+ * `style.filter`, which is why teaching cues stay unaffected (they paint
+ * ABOVE the source element, never inside it). This is an approximation,
+ * not export parity: the render (a later task) applies ffmpeg's `eq`/
+ * `hue`/`colorchannelmixer` filters to the same five values, and nothing
+ * has compared the two yet (docs/Gaps.md GAP-173).
+ *
+ * What this deliberately still does NOT model (docs/Gaps.md GAP-173 — the
+ * preview approximates the render): transitions, effects, captions, cards
+ * and other SYNTHESIZED builtin assets (they have no file to show), and
+ * frame-accurate sync. The fade CURVE SHAPE is itself only an
+ * approximation for `smooth` — GAP-173 records that the preview's
  * smoothstep and the render's ffmpeg `hsin` are close but not bit-identical.
  */
 import type { Asset, Builtin, Clip, Project, Track } from "../editorTypes";
+import { adjustmentsFilter } from "./colorPresets";
 import { gainAt } from "./fadeCurves";
 import { isTrackAudible } from "./mixRules";
 import type { Box, Size } from "./previewGeometry";
@@ -110,6 +121,9 @@ export interface PreviewLayer {
   preservePitch: boolean;
   /** Everything about how the picture sits in its box (Task 31). */
   look: LayerLook;
+  /** The CSS `filter:` string for this layer's colour (Task 32) — `"none"`
+   * for an audio layer (no picture) or a clip carrying no adjustments. */
+  filter: string;
 }
 
 function layerKind(asset: Asset, track: Track): LayerKind {
@@ -138,6 +152,70 @@ function fadeFactor(clip: Clip, t: number): number {
   return factor;
 }
 
+/** Everything `buildLayer` needs, resolved once per clip. */
+interface ResolvedLayerInputs {
+  track: Track;
+  index: number;
+  asset: Asset;
+  sourceMs: number;
+  speed: number;
+  kind: LayerKind;
+}
+
+/** Resolves whether `clip` has anything to show at output time `t`, and if
+ * so, everything that decides WHETHER it shows -- an unknown/invisible
+ * track, an asset with no preview source, or `t` outside the clip's active
+ * span (`sourceAt`'s half-open rule) all read as `null`. Split out of
+ * `computeLayers` (Task 32 fix) so each half of the per-clip work — whether
+ * to show it, and how — stays under the fallow complexity ceiling on its
+ * own; `buildLayer` below is the "how" half. */
+function resolveLayerInputs(
+  clip: Clip,
+  project: Project,
+  t: number,
+  trackIndex: Map<string, number>,
+  assets: Map<string, Asset>,
+): ResolvedLayerInputs | null {
+  const index = trackIndex.get(clip.track_id);
+  const track = index === undefined ? undefined : project.tracks[index];
+  const asset = assets.get(clip.asset_id);
+  if (index === undefined || !track || !track.visible || !asset || !hasPreviewSource(asset)) return null;
+  const speed = clip.speed ?? 1;
+  const sourceMs = sourceAt({ start_ms: clip.start_ms, in_ms: clip.in_ms, out_ms: clip.out_ms, speed }, t);
+  if (sourceMs === null) return null;
+  return { track, index, asset, sourceMs, speed, kind: layerKind(asset, track) };
+}
+
+/** Builds the layer from `resolveLayerInputs`' resolved facts -- mix, box,
+ * colour and everything else that decides HOW a clip shows, never whether. */
+function buildLayer(
+  clip: Clip,
+  project: Project,
+  t: number,
+  canvasBox: Box,
+  monitor: MonitorState,
+  resolved: ResolvedLayerInputs,
+): PreviewLayer {
+  const { track, index, asset, sourceMs, speed, kind } = resolved;
+  const muted = kind === "image" || isMuted(clip, track, project.tracks, monitor);
+  const fade = fadeFactor(clip, t);
+  return {
+    clipId: clip.id,
+    assetId: asset.id,
+    kind,
+    box: kind === "audio" ? null : clipBox(canvasBox, clip),
+    opacity: clip.opacity * fade,
+    z: project.tracks.length - index,
+    muted,
+    gain: muted ? 0 : clip.volume * track.volume * project.master_gain * monitor.volume * fade,
+    sourceMs,
+    speed,
+    preservePitch: clip.preserve_pitch ?? true,
+    look: layerLook(clip, asset),
+    filter: kind === "audio" ? "none" : adjustmentsFilter(clip.adjustments),
+  };
+}
+
 /** Every layer active at output time `t`, sorted top-most first. */
 export function computeLayers(
   project: Project,
@@ -150,30 +228,8 @@ export function computeLayers(
   const canvasBox = containRect(project.canvas, stage);
   const layers: PreviewLayer[] = [];
   for (const clip of project.clips) {
-    const index = trackIndex.get(clip.track_id);
-    const track = index === undefined ? undefined : project.tracks[index];
-    const asset = assets.get(clip.asset_id);
-    if (index === undefined || !track || !track.visible || !asset || !hasPreviewSource(asset)) continue;
-    const speed = clip.speed ?? 1;
-    const sourceMs = sourceAt({ start_ms: clip.start_ms, in_ms: clip.in_ms, out_ms: clip.out_ms, speed }, t);
-    if (sourceMs === null) continue;
-    const kind = layerKind(asset, track);
-    const muted = kind === "image" || isMuted(clip, track, project.tracks, monitor);
-    const fade = fadeFactor(clip, t);
-    layers.push({
-      clipId: clip.id,
-      assetId: asset.id,
-      kind,
-      box: kind === "audio" ? null : clipBox(canvasBox, clip),
-      opacity: clip.opacity * fade,
-      z: project.tracks.length - index,
-      muted,
-      gain: muted ? 0 : clip.volume * track.volume * project.master_gain * monitor.volume * fade,
-      sourceMs,
-      speed,
-      preservePitch: clip.preserve_pitch ?? true,
-      look: layerLook(clip, asset),
-    });
+    const resolved = resolveLayerInputs(clip, project, t, trackIndex, assets);
+    if (resolved) layers.push(buildLayer(clip, project, t, canvasBox, monitor, resolved));
   }
   return layers.sort((a, b) => b.z - a.z);
 }
