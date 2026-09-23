@@ -27,6 +27,8 @@ mod package_test_support;
 pub mod prefs_commands;
 pub mod project_store;
 pub mod recovery;
+pub mod relink_commands;
+pub mod relink_media;
 pub mod save_commands;
 pub mod session_commands;
 pub mod store_io;
@@ -98,6 +100,10 @@ use vault_buddy_core::editor::EditorSession;
 /// one is refused rather than opening a second dialog. A leaf lock: taken
 /// only to insert or remove one id.
 ///
+/// `relinks` (Task 40) is the sessions with a reconnect in flight
+/// (`relink_commands`), the `caption_imports` posture: a leaf lock, taken
+/// only to insert or remove one id.
+///
 /// `journal` (Task 37) is the recovery journal's per-session debounce
 /// state (`recovery::JournalQueue`) — a leaf lock, taken only to schedule,
 /// take or forget one entry. Every journal WRITE runs under the session's
@@ -111,5 +117,6 @@ pub struct EditorState {
     pub jobs: Mutex<media_jobs::JobRegistry>,
     pub thumbnails: media_derive::ThumbnailRenders,
     pub caption_imports: Mutex<HashSet<String>>,
+    pub relinks: Mutex<HashSet<String>>,
     pub journal: recovery::JournalQueue,
 }

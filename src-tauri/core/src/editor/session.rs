@@ -209,7 +209,11 @@ impl EditorSession {
         let (candidate, label) = commands::apply_internal(&self.project, cmd)?;
         validate_project(&candidate)?;
         let previous = std::mem::replace(&mut self.project, candidate);
-        self.history.push(previous, label);
+        // A reconnect (Task 40) changes `sources.json`, never the graph:
+        // Undo could not put the old file back, so it is no undo step.
+        if !matches!(cmd, InternalCommand::RelinkAssets(_)) {
+            self.history.push(previous, label);
+        }
         self.revision += 1;
         Ok(self.snapshot())
     }

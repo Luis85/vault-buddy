@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **21 rows** today (T1–T21), of which **0** carry a result. An
+This file carries **22 rows** today (T1–T22), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -248,3 +248,16 @@ volume, or plays the imported media in WebView2. (The brief called this row
 | # | Check | Steps | Result |
 | --- | --- | --- | --- |
 | T21 | **Portable export, move, import, play** | Open a staged capture in the editor, import one more video (T11's steps) and place it on the timeline, rename the project, and do NOT save. (a) Header **▾** beside **Save project** -> **Save a portable copy…**. **Record**: the dialog explains that the portable file includes the originals (the amber warning), the radio buttons are full-size, the heading and buttons stay visible when the window is made short enough to scroll the dialog, and pressing the save button opens the NATIVE save dialog offering `<title>.vbproject.zip`. Save it to Documents. **Record**: the dialog reads "Saved to <that file name>" only after the native dialog closes, and no `.part-` file is left beside it. (b) Save again onto the SAME file (confirm the overwrite): **Record** it succeeds. Then save onto an unrelated existing `.zip` renamed to `x.vbproject.zip`: **Record** the message "Choose a new name — that file is not this project" and that the unrelated file is unchanged. (c) Move the saved `.vbproject.zip` to another folder (e.g. Desktop). Header **▾** -> **Open a project file…**, pick it. **Record**: the editor switches to the imported project (a COPY with a new id, since the original is still in the store — check `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\`), its title and clips match, the preview PLAYS both the screen capture and the imported video, no staged capture's sidecar gained a second `editorProjectId`, and no `.<id>.importing` directory is left in the store. (d) Repeat (a) and (c) with **Save a lightweight copy…**: **Record** that the imported copy lists both originals as missing and the preview shows them as unavailable. | |
+
+## Task 40's rows
+
+Task 40 adds `editor_relink_media` (the media library's **Reconnect…**,
+through `ReconnectDialog` and Rust's own open dialog). Rust tests cover the
+matching, the copy, the `sources.json` rewrite, the replacement rule and the
+cache purge on tempdirs, and Vitest the dialog and the preview's re-lookup;
+nothing automated opens the real native dialog, probes real media with the
+installed ffprobe, or plays the reconnected file in WebView2.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T22 | **Reconnect after a lightweight import, including an ambiguous pick** | Do T21 (d) so the imported copy lists both originals as missing. Make a byte-identical copy of the imported video beside the original (e.g. `clip.mp4` and `clip (copy).mp4`). (a) In the media library press **… originals are missing — Reconnect…**. **Record**: each missing original is listed with its size and length, and no file path appears anywhere. (b) Press **Find all…**; in the NATIVE dialog (it should allow several files) pick the screen capture's `.mp4`, BOTH copies of the video, and one unrelated video. **Record**: the capture's row reads "Reconnected to …" and the preview now PLAYS it (no reload); the video's row reads "2 chosen files match equally well: … Choose the right one." and the video is still shown as unavailable in the preview. (c) On the video's row press **Choose file…** — the dialog should allow only ONE file — and pick `clip.mp4`. **Record** "Reconnected to “clip.mp4”", that the preview plays it, and that `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\media\` now holds both files under their asset ids. (d) Repeat on a fresh lightweight import, but pick a SHORTER video for the video's row: **Record** the reason ("different duration: … vs …"); press **Replace…** and pick the same file: **Record** the refusal naming it as shorter. Pick a LONGER video instead via **Replace…**: **Record** "Replaced with …", that its `sources.json` entry carries `replacedFrom`, and that every clip, cue and caption on the timeline is exactly where it was. | |

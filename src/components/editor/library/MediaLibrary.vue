@@ -29,6 +29,9 @@
  * `reconcile()` runs on mount: this webview mounts once per process, but a
  * reload mid-import would otherwise show nothing for a job still running in
  * Rust.
+ *
+ * **Reconnect… (Task 40)** appears while any original is missing and opens
+ * `ReconnectDialog`; like Import, it never sends a path.
  */
 import { computed, onMounted, ref } from "vue";
 
@@ -38,6 +41,7 @@ import { useEditorJobsStore } from "../../../stores/editorJobs";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import { formatDuration } from "../../../utils/formatDuration";
+import ReconnectDialog from "../dialogs/ReconnectDialog.vue";
 import ImportStatus from "./ImportStatus.vue";
 import LibraryAssetCard from "./LibraryAssetCard.vue";
 
@@ -46,6 +50,7 @@ const workspace = useEditorWorkspaceStore();
 const jobs = useEditorJobsStore();
 
 const query = ref("");
+const reconnectOpen = ref(false);
 
 interface AssetRow {
   asset: Asset;
@@ -146,6 +151,20 @@ onMounted(() => {
         Import…
       </button>
     </div>
+
+    <button
+      v-if="project.missing.length > 0"
+      type="button"
+      data-testid="library-reconnect"
+      class="rounded border border-danger/40 px-2 py-0.5 text-left text-danger-fg hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+      @click="reconnectOpen = true"
+    >
+      {{ project.missing.length === 1 ? "1 original is missing" : `${project.missing.length} originals are missing` }} — Reconnect…
+    </button>
+    <ReconnectDialog
+      :open="reconnectOpen"
+      @close="reconnectOpen = false"
+    />
 
     <p
       v-if="jobs.lastError"

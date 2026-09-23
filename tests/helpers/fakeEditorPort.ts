@@ -30,6 +30,7 @@ export function fakeEditorPort(overrides: Partial<EditorPort> = {}): EditorPort 
     importCaptions: unimplemented("importCaptions"),
     exportPackage: unimplemented("exportPackage"),
     importPackage: unimplemented("importPackage"),
+    relinkMedia: unimplemented("relinkMedia"),
     ...overrides,
   };
 }

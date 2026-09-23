@@ -29,6 +29,7 @@ pub mod package_plan;
 pub mod peaks;
 pub mod probe;
 pub mod projection;
+pub mod relink;
 pub mod session;
 #[cfg(test)]
 pub(crate) mod test_support;

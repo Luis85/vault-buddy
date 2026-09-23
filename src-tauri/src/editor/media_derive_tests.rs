@@ -47,6 +47,7 @@ fn record(file: &str, kind: SourceMediaKind, duration_ms: u64) -> SourceRecord {
         has_audio: kind == SourceMediaKind::Audio,
         has_video: kind != SourceMediaKind::Audio,
         media_kind: kind,
+        replaced_from: None,
     }
 }
 

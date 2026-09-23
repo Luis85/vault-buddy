@@ -100,6 +100,23 @@ pub struct SourceRecord {
     pub has_audio: bool,
     pub has_video: bool,
     pub media_kind: SourceMediaKind,
+    /// Set when the user CONFIRMED a different file as this source's
+    /// replacement (Task 40, `editor_relink_media` with `confirmReplace`):
+    /// the identity the record had before, so the project remembers that
+    /// its bytes are a deliberate substitute and not the original.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced_from: Option<ReplacedFrom>,
+}
+
+/// The identity a replaced source had (`SourceRecord::replaced_from`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplacedFrom {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    pub size: u64,
+    pub duration_ms: u64,
+    pub media_kind: SourceMediaKind,
 }
 
 /// A joined path, but only when `name` is a single ordinary path component
@@ -311,6 +328,7 @@ mod tests {
             has_audio: false,
             has_video: false,
             media_kind: SourceMediaKind::Video,
+            replaced_from: None,
         };
         assert_eq!(
             resolve_source(
@@ -349,6 +367,7 @@ mod tests {
             has_audio: false,
             has_video: false,
             media_kind: SourceMediaKind::Video,
+            replaced_from: None,
         };
         assert_eq!(
             resolve_source(
@@ -395,6 +414,7 @@ mod tests {
             has_audio: false,
             has_video: false,
             media_kind: SourceMediaKind::Video,
+            replaced_from: None,
         };
         assert_eq!(resolve_source(root.path(), "proj1", &record), None);
     }
@@ -433,6 +453,7 @@ mod tests {
             has_audio: true,
             has_video: true,
             media_kind: SourceMediaKind::Video,
+            replaced_from: None,
         };
         assert_eq!(
             serde_json::to_value(&record).unwrap(),
@@ -463,6 +484,7 @@ mod tests {
             has_audio: true,
             has_video: true,
             media_kind: SourceMediaKind::Video,
+            replaced_from: None,
         };
         assert_eq!(
             serde_json::to_value(&record).unwrap(),
@@ -476,6 +498,34 @@ mod tests {
                 "mediaKind": "video",
             }),
         );
+    }
+
+    // Task 40: a CONFIRMED replacement remembers the identity it replaced,
+    // spelled literally; a record written before it (no key) still reads.
+    #[test]
+    fn a_replaced_source_record_carries_its_former_identity() {
+        let json = serde_json::json!({
+            "store": "media",
+            "file": "a1.mov",
+            "sha256": "bb",
+            "size": 12,
+            "durationMs": 40_000,
+            "hasAudio": false,
+            "hasVideo": true,
+            "mediaKind": "video",
+            "replacedFrom": { "size": 30, "durationMs": 31_000, "mediaKind": "video" },
+        });
+        let record: SourceRecord = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(
+            record.replaced_from,
+            Some(ReplacedFrom {
+                sha256: None,
+                size: 30,
+                duration_ms: 31_000,
+                media_kind: SourceMediaKind::Video,
+            })
+        );
+        assert_eq!(serde_json::to_value(&record).unwrap(), json);
     }
 
     #[test]

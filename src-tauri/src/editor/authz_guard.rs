@@ -46,6 +46,7 @@ const EXPECTED: &[&str] = &[
     "editor_media_url",
     "editor_open_project",
     "editor_open_staged",
+    "editor_relink_media",
     "editor_save_project",
     "editor_save_workspace",
 ];

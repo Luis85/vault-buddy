@@ -14,7 +14,9 @@
  * hands the answer to `convertFileSrc`; this file never builds a path, and
  * the asset protocol's enumerated scope (ADR R7, pinned by `tray.rs`) is
  * the actual boundary. A layer whose media cannot be resolved is NAMED in a
- * status line rather than left as a silent black box (R20).
+ * status line rather than left as a silent black box (R20). A reconnect
+ * (Task 40) that takes an asset off the missing list makes the controller
+ * forget that asset's failed lookup, so it is asked for again.
  *
  * The stage has no height of its own: it `grow`s into whatever the shell's
  * preview column leaves (`EditorShell.vue`'s "Height" note) and the canvas
@@ -192,6 +194,20 @@ watch(() => editorProject.sessionId, () => createController());
 watch(
   () => editorProject.project,
   (p) => controller?.setProject(p),
+);
+// Task 40: an asset that stopped being missing was reconnected. Its failed
+// lookup must not outlive that: the controller forgets it and asks again,
+// and its name leaves the status line.
+watch(
+  () => editorProject.missing,
+  (now, before) => {
+    const still = new Set(now.map((m) => m.assetId));
+    const found = before.filter((m) => !still.has(m.assetId));
+    if (found.length === 0) return;
+    const names = new Set(found.map((m) => assetName(m.assetId)));
+    unavailable.value = unavailable.value.filter((n) => !names.has(n));
+    controller?.forgetMedia(found.map((m) => m.assetId));
+  },
 );
 watch(
   () => [workspace.monitorMuted, volume.value] as const,

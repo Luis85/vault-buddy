@@ -346,6 +346,7 @@ fn source_record(
             FactsMediaKind::Audio => SourceMediaKind::Audio,
             FactsMediaKind::Video => SourceMediaKind::Video,
         },
+        replaced_from: None,
     }
 }
 

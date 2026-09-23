@@ -166,6 +166,7 @@ pub(crate) fn open_staged_in(
             has_audio: !sidecar.inputs.is_empty(),
             has_video: true,
             media_kind: SourceMediaKind::Video,
+            replaced_from: None,
         },
     );
     create_project(root, &migration.project, &sources)

@@ -238,6 +238,16 @@ export class PreviewController {
     this.deps.onPlayingChange?.(false);
   }
 
+  /** Task 40: drop reconnected assets' cached lookups (the `null` from
+   * while their file was missing) and unbind them, so layout asks again. */
+  forgetMedia(assetIds: readonly string[]): void {
+    for (const id of assetIds) this.urls.delete(id);
+    for (const slot of [...this.active.values(), ...this.free]) {
+      if (slot.assetId !== null && assetIds.includes(slot.assetId)) slot.assetId = null;
+    }
+    this.relayout();
+  }
+
   destroy(): void {
     this.pause();
     this.cancelPending?.();
@@ -265,10 +275,9 @@ export class PreviewController {
     return clips.reduce((max, c) => Math.max(max, clipOutputEnd({ ...c, speed: c.speed ?? 1 })), 0);
   }
 
-  /** Re-anchor the wall clock at the current time, so a rate change or a
-   * seek during playback continues from where the clock is NOW. */
-  /** Clamped to the project's end: a pause landing after the last frame's
-   * tick must not report a time past the timeline. */
+  /** Re-anchor the wall clock at the current time (a rate change or seek
+   * continues from NOW), clamped to the project's end: a pause landing
+   * after the last frame's tick must not report a time past the timeline. */
   private reanchor(): void {
     this.anchorAt(this.isPlaying ? Math.min(this.clockTime(), this.duration()) : this.time);
   }
@@ -463,9 +472,8 @@ export class PreviewController {
       if (known) slot.el.src = known;
       return;
     }
-    // A `null` answer (the caller could not resolve it) is cached for this
-    // controller's life — it is rebuilt per session; a REJECTION is logged
-    // and not cached, so the next bind of that asset asks again.
+    // A `null` answer is cached until `forgetMedia` (a reconnect); a
+    // REJECTION is logged and not cached, so the next bind asks again.
     this.deps.resolveUrl(assetId).then(
       (url) => {
         this.urls.set(assetId, url);

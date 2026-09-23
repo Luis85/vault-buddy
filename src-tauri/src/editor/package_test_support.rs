@@ -187,6 +187,7 @@ pub(crate) fn machine_a() -> (Machine, String, String) {
             has_audio: false,
             has_video: true,
             media_kind: SourceMediaKind::Image,
+            replaced_from: None,
         },
     );
     crate::editor::store_io::write_sources(a.root(), &project_id, &sources).unwrap();

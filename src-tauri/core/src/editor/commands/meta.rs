@@ -1,12 +1,15 @@
 //! Implemented `EditorCommand`/`InternalCommand` arms: `rename`,
-//! `setDestination`, and the native `AddAssets` -- the ones this task
-//! itself delivers (`commands/mod.rs`'s module doc explains why every
-//! other kind is `apply`'s shared "not available yet" fallback instead).
+//! `setDestination`, and the native `AddAssets` -- the ones Task 6 itself
+//! delivered (`commands/mod.rs`'s module doc explains the "not available
+//! yet" fallback that shrank task by task) -- plus Task 40's native
+//! `RelinkAssets`, which leaves the graph as it is.
 
 use std::collections::HashSet;
 use std::path::Path;
 
-use super::payloads::{AddAssetsPayload, RenamePayload, SetDestinationPayload};
+use super::payloads::{
+    AddAssetsPayload, RelinkAssetsPayload, RenamePayload, SetDestinationPayload,
+};
 use crate::capture_paths::safe_recording_root;
 use crate::editor::error::{EditorError, EditorErrorCode};
 use crate::editor::ids::is_valid_id;
@@ -101,9 +104,43 @@ pub(super) fn add_assets(
     Ok((candidate, "Add assets".to_string()))
 }
 
+/// `RelinkAssets{assetIds}` (native-only, Task 40): the graph half of a
+/// reconnect. The shell has already copied each file into `media\` and
+/// rewritten its `sources.json` record; the GRAPH is left exactly as it was
+/// -- same asset ids, same clips, cues and captions on them -- and the
+/// command exists so the session's revision records that the project's
+/// sources changed. Every id must be a graph asset with bytes of its own:
+/// a detached audio asset (`linked_asset`) has no record to reconnect.
+/// `EditorSession::execute_internal` does not make this an undo step.
+pub(super) fn relink_assets(
+    project: &Project,
+    payload: &RelinkAssetsPayload,
+) -> Result<(Project, String), EditorError> {
+    if payload.asset_ids.is_empty() {
+        return Err(invalid_request("no asset to reconnect"));
+    }
+    let mut seen = HashSet::new();
+    for id in &payload.asset_ids {
+        if !seen.insert(id.as_str()) {
+            return Err(invalid_request(format!("asset {id}: listed twice")));
+        }
+        match project.assets.iter().find(|a| &a.id == id) {
+            None => return Err(invalid_request(format!("asset {id}: not in this project"))),
+            Some(a) if a.linked_asset.is_some() => {
+                return Err(invalid_request(format!(
+                    "asset {id}: shares another asset's file and has none of its own to reconnect"
+                )))
+            }
+            Some(_) => {}
+        }
+    }
+    Ok((project.clone(), "Reconnect media".to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor::commands::InternalCommand;
     use crate::editor::model::{Asset, AssetKind};
     use crate::editor::test_support::minimal_project;
     use crate::editor::Map;
@@ -279,6 +316,65 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, EditorErrorCode::InvalidRequest);
+    }
+
+    // Named case (Task 40). A reconnect changes WHERE an asset's bytes live
+    // (`sources.json`, the shell's business), never the edit: after it the
+    // graph is identical -- the asset keeps its id, every clip, cue and
+    // marker keeps its id and its clip link -- and only the revision moved.
+    // It is NOT an undo step: Undo cannot put a file back, so an entry here
+    // would be a step that visibly does nothing.
+    #[test]
+    fn relink_preserves_clip_and_cue_ids() {
+        use crate::editor::model::TrackKind;
+        use crate::editor::model_cues::Marker;
+        use crate::editor::test_support::{clip, effect, track};
+        use crate::editor::EditorSession;
+
+        let mut project = minimal_project();
+        let mut screen = asset("a-screen");
+        screen.duration_ms = 31_000;
+        project.assets = vec![screen, asset("a-other")];
+        project.tracks = vec![track("t-video", TrackKind::Video, false)];
+        project.clips = vec![
+            clip("c-first", "t-video", "a-screen", 0, 2_000, 9_000),
+            clip("c-second", "t-video", "a-other", 7_000, 0, 1_000),
+        ];
+        project.effects = vec![effect("e-arrow", "c-first", 2_500, 4_000)];
+        project.markers = vec![Marker {
+            id: "m-step".into(),
+            clip_id: "c-first".into(),
+            source_ms: 3_000,
+            title: "Step".into(),
+            extra: Map::new(),
+        }];
+        let before = project.clone();
+        let mut session = EditorSession::resume("ses-1", project, 7);
+
+        let snap = session
+            .execute_internal(&InternalCommand::RelinkAssets(RelinkAssetsPayload {
+                asset_ids: vec!["a-screen".into()],
+            }))
+            .expect("a reconnect of a graph asset applies");
+
+        assert_eq!(session.project(), &before, "the graph is untouched");
+        assert_eq!(snap.revision, 8, "the revision advances");
+        assert!(!snap.can_undo, "a reconnect is not an undo step");
+    }
+
+    #[test]
+    fn relink_refuses_ids_it_cannot_reconnect() {
+        let mut project = minimal_project();
+        let mut detached = asset("a-audio");
+        detached.linked_asset = Some("a1".into());
+        project.assets = vec![asset("a1"), detached];
+        for ids in [vec![], vec!["nope"], vec!["a1", "a1"], vec!["a-audio"]] {
+            let payload = RelinkAssetsPayload {
+                asset_ids: ids.iter().map(|s| s.to_string()).collect(),
+            };
+            let e = relink_assets(&project, &payload).expect_err(&format!("{ids:?}"));
+            assert_eq!(e.code, EditorErrorCode::InvalidRequest, "{ids:?}");
+        }
     }
 
     #[test]

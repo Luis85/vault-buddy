@@ -68,6 +68,7 @@ use editor::caption_commands;
 use editor::media_commands;
 use editor::package_commands;
 use editor::prefs_commands;
+use editor::relink_commands;
 use editor::save_commands;
 use editor::session_commands;
 
@@ -522,6 +523,7 @@ pub fn run() {
             caption_commands::editor_import_captions,
             package_commands::editor_export_package,
             package_commands::editor_import_package,
+            relink_commands::editor_relink_media,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to

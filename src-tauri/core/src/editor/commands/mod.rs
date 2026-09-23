@@ -273,7 +273,7 @@ pub fn apply_internal(
         InternalCommand::AddAssets(p) => meta::add_assets(project, p),
         InternalCommand::ImportCaptions(p) => captions::import_captions(project, p),
         InternalCommand::RestoreSnapshot(_) => Err(not_yet("restoreSnapshot")),
-        InternalCommand::RelinkAssets(_) => Err(not_yet("relinkAssets")),
+        InternalCommand::RelinkAssets(p) => meta::relink_assets(project, p),
     }
 }
 
@@ -570,9 +570,10 @@ mod tests {
 
         let err = apply_internal(
             &project,
-            &InternalCommand::RelinkAssets(RelinkAssetsPayload {
-                asset_ids: vec!["a1".to_string()],
-            }),
+            &InternalCommand::RestoreSnapshot(Box::new(RestoreSnapshotPayload {
+                product_id: "prod-1".to_string(),
+                project: minimal_project(),
+            })),
         )
         .unwrap_err();
         assert_eq!(err.code, EditorErrorCode::InvalidRequest);

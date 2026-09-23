@@ -478,6 +478,7 @@ mod tests {
             has_audio: true,
             has_video: true,
             media_kind: SourceMediaKind::Video,
+            replaced_from: None,
         }
     }
 

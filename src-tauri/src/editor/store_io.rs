@@ -506,6 +506,7 @@ mod tests {
                 has_audio: true,
                 has_video: true,
                 media_kind: super::super::project_store::SourceMediaKind::Video,
+                replaced_from: None,
             },
         );
 

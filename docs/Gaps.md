@@ -2429,7 +2429,7 @@ through `PreviewSurface.vue`, asserting BOTH halves this gap named:
 asset id. Red before the fix (`mediaUrl` never called); a mutation reverting
 `FILE_BACKED_BUILTINS` to empty reproduces the same red.
 
-### GAP-176 · Low (latent, until a relink lands) · Cached thumbnails are keyed by asset id alone, so a relinked asset would keep showing its old file's frames
+### GAP-176 · ~~Low~~ FIXED 2026-09-24 · Cached thumbnails are keyed by asset id alone, so a relinked asset would keep showing its old file's frames
 `src-tauri/src/editor/media_derive.rs` (tutorial-editor Task 28). A
 thumbnail lives at `cache\<recordId>-<ms>.jpg` and a hit is served whenever
 that file exists — nothing records WHICH source file it was cut from. The
@@ -2446,6 +2446,16 @@ them.
 **Fix:** the relink task purges `cache\<recordId>-*.jpg` (and, for tidiness,
 `<recordId>.peaks.*.json`) for every relinked record id, owned names only,
 no-follow — the same name test `media_derive::is_thumbnail_name` applies.
+
+**Fixed by Task 40.** `relink_media::commit` purges, under the session's save
+lock and right after `RelinkAssets` lands, every PLAIN file in `cache\` named
+exactly `<recordId>-<digits>.jpg` or `<recordId>.peaks.<digits>.json` for each
+relinked record (`derived_of`; no-follow, so a directory or link wearing the
+name stays, and another asset whose id merely starts with this one's —
+`a-talk-2` beside `a-talk` — keeps its cache). Pinned by
+`a_relink_purges_the_assets_cached_thumbnails_and_waveforms`. The thumbnail
+itself is still not fingerprinted; a future path that changes the file behind
+an asset id must purge the same way.
 
 ### GAP-177 · Low (unverified cause) · The registry-fresh PATH carries unexpanded `%SystemRoot%` entries, and a child `cmd.exe` spawned with it did not find `ping`
 `src-tauri/src/external_tool.rs` (`registry_path_entries`, `augmented_path`).
@@ -2602,7 +2612,9 @@ What remains:
   editor) gets them from its asset, and never invents audio: a video's
   `hasAudio` is false. Such a video with a real sound track therefore cannot
   detach its audio (or draw a waveform) until it is reconnected (Task 40)
-  and re-probed. The refusal is honest, and nothing is lost.
+  and re-probed. The refusal is honest, and nothing is lost. Task 40 does
+  this: a reconnected record is rewritten from the chosen file's OWN probe
+  and hash, so its `hasAudio` is then the truth.
 - A lightweight placeholder's expected size is 0 when the file carried no
   facts and the asset recorded no size, which weakens Task 40's match to
   name and duration.
@@ -2617,6 +2629,28 @@ What remains:
 **Fix:** re-probe extracted media with ffprobe when it is installed; decide
 whether unplaced library media belongs in a portable file (a cross-check
 change).
+
+### GAP-183 · Low · Some missing originals cannot be reconnected from the editor: a staged capture, and one only a retained snapshot uses
+`src-tauri/src/editor/relink_media.rs` (`targets`), found by Task 40.
+`editor_relink_media` refuses, by name and before any dialog, a source whose
+`sources.json` record is a STAGED capture (`{"store":"staging"}`): its file
+lives in the capture staging folder, and moving the record into the
+project's `media\` would silently cut the project's pin and `sourceBase` (the
+staged list's Edit, the orphan-adoption scan and a discard's unpin all key on
+that base). A capture whose staged `.mp4` was deleted from outside the app is
+therefore reported missing with no way back except re-recording. It also
+reconnects only assets in the LIVE graph: a missing original that only a
+retained render snapshot references (`missing_media` lists every
+`sources.json` record) is refused as "not part of this project". And a
+confirmed replacement keeps the graph's asset facts (length, dimensions) —
+it must be at least as long, but a replacement with other dimensions is
+placed by the old ones until re-imported. Nothing is lost in any case; the
+refusals are honest.
+
+**Fix:** decide whether a staged capture's replacement should be copied into
+`media\` and unpin, or re-staged; let a snapshot-only source be reconnected
+by record id; refresh an asset's dimensions on a confirmed replacement
+through an explicit graph command.
 
 ## 9. Documentation & repo hygiene
 

@@ -189,7 +189,7 @@ fn fail(reporter: JobReporter, per_file: Vec<PerFileError>, error: EditorError) 
 
 /// The file's own name, never its directory — the only part of a path any
 /// message or asset may carry.
-fn file_name_of(path: &Path) -> String {
+pub(crate) fn file_name_of(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default()
@@ -242,7 +242,7 @@ fn import_one(
     }
 }
 
-fn source_size(path: &Path) -> Result<u64, EditorError> {
+pub(crate) fn source_size(path: &Path) -> Result<u64, EditorError> {
     let meta = std::fs::metadata(path).map_err(|e| {
         err(
             EditorErrorCode::SourceMissing,
@@ -273,7 +273,7 @@ fn require_capacity(job: &ImportJob, imported_so_far: usize) -> Result<(), Edito
     Ok(())
 }
 
-fn extension_of(name: &str) -> String {
+pub(crate) fn extension_of(name: &str) -> String {
     name.rsplit_once('.')
         .map(|(_, ext)| ext.to_ascii_lowercase())
         .unwrap_or_default()
@@ -283,7 +283,7 @@ fn extension_of(name: &str) -> String {
 /// `create_dir_all`: if the project directory itself is gone (discarded
 /// under a running import) this must fail rather than resurrect a partial
 /// project directory nothing owns.
-fn media_dir(root: &Path, project_id: &str) -> Result<PathBuf, EditorError> {
+pub(crate) fn media_dir(root: &Path, project_id: &str) -> Result<PathBuf, EditorError> {
     let media = project_dir(root, project_id)
         .ok_or_else(|| err(EditorErrorCode::Internal, "The project id is not valid."))?
         .join("media");
@@ -301,7 +301,7 @@ fn media_dir(root: &Path, project_id: &str) -> Result<PathBuf, EditorError> {
 /// path and the bytes' SHA-256. A failure at ANY step removes the `.part`
 /// this call created — and only one it created (`create_new`), never a
 /// stranger's file that happened to carry the name.
-fn copy_owned(
+pub(crate) fn copy_owned(
     io: &dyn ImportIo,
     src: &Path,
     media: &Path,
@@ -354,7 +354,7 @@ fn copy_error(e: io::Error) -> EditorError {
 
 /// Probe the COPY (never the original — the copy is what the project will
 /// play) and build its asset and source record.
-fn describe(
+pub(crate) fn describe(
     io: &dyn ImportIo,
     dest: &Path,
     declared: ImportKind,
@@ -398,6 +398,7 @@ fn describe(
             ImportKind::Audio => SourceMediaKind::Audio,
             ImportKind::Image => SourceMediaKind::Image,
         },
+        replaced_from: None,
     };
     Ok((asset, record))
 }
@@ -494,7 +495,7 @@ fn rollback(job: &ImportJob, project_id: &str, imported: &[Imported]) {
     }
 }
 
-fn remove_quietly(path: &Path) {
+pub(crate) fn remove_quietly(path: &Path) {
     if let Err(e) = std::fs::remove_file(path) {
         if e.kind() != io::ErrorKind::NotFound {
             log::warn!("editor import: could not remove {}: {e}", path.display());

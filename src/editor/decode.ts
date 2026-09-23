@@ -192,7 +192,7 @@ export function decodeWorkspace(value: unknown): Workspace {
   return asObject(value, "workspace") as unknown as Workspace;
 }
 
-function decodeMissingMedia(value: unknown, index: number): MissingMedia {
+export function decodeMissingMedia(value: unknown, index: number): MissingMedia {
   const v = asObject(value, `missing[${index}]`);
   return {
     assetId: asId(v.assetId, `missing[${index}].assetId`),

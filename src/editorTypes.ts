@@ -381,6 +381,22 @@ export interface MissingMedia {
   expectedDurationMs: number;
 }
 
+/** `editor_relink_media`'s reply (Task 40; ADR §3.3 `RelinkReport`;
+ * `core::editor::relink::RelinkReportDto`) — `null` instead when the dialog
+ * was dismissed. Files are named by display name only. `ambiguous` and
+ * `mismatched` sources were left untouched; `missing` is what is still
+ * missing afterwards. Every list is always present. */
+export interface RelinkReport {
+  projection: EditorProjection;
+  missing: MissingMedia[];
+  matched: { assetId: string; file: string }[];
+  replaced: { assetId: string; file: string }[];
+  ambiguous: { assetId: string; files: string[] }[];
+  unmatched: string[];
+  mismatched: { assetId: string; file: string; reason: string }[];
+  perFile: { name: string; error: string }[];
+}
+
 /** What `editor_open_staged`/`editor_open_project` return
  * (`core::editor::projection::EditorOpenResult`). `sourceBase` and
  * `missing` are always-present keys, even when `null`/`[]`. */

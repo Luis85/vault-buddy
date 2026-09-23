@@ -34,6 +34,7 @@ import type {
   PackageFormat,
   PackageReceipt,
   ProjectSummaryDto,
+  RelinkReport,
   SaveReceipt,
   Workspace,
 } from "../editorTypes";
@@ -55,6 +56,7 @@ import {
   decodeWorkspace,
   isEditorError,
 } from "./decode";
+import { decodeRelinkReport } from "./decodeRelink";
 
 /** Thrown by every `EditorPort` method on a rejected invoke — `error` is
  * the decoded `EditorError`, so a caller reads `err.error.code` rather
@@ -163,6 +165,12 @@ export interface EditorPort {
    * the whole file and installs it as a project (a copy when its id is
    * taken); `null` when the dialog was dismissed. */
   importPackage(): Promise<EditorOpenResult | null>;
+  /** `editor_relink_media` (Task 40) — Rust opens its OWN open dialog (one
+   * file for one asset, many for a batch), matches each picked file to a
+   * missing original by hash, or by size + length + kind, and reconnects
+   * only unique matches; `confirmReplace` (one asset) accepts a file that
+   * is not the original. `null` when the dialog was dismissed. */
+  relinkMedia(sessionId: string, assetIds: string[], confirmReplace: boolean): Promise<RelinkReport | null>;
 }
 
 /** The per-job Channel (Tauri's ordered, subscriber-scoped delivery) —
@@ -253,6 +261,9 @@ export function createTauriEditorPort(): EditorPort {
     },
     importPackage() {
       return call("editor_import_package", undefined, decodeNullableOpenResult);
+    },
+    relinkMedia(sessionId, assetIds, confirmReplace) {
+      return call("editor_relink_media", { sessionId, assetIds, confirmReplace }, decodeRelinkReport);
     },
   };
 }
