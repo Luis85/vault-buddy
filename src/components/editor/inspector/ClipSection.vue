@@ -72,11 +72,7 @@ const MAX_DURATION_MS = 7_200_000;
  * client-side mirrors take. */
 const clipAsset = editorProject.project?.assets.find((a) => a.id === clip.value?.asset_id);
 const assetDurationMs =
-  clipAsset === undefined
-    ? MAX_DURATION_MS
-    : clipAsset.media_type === "image"
-      ? MAX_DURATION_MS
-      : clipAsset.duration_ms;
+  clipAsset === undefined || clipAsset.media_type === "image" ? MAX_DURATION_MS : clipAsset.duration_ms;
 
 /** Both commits return `execute`'s outcome, so `useInspectorDraft` can drop
  * a value Rust refused instead of showing it as committed (fix round 1). */
