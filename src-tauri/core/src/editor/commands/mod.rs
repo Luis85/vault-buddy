@@ -2,33 +2,42 @@
 //! `InternalCommand` (native-only, never `Deserialize`), plus their
 //! dispatch (`apply`/`apply_internal`) into family modules (R14, F-13, F31).
 //!
-//! SIXTEEN kinds are implemented so far: `rename`/`setDestination` (Task 6,
-//! `meta.rs`), the two `EditorSession` intercepts before ever calling
-//! `apply` at all, `undo`/`redo` (see `session.rs`'s `execute`), the seven
-//! core clip commands `insertClip`/`updateClip`/`splitClip`/`trimClip`/
+//! TWENTY-ONE kinds are implemented so far: `rename`/`setDestination`
+//! (Task 6, `meta.rs`), the two `EditorSession` intercepts before ever
+//! calling `apply` at all, `undo`/`redo` (see `session.rs`'s `execute`), the
+//! seven core clip commands `insertClip`/`updateClip`/`splitClip`/`trimClip`/
 //! `deleteClips`/`moveClips`/`reorderClip` (Task 7, `clips.rs`; cue
-//! reassignment for `splitClip` lives in the sibling `cue_follow.rs`), and
+//! reassignment for `splitClip` lives in the sibling `cue_follow.rs`),
 //! `groupClips`/`ungroupClips`/`duplicateClips`/`pasteFragment`/`cutClips`
-//! (Task 8, `groups.rs`). `moveClips`'s own group-EXPANSION behaviour also
-//! landed this task, but stays in `clips.rs` (F13: Task 7 shipped
-//! `moveClips` before any group could exist to expand into). Every other
-//! kind falls through to the shared "not available yet" arm below -- each
-//! later task adds its own explicit arm ABOVE the fallback and deletes
-//! that kind's row from `unimplemented_kinds_are_invalid_request_not_panic`'s
-//! table (this module's own tests), so the table shrinks monotonically
-//! task by task; say so explicitly in that task's own report rather than
-//! re-verifying the whole table at the end.
+//! (Task 8, `groups.rs`), and `addTrack`/`renameTrack`/`moveTrack`/
+//! `setTrackFlags`/`deleteTrack` (Task 23, `tracks.rs`). `moveClips`'s own
+//! group-EXPANSION behaviour also landed with Task 8, but stays in
+//! `clips.rs` (F13: Task 7 shipped `moveClips` before any group could exist
+//! to expand into). Every other kind falls through to the shared "not
+//! available yet" arm below -- each later task adds its own explicit arm
+//! ABOVE the fallback and deletes that kind's row from
+//! `unimplemented_kinds_are_invalid_request_not_panic`'s table (this
+//! module's own tests), so the table shrinks monotonically task by task;
+//! say so explicitly in that task's own report rather than re-verifying the
+//! whole table at the end.
 //!
 //! **The frontend keeps its own copy of this table, and nothing enforces
 //! they agree.** `src/editor/actionMeta.ts`'s `UNIMPLEMENTED_KINDS`
 //! (re-exported from `src/editor/actions.ts`, Task 17) is a hand-copy of
-//! the SAME thirty kind strings `unimplemented_commands()` below lists --
-//! it gates every teaching-tool/track/fade/transition/detachAudio/ratio
+//! the SAME twenty-five kind strings `unimplemented_commands()` below lists
+//! -- it gates every teaching-tool/fade/transition/detachAudio/ratio
 //! action in the preview toolbar and context menu so none of them ever
-//! sends a command this file would reject. There is no build-time or
-//! test-time link between the two lists: a task that adds an arm here and
-//! deletes the row from `unimplemented_commands()` below MUST ALSO delete
-//! the matching entry from `UNIMPLEMENTED_KINDS` in the same commit, or the
+//! sends a command this file would reject. **One deliberate exception**
+//! (Task 23): the frontend set also keeps `addTrack` gated even though
+//! this file implements it, because the two `ActionId`s that map to it
+//! (`addTrackVideo`/`addTrackAudio`) have no command builder yet -- nobody
+//! has built an "add a new track" UI surface, so ungating it there would
+//! make an enabled button send nothing. See `actionMeta.ts`'s own doc on
+//! `UNIMPLEMENTED_KINDS` for the exact reasoning. There is no build-time or
+//! test-time link between the two lists otherwise: a task that adds an arm
+//! here and deletes the row from `unimplemented_commands()` below MUST
+//! ALSO delete the matching entry from `UNIMPLEMENTED_KINDS` in the same
+//! commit UNLESS that same "no consuming UI yet" condition holds, or the
 //! frontend keeps refusing an action Rust would now accept.
 
 mod clips;
@@ -36,6 +45,7 @@ mod cue_follow;
 mod groups;
 mod meta;
 pub mod payloads;
+mod tracks;
 
 use serde::{Deserialize, Serialize};
 
@@ -158,6 +168,11 @@ pub fn apply(project: &Project, cmd: &EditorCommand) -> Result<(Project, String)
         EditorCommand::DuplicateClips(p) => groups::duplicate_clips(project, p),
         EditorCommand::PasteFragment(p) => groups::paste_fragment(project, p),
         EditorCommand::CutClips(p) => groups::cut_clips(project, p),
+        EditorCommand::AddTrack(p) => tracks::add_track(project, p),
+        EditorCommand::RenameTrack(p) => tracks::rename_track(project, p),
+        EditorCommand::MoveTrack(p) => tracks::move_track(project, p),
+        EditorCommand::SetTrackFlags(p) => tracks::set_track_flags(project, p),
+        EditorCommand::DeleteTrack(p) => tracks::delete_track(project, p),
         EditorCommand::Undo | EditorCommand::Redo => Err(EditorError::new(
             EditorErrorCode::InvalidRequest,
             "undo/redo are dispatched by EditorSession::execute, never by apply",
@@ -201,45 +216,6 @@ mod tests {
     /// whole table at once.
     fn unimplemented_commands() -> Vec<(&'static str, EditorCommand)> {
         vec![
-            (
-                "addTrack",
-                EditorCommand::AddTrack(AddTrackPayload {
-                    kind: TrackKind::Video,
-                    name: "Track".into(),
-                    index: 0,
-                }),
-            ),
-            (
-                "renameTrack",
-                EditorCommand::RenameTrack(RenameTrackPayload {
-                    track_id: "t1".into(),
-                    name: "Track".into(),
-                }),
-            ),
-            (
-                "moveTrack",
-                EditorCommand::MoveTrack(MoveTrackPayload {
-                    track_id: "t1".into(),
-                    to_index: 1,
-                }),
-            ),
-            (
-                "setTrackFlags",
-                EditorCommand::SetTrackFlags(SetTrackFlagsPayload {
-                    track_id: "t1".into(),
-                    visible: Some(true),
-                    locked: None,
-                    muted: None,
-                    solo: None,
-                    volume: None,
-                }),
-            ),
-            (
-                "deleteTrack",
-                EditorCommand::DeleteTrack(DeleteTrackPayload {
-                    track_id: "t1".into(),
-                }),
-            ),
             (
                 "setClipMix",
                 EditorCommand::SetClipMix(SetClipMixPayload {
@@ -457,14 +433,15 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_commands_table_has_thirty_rows() {
+    fn unimplemented_commands_table_has_twenty_five_rows() {
         // A vacuity guard, the `shared_fixture_table_has_ten_cases`
         // precedent (`time.rs`): 46 total EditorCommand kinds minus the
-        // sixteen implemented so far (rename, undo, redo, setDestination,
+        // twenty-one implemented so far (rename, undo, redo, setDestination,
         // insertClip, updateClip, splitClip, trimClip, deleteClips,
         // moveClips, reorderClip, groupClips, ungroupClips,
-        // duplicateClips, pasteFragment, cutClips).
-        assert_eq!(unimplemented_commands().len(), 30);
+        // duplicateClips, pasteFragment, cutClips, addTrack, renameTrack,
+        // moveTrack, setTrackFlags, deleteTrack).
+        assert_eq!(unimplemented_commands().len(), 25);
     }
 
     #[test]

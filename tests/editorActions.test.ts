@@ -485,18 +485,26 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
 });
 
 describe("UNIMPLEMENTED_KINDS", () => {
-  it("carries exactly the 30 kinds core::editor::commands::mod.rs's own table rejects", () => {
-    expect(UNIMPLEMENTED_KINDS.size).toBe(30);
+  it("carries exactly the 26 kinds this registry still gates", () => {
+    expect(UNIMPLEMENTED_KINDS.size).toBe(26);
     // The ten kinds an ActionId in this registry maps to that ARE
     // implemented must be absent, or every action built on them would be
-    // wrongly gated.
+    // wrongly gated -- plus the four track kinds Task 23 implemented that
+    // map to NO ActionId (renameTrack/moveTrack/setTrackFlags/deleteTrack:
+    // TrackHeader.vue calls editorProject.execute directly, never through
+    // this registry).
     for (const implemented of [
       "undo", "redo", "splitClip", "deleteClips", "cutClips", "pasteFragment",
       "duplicateClips", "groupClips", "ungroupClips", "reorderClip",
+      "renameTrack", "moveTrack", "setTrackFlags", "deleteTrack",
     ]) {
       expect(UNIMPLEMENTED_KINDS.has(implemented)).toBe(false);
     }
     expect(UNIMPLEMENTED_KINDS.has("addEffect")).toBe(true);
+    // addTrack stays gated on purpose: addTrackVideo/addTrackAudio (the
+    // only actions that map to it) have no RESOLVERS/BUILDERS entry yet --
+    // see actionMeta.ts's own doc on this constant.
+    expect(UNIMPLEMENTED_KINDS.has("addTrack")).toBe(true);
   });
 });
 

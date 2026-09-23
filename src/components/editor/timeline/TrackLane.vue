@@ -13,13 +13,26 @@
  * Testing conventions: happy-dom has no layout engine) and the CSS
  * interaction with a per-row flex width was real added risk for a property
  * nothing here can verify. A follow-up gap, not a hidden shortcut.
+ *
+ * Task 23 (F-06): the label column's plain name span is now `TrackHeader`
+ * (name/eye/lock/mute/solo/volume/menu). **A locked track's clip body is
+ * `pointer-events-none`** — Rust's own `ensure_unlocked`-shaped refusal
+ * (`core::editor::commands::tracks`) means a drag/trim/select gesture that
+ * started here would only ever end in a rejected `moveClips`/`trimClip`
+ * anyway, so this stops the gesture from starting at all rather than
+ * letting the user watch a preview that can never commit. The reason is
+ * carried as the body's own `title`, `actionMeta.ts`'s `lockedReason` — the
+ * SAME text a locked track's clip actions already show elsewhere, so a
+ * locked lane never explains itself two different ways.
  */
 import { computed } from "vue";
 
+import { lockedReason } from "../../../editor/actionMeta";
 import { LANE_HEIGHT_PX, msToX, TRACK_LABEL_WIDTH_PX } from "../../../editor/timelineLayout";
 import { clipOutputEnd } from "../../../editor/timeMap";
 import type { Asset, Clip, ClipSpan, Track } from "../../../editorTypes";
 import ClipItem from "./ClipItem.vue";
+import TrackHeader from "./TrackHeader.vue";
 
 const props = defineProps<{
   track: Track;
@@ -76,12 +89,18 @@ function widthOf(clip: Clip): number {
         class="h-2 w-2 shrink-0 rounded-full"
         :class="track.kind === 'audio' ? 'bg-audio' : 'bg-video'"
       />
-      <span class="truncate">{{ track.name }}</span>
+      <TrackHeader
+        :track="track"
+        :track-index="trackIndex"
+        :track-count="trackOrder.length"
+      />
     </div>
 
     <div
       :data-testid="`track-lane-body-${track.id}`"
+      :title="track.locked ? lockedReason(track.name) : undefined"
       class="relative bg-stage"
+      :class="track.locked ? 'pointer-events-none' : ''"
       :style="{ width: `${widthPx}px` }"
     >
       <ClipItem

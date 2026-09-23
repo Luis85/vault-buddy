@@ -15,9 +15,10 @@
  * at this file's own 500-line cap) and is re-exported below, so nothing
  * outside these two files needs to know the split exists.
  *
- * **Which commands this task can send.** Sixteen `EditorCommand` kinds are
- * implemented in Rust today (`core::editor::commands::mod.rs`'s own count);
- * the other thirty are rejected with `invalidRequest` and a message of the
+ * **Which commands this task can send.** Twenty-one `EditorCommand` kinds
+ * are implemented in Rust today (`core::editor::commands::mod.rs`'s own
+ * count, as of Task 23's five track commands); the other twenty-five are
+ * rejected with `invalidRequest` and a message of the
  * shape `"<kind> is not available yet"`
  * (`unimplemented_kinds_are_invalid_request_not_panic`, that module's own
  * test — its own module doc names `UNIMPLEMENTED_KINDS` back as the

@@ -131,11 +131,30 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
 };
 
 /**
- * The exact thirty wire kinds `core::editor::commands::mod.rs`'s `apply()`
- * still rejects. `undo`/`redo`/`splitClip`/`deleteClips`/`cutClips`/
- * `pasteFragment`/`duplicateClips`/`groupClips`/`ungroupClips`/
- * `reorderClip` are deliberately absent: those ten (of the sixteen
- * implemented kinds) are the ones an action in `ACTION_KIND` maps to.
+ * The exact twenty-six wire kinds this registry still gates. `undo`/
+ * `redo`/`splitClip`/`deleteClips`/`cutClips`/`pasteFragment`/
+ * `duplicateClips`/`groupClips`/`ungroupClips`/`reorderClip` are
+ * deliberately absent (those ten of the sixteen pre-Task-23 kinds are the
+ * ones an action in `ACTION_KIND` maps to), and so are `renameTrack`/
+ * `moveTrack`/`setTrackFlags`/`deleteTrack` as of Task 23 — Rust's
+ * `commands::tracks` implements all five track kinds, but no `ActionId`
+ * maps to any of those four (`TrackHeader.vue` calls
+ * `editorProject.execute` directly, never through this registry), so
+ * removing them changes nothing here and keeps `mod.rs`'s own invariant
+ * ("delete the matching entry or every action that maps to that kind stays
+ * wrongly disabled") satisfied for the part of it that applies.
+ *
+ * **`addTrack` is the one exception, deliberately still gated even though
+ * Rust implements it.** `addTrackVideo`/`addTrackAudio` are the only
+ * actions that map to it (`ACTION_KIND` above) and neither has a
+ * `RESOLVERS`/`BUILDERS` entry in `actions.ts` — nobody has built an
+ * "add a new track" UI surface yet (Task 23's own brief scopes
+ * `TrackHeader` to an EXISTING track's controls only). Ungating `addTrack`
+ * without those two entries would render `addTrackVideo`/`addTrackAudio`
+ * as ENABLED buttons that `commandFor` still returns `null` for — a
+ * broken control, worse than an honestly-disabled one. Whichever task
+ * finally wires that surface removes this entry in the SAME commit it adds
+ * the resolver/builder pair, per `mod.rs`'s own rule.
  *
  * **This is a hand-copy with nothing keeping it in sync with Rust's own
  * table**, and Rust's `commands/mod.rs` module doc names this exact
@@ -147,7 +166,7 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * direction.
  */
 export const UNIMPLEMENTED_KINDS: ReadonlySet<string> = new Set([
-  "addTrack", "renameTrack", "moveTrack", "setTrackFlags", "deleteTrack",
+  "addTrack",
   "setClipMix", "setMasterGain", "detachAudio", "setFades",
   "addTransition", "setTransitionDuration", "removeTransition",
   "setSpeed", "setLayout", "setAdjustments", "setCanvas",
