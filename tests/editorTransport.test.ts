@@ -196,10 +196,11 @@ describe("PreviewSurface", () => {
     return { ctx, gains };
   }
 
-  async function mountSurface(mediaUrl: EditorPort["mediaUrl"]) {
+  async function mountSurface(mediaUrl: EditorPort["mediaUrl"], project: Project = PROJECT) {
     mockConvertFileSrc("windows");
     const store = useEditorProjectStore();
-    store.setPort(fakePort({ openStaged: () => Promise.resolve(openResult()), mediaUrl, execute }));
+    const opened = { ...openResult(), project };
+    store.setPort(fakePort({ openStaged: () => Promise.resolve(opened), mediaUrl, execute }));
     await store.openStaged("base");
     const audio = fakeAudio();
     const w = mount(PreviewSurface, {
@@ -217,6 +218,24 @@ describe("PreviewSurface", () => {
     expect(mediaUrl).toHaveBeenCalledWith("ses-a", { assetId: "cap" });
     const video = w.get('[data-testid="preview-layers"] video').element as HTMLVideoElement;
     expect(video.getAttribute("src")).toBe(`http://asset.localhost/${encodeURIComponent(PATH)}`);
+  });
+
+  // docs/Gaps.md GAP-175: `migrate::from_staged` (core::editor::migrate)
+  // marks a staged capture's own asset `builtin: Some(Builtin::Screen)` for
+  // the reference format's sake, but — unlike every OTHER builtin — it is
+  // backed by a real file in `sources.json` (`validate_media.rs`'s own
+  // module doc). `computeLayers` must still lay this one out and the
+  // controller must still ask the port for its media, or the one clip
+  // every migrated project starts with shows no picture and no sound.
+  it("lays out and requests media for a migrated capture's own builtin-screen asset", async () => {
+    const migrated: Project = {
+      ...PROJECT,
+      assets: [{ id: "cap", kind: "video", name: "cap.mp4", duration_ms: 8_000, builtin: "screen" }],
+    };
+    const mediaUrl = vi.fn((_sid: string, _ref: MediaRef) => Promise.resolve("C:\\x\\cap.mp4"));
+    const { w } = await mountSurface(mediaUrl, migrated);
+    expect(mediaUrl).toHaveBeenCalledWith("ses-a", { assetId: "cap" });
+    expect(w.find('[data-testid="preview-layers"] video').exists()).toBe(true);
   });
 
   it("says so when a layer's media cannot be loaded, instead of a silent black frame", async () => {

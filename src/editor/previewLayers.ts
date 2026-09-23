@@ -17,16 +17,38 @@
  *
  * What this deliberately does NOT model (docs/Gaps.md GAP-173 — the preview
  * approximates the render): fades, transitions, effects, captions, cards
- * and other builtin assets (they have no file to show), rotation/mirror/
- * crop/adjustments, and frame-accurate sync.
+ * and other SYNTHESIZED builtin assets (they have no file to show),
+ * rotation/mirror/crop/adjustments, and frame-accurate sync.
  */
-import type { Asset, Clip, Fit, Project, Track } from "../editorTypes";
+import type { Asset, Builtin, Clip, Fit, Project, Track } from "../editorTypes";
 import { isTrackAudible } from "./mixRules";
 import type { Box, Size } from "./previewGeometry";
 import { clipBox, containRect } from "./previewGeometry";
 import { sourceAt } from "./timeMap";
 
 export type LayerKind = "video" | "image" | "audio";
+
+/**
+ * Builtins THIS codebase backs with a real file (docs/Gaps.md GAP-175).
+ * `core::editor::migrate::from_staged` is the one place that mints a
+ * `builtin: screen` asset, and it deliberately diverges from the reference
+ * format: that asset has a real `sources.json` record, resolvable through
+ * `editor_media_url` (`validate_media.rs`'s own module doc — "a staged
+ * capture's asset is builtin: screen here AND has a real file … which the
+ * reference's synthesized builtins never had"). Every other builtin this
+ * enum names — card, cues, presenter, detail, ambient — is procedurally
+ * supplied with no file, per the reference format, and nothing in this
+ * codebase mints one with a registered source; skip those, never lay them
+ * out, or the controller would ask Rust for media that cannot exist. An
+ * asset with NO `builtin` at all is always file-backed (an import).
+ */
+const FILE_BACKED_BUILTINS: ReadonlySet<Builtin> = new Set<Builtin>(["screen"]);
+
+/** Has this asset a real file the preview could show — as opposed to a
+ * synthesized builtin with none (GAP-175)? */
+function hasPreviewSource(asset: Asset): boolean {
+  return asset.builtin === undefined || FILE_BACKED_BUILTINS.has(asset.builtin);
+}
 
 /** Local preview monitoring — never part of the project. */
 export interface MonitorState {
@@ -78,7 +100,7 @@ export function computeLayers(
     const index = trackIndex.get(clip.track_id);
     const track = index === undefined ? undefined : project.tracks[index];
     const asset = assets.get(clip.asset_id);
-    if (index === undefined || !track || !track.visible || !asset || asset.builtin) continue;
+    if (index === undefined || !track || !track.visible || !asset || !hasPreviewSource(asset)) continue;
     const speed = clip.speed ?? 1;
     const sourceMs = sourceAt({ start_ms: clip.start_ms, in_ms: clip.in_ms, out_ms: clip.out_ms, speed }, t);
     if (sourceMs === null) continue;

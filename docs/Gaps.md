@@ -2319,7 +2319,7 @@ the registry, prune a session's TERMINAL records when the session closes
 (`drop_session`), keeping running ones until their terminal lands; Task 46
 should decide this before it adds render jobs.
 
-### GAP-175 · Medium · The preview skips a migrated staged capture's own video, because migration marks its asset `builtin: screen`
+### GAP-175 · ~~Medium~~ FIXED 2026-09-23 · The preview skips a migrated staged capture's own video, because migration marks its asset `builtin: screen`
 `src/editor/previewLayers.ts` (tutorial-editor Task 22) +
 `src-tauri/core/src/editor/migrate.rs` (Task 4). Found while wiring Task 27's
 detached audio through the preview. `computeLayers` skips every asset with a
@@ -2345,6 +2345,36 @@ skip only `builtin` values with no file by construction (`card`/`cues`/
 synthesized audio), or have the projection mark which assets are backed by
 a registered source. The `builtin: screen` marker itself is load-bearing
 for the reference format and should stay.
+
+**Fixed, keyed on "is this builtin file-backed" rather than "is `screen`
+special".** `sources.json` itself is not reachable from `computeLayers` — a
+pure, synchronous function of the `Project` graph alone — and widening
+`EditorProjection`'s pinned exact shape (ADR §3.3) just to carry that
+answer was rejected as the wrong-sized fix for a rule the `Builtin` enum
+already expresses: in THIS codebase, `migrate::from_staged` is the only
+site that ever mints a `builtin` value, and it mints exactly one,
+`Builtin::Screen`, deliberately backed by a real file
+(`validate_media.rs`'s own module doc). No code here has ever minted
+`presenter`/`detail`/`ambient`/`card`/`cues` — those remain the reference
+format's synthesized placeholders until something does. `previewLayers.ts`
+now carries `FILE_BACKED_BUILTINS = new Set<Builtin>(["screen"])` and a
+`hasPreviewSource(asset)` predicate (`asset.builtin === undefined ||
+FILE_BACKED_BUILTINS.has(asset.builtin)`) that `computeLayers` consults in
+place of the old bare `asset.builtin` truthiness check — so an asset with
+no `builtin` (an import) or `builtin: screen` (a migrated capture) is laid
+out, and `card`/`cues`/every other still-unminted builtin stays skipped
+exactly as before (pinned by the pre-existing
+`tests/previewController.test.ts` case "images get an `<img>`, audio
+tracks a hidden `<audio>`, builtins nothing", which uses a `card` asset and
+still passes unchanged). Covering test:
+`tests/editorTransport.test.ts` → `PreviewSurface` → "lays out and requests
+media for a migrated capture's own builtin-screen asset" — a migrated-shape
+project (one `builtin: screen` asset, one clip on the video track) mounted
+through `PreviewSurface.vue`, asserting BOTH halves this gap named:
+`computeLayers` produces a layer (a `<video>` element exists in
+`preview-layers`) AND the controller calls the port's `mediaUrl` for that
+asset id. Red before the fix (`mediaUrl` never called); a mutation reverting
+`FILE_BACKED_BUILTINS` to empty reproduces the same red.
 
 ## 9. Documentation & repo hygiene
 
