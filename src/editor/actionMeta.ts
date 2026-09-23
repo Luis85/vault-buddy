@@ -187,7 +187,13 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * `TransitionRow.vue` sends the other two directly (no `ActionId` maps to
  * either). **Task 31 removed `setSpeed`/`setLayout`, WITH consumers**: the
  * Speed and Layout inspector sections and the preview's `LayoutHandles`
- * send them directly (no `ActionId` maps to either).
+ * send them directly (no `ActionId` maps to either). **Task 33 removed
+ * `addCard`/`updateCard`/`insertIntro`**: no `ActionId` has ever mapped to
+ * any of the three (`TitlesLibrary.vue` sends `addCard` directly through
+ * `editorProject.execute`, the `MediaLibrary.vue` "+" precedent), so unlike
+ * every other removal above there was no gate to lift here either way —
+ * this is bookkeeping only, keeping this table's rows matching Rust's
+ * implemented set per `mod.rs`'s own rule.
  *
  * **This is a hand-copy with nothing keeping it in sync with Rust's own
  * table**, and Rust's `commands/mod.rs` module doc names this exact
@@ -205,7 +211,6 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * `PreviewToolbar.vue`, never through `commandFor`.
  */
 export const UNIMPLEMENTED_KINDS: ReadonlySet<string> = new Set([
-  "addCard", "updateCard", "insertIntro",
   "addEffect", "updateEffect", "removeEffect",
   "setCaptionSettings", "addCaption", "updateCaption", "splitCaption", "removeCaptions",
   "addMarker", "updateMarker", "removeMarker",

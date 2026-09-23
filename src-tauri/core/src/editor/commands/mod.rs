@@ -2,7 +2,7 @@
 //! `InternalCommand` (native-only, never `Deserialize`), plus their
 //! dispatch (`apply`/`apply_internal`) into family modules (R14, F-13, F31).
 //!
-//! THIRTY-TWO kinds are implemented so far: `rename`/`setDestination`
+//! THIRTY-FIVE kinds are implemented so far: `rename`/`setDestination`
 //! (Task 6, `meta.rs`), the two `EditorSession` intercepts before ever
 //! calling `apply` at all, `undo`/`redo` (see `session.rs`'s `execute`), the
 //! seven core clip commands `insertClip`/`updateClip`/`splitClip`/`trimClip`/
@@ -24,7 +24,15 @@
 //! way a trim does), and `setCanvas`/`setAdjustments` (Task 32, `layout.rs`
 //! beside their two Task 31 siblings -- `setAdjustments` reuses
 //! `check_targets`'s video-track/unlocked discipline for its own
-//! `check_color_targets`, adding the title-card refusal).
+//! `check_color_targets`, adding the title-card refusal), and `addCard`/
+//! `updateCard`/`insertIntro` (Task 33, `cards.rs` -- the builtin `card`
+//! asset is minted once per project and reused by every later card;
+//! `insertIntro` shifts every clip's `start_ms` uniformly, which is why it
+//! never has to touch `effects`/`markers`/`captions` (their source times
+//! are clip-relative already) or re-derive transition/group geometry (a
+//! uniform shift preserves every relative offset by construction) --
+//! `transitions::ensure_intact` still runs as the same defensive check
+//! `setSpeed` above uses).
 //! `moveClips`'s own group-EXPANSION behaviour also landed with Task 8, but
 //! stays in `clips.rs` (F13: Task 7 shipped `moveClips` before any group
 //! could exist to expand into). Every other kind falls through to the
@@ -59,6 +67,7 @@
 //! commit UNLESS that same "no consuming UI yet" condition holds, or the
 //! frontend keeps refusing an action Rust would now accept.
 
+mod cards;
 mod clips;
 mod cue_follow;
 pub mod fades;
@@ -229,6 +238,9 @@ pub fn apply(
         EditorCommand::SetLayout(p) => layout::set_layout(project, p),
         EditorCommand::SetAdjustments(p) => layout::set_adjustments(project, p),
         EditorCommand::SetCanvas(p) => layout::set_canvas(project, p),
+        EditorCommand::AddCard(p) => cards::add_card(project, p),
+        EditorCommand::UpdateCard(p) => cards::update_card(project, p),
+        EditorCommand::InsertIntro(p) => cards::insert_intro(project, p),
         EditorCommand::Undo | EditorCommand::Redo => Err(EditorError::new(
             EditorErrorCode::InvalidRequest,
             "undo/redo are dispatched by EditorSession::execute, never by apply",
@@ -256,7 +268,7 @@ pub fn apply_internal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::model::{CardPreset, TrackKind};
+    use crate::editor::model::TrackKind;
     use crate::editor::model_cues::{EffectKind, TransitionKind};
     use crate::editor::test_support::{minimal_project, no_context};
 
@@ -275,36 +287,6 @@ mod tests {
     /// `setAdjustments`/`setCanvas`'s two.
     fn unimplemented_commands() -> Vec<(&'static str, EditorCommand)> {
         vec![
-            (
-                "addCard",
-                EditorCommand::AddCard(AddCardPayload {
-                    preset: CardPreset::Intro,
-                    track_id: None,
-                    start_ms: 0,
-                    duration_ms: 1_000,
-                    title: "Title".into(),
-                    subtitle: "Subtitle".into(),
-                }),
-            ),
-            (
-                "updateCard",
-                EditorCommand::UpdateCard(UpdateCardPayload {
-                    clip_id: "c1".into(),
-                    title: Some("T".into()),
-                    subtitle: None,
-                    background: None,
-                    foreground: None,
-                    accent: None,
-                }),
-            ),
-            (
-                "insertIntro",
-                EditorCommand::InsertIntro(InsertIntroPayload {
-                    duration_ms: 1_000,
-                    title: "Title".into(),
-                    subtitle: "Subtitle".into(),
-                }),
-            ),
             (
                 "addEffect",
                 EditorCommand::AddEffect(AddEffectPayload {
@@ -401,17 +383,18 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_commands_table_has_fourteen_rows() {
+    fn unimplemented_commands_table_has_eleven_rows() {
         // A vacuity guard, the `shared_fixture_table_has_ten_cases`
         // precedent (`time.rs`): 46 total EditorCommand kinds minus the
-        // thirty-two implemented so far (rename, undo, redo, setDestination,
+        // thirty-five implemented so far (rename, undo, redo, setDestination,
         // insertClip, updateClip, splitClip, trimClip, deleteClips,
         // moveClips, reorderClip, groupClips, ungroupClips,
         // duplicateClips, pasteFragment, cutClips, addTrack, renameTrack,
         // moveTrack, setTrackFlags, deleteTrack, setClipMix, setMasterGain,
         // detachAudio, setFades, addTransition, setTransitionDuration,
-        // removeTransition, setSpeed, setLayout, setAdjustments, setCanvas).
-        assert_eq!(unimplemented_commands().len(), 14);
+        // removeTransition, setSpeed, setLayout, setAdjustments, setCanvas,
+        // addCard, updateCard, insertIntro).
+        assert_eq!(unimplemented_commands().len(), 11);
     }
 
     #[test]

@@ -41,11 +41,18 @@
  * has compared the two yet (docs/Gaps.md GAP-173).
  *
  * What this deliberately still does NOT model (docs/Gaps.md GAP-173 — the
- * preview approximates the render): transitions, effects, captions, cards
- * and other SYNTHESIZED builtin assets (they have no file to show), and
- * frame-accurate sync. The fade CURVE SHAPE is itself only an
- * approximation for `smooth` — GAP-173 records that the preview's
- * smoothstep and the render's ffmpeg `hsin` are close but not bit-identical.
+ * preview approximates the render): transitions, effects, captions and
+ * every OTHER synthesized builtin asset with no file to show (this
+ * module's own `BUILTIN_HAS_FILE`), plus frame-accurate sync. **Title
+ * cards are the one exception** (Task 33; F-37): a card clip is still
+ * excluded here (`hasPreviewSource` reads `BUILTIN_HAS_FILE.card ===
+ * false`, unchanged), because it has text/colour rather than a file — but
+ * `previewCardLayer.ts`'s `computeCardLayers` fills that gap with its own
+ * pure layer computation, and `previewCardDom.ts` renders it as a styled
+ * `<div>` layer `previewController.ts` applies alongside these media
+ * layers. The fade CURVE SHAPE is itself only an approximation for
+ * `smooth` — GAP-173 records that the preview's smoothstep and the
+ * render's ffmpeg `hsin` are close but not bit-identical.
  */
 import type { Asset, Builtin, Clip, Project, Track } from "../editorTypes";
 import { adjustmentsFilter } from "./colorPresets";
@@ -216,6 +223,25 @@ function buildLayer(
   };
 }
 
+/** The per-track index, asset-id lookup and letterboxed canvas box every
+ * layer kind needs before it can resolve a single clip -- shared between
+ * `computeLayers` here and `previewCardLayer.ts`'s `computeCardLayers` so
+ * the two disjoint layer kinds (media vs. title card) build it identically
+ * rather than each carrying its own copy. */
+export interface LayerContext {
+  trackIndex: Map<string, number>;
+  assets: Map<string, Asset>;
+  canvasBox: Box;
+}
+
+export function layerContext(project: Project, stage: Size): LayerContext {
+  return {
+    trackIndex: new Map(project.tracks.map((track, i) => [track.id, i])),
+    assets: new Map(project.assets.map((a) => [a.id, a])),
+    canvasBox: containRect(project.canvas, stage),
+  };
+}
+
 /** Every layer active at output time `t`, sorted top-most first. */
 export function computeLayers(
   project: Project,
@@ -223,9 +249,7 @@ export function computeLayers(
   stage: Size,
   monitor: MonitorState,
 ): PreviewLayer[] {
-  const trackIndex = new Map(project.tracks.map((track, i) => [track.id, i]));
-  const assets = new Map(project.assets.map((a) => [a.id, a]));
-  const canvasBox = containRect(project.canvas, stage);
+  const { trackIndex, assets, canvasBox } = layerContext(project, stage);
   const layers: PreviewLayer[] = [];
   for (const clip of project.clips) {
     const resolved = resolveLayerInputs(clip, project, t, trackIndex, assets);

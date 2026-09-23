@@ -35,6 +35,8 @@
  */
 import type { Project } from "../editorTypes";
 import { logWarning } from "../logging";
+import { CardLayerDom } from "./previewCardDom";
+import { computeCardLayers } from "./previewCardLayer";
 import type { Size } from "./previewGeometry";
 import type { LayerKind, MonitorState, PreviewLayer } from "./previewLayers";
 import { computeLayers } from "./previewLayers";
@@ -127,6 +129,10 @@ export class PreviewController {
   private readonly active = new Map<string, Slot>();
   private readonly free: Slot[] = [];
   private readonly urls = new Map<string, string | null>();
+  /** Title cards (Task 33): a disjoint layer kind from every media slot
+   * above -- see `previewCardLayer.ts`'s module doc for why they are
+   * computed and applied separately rather than folded into `PreviewLayer`. */
+  private readonly cards: CardLayerDom;
   private audio: AudioContextLike | null | undefined = undefined;
   /** `undefined` until the first layer is routed; `null` = no analyser. */
   private meter: AnalyserLike | null | undefined = undefined;
@@ -146,6 +152,7 @@ export class PreviewController {
 
   constructor(deps: PreviewControllerDeps) {
     this.deps = deps;
+    this.cards = new CardLayerDom(deps.container);
   }
 
   get timeMs(): number {
@@ -237,6 +244,7 @@ export class PreviewController {
     for (const slot of [...this.active.values(), ...this.free]) this.teardown(slot);
     this.active.clear();
     this.free.length = 0;
+    this.cards.destroy();
     // `close()` rejects (InvalidStateError) on an already-closed context:
     // logged, never an unhandled rejection.
     this.audio
@@ -311,6 +319,7 @@ export class PreviewController {
       if (!keep.has(clipId)) this.release(clipId, slot);
     }
     for (const layer of shown) this.show(layer, forceSeek);
+    this.cards.apply(computeCardLayers(this.project, this.time, this.stage));
     return shown;
   }
 

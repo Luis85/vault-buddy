@@ -12,6 +12,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { computeCardLayers } from "../src/editor/previewCardLayer";
 import type { AudioContextLike, GainLike } from "../src/editor/previewController";
 import { MAX_ELEMENTS, PreviewController } from "../src/editor/previewController";
 import { clientToCanvas, containRect } from "../src/editor/previewGeometry";
@@ -549,5 +550,106 @@ describe("seeking", () => {
     c.pause();
     expect(c.playing).toBe(false);
     expect(onTime).toHaveBeenCalledWith(208);
+  });
+});
+
+describe("title cards (Task 33; F-37)", () => {
+  function cardClip(id: string, trackId: string, overrides: Partial<Clip> = {}) {
+    return clip(id, trackId, {
+      asset_id: `a-${id}`,
+      card: {
+        preset: "chapter",
+        title: `Title ${id}`,
+        subtitle: `Subtitle ${id}`,
+        background: "#18191e",
+        foreground: "#f0eef6",
+        accent: "#b6a2f5",
+      },
+      ...overrides,
+    });
+  }
+
+  function cardAsset(id: string) {
+    return asset(id, { builtin: "card" });
+  }
+
+  it("computeCardLayers returns a card's own text/colours, never a media layer", () => {
+    const p = project(
+      [track("v")],
+      [cardClip("card1", "v", { start_ms: 1_000, out_ms: 3_000 })],
+      { assets: [cardAsset("a-card1")] },
+    );
+    const [layer] = computeCardLayers(p, 2_000, STAGE);
+    expect(layer.clipId).toBe("card1");
+    expect(layer.title).toBe("Title card1");
+    expect(layer.subtitle).toBe("Subtitle card1");
+    expect(layer.background).toBe("#18191e");
+    expect(layer.foreground).toBe("#f0eef6");
+    expect(layer.accent).toBe("#b6a2f5");
+
+    // The media pipeline shows nothing for the same clip -- disjoint sets.
+    expect(computeLayers(p, 2_000, STAGE, LOUD)).toHaveLength(0);
+  });
+
+  it("a card is inactive outside its span and on a hidden track, the same rules a media layer follows", () => {
+    const p = project(
+      [track("v"), track("hidden", { visible: false })],
+      [
+        cardClip("card1", "v", { start_ms: 1_000, in_ms: 1_000, out_ms: 3_000 }),
+        cardClip("card2", "hidden", { start_ms: 0, out_ms: 3_000, asset_id: "a-card2" }),
+      ],
+      { assets: [cardAsset("a-card1"), cardAsset("a-card2")] },
+    );
+    // card1's output span is [1_000, 1_000 + (3_000 - 1_000)) = [1_000, 3_000).
+    expect(computeCardLayers(p, 500, STAGE)).toHaveLength(0); // before card1 starts
+    expect(computeCardLayers(p, 3_000, STAGE)).toHaveLength(0); // at card1's exclusive end
+    expect(computeCardLayers(p, 2_000, STAGE).map((l) => l.clipId)).toEqual(["card1"]);
+  });
+
+  it("an ordinary clip carrying inline `.card` content is not a card unless its ASSET is builtin: card", () => {
+    // A clip that merely LOOKS like a card (has `.card` populated) but
+    // whose asset is ordinary footage must not render as one -- the same
+    // "identified by the asset, not the clip" rule `setAdjustments` uses.
+    const p = project([track("v")], [cardClip("fake", "v", { asset_id: "a-fake" })], {
+      assets: [asset("a-fake")],
+    });
+    expect(computeCardLayers(p, 0, STAGE)).toHaveLength(0);
+  });
+
+  it("the controller renders a card as a styled div with its own box/z and text, stacked like a media layer", () => {
+    const p = project(
+      [track("upper"), track("lower")],
+      [
+        clip("under", "lower"),
+        cardClip("over", "upper", { x: 0.1, y: 0.2, w: 0.5, h: 0.25, opacity: 0.75 }),
+      ],
+      { assets: [asset("a-under"), cardAsset("a-over")] },
+    );
+    const { c, container } = controller();
+    c.layout(p, 0);
+
+    const node = container.querySelector<HTMLDivElement>('[data-preview-layer="card"]')!;
+    expect(node).toBeTruthy();
+    expect(node.style.opacity).toBe("0.75");
+    expect(node.style.background).toBe("#18191e");
+    expect(node.querySelector('[data-card-title]')!.textContent).toBe("Title over");
+    expect(node.querySelector('[data-card-subtitle]')!.textContent).toBe("Subtitle over");
+
+    // Stacks above the lower track's media element, the same z rule.
+    const video = container.querySelector<HTMLVideoElement>("video")!;
+    expect(Number(node.style.zIndex)).toBeGreaterThan(Number(video.style.zIndex));
+
+    // Moving past the card's end removes its node; nothing is leaked.
+    c.layout(p, 20_000);
+    expect(container.querySelector('[data-preview-layer="card"]')).toBeNull();
+  });
+
+  it("destroy() removes any card node left on the stage", () => {
+    const p = project([track("v")], [cardClip("card1", "v")], { assets: [cardAsset("a-card1")] });
+    const { c, container } = controller();
+    c.layout(p, 0);
+    expect(container.querySelector('[data-preview-layer="card"]')).toBeTruthy();
+    c.destroy();
+    expect(container.querySelector('[data-preview-layer="card"]')).toBeNull();
   });
 });
