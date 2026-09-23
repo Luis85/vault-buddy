@@ -2498,7 +2498,7 @@ batch exactly when a carried transition explains it — the
 `transitions::overlap_refusal` shape. A wire change to `ClipboardFragment`,
 so it needs the TS decoder/type and a literal-JSON pin in the same commit.
 
-### GAP-179 · Low · A caption or chapter trimmed out of its clip is kept but listed nowhere, and `validate_project` does not bound caption settings or text
+### GAP-179 · ~~Low~~ FIXED 2026-09-23 · `validate_project` did not bound caption settings or text (the trimmed-away listing half is now GAP-181)
 `src/editor/captionRules.ts` (`captionRows`, `chapterRows`),
 `src-tauri/core/src/editor/commands/cues.rs` (`chapters`),
 `src-tauri/core/src/editor/validate.rs` (`check_caption`, `check_marker`).
@@ -2530,6 +2530,25 @@ confirming no migration or fixture writes an out-of-range value (the
 paste path's default font size was 16 until Task 36 moved it to the shared
 30).
 
+**Fixed (validation half) by Task 38**, ahead of both deadlines, because
+Task 38's `editor::package::inspect_archive` is where an untrusted
+`project.json` first reaches `validate_project`. `check_caption_settings`
+refuses a caption `font_size` outside `limits::CAPTION_FONT_SIZE_MIN..=MAX`
+(18-56, `workspace.schema.json`; `commands::captions::FONT_SIZE_MIN/MAX`
+now read the same constants), `check_caption` refuses text that is blank
+after trimming or longer than `MAX_CAPTION_TEXT_CHARS` characters, and
+`check_marker` refuses a title longer than `MAX_TITLE_CHARS` characters --
+the reference validator's (`captions.js`, `editor.js`) exact rules,
+counted in characters like the commands. A BLANK chapter title is still
+accepted by validation: neither the schema nor the reference validator
+refuses one (only `addMarker`/`updateMarker` do). Confirmed nothing
+writes an out-of-range value: migration writes no captions, the reference
+fixture carries none and three short chapter titles, and
+`commands::captions::default_settings` (30) is pinned valid by
+`validate_cues_tests.rs`' `the_command_caption_defaults_validate`. The
+UI half -- trimmed-away cues and chapters listed nowhere -- is unchanged
+and moved to GAP-181 so this entry can close.
+
 ### GAP-180 · Low · After an unreadable `recovery.json`, "Open saved project" keeps it only until the next edit journals over it
 `src/composables/useEditorRecovery.ts` (`openSaved`),
 `src-tauri/src/editor/recovery.rs` (`write_locked`).
@@ -2548,6 +2567,21 @@ beside Resume and Discard).
 (`recovery.unreadable-<timestamp>.json`, owned-file rails) before the new
 session can journal, and have `list_projects` keep reporting it so the
 user can export or discard it later.
+
+### GAP-181 · Low · A caption or chapter trimmed out of its clip is kept but listed nowhere
+`src/editor/captionRules.ts` (`captionRows`, `chapterRows`),
+`src-tauri/core/src/editor/commands/cues.rs` (`chapters`).
+Split out of GAP-179 by Task 38, which fixed that entry's validation half.
+Captions and markers are stored in SOURCE time and follow their footage, so
+a trim that cuts past one does not delete it -- extending the trim again
+brings it back (the reference editor's own behaviour, and DATA-MODEL.md's
+"trim changes the visible intersection, not the original cue timestamps").
+But while it is trimmed away it has no OUTPUT time, and both libraries list
+only what the edit shows: nothing in the UI can select, edit or delete it,
+and it still counts toward `MAX_CAPTIONS`/`MAX_MARKERS`.
+
+**Fix:** list trimmed-away cues and markers under a "Not in the edit" group
+in each library (delete-only).
 
 ## 9. Documentation & repo hygiene
 

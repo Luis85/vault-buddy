@@ -47,9 +47,10 @@ use crate::editor::{Map, Num};
 
 /// The reference editor's default caption font size, in canvas px at 720p.
 pub const DEFAULT_FONT_SIZE: i64 = 30;
-/// `captions.js`' own `font_size<18||font_size>56` refusal.
-pub const FONT_SIZE_MIN: f64 = 18.0;
-pub const FONT_SIZE_MAX: f64 = 56.0;
+/// `captions.js`' own `font_size<18||font_size>56` refusal -- the same
+/// pair `validate_project` enforces (GAP-179), declared once in `limits`.
+pub const FONT_SIZE_MIN: f64 = limits::CAPTION_FONT_SIZE_MIN;
+pub const FONT_SIZE_MAX: f64 = limits::CAPTION_FONT_SIZE_MAX;
 
 /// A fresh `CaptionSettings` with the reference editor's defaults and no
 /// cues.
@@ -227,8 +228,8 @@ pub(super) fn update_caption(
 /// half gets `round(words · fraction)` of them, clamped so each half keeps
 /// at least one. A single word cannot be divided, so both halves keep it
 /// rather than one being left with nothing -- the commands refuse an empty
-/// caption (`checked_text`); `validate_project` does not (docs/Gaps.md
-/// GAP-179), so this is where an empty half would have to be stopped.
+/// caption (`checked_text`) and, since Task 38 closed docs/Gaps.md
+/// GAP-179, so does `validate_project` -- an empty half is stopped here.
 fn split_words(text: &str, fraction: f64) -> (String, String) {
     let words: Vec<&str> = text.split_whitespace().collect();
     if words.len() < 2 {

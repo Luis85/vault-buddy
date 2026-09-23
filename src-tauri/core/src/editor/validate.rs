@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use super::error::{EditorError, EditorErrorCode};
 use super::limits;
 use super::model::{Asset, Clip, MediaType, Project, Track, TrackKind};
-use super::model_cues::{CaptionCue, Effect, EffectKind, Marker, WorkspaceEnvelope};
+use super::model_cues::{
+    CaptionCue, CaptionSettings, Effect, EffectKind, Marker, WorkspaceEnvelope,
+};
 use super::{validate_media, Num};
 
 /// `Track.name`'s cap is `workspace.schema.json`'s `maxLength: 200` on the
@@ -402,7 +404,36 @@ fn check_caption(cue: &CaptionCue, clips: &HashMap<&str, &Clip>) -> Result<(), E
             cue.id, cue.start_ms, cue.end_ms
         )));
     }
+    // GAP-179: the reference validator's (`captions.js`) text rule, which
+    // `commands::captions::checked_text` already applies to every write --
+    // non-blank after trimming, at most `MAX_CAPTION_TEXT_CHARS` characters
+    // (characters, not bytes, exactly as the command counts them).
+    if cue.text.trim().is_empty() {
+        return Err(invalid(format!("caption {}: text is blank", cue.id)));
+    }
+    if cue.text.chars().count() > limits::MAX_CAPTION_TEXT_CHARS {
+        return Err(invalid(format!(
+            "caption {}: text exceeds {} characters",
+            cue.id,
+            limits::MAX_CAPTION_TEXT_CHARS
+        )));
+    }
     Ok(())
+}
+
+/// GAP-179: `workspace.schema.json`'s `captions.font_size` bound, the one
+/// caption-presentation number the schema limits (the booleans and the
+/// `position` enum are already enforced by the typed model's
+/// deserialization).
+fn check_caption_settings(settings: &CaptionSettings) -> Result<(), EditorError> {
+    let size = as_f64("captions", "font_size", &settings.font_size)?;
+    check_range(
+        "captions",
+        "font_size",
+        size,
+        limits::CAPTION_FONT_SIZE_MIN,
+        limits::CAPTION_FONT_SIZE_MAX,
+    )
 }
 
 fn check_marker(
@@ -410,6 +441,17 @@ fn check_marker(
     clips: &HashMap<&str, &Clip>,
     assets: &HashMap<&str, &Asset>,
 ) -> Result<(), EditorError> {
+    // GAP-179: `workspace.schema.json`'s `marker.title` `maxLength 160`
+    // (the reference validator's own `str(m.title,160)`). A blank title is
+    // NOT refused here: neither the schema nor the reference validator
+    // refuses one -- only the `addMarker`/`updateMarker` commands do.
+    if marker.title.chars().count() > limits::MAX_TITLE_CHARS {
+        return Err(invalid(format!(
+            "marker {}: title exceeds {} characters",
+            marker.id,
+            limits::MAX_TITLE_CHARS
+        )));
+    }
     let clip = *clips.get(marker.clip_id.as_str()).ok_or_else(|| {
         invalid(format!(
             "marker {}: clip_id {} does not resolve",
@@ -487,6 +529,7 @@ pub fn validate_project(p: &Project) -> Result<(), EditorError> {
     }
 
     if let Some(captions) = &p.captions {
+        check_caption_settings(captions)?;
         for cue in &captions.cues {
             check_caption(cue, &clips_by_id)?;
         }

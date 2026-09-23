@@ -98,6 +98,12 @@ pub mod limits {
     pub const MAX_NAME_CHARS: usize = 300;
     pub const MAX_EFFECT_TEXT_CHARS: usize = 1000;
     pub const MAX_CAPTION_TEXT_CHARS: usize = 500;
+    /// `workspace.schema.json`'s `captions.font_size` (`minimum 18,
+    /// maximum 56`) -- the reference `captions.js` refuses the same range.
+    /// Declared here (GAP-179, Task 38) so `validate_project` and the
+    /// `setCaptionSettings` command read ONE pair of numbers.
+    pub const CAPTION_FONT_SIZE_MIN: f64 = 18.0;
+    pub const CAPTION_FONT_SIZE_MAX: f64 = 56.0;
 
     /// The four supported canvases, `(width, height)`, all at 30 fps.
     pub const CANVASES: [(u32, u32); 4] = [(1280, 720), (720, 1280), (720, 720), (960, 720)];

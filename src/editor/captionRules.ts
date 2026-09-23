@@ -13,7 +13,7 @@
  * playhead going the other way. A cue or marker whose source instant is no
  * longer inside its clip (trimmed away) is not listed -- Rust's own
  * `commands::chapters` omits exactly the same markers (docs/Gaps.md
- * GAP-179).
+ * GAP-181).
  *
  * **Notices are editorial heuristics, not certification** (the reference
  * editor's own wording): a cue reading faster than `DENSITY_LIMIT_CPS`

@@ -802,3 +802,8 @@ fn track_volume_out_of_range_is_rejected() {
 // cap (Task 34 fix round 1) -- see that file's own module doc.
 #[path = "validate_transitions_tests.rs"]
 mod transitions;
+
+// GAP-179's caption/chapter bounds (Task 38) -- the same nested-sibling
+// split as `mod transitions` just above.
+#[path = "validate_cues_tests.rs"]
+mod cues;

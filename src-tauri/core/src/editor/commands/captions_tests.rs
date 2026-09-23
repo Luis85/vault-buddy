@@ -372,9 +372,9 @@ fn split_caption_refuses_a_boundary_split() {
 #[test]
 fn split_caption_of_one_word_keeps_it_on_both_halves() {
     // One word cannot be divided; dropping it from either half would leave
-    // an empty caption -- which the commands refuse (`checked_text`) but
-    // `validate_project` does not (GAP-179) -- so both keep it and the user
-    // edits whichever is wrong.
+    // an empty caption -- which the commands refuse (`checked_text`) and,
+    // since GAP-179 closed, `validate_project` does too -- so both keep it
+    // and the user edits whichever is wrong.
     let mut p = project();
     with_cue(&mut p, "cap1", 2_000, 6_000, "Hello");
     let (after, _) = split_caption(
