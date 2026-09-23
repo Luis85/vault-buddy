@@ -995,6 +995,52 @@ describe("ScreenSourcePicker", () => {
     expect(calls.filter((c) => c.cmd === "discard_staged_capture")).toHaveLength(1);
     expect(w.find(`[data-testid="staged-keep-${base}"]`).exists()).toBe(true);
   });
+
+  // --- Tutorial projects: listed and resumed (Task 37 Part B, F4) ---
+  // Fix round 1 (review Minor): this wiring had no dedicated test — the
+  // staged-capture handlers immediately above it do.
+
+  const PROJECT_ROW = {
+    projectFileId: "proj1",
+    title: "Intro to Figma",
+    updatedAt: "2026-09-20T10:00:00Z",
+    persistedRevision: 3,
+    hasRecovery: false,
+    sourceBase: "2026-09-20 1000 Figma",
+  };
+
+  function mockProjects(
+    rows: unknown[] = [PROJECT_ROW],
+    extra: (cmd: string, args: unknown) => unknown = () => undefined,
+  ) {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "list_capture_sources") return SOURCES;
+      if (cmd === "list_audio_devices") return NO_DEVICES;
+      if (cmd === "list_tutorial_projects") return rows;
+      return extra(cmd, args);
+    });
+    return calls;
+  }
+
+  it("lists tutorial projects on mount", async () => {
+    mockProjects();
+    const w = await mountPicker();
+    expect(
+      w.find(`[data-testid="project-row-${PROJECT_ROW.projectFileId}"]`).exists(),
+    ).toBe(true);
+  });
+
+  it("resumes a tutorial project through the one command that opens the editor", async () => {
+    const calls = mockProjects();
+    const w = await mountPicker();
+    await w.get(`[data-testid="project-resume-${PROJECT_ROW.projectFileId}"]`).trigger("click");
+    await flushPromises();
+    expect(calls.filter((c) => c.cmd === "open_project_editor")).toEqual([
+      { cmd: "open_project_editor", args: { projectFileId: PROJECT_ROW.projectFileId } },
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

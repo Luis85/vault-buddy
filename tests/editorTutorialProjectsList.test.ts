@@ -59,7 +59,14 @@ describe("TutorialProjectsList", () => {
     expect(r.text()).toContain("Intro to Figma");
     // The updated date renders as a relative age, the staged-list precedent.
     expect(r.text()).toContain("2h ago");
-    expect(w.find(`[data-testid="project-discard-proj1"]`).exists()).toBe(false);
+    // Fix round 1 (review Minor): a guessed `data-testid="project-discard-…"`
+    // can never fail — the component defines no such id under ANY
+    // circumstance, so a real Discard control added under a DIFFERENT name
+    // would sail past that check. Asserting the row's own button COUNT and
+    // label instead catches a Discard button regardless of what it is
+    // called.
+    expect(r.findAll("button")).toHaveLength(1);
+    expect(r.get("button").text()).toBe("Resume");
 
     await w.get(resume("proj1")).trigger("click");
     expect(w.emitted("resumeProject")).toEqual([["proj1"]]);

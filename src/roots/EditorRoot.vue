@@ -57,11 +57,29 @@
  * "Tutorial projects" Resume — `StagedCaptureList.vue`). Only the `staged`
  * arm touches `legacyBase`/`legacyRequestSeq`: the legacy phase-4 surface
  * (`LegacyCaptureEditor`, `SHOW_LEGACY_EDITOR`) understands a staged
- * capture's base, never a project id, and Task 21's real workspace UI is
- * what a project open is FOR. Both arms run `editorProject`'s open and, on
- * success, the same recovery check — a project opened plainly from the
- * panel (`openProject(id, false)`) must offer to resume its own leftover
- * `recovery.json` exactly like a freshly-opened capture does.
+ * capture's base, never a project id. Both arms run `editorProject`'s open
+ * and, on success, the same recovery check — a project opened plainly from
+ * the panel (`openProject(id, false)`) must offer to resume its own
+ * leftover `recovery.json` exactly like a freshly-opened capture does.
+ *
+ * Task 37 Part B, fix round 1 (review Critical #1): a Resume click used to
+ * open a real session with nothing on screen — `EditorShell`'s render gate,
+ * `sessionMatchesLegacy`, compares the store's `sourceBase` against
+ * `legacyBase`, and a project-kind open never touches `legacyBase` at all,
+ * so the shell stayed permanently hidden behind the legacy surface's "No
+ * capture open" line. `sessionMatchesProject` is the project-kind
+ * counterpart, built the SAME way for the SAME race-safety reason
+ * `sessionMatchesLegacy` already has one: `openedProjectId` is set
+ * unconditionally at drain time (mirroring `legacyBase`'s own timing), so a
+ * slower, now-superseded project open resolving late can never make the
+ * shell show a DIFFERENT project than the one this root most recently
+ * asked for — and a FAILED open (of either kind) leaves the tracking ref
+ * pointed at a target the store's own state can never match, hiding the
+ * shell exactly like a failed staged open already does. `showLegacySurface`
+ * additionally hides `LegacyCaptureEditor` itself while a project-kind
+ * session is the one on screen — it understands only a staged capture's
+ * base, so left mounted it would go on showing either "No capture open" or
+ * a STALE previous staged capture underneath the real shell.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -114,6 +132,13 @@ const legacyBase = ref<string | null>(null);
  */
 const legacyRequestSeq = ref(0);
 
+/** The project-kind counterpart of `legacyBase` (Task 37 Part B, fix round
+ * 1): which project id this root's most recent `{kind:"project"}` drain
+ * asked to open. Set unconditionally at drain time, before the open
+ * resolves — the exact timing `legacyBase` already uses — so
+ * `sessionMatchesProject` below gets the same race-safety guarantee. */
+const openedProjectId = ref<string | null>(null);
+
 /**
  * Fix round 1: a shell that goes on showing the PREVIOUS capture's identity
  * while a later open fails is worse than showing nothing — it attributes a
@@ -150,6 +175,24 @@ const sessionMatchesLegacy = computed(
   () => editorProject.sourceBase !== null && editorProject.sourceBase === legacyBase.value,
 );
 
+/** Task 37 Part B, fix round 1: true once the store's OWN reply for the
+ * CURRENT session agrees with which project id this root most recently
+ * asked to open — `sessionMatchesLegacy`'s project-kind counterpart, needed
+ * because a project-kind open has no staged base to compare `legacyBase`
+ * against at all. */
+const sessionMatchesProject = computed(
+  () => editorProject.snapshot?.projectId != null
+    && editorProject.snapshot.projectId === openedProjectId.value,
+);
+
+/** `LegacyCaptureEditor` understands only a staged capture's base, so it is
+ * hidden entirely — not merely blank — while a project-kind session is the
+ * one actually on screen: left mounted it would show either its "No capture
+ * open" empty state (nothing was ever staged this process) or a STALE
+ * previous staged capture (`legacyBase` untouched by the project-kind
+ * arm), neither of which describes what the shell beside it is showing. */
+const showLegacySurface = computed(() => SHOW_LEGACY_EDITOR && !sessionMatchesProject.value);
+
 /** `take_editor_request`'s widened reply (Task 37 Part B) — declared here,
  * not in `editorTypes.ts`, because it is not one of the `editor_*` DTOs
  * `src/editor/decode.ts` decodes: this command deliberately does not start
@@ -177,18 +220,21 @@ async function openRequested() {
   // `editor_open_staged` round trip on a re-`editor:open` for the capture
   // already showing. Only a STAGED open touches the legacy surface:
   // `LegacyCaptureEditor` understands a staged capture's own base, never a
-  // tutorial project's id, and Task 21's real workspace UI (not yet wired
-  // here) is what a project open is for.
+  // tutorial project's id — `openedProjectId` (below) is that arm's own
+  // tracking ref, set at the SAME point in the flow for the SAME
+  // race-safety reason `legacyBase` already is.
   if (request.kind === "staged") {
     legacyBase.value = request.value;
     legacyRequestSeq.value += 1;
     await editorProject.openStaged(request.value);
   } else {
+    openedProjectId.value = request.value;
     await editorProject.openProject(request.value, false);
   }
   // Fix round 1: a failed open used to be silent — `lastError` was set on
   // the store and nothing else happened, so the only trace was whatever
-  // `sessionMatchesLegacy` now hides. Logged here, not inside the store,
+  // `sessionMatchesLegacy`/`sessionMatchesProject` now hide. Logged here,
+  // not inside the store,
   // because the store's own `openWith` doc is explicit that a failure is a
   // normal, expected outcome for some callers (a picker probing a project
   // that no longer exists) and must not itself become a warning line for
@@ -244,13 +290,14 @@ onBeforeUnmount(() => {
   >
     <!-- Task 16 (F-48): the real responsive shell/header, replacing Task
          15's temporary title/duration/dirty/vault bar. Gated on
-         `sessionMatchesLegacy` (fix round 1) so a failed open never leaves
-         this attributing a PREVIOUS capture's identity to whatever the
-         legacy surface is now showing — `EditorShell`/`EditorHeader` read
-         `editorProject` directly and always render once mounted, so the
-         v-if here (not inside the shell) is what makes it disappear on a
-         failed open, exactly like the bar it replaces. -->
-    <EditorShell v-if="editorProject.snapshot && sessionMatchesLegacy">
+         `sessionMatchesLegacy` OR `sessionMatchesProject` (fix round 1) so a
+         failed open of EITHER kind never leaves this attributing a stale
+         identity to whatever is now (or is not) open —
+         `EditorShell`/`EditorHeader` read `editorProject` directly and
+         always render once mounted, so the v-if here (not inside the shell)
+         is what makes it disappear on a failed open, exactly like the bar
+         it replaces. -->
+    <EditorShell v-if="editorProject.snapshot && (sessionMatchesLegacy || sessionMatchesProject)">
       <!-- Task 19: the inspector shell (six category tabs + the shared
            draft composable later sections build on) fills the shell's
            `inspector` slot from here, the same seam `PreviewToolbar`
@@ -341,9 +388,14 @@ onBeforeUnmount(() => {
          this task's extraction, so `main`'s flex-column layout contract
          (AGENTS.md's Testing conventions, the e2e rules) is unchanged.
          `request-seq` (fix round 1) is what makes a re-drain of the SAME
-         base reload — see `legacyRequestSeq`'s own doc. -->
+         base reload — see `legacyRequestSeq`'s own doc. Gated on
+         `showLegacySurface`, not the bare `SHOW_LEGACY_EDITOR` flag (Task 37
+         Part B, fix round 1): while a project-kind session is the one on
+         screen this surface understands neither it nor the "No capture
+         open" line it would otherwise show, so it is unmounted entirely
+         rather than left showing something untrue. -->
     <LegacyCaptureEditor
-      v-if="SHOW_LEGACY_EDITOR"
+      v-if="showLegacySurface"
       :staged-base="legacyBase"
       :request-seq="legacyRequestSeq"
     />

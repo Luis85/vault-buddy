@@ -539,41 +539,65 @@ fn list_tutorial_projects_is_not_editor_window_scoped() {
     );
 }
 
-// Task 37 Part B (F4): `open_project_editor` is `open_capture_editor`'s own
-// shape -- stash, THEN emit `editor:open` (rolling the stash back on a
-// failed emit), THEN `show()` (rolling the stash back on a failed show too)
-// -- so a Resume click can never show a blank editor with nothing staged,
-// or leave a stale request a LATER drain would silently open. Neither
-// command is unit-testable directly (both take `AppHandle`; see this
-// file's own `every_command_taking_a_base_guards_it_with_is_safe_base`
-// comment for why), so this is a structural scan of the production source,
-// the same technique that test already uses.
+// Task 37 Part B (F4), fix round 1 (review Important #4): `open_project_editor`
+// is `open_capture_editor`'s own shape -- stash, THEN emit `editor:open`
+// (rolling the stash back on a failed emit), THEN `show()` (rolling the
+// stash back on a failed show too) -- so a Resume click can never show a
+// blank editor with nothing staged, or leave a stale request a LATER drain
+// would silently open. Neither command is unit-testable directly (both take
+// `AppHandle`; see this file's own
+// `every_command_taking_a_base_guards_it_with_is_safe_base` comment for
+// why), so this is a structural scan of the production source, the same
+// technique that test already uses.
+//
+// Fix round 1 extracted the shared sequence into one `stash_and_open`
+// helper both commands call (review Important #4: the two command bodies
+// used to duplicate it verbatim), so this test now asserts TWO things
+// instead of one: each command's own body DELEGATES to the helper rather
+// than re-duplicating the sequence, and the helper itself still does the
+// stash/emit/show ordering and both rollbacks -- pinned ONCE, for both
+// callers, instead of once per caller.
 #[test]
 fn open_project_editor_stashes_and_emits_like_open_capture_editor() {
     let src = include_str!("editor_commands.rs");
     let production = src.split("#[cfg(test)]").next().unwrap_or(src);
-    let start = production
-        .find("pub fn open_project_editor")
-        .expect("open_project_editor must exist");
-    let rest = &production[start..];
-    let body = match rest.find("\n}\n") {
-        Some(i) => &rest[..i + 3],
-        None => rest,
-    };
 
+    fn bounded_body<'a>(production: &'a str, needle: &str) -> &'a str {
+        let start = production
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle:?} not found in editor_commands.rs"));
+        let rest = &production[start..];
+        match rest.find("\n}\n") {
+            Some(i) => &rest[..i + 3],
+            None => rest,
+        }
+    }
+
+    // MUTATION CHECK target: if either command stopped calling the shared
+    // helper and went back to duplicating the sequence inline, this fails
+    // naming which one -- the whole point of the fix round 4 extraction.
+    for name in ["open_capture_editor", "open_project_editor"] {
+        let body = bounded_body(production, &format!("pub fn {name}"));
+        assert!(
+            body.contains("stash_and_open("),
+            "{name} must delegate the stash-then-emit-then-show sequence to the shared \
+             stash_and_open helper rather than duplicating it inline"
+        );
+    }
+
+    let body = bounded_body(production, "fn stash_and_open");
     let stash_at = body
-        .find("Some(EditorRequestKind::Project(")
-        .expect("open_project_editor must stash an EditorRequestKind::Project");
+        .find(".0) = Some(request)")
+        .expect("stash_and_open must stash the request");
     let emit_at = body
         .find("emit_to(EDITOR_LABEL, EDITOR_OPEN_EVENT")
-        .expect("open_project_editor must emit EDITOR_OPEN_EVENT to the editor window alone");
+        .expect("stash_and_open must emit EDITOR_OPEN_EVENT to the editor window alone");
     let show_at = body
         .find("window.show()")
-        .expect("open_project_editor must show the editor window");
+        .expect("stash_and_open must show the editor window");
     assert!(
         stash_at < emit_at && emit_at < show_at,
-        "open_project_editor must stash, THEN emit, THEN show -- in that order, exactly like \
-         open_capture_editor"
+        "stash_and_open must stash, THEN emit, THEN show -- in that order"
     );
 
     // Both failure branches roll the stash back to None -- a failed emit or
@@ -582,7 +606,7 @@ fn open_project_editor_stashes_and_emits_like_open_capture_editor() {
     let rollbacks = body.matches(".0) = None;").count();
     assert_eq!(
         rollbacks, 2,
-        "open_project_editor must roll the stash back on BOTH the failed-emit and the \
-         failed-show branches, exactly like open_capture_editor"
+        "stash_and_open must roll the stash back on BOTH the failed-emit and the failed-show \
+         branches"
     );
 }

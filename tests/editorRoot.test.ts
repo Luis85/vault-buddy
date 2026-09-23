@@ -1140,6 +1140,97 @@ describe("EditorRoot", () => {
     );
   });
 
+  // ---- Task 37 Part B, fix round 1 (review Critical #1): a Resume click
+  // from the panel opened a real session with nothing on screen —
+  // `sessionMatchesLegacy` never matches a project-kind open, since that
+  // arm never touches `legacyBase`, so the shell stayed hidden behind the
+  // legacy surface's own "No capture open" line forever. ----
+
+  it("renders the shell for a project-kind drain, with the project's own snapshot, and hides the legacy surface", async () => {
+    const store = useEditorProjectStore();
+    store.setPort(
+      fakeEditorPort({
+        openProject: (id) =>
+          Promise.resolve(
+            openResultFixture({
+              sourceBase: null,
+              snapshot: snapshotFixture({ projectId: id, title: "My Tutorial" }),
+              project: projectFixture({
+                id,
+                destination: { vault: "vault-a", folder: "", dated: false },
+              }),
+            }),
+          ),
+      }),
+    );
+    mockIPC((cmd) => {
+      if (cmd === "take_editor_request") return { kind: "project", value: "proj1" };
+      return undefined;
+    });
+    const w = mount(EditorRoot);
+    await flushPromises();
+
+    expect(w.find('[data-testid="editor-shell"]').exists()).toBe(true);
+    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("My Tutorial");
+    expect(w.get('[data-testid="editor-shell-vault"]').text()).toBe("vault-a");
+    // The legacy surface's own empty state must not show underneath a real,
+    // successfully-open session.
+    expect(w.text()).not.toContain("No capture open");
+  });
+
+  it("hides the shell when a project-kind open fails, exactly like a failed staged open", async () => {
+    const store = useEditorProjectStore();
+    store.setPort(
+      fakeEditorPort({
+        openProject: () =>
+          Promise.reject(
+            new EditorPortError({
+              code: "invalidProject",
+              message: "That project could not be opened.",
+              retryable: false,
+              operationId: "op-1",
+            }),
+          ),
+      }),
+    );
+    mockIPC((cmd) => {
+      if (cmd === "take_editor_request") return { kind: "project", value: "proj1" };
+      return undefined;
+    });
+    const w = mount(EditorRoot);
+    await flushPromises();
+
+    expect(w.find('[data-testid="editor-shell"]').exists()).toBe(false);
+    expect(vi.mocked(logWarning)).toHaveBeenCalledWith(
+      expect.stringContaining("editor_open_project"),
+    );
+  });
+
+  // The paired negative for the fix above: an ordinary STAGED open must
+  // still render exactly as it always has — through the `legacyBase` match,
+  // with the legacy surface still mounted and visible beside the shell.
+  it("leaves an ordinary staged open's rendering unchanged", async () => {
+    const store = useEditorProjectStore();
+    store.setPort(
+      fakeEditorPort({
+        openStaged: (base) =>
+          Promise.resolve(
+            openResultFixture({
+              sourceBase: base,
+              project: projectFixture({ destination: { vault: "vault-a", folder: "", dated: false } }),
+            }),
+          ),
+      }),
+    );
+    const w = await open();
+
+    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("Tutorial");
+    expect(w.get('[data-testid="editor-shell-vault"]').text()).toBe("vault-a");
+    // The legacy surface is still up too — a staged open never hides it.
+    expect(w.text()).toContain("Screen 1");
+    expect(w.find('[data-testid="editor-shell"]').exists()).toBe(true);
+  });
+
   // ---- Fix round 1, controller ruling: opening a staged capture in the
   // editor now PINS it to a tutorial project (every legacy load opens a
   // session alongside it, this task on), and `discard_staged_capture`

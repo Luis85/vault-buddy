@@ -32,7 +32,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_screen::staging;
 
@@ -194,6 +194,45 @@ fn load_from_staging_dir(dir: &Path, requested_base: &str) -> Result<StagedCaptu
     Ok(detail_from_sidecar(&sidecar, &mp4))
 }
 
+/// The stash-then-emit-then-show sequence `open_capture_editor` and
+/// `open_project_editor` share verbatim (Task 37 Part B, fix round 1):
+/// write `request` into the stash, emit `EDITOR_OPEN_EVENT` to the editor
+/// window alone (rolling the stash back on a failed emit — M-2's "leave
+/// NOTHING behind for a later drain to read"), `show()` it (rolling the
+/// stash back on a failed show too), then `unminimize()`/`set_focus()`.
+/// `caller` names the command in the one log line each failure path can
+/// still produce, so the two commands keep distinguishable diagnostics
+/// despite sharing every line of logic. Each command's own PRE-check
+/// (`open_capture_editor`'s `is_safe_base`; `open_project_editor` has none,
+/// see its own doc) stays at its own call site, before this runs — this
+/// function is only the part that was byte-for-byte identical between them.
+fn stash_and_open(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    caller: &str,
+    request: EditorRequestKind,
+) -> Result<(), String> {
+    *lock_ignoring_poison(&app.state::<EditorRequest>().0) = Some(request);
+    // Emitted BEFORE `show()`, the `region:begin` shape: the editor's own
+    // listener is installed once at mount (the webview loads regardless of
+    // `visible: false`, same as panel/bubble/overlay), so by the time this
+    // command can ever run it already exists — this event is what makes an
+    // ALREADY-mounted editor re-drain the stash instead of doing nothing
+    // (see the module doc's "why the stash alone is not enough").
+    if let Err(e) = app.emit_to(EDITOR_LABEL, EDITOR_OPEN_EVENT, ()) {
+        *lock_ignoring_poison(&app.state::<EditorRequest>().0) = None;
+        log::warn!("{caller}: could not signal the editor window: {e}");
+        return Err(format!("Could not signal the editor: {e}"));
+    }
+    if let Err(e) = window.show() {
+        *lock_ignoring_poison(&app.state::<EditorRequest>().0) = None;
+        return Err(format!("Could not open the editor: {e}"));
+    }
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    Ok(())
+}
+
 /// SYNC: shows and focuses the editor window and stashes which capture it
 /// should open. Window APIs are main-thread-only and this command touches no
 /// disk, so sync is correct — see the module doc for why the data arrives
@@ -207,64 +246,37 @@ pub fn open_capture_editor(app: AppHandle, base: String) -> Result<(), String> {
     let window = app
         .get_webview_window(EDITOR_LABEL)
         .ok_or_else(|| "The editor window is missing.".to_string())?;
-    // M-2: the stash is claimed only from here on — a failure below must
-    // leave NOTHING behind for a later mount/reopen to read, or a later
-    // drain would silently open a capture the user was just told failed to
-    // open. Both failure arms below roll it back for exactly that reason.
-    *lock_ignoring_poison(&app.state::<EditorRequest>().0) =
-        Some(EditorRequestKind::Staged(base.clone()));
-    // Emitted BEFORE `show()`, the `region:begin` shape: the editor's own
-    // listener is installed once at mount (the webview loads regardless of
-    // `visible: false`, same as panel/bubble/overlay), so by the time this
-    // command can ever run it already exists — this event is what makes an
-    // ALREADY-mounted editor re-drain the stash instead of doing nothing
-    // (see the module doc's "why the stash alone is not enough").
-    if let Err(e) = app.emit_to(EDITOR_LABEL, EDITOR_OPEN_EVENT, ()) {
-        *lock_ignoring_poison(&app.state::<EditorRequest>().0) = None;
-        log::warn!("open_capture_editor: could not signal the editor window: {e}");
-        return Err(format!("Could not signal the editor: {e}"));
-    }
-    if let Err(e) = window.show() {
-        *lock_ignoring_poison(&app.state::<EditorRequest>().0) = None;
-        return Err(format!("Could not open the editor: {e}"));
-    }
-    let _ = window.unminimize();
-    let _ = window.set_focus();
-    Ok(())
+    stash_and_open(
+        &app,
+        &window,
+        "open_capture_editor",
+        EditorRequestKind::Staged(base),
+    )
 }
 
 /// SYNC: `open_capture_editor`'s own shape (Task 37 Part B, F4), applied to a
-/// tutorial project id instead of a staged capture's base — stash, then
-/// emit `EDITOR_OPEN_EVENT` (rolling the stash back on a failed emit), then
-/// `show()` (rolling the stash back on a failed show too). Deliberately
-/// PANEL-callable rather than one of the editor window's own session
-/// commands: it lives here, beside `open_capture_editor` and OUTSIDE
-/// `src/editor/`, so neither Task 10's `authz_guard` structural scan (which
-/// walks only that directory) nor Task 11's editor-only capability manifest
-/// ever sees or constrains it — the panel calls it under its existing
-/// `default.json` grant, never `editor.json`'s. Opening a session over the
-/// project id this stashes is `editor_open_project`'s job once the editor
-/// window drains the stash; this command touches no session and no disk at
-/// all, exactly like its sibling.
+/// tutorial project id instead of a staged capture's base — the shared
+/// `stash_and_open` sequence, below. Deliberately PANEL-callable rather than
+/// one of the editor window's own session commands: it lives here, beside
+/// `open_capture_editor` and OUTSIDE `src/editor/`, so neither Task 10's
+/// `authz_guard` structural scan (which walks only that directory) nor Task
+/// 11's editor-only capability manifest ever sees or constrains it — the
+/// panel calls it under its existing `default.json` grant, never
+/// `editor.json`'s. Opening a session over the project id this stashes is
+/// `editor_open_project`'s job once the editor window drains the stash;
+/// this command touches no session and no disk at all, exactly like its
+/// sibling.
 #[tauri::command]
 pub fn open_project_editor(app: AppHandle, project_file_id: String) -> Result<(), String> {
     let window = app
         .get_webview_window(EDITOR_LABEL)
         .ok_or_else(|| "The editor window is missing.".to_string())?;
-    *lock_ignoring_poison(&app.state::<EditorRequest>().0) =
-        Some(EditorRequestKind::Project(project_file_id));
-    if let Err(e) = app.emit_to(EDITOR_LABEL, EDITOR_OPEN_EVENT, ()) {
-        *lock_ignoring_poison(&app.state::<EditorRequest>().0) = None;
-        log::warn!("open_project_editor: could not signal the editor window: {e}");
-        return Err(format!("Could not signal the editor: {e}"));
-    }
-    if let Err(e) = window.show() {
-        *lock_ignoring_poison(&app.state::<EditorRequest>().0) = None;
-        return Err(format!("Could not open the editor: {e}"));
-    }
-    let _ = window.unminimize();
-    let _ = window.set_focus();
-    Ok(())
+    stash_and_open(
+        &app,
+        &window,
+        "open_project_editor",
+        EditorRequestKind::Project(project_file_id),
+    )
 }
 
 /// SYNC, one-shot: the editor webview drains this on mount, and again on
