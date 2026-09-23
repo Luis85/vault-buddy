@@ -22,6 +22,8 @@ export function fakeEditorPort(overrides: Partial<EditorPort> = {}): EditorPort 
     getWorkspace: unimplemented("getWorkspace"),
     saveWorkspace: unimplemented("saveWorkspace"),
     mediaUrl: unimplemented("mediaUrl"),
+    mediaPeaks: unimplemented("mediaPeaks"),
+    mediaThumbnail: unimplemented("mediaThumbnail"),
     importMedia: unimplemented("importMedia"),
     cancelJob: unimplemented("cancelJob"),
     getJobs: unimplemented("getJobs"),

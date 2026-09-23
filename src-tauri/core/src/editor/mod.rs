@@ -21,6 +21,7 @@ pub mod import_io;
 pub mod migrate;
 pub mod model;
 pub mod model_cues;
+pub mod peaks;
 pub mod probe;
 pub mod projection;
 pub mod session;

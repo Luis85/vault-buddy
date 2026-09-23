@@ -42,13 +42,14 @@ use vault_buddy_core::editor::probe::import_extensions;
 use vault_buddy_core::editor::{is_valid_id, EditorError, EditorErrorCode};
 
 use super::authz::{require_editor_window, require_session};
+use super::media_derive::{editor_ffmpeg, peaks_in, thumbnail_in, MediaPeaks, MediaRequest};
 use super::media_import::{run_import, FfprobeImportIo, ImportJob};
 use super::media_jobs::{
     cancel_job_in, jobs_in, start_job_in, JobKind, JobPhase, JobProgressDto, JobRecordDto,
     JobReporter, JobStarted, JobTerminal,
 };
 use super::prefs_commands::{blocking, local_data, project_id_for};
-use super::project_store::{join_contained, project_dir, resolve_source};
+use super::project_store::{join_contained, project_dir, resolve_source, SourceRecord};
 use super::store_io::{load_project, load_sources};
 use super::EditorState;
 
@@ -124,13 +125,25 @@ fn missing(id: &str) -> EditorError {
     )
 }
 
-fn asset_path(
+/// A registered asset's source, resolved: the id of the `sources.json`
+/// record its bytes live under (the asset itself, or its `linked_asset`
+/// root), that record, and the plain file it names.
+pub(crate) struct ResolvedAsset {
+    pub record_id: String,
+    pub record: SourceRecord,
+    pub path: PathBuf,
+}
+
+/// Every refusal `editor_media_url` makes for an asset, shared with the
+/// waveform/thumbnail commands (Task 28) so they can never answer for an
+/// asset the preview would be refused.
+pub(crate) fn resolve_asset(
     state: &EditorState,
     root: &Path,
     session_id: &str,
     project_id: &str,
     asset_id: &str,
-) -> Result<PathBuf, EditorError> {
+) -> Result<ResolvedAsset, EditorError> {
     // In the live graph first: a stale `sources.json` entry for an asset
     // the project no longer holds is not something the preview can ask for.
     // A detached audio asset (Task 27) has no record of its own -- its
@@ -149,13 +162,17 @@ fn asset_path(
             )
         })
         .ok_or_else(|| unregistered("asset", asset_id))?;
-    let sources = load_sources(root, project_id)?;
+    let mut sources = load_sources(root, project_id)?;
     let record = sources
-        .get(&record_id)
+        .remove(&record_id)
         .ok_or_else(|| unregistered("asset", asset_id))?;
     let path =
-        resolve_source(root, project_id, record).ok_or_else(|| unregistered("asset", asset_id))?;
-    require_plain_file(path, asset_id)
+        resolve_source(root, project_id, &record).ok_or_else(|| unregistered("asset", asset_id))?;
+    Ok(ResolvedAsset {
+        path: require_plain_file(path, asset_id)?,
+        record_id,
+        record,
+    })
 }
 
 fn product_path(root: &Path, project_id: &str, product_id: &str) -> Result<PathBuf, EditorError> {
@@ -184,7 +201,9 @@ pub(crate) fn media_path_in(
 ) -> Result<PathBuf, EditorError> {
     let project_id = project_id_for(state, session_id)?;
     match media {
-        MediaRef::Asset(id) => asset_path(state, root, session_id, &project_id, id),
+        MediaRef::Asset(id) => {
+            resolve_asset(state, root, session_id, &project_id, id).map(|asset| asset.path)
+        }
         MediaRef::Product(id) => product_path(root, &project_id, id),
     }
 }
@@ -205,12 +224,79 @@ pub async fn editor_media_url(
     let path =
         blocking(move || media_path_in(&app.state::<EditorState>(), &root, &session_id, &media))
             .await?;
+    path_string(&path)
+}
+
+fn path_string(path: &Path) -> Result<String, EditorError> {
     path.to_str().map(str::to_string).ok_or_else(|| {
         err(
             EditorErrorCode::Internal,
             "The media path is not valid UTF-8.",
         )
     })
+}
+
+// ---- waveforms and thumbnails (Task 28) --------------------------------------
+
+/// ASYNC (ADR §3.3): a cache hit reads one small file; a miss decodes the
+/// asset's whole sound through ffmpeg on the named `editor-peaks` thread —
+/// minutes of work for a long recording, registered as a cancelable
+/// `peaks` job (`media_derive`'s doc).
+#[tauri::command]
+pub async fn editor_media_peaks(
+    window: WebviewWindow,
+    app: AppHandle,
+    session_id: String,
+    asset_id: String,
+    buckets: u32,
+) -> Result<MediaPeaks, EditorError> {
+    require_editor_window(&window)?;
+    let root = local_data(&app)?;
+    let buckets = usize::try_from(buckets).unwrap_or(usize::MAX);
+    blocking(move || {
+        let request = MediaRequest {
+            session_id: &session_id,
+            asset_id: &asset_id,
+        };
+        peaks_in(
+            &app.state::<EditorState>(),
+            &root,
+            &request,
+            buckets,
+            &editor_ffmpeg,
+        )
+    })
+    .await
+}
+
+/// ASYNC (ADR §3.3): one ffmpeg single-frame seek on a miss. Answers the
+/// thumbnail's absolute path under the project's `cache\` (inside R7's
+/// asset scope), for `convertFileSrc` — the frontend never builds it.
+#[tauri::command]
+pub async fn editor_media_thumbnail(
+    window: WebviewWindow,
+    app: AppHandle,
+    session_id: String,
+    asset_id: String,
+    at_ms: u64,
+) -> Result<String, EditorError> {
+    require_editor_window(&window)?;
+    let root = local_data(&app)?;
+    let path = blocking(move || {
+        let request = MediaRequest {
+            session_id: &session_id,
+            asset_id: &asset_id,
+        };
+        thumbnail_in(
+            &app.state::<EditorState>(),
+            &root,
+            &request,
+            at_ms,
+            &editor_ffmpeg,
+        )
+    })
+    .await?;
+    path_string(&path)
 }
 
 // ---- the import job (Task 25) ------------------------------------------------

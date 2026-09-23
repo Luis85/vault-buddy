@@ -2309,7 +2309,9 @@ disk- or memory-only — no edit is lost and nothing wrong is shown:
    `editor_get_jobs` can answer a reconcile after a reload. Records are
    small and imports are user-paced, so this is bounded in practice, but
    render (Task 46) and the shutdown gate REUSE this registry and will add
-   records at a higher rate.
+   records at a higher rate. Task 28's `peaks` jobs do NOT add to it: their
+   result travels in the command's own reply, so `JobRegistry::forget`
+   drops each record the moment the decode ends.
 
 **Fix:** a project-store sweep on project open (Task 37's recovery is the
 natural home): delete owned `media\.*.part` files, and drop `media\` files
@@ -2375,6 +2377,50 @@ through `PreviewSurface.vue`, asserting BOTH halves this gap named:
 `preview-layers`) AND the controller calls the port's `mediaUrl` for that
 asset id. Red before the fix (`mediaUrl` never called); a mutation reverting
 `FILE_BACKED_BUILTINS` to empty reproduces the same red.
+
+### GAP-176 · Low (latent, until a relink lands) · Cached thumbnails are keyed by asset id alone, so a relinked asset would keep showing its old file's frames
+`src-tauri/src/editor/media_derive.rs` (tutorial-editor Task 28). A
+thumbnail lives at `cache\<recordId>-<ms>.jpg` and a hit is served whenever
+that file exists — nothing records WHICH source file it was cut from. The
+waveform cache does not share this: `<recordId>.peaks.<buckets>.json`
+carries the source's size and mtime and is ignored when either changed
+(`a_cached_waveform_needs_no_ffmpeg_until_its_source_changes`). Today no
+code path changes the file behind an asset id (an import mints a fresh id;
+a staged capture's file is immutable), so nothing wrong can be shown yet.
+The first path that can is `InternalCommand::RelinkAssets` (the missing-media
+relink, a later task): relinking an asset to a DIFFERENT file would leave
+the timeline drawing frames of the old one until the LRU happens to evict
+them.
+
+**Fix:** the relink task purges `cache\<recordId>-*.jpg` (and, for tidiness,
+`<recordId>.peaks.*.json`) for every relinked record id, owned names only,
+no-follow — the same name test `media_derive::is_thumbnail_name` applies.
+
+### GAP-177 · Low (unverified cause) · The registry-fresh PATH carries unexpanded `%SystemRoot%` entries, and a child `cmd.exe` spawned with it did not find `ping`
+`src-tauri/src/external_tool.rs` (`registry_path_entries`, `augmented_path`).
+Found by Task 28 on the Windows dev host while writing a stand-in slow tool
+for `media_derive`'s cancel test. `registry_path_entries` reads the `Path`
+values with `winreg`'s `get_value::<String, _>`, which returns a
+`REG_EXPAND_SZ` value RAW: the merged PATH `tool_command` sets on every
+child begins with literal `%SystemRoot%\system32`, `%SystemRoot%`,
+`%SYSTEMROOT%\System32\Wbem` … entries (observed: `augmented_path()` printed
+them verbatim), followed by the process PATH's expanded copies. A `.cmd`
+script spawned through `tool_command` then failed with "ping … could not be
+found" although `C:\WINDOWS\system32` IS in the merged list — why cmd.exe
+missed it (the literal entries, the variable's length, or something else)
+was not established. Production is unaffected so far: ffmpeg and Pandoc are
+resolved to ABSOLUTE paths by `candidates_for` before they are spawned, and
+their own children are not looked up by name. What the unexpanded entries do
+defeat is the module's own purpose for any tool installed into a directory
+the registry names through a variable (a per-user install under
+`%LOCALAPPDATA%` added while the app runs): `executables_in` joins the
+literal `%LOCALAPPDATA%\…` and finds nothing there.
+
+**Fix:** expand each registry entry with `ExpandEnvironmentStringsW` (or
+read the value as `REG_EXPAND_SZ` and expand it) before `merged_path`
+dedupes, with a Windows-only test that a `%SystemRoot%` entry comes back
+expanded; then re-check whether a child `cmd.exe` finds `ping` by name.
+The Task 28 test uses an absolute `%SystemRoot%\System32\PING.EXE` meanwhile.
 
 ## 9. Documentation & repo hygiene
 

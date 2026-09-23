@@ -15,6 +15,7 @@ mod authz_guard;
 #[cfg(test)]
 mod capability_guard;
 pub mod media_commands;
+pub mod media_derive;
 pub mod media_import;
 pub mod media_jobs;
 pub mod media_probe;

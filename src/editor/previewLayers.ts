@@ -60,7 +60,7 @@ const BUILTIN_HAS_FILE: Record<Builtin, boolean> = {
 
 /** Has this asset a real file the preview could show — as opposed to a
  * synthesized builtin with none (GAP-175)? */
-function hasPreviewSource(asset: Asset): boolean {
+export function hasPreviewSource(asset: Asset): boolean {
   return asset.builtin === undefined || BUILTIN_HAS_FILE[asset.builtin];
 }
 

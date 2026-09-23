@@ -263,14 +263,14 @@ describe("ClipItem — accessible label and media-kind styling", () => {
     expect(w.get('[data-testid="clip-c3"]').classes()).toContain("bg-audio-bg");
   });
 
-  it("reserves a waveform lane slot for audio clips only (F-26)", async () => {
+  it("draws a waveform lane for audio clips only (F-26, Task 28)", async () => {
     executed = [];
     await openProject();
     const w = mount(TimelineView);
     await flushPromises();
 
-    expect(w.find('[data-testid="clip-c3-waveform-slot"]').exists()).toBe(true);
-    expect(w.find('[data-testid="clip-c2-waveform-slot"]').exists()).toBe(false);
+    expect(w.find('[data-testid="clip-c3-waveform"]').exists()).toBe(true);
+    expect(w.find('[data-testid="clip-c2-waveform"]').exists()).toBe(false);
   });
 });
 

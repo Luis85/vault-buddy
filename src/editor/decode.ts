@@ -42,6 +42,7 @@ import {
   asInteger,
   asMs,
   asNullableString,
+  asNumber,
   asObject,
   asString,
   fail,
@@ -215,6 +216,19 @@ export function decodeMediaPath(value: unknown): string {
   const path = asString(value, "mediaPath");
   if (path.trim() === "") fail("mediaPath must not be empty");
   return path;
+}
+
+/** `editor_media_peaks`' reply, `{ peaks: number[] }`
+ * (`media_derive::MediaPeaks`), unwrapped to the array. Every value is a
+ * full-scale max-abs peak, so anything outside `0..=1` is a protocol error,
+ * not a louder-than-possible sample. */
+export function decodeMediaPeaks(value: unknown): number[] {
+  const v = asObject(value, "mediaPeaks");
+  return asArray(v.peaks, "mediaPeaks.peaks").map((p, i) => {
+    const peak = asNumber(p, `mediaPeaks.peaks[${i}]`);
+    if (peak < 0 || peak > 1) fail(`mediaPeaks.peaks[${i}] must be within 0..1`);
+    return peak;
+  });
 }
 
 function decodeProjectSummary(value: unknown, index: number): ProjectSummaryDto {

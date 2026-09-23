@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **13 rows** today (T1–T13), of which **0** carry a result. An
+This file carries **14 rows** today (T1–T14), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -143,3 +143,17 @@ WebView2 `<audio>` element or reads a real `AnalyserNode`.
 | --- | --- | --- | --- |
 | T12 | **Detach audio from an imported video plays the sound on its own clip** | Import an `.mp4` WITH sound (T11's steps) and add it to a video track. Select the clip, open the inspector's **Audio** tab and press **Detach audio**. **Record**: (a) a new clip named "… · audio" appears on an audio track at the SAME start and length; (b) the original clip's Audio tab reads **Unmute clip audio** (it is muted); (c) pressing play, the sound is audible exactly once (not doubled) and in sync with the picture; (d) muting the NEW audio clip silences the sound while the picture keeps playing; (e) ONE Ctrl+Z removes the audio clip and unmutes the original. Then import a SILENT video (e.g. a screen recording made with no microphone) and press **Detach audio** on it: **Record** the error shown (expected: "<name> has no audio to detach") and that nothing changed. (GAP-175, fixed 2026-09-23: a staged capture's own picture now shows in the new preview too, not only an imported video's — either works for (c).) | |
 | T13 | **The mixer's levels, solo and preview peak** | During T12's playback open **Audio mixer** (beside the transport's speaker). **Record**: (a) the **Preview peak** bar moves with the sound and its dBFS figure is at or below 0.0; (b) with **Mute preview (does not affect the video)** ticked the sound stops and the peak reads −∞ dBFS, while the header's Undo label does NOT change; (c) **Solo** on the audio track labels every other track "Silenced by solo" and only that track is heard; (d) dragging the master slider changes the readout while dragging but the Undo label changes only ONCE, on release. | |
+
+## Task 28's rows
+
+Task 28 derives waveforms and thumbnails with ffmpeg into the project's own
+`cache\` directory (`src-tauri/src/editor/media_derive.rs`). The Rust tests run
+the real ffmpeg round trip (a synthesized tone then silence, a synthesized
+test pattern) and kill a stand-in decode through a closing session; Vitest
+draws the polyline from faked peaks. Nothing automated shows a real
+thumbnail through WebView2's asset protocol from `cache\`, or watches the
+decode stay off the UI thread on a long real recording.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T14 | **Waveforms and thumbnails on the timeline, and the no-ffmpeg hint** | Open a staged capture recorded WITH a microphone that is at least 10 minutes long, detach its audio (T12's steps) and zoom the timeline out. **Record**: (a) the audio clip draws a waveform that is flat where the recording was silent and tall where someone spoke; (b) while the first waveform is computing, the playhead, scrolling and the preview stay responsive; (c) the video clip shows a small poster frame at its left edge (the asset protocol serving `cache\<id>-<ms>.jpg`); (d) closing and reopening the editor draws the same waveform at once (from `cache\`, no second decode — the Rust log shows no `editor-peaks` work); (e) trimming the audio clip's start moves the drawn waveform with the handle. Then point Buddy settings → Integrations at a non-existent ffmpeg path (or rename ffmpeg), restart, open a project whose `cache\` has been deleted: **Record** that the audio lane reads "Install ffmpeg to see waveforms" and nothing else breaks. | |

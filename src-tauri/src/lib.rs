@@ -22,6 +22,7 @@ mod editor_commands;
 mod export_commands;
 mod export_shutdown;
 mod export_worker;
+mod external_stream;
 mod external_tool;
 mod ffmpeg;
 mod mcp_commands;
@@ -509,6 +510,8 @@ pub fn run() {
             prefs_commands::editor_get_workspace,
             prefs_commands::editor_save_workspace,
             media_commands::editor_media_url,
+            media_commands::editor_media_peaks,
+            media_commands::editor_media_thumbnail,
             media_commands::editor_import_media,
             media_commands::editor_cancel_job,
             media_commands::editor_get_jobs,

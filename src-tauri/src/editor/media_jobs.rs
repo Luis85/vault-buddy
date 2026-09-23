@@ -44,10 +44,24 @@ use super::EditorState;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum JobKind {
-    // `render`/`peaks`/`publish` join with the tasks that start those jobs
-    // (46-48) — a variant nothing constructs is dead code, and the wire
+    // `render`/`publish` join with the tasks that start those jobs (46,
+    // 48) — a variant nothing constructs is dead code, and the wire
     // spelling of each is already pinned by the frontend's decoder.
     Import,
+    /// A waveform decode (Task 28, `media_derive`). Not exclusive: several
+    /// may be registered at once (one per visible asset); `media_derive`'s
+    /// own gate runs them one at a time.
+    Peaks,
+}
+
+impl JobKind {
+    /// May only ONE job of this kind run per session? An import is (two
+    /// batches racing the capacity check could roll each other back); a
+    /// peaks decode is not — the timeline asks for every visible asset's
+    /// waveform at once, and refusing all but one would draw one waveform.
+    fn exclusive(self) -> bool {
+        matches!(self, Self::Import)
+    }
 }
 
 /// `JobProgressDto.phase`: `queued → preparing → rendering → publishing →
@@ -228,6 +242,14 @@ impl JobRegistry {
         self.jobs.values().any(|r| !r.phase.is_terminal())
     }
 
+    /// Drop a finished job's record. Only for a job whose result travels
+    /// in its command's own REPLY (a peaks decode): no Channel message
+    /// could have been dropped, so there is nothing for `editor_get_jobs`
+    /// to recover and keeping it would only grow the registry (GAP-174).
+    pub(crate) fn forget(&mut self, job_id: &str) {
+        self.jobs.remove(job_id);
+    }
+
     fn update(&mut self, message: &JobProgressDto) {
         if let Some(record) = self.jobs.get_mut(&message.job_id) {
             record.phase = message.phase;
@@ -251,7 +273,7 @@ pub(crate) fn start_job_in(
 ) -> Result<(String, Arc<AtomicBool>), EditorError> {
     drop(require_session(state, session_id)?);
     let mut jobs = lock_ignoring_poison(&state.jobs);
-    if jobs.is_running(session_id, kind) {
+    if kind.exclusive() && jobs.is_running(session_id, kind) {
         return Err(EditorError::new(
             EditorErrorCode::InvalidRequest,
             "An import is already running in this editing session. Wait for it to finish or cancel it.",
@@ -283,6 +305,15 @@ pub(crate) fn jobs_in(
 /// collect into a `Vec`.
 pub(crate) trait ProgressSink {
     fn deliver(&self, message: JobProgressDto);
+}
+
+/// A job with no Channel subscriber (a peaks decode answers in its
+/// command's reply): its reporter still keeps the REGISTRY current, so
+/// `editor_get_jobs` shows it running and `editor_cancel_job` can stop it.
+pub(crate) struct NoSubscriber;
+
+impl ProgressSink for NoSubscriber {
+    fn deliver(&self, _message: JobProgressDto) {}
 }
 
 impl ProgressSink for Channel<JobProgressDto> {
@@ -457,6 +488,10 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
+            serde_json::to_value(JobKind::Peaks).unwrap(),
+            json!("peaks")
+        );
+        assert_eq!(
             serde_json::to_value(JobStarted {
                 job_id: "job-b".into()
             })
@@ -574,6 +609,18 @@ pub(crate) mod tests {
         JobReporter::new(&state.jobs, &sink, "ses-a", &first, JobKind::Import)
             .finish(JobPhase::Complete, JobTerminal::default());
         start_job_in(&state, "ses-a", JobKind::Import).unwrap();
+
+        // Task 28: peaks decodes are NOT exclusive — every visible asset
+        // asks at once — and a forgotten record is gone from the listing.
+        let (p1, _) = start_job_in(&state, "ses-a", JobKind::Peaks).unwrap();
+        let (p2, _) = start_job_in(&state, "ses-a", JobKind::Peaks).unwrap();
+        lock_ignoring_poison(&state.jobs).forget(&p1);
+        let ids: Vec<String> = jobs_in(&state, "ses-a")
+            .unwrap()
+            .into_iter()
+            .map(|r| r.job_id)
+            .collect();
+        assert!(ids.contains(&p2) && !ids.contains(&p1), "{ids:?}");
     }
 
     // A terminal phase handed to `progress` must not become a second

@@ -38,6 +38,8 @@ const EXPECTED: &[&str] = &[
     "editor_hide_window",
     "editor_import_media",
     "editor_list_projects",
+    "editor_media_peaks",
+    "editor_media_thumbnail",
     "editor_media_url",
     "editor_open_project",
     "editor_open_staged",

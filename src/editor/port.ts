@@ -41,6 +41,7 @@ import {
   decodeJobRecords,
   decodeJobStarted,
   decodeMediaPath,
+  decodeMediaPeaks,
   decodeOpenResult,
   decodeProjection,
   decodeProjectSummaries,
@@ -122,6 +123,15 @@ export interface EditorPort {
    * product (`unauthorizedSource` otherwise, `sourceMissing` when its file
    * is gone), for `convertFileSrc`. The frontend never builds a path. */
   mediaUrl(sessionId: string, ref: MediaRef): Promise<string>;
+  /** `editor_media_peaks` — a registered asset's waveform, `buckets`
+   * full-scale max-abs values in `0..=1` over its whole source. Rust
+   * decodes it with ffmpeg on a miss (a cancelable `peaks` job) and caches
+   * it; `encoderUnavailable` when ffmpeg is missing and nothing is cached. */
+  mediaPeaks(sessionId: string, assetId: string, buckets: number): Promise<number[]>;
+  /** `editor_media_thumbnail` — the absolute path of a 160 px wide JPEG of
+   * a registered asset near `atMs` (Rust quantizes to 250 ms), inside the
+   * project's `cache\`, for `convertFileSrc`. */
+  mediaThumbnail(sessionId: string, assetId: string, atMs: number): Promise<string>;
   /** `editor_import_media` — Rust opens its OWN native multi-file dialog
    * (no path ever leaves this webview) and answers `{ jobId }` at once;
    * every progress message, decoded, reaches `onProgress` through a
@@ -191,6 +201,12 @@ export function createTauriEditorPort(): EditorPort {
     },
     mediaUrl(sessionId, ref) {
       return call("editor_media_url", { sessionId, ref }, decodeMediaPath);
+    },
+    mediaPeaks(sessionId, assetId, buckets) {
+      return call("editor_media_peaks", { sessionId, assetId, buckets }, decodeMediaPeaks);
+    },
+    mediaThumbnail(sessionId, assetId, atMs) {
+      return call("editor_media_thumbnail", { sessionId, assetId, atMs }, decodeMediaPath);
     },
     importMedia(sessionId, onProgress) {
       const onProgressChannel = progressChannel(onProgress);

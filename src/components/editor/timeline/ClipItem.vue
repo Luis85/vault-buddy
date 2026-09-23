@@ -46,6 +46,7 @@
 import { computed, nextTick, ref } from "vue";
 
 import { useTimelineDrag } from "../../../composables/useTimelineDrag";
+import { hasPreviewSource } from "../../../editor/previewLayers";
 import { isContextMenuShortcut } from "../../../editor/shortcuts";
 import { msToX, snapTargets as computeSnapTargets } from "../../../editor/timelineLayout";
 import { clipOutputEnd } from "../../../editor/timeMap";
@@ -54,6 +55,8 @@ import type { Clip, ClipSpan } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import { formatDuration } from "../../../utils/formatDuration";
+import ClipThumbnail from "./ClipThumbnail.vue";
+import ClipWaveform from "./ClipWaveform.vue";
 
 const props = defineProps<{
   clip: Clip;
@@ -211,6 +214,29 @@ const previewWidthPx = computed(() => {
   return end - start;
 });
 
+// ---- derived media (Task 28) -----------------------------------------------
+
+/** The asset this clip plays — `null` for a dangling reference, which then
+ * draws neither a waveform nor a thumbnail. */
+const asset = computed(() => editorProject.project?.assets.find((a) => a.id === props.clip.asset_id) ?? null);
+/** The source range on screen: a live trim previews its own in/out so the
+ * waveform follows the handle instead of stretching the committed range. */
+const shownInMs = computed(() => drag.trimPreview.value?.inMs ?? props.clip.in_ms);
+const shownOutMs = computed(() => drag.trimPreview.value?.outMs ?? props.clip.out_ms);
+/** Narrower than this, a poster frame is noise over the clip's name. */
+const THUMBNAIL_MIN_WIDTH_PX = 48;
+/** An audio clip's asset, for its waveform lane (`null`: no lane). */
+const waveformAsset = computed(() => (props.assetKind === "audio" ? asset.value : null));
+/** A video clip's asset when it has a real file to cut a poster frame
+ * from and the clip is wide enough to show one (`null`: no poster). */
+const posterAsset = computed(() => {
+  const a = asset.value;
+  const fits = previewWidthPx.value >= THUMBNAIL_MIN_WIDTH_PX;
+  return a && props.assetKind === "video" && fits && hasPreviewSource(a) ? a : null;
+});
+/** The waveform's drawing width: the lane is inset 4 px on each side. */
+const waveformWidthPx = computed(() => Math.max(previewWidthPx.value - 8, 1));
+
 const NUDGE_FRAME_MS = 33;
 const NUDGE_SECOND_MS = 1_000;
 
@@ -286,14 +312,32 @@ function onKeydown(event: KeyboardEvent) {
       class="pointer-events-none absolute inset-y-0 right-0 w-3 bg-gold/40"
       style="clip-path: polygon(0 100%, 100% 100%, 100% 0)"
     />
-    <!-- F-26: a reserved lane slot for a future waveform, not the waveform
-         itself -- peaks rendering needs a Rust-side job this task does not
-         add (the brief's own "(lane slot)" scoping). -->
+    <!-- F-26 (Task 28): the waveform of an audio clip, and a poster frame
+         for a video clip whose asset has a real file. Both mount only with
+         this ClipItem, i.e. only for a clip the timeline keeps visible. -->
     <div
-      v-if="assetKind === 'audio'"
-      :data-testid="`clip-${clip.id}-waveform-slot`"
+      v-if="waveformAsset"
+      :data-testid="`clip-${clip.id}-waveform`"
       class="pointer-events-none absolute inset-x-1 bottom-0.5 h-3 rounded bg-audio-bg/60"
-    />
+    >
+      <ClipWaveform
+        :asset-id="waveformAsset.id"
+        :asset-duration-ms="waveformAsset.duration_ms"
+        :in-ms="shownInMs"
+        :out-ms="shownOutMs"
+        :width-px="waveformWidthPx"
+      />
+    </div>
+    <div
+      v-else-if="posterAsset"
+      :data-testid="`clip-${clip.id}-thumbnail`"
+      class="pointer-events-none absolute inset-y-0 left-1"
+    >
+      <ClipThumbnail
+        :asset-id="posterAsset.id"
+        :at-ms="clip.in_ms"
+      />
+    </div>
 
     <span class="pointer-events-none relative z-10 truncate">{{ clip.name }}</span>
 

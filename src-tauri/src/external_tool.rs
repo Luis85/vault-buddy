@@ -246,7 +246,7 @@ pub(crate) enum Capture {
 /// this is never hit; it only bounds the pathological case where a surviving
 /// descendant keeps the inherited pipe open (Codex review) so the call can't
 /// block — critically while `ImportLock` is held.
-const DRAIN_GRACE: Duration = Duration::from_secs(2);
+pub(crate) const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 /// Max bytes `run_capturing` STORES from the captured stream. We only ever use
 /// the first version line or a 500-char stderr slice, so 64 KiB is ample;
