@@ -44,6 +44,22 @@ fn check_range(id: &str, field: &str, value: f64, lo: f64, hi: f64) -> Result<()
     Ok(())
 }
 
+/// `(0,1]` -- unlike `check_clip`'s own `w`/`h` floor of `0.1` (a video
+/// FRAME can't usefully shrink below a tenth of the canvas), a teaching
+/// cue's box can legitimately be much thinner: the reference workspace
+/// fixture's own text/highlight/step cues carry `h` as low as `0.05`
+/// (`reference-workspace.example.json`, caught by this exact check when it
+/// first shipped with `check_clip`'s floor copied verbatim). Zero and
+/// negative are still refused -- a box with no extent paints nothing.
+fn check_positive_fraction(id: &str, field: &str, value: f64) -> Result<(), EditorError> {
+    if !(value > 0.0 && value <= 1.0) {
+        return Err(invalid(format!(
+            "{id}: {field} {value} must be within (0,1]"
+        )));
+    }
+    Ok(())
+}
+
 /// `speed`'s effective value for arithmetic: the clip's own value when set
 /// (already range-checked by `check_clip` before any caller outside this
 /// module's clip loop can see it), else the reference format's implicit
@@ -311,6 +327,30 @@ fn check_effect(effect: &Effect, clips: &HashMap<&str, &Clip>) -> Result<(), Edi
             "effect {}: start_ms {} must be before end_ms {}",
             effect.id, effect.start_ms, effect.end_ms
         )));
+    }
+    // Task 34: `x`/`y` mirror `check_clip`'s own `[0,1]` range for every
+    // kind (both are required fields on `Effect` regardless of kind); `w`/
+    // `h` (the four box-shaped kinds that carry them at all) use the
+    // looser `(0,1]` `check_positive_fraction` -- see its own doc for why
+    // `check_clip`'s `0.1` floor is wrong here; `dim` (spotlight only)
+    // mirrors `opacity`'s own `[0,1]` range just above. Every one of
+    // `cues::default_shell`'s own defaults already lands inside these, so
+    // omitting a field never trips them.
+    let x = as_f64(&effect.id, "x", &effect.x)?;
+    check_range(&effect.id, "x", x, 0.0, 1.0)?;
+    let y = as_f64(&effect.id, "y", &effect.y)?;
+    check_range(&effect.id, "y", y, 0.0, 1.0)?;
+    if let Some(w) = &effect.w {
+        let w = as_f64(&effect.id, "w", w)?;
+        check_positive_fraction(&effect.id, "w", w)?;
+    }
+    if let Some(h) = &effect.h {
+        let h = as_f64(&effect.id, "h", h)?;
+        check_positive_fraction(&effect.id, "h", h)?;
+    }
+    if let Some(dim) = &effect.dim {
+        let dim = as_f64(&effect.id, "dim", dim)?;
+        check_range(&effect.id, "dim", dim, 0.0, 1.0)?;
     }
     match effect.kind {
         EffectKind::Text => require_text(effect)?,

@@ -598,8 +598,8 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
 });
 
 describe("UNIMPLEMENTED_KINDS", () => {
-  it("carries exactly the 11 kinds this registry still gates", () => {
-    expect(UNIMPLEMENTED_KINDS.size).toBe(11);
+  it("carries exactly the 8 kinds this registry still gates", () => {
+    expect(UNIMPLEMENTED_KINDS.size).toBe(8);
     // The ten kinds an ActionId in this registry maps to that ARE
     // implemented must be absent, or every action built on them would be
     // wrongly gated -- plus the four track kinds Task 23 implemented that
@@ -627,10 +627,14 @@ describe("UNIMPLEMENTED_KINDS", () => {
       // TitlesLibrary.vue sends addCard directly through
       // editorProject.execute, the MediaLibrary.vue "+" precedent.
       "addCard", "updateCard", "insertIntro",
+      // Task 34: Rust now accepts all three teaching-cue commands, so the
+      // ROW is gone -- no ActionId has ever mapped to any of them yet
+      // (there is no teaching-cue toolbar in this repo to wire), so this
+      // is bookkeeping-only, same as `addCard`'s own three rows above.
+      "addEffect", "updateEffect", "removeEffect",
     ]) {
       expect(UNIMPLEMENTED_KINDS.has(implemented)).toBe(false);
     }
-    expect(UNIMPLEMENTED_KINDS.has("addEffect")).toBe(true);
     // Task 26: `addTrack` is no longer gated -- dropping a media asset
     // below the timeline's last lane sends it directly
     // (`TimelineView.vue`'s `editorProject.execute`, the `TrackHeader.vue`

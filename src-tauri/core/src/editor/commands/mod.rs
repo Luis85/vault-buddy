@@ -2,7 +2,7 @@
 //! `InternalCommand` (native-only, never `Deserialize`), plus their
 //! dispatch (`apply`/`apply_internal`) into family modules (R14, F-13, F31).
 //!
-//! THIRTY-FIVE kinds are implemented so far: `rename`/`setDestination`
+//! THIRTY-EIGHT kinds are implemented so far: `rename`/`setDestination`
 //! (Task 6, `meta.rs`), the two `EditorSession` intercepts before ever
 //! calling `apply` at all, `undo`/`redo` (see `session.rs`'s `execute`), the
 //! seven core clip commands `insertClip`/`updateClip`/`splitClip`/`trimClip`/
@@ -32,7 +32,12 @@
 //! are clip-relative already) or re-derive transition/group geometry (a
 //! uniform shift preserves every relative offset by construction) --
 //! `transitions::ensure_intact` still runs as the same defensive check
-//! `setSpeed` above uses).
+//! `setSpeed` above uses), and `addEffect`/`updateEffect`/`removeEffect`
+//! (Task 34, `cues.rs` -- the seven teaching-cue kinds; `start_ms`/`end_ms`
+//! are SOURCE time, stored verbatim, which is what makes a cue survive
+//! `splitClip`'s already-shipped `cue_follow.rs` reassignment and every
+//! other clip command's move/trim/speed change untouched -- Task 7's own
+//! claim, exercised here rather than re-implemented).
 //! `moveClips`'s own group-EXPANSION behaviour also landed with Task 8, but
 //! stays in `clips.rs` (F13: Task 7 shipped `moveClips` before any group
 //! could exist to expand into). Every other kind falls through to the
@@ -70,6 +75,7 @@
 mod cards;
 mod clips;
 mod cue_follow;
+mod cues;
 pub mod fades;
 mod groups;
 mod layout;
@@ -241,6 +247,9 @@ pub fn apply(
         EditorCommand::AddCard(p) => cards::add_card(project, p),
         EditorCommand::UpdateCard(p) => cards::update_card(project, p),
         EditorCommand::InsertIntro(p) => cards::insert_intro(project, p),
+        EditorCommand::AddEffect(p) => cues::add_effect(project, p),
+        EditorCommand::UpdateEffect(p) => cues::update_effect(project, p),
+        EditorCommand::RemoveEffect(p) => cues::remove_effect(project, p),
         EditorCommand::Undo | EditorCommand::Redo => Err(EditorError::new(
             EditorErrorCode::InvalidRequest,
             "undo/redo are dispatched by EditorSession::execute, never by apply",
@@ -272,10 +281,6 @@ mod tests {
     use crate::editor::model_cues::{EffectKind, TransitionKind};
     use crate::editor::test_support::{minimal_project, no_context};
 
-    fn num(v: i64) -> crate::editor::Num {
-        crate::editor::Num::from(v)
-    }
-
     /// Every `EditorCommand` kind NOT implemented so far (`rename`, `undo`,
     /// `redo`, `setDestination`, and the seven clip commands are -- see the
     /// module doc). Each later task deletes its own row here as it
@@ -284,38 +289,10 @@ mod tests {
     /// whole table at once. Task 29 deleted `setFades`'s row; Task 30 deleted
     /// `addTransition`/`setTransitionDuration`/`removeTransition`'s three;
     /// Task 31 deleted `setSpeed`/`setLayout`'s two; Task 32 deleted
-    /// `setAdjustments`/`setCanvas`'s two.
+    /// `setAdjustments`/`setCanvas`'s two; Task 34 deleted `addEffect`/
+    /// `updateEffect`/`removeEffect`'s three.
     fn unimplemented_commands() -> Vec<(&'static str, EditorCommand)> {
         vec![
-            (
-                "addEffect",
-                EditorCommand::AddEffect(AddEffectPayload {
-                    clip_id: "c1".into(),
-                    kind: EffectKind::Highlight,
-                    start_ms: 0,
-                    end_ms: 500,
-                    props: EffectProps::Highlight(HighlightEffectProps {
-                        x: Some(num(0)),
-                        y: Some(num(0)),
-                        ..Default::default()
-                    }),
-                }),
-            ),
-            (
-                "updateEffect",
-                EditorCommand::UpdateEffect(UpdateEffectPayload {
-                    effect_id: "e1".into(),
-                    start_ms: None,
-                    end_ms: None,
-                    props: None,
-                }),
-            ),
-            (
-                "removeEffect",
-                EditorCommand::RemoveEffect(RemoveEffectPayload {
-                    effect_id: "e1".into(),
-                }),
-            ),
             (
                 "setCaptionSettings",
                 EditorCommand::SetCaptionSettings(SetCaptionSettingsPayload {
@@ -383,18 +360,19 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_commands_table_has_eleven_rows() {
+    fn unimplemented_commands_table_has_eight_rows() {
         // A vacuity guard, the `shared_fixture_table_has_ten_cases`
         // precedent (`time.rs`): 46 total EditorCommand kinds minus the
-        // thirty-five implemented so far (rename, undo, redo, setDestination,
+        // thirty-eight implemented so far (rename, undo, redo, setDestination,
         // insertClip, updateClip, splitClip, trimClip, deleteClips,
         // moveClips, reorderClip, groupClips, ungroupClips,
         // duplicateClips, pasteFragment, cutClips, addTrack, renameTrack,
         // moveTrack, setTrackFlags, deleteTrack, setClipMix, setMasterGain,
         // detachAudio, setFades, addTransition, setTransitionDuration,
         // removeTransition, setSpeed, setLayout, setAdjustments, setCanvas,
-        // addCard, updateCard, insertIntro).
-        assert_eq!(unimplemented_commands().len(), 11);
+        // addCard, updateCard, insertIntro, addEffect, updateEffect,
+        // removeEffect).
+        assert_eq!(unimplemented_commands().len(), 8);
     }
 
     #[test]

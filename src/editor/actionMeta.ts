@@ -208,10 +208,15 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * `MixerPopover` precedent), and `ratio` — the one `ActionId` that used to
  * name `setCanvas` here purely to stay gated — now has its own `RESOLVERS`
  * entry and sends `setCanvas` directly from its ratio control in
- * `PreviewToolbar.vue`, never through `commandFor`.
+ * `PreviewToolbar.vue`, never through `commandFor`. **Task 34 removed
+ * `addEffect`/`updateEffect`/`removeEffect`, WITHOUT consumers**: Rust now
+ * accepts all three (`core::editor::commands::cues`), but no `ActionId` in
+ * this registry has ever mapped to any of them -- there is no
+ * teaching-cue toolbar in this repo yet for a later task to wire up. The
+ * row is gone purely because it would otherwise be a false claim that
+ * Rust still refuses the kind.
  */
 export const UNIMPLEMENTED_KINDS: ReadonlySet<string> = new Set([
-  "addEffect", "updateEffect", "removeEffect",
   "setCaptionSettings", "addCaption", "updateCaption", "splitCaption", "removeCaptions",
   "addMarker", "updateMarker", "removeMarker",
 ]);
