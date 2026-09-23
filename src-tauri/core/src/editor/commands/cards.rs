@@ -284,10 +284,12 @@ pub(super) fn add_card(
 // ---- updateCard ---------------------------------------------------------
 
 /// `updateCard{clipId, title?, subtitle?, background?, foreground?,
-/// accent?}` (F-37): refuses an unknown clip, a clip that is not a card
-/// (`Clip.card.is_none()`), a locked track, a malformed colour (checked
-/// for EVERY field present before anything changes, so one bad field can
-/// never leave another already written), and a payload that sets nothing.
+/// accent?}` (F-37, fix round 1: refusal order corrected to match the code
+/// below): refuses, in order, an unknown clip, a clip that is not a card
+/// (`Clip.card.is_none()`), a locked track, a payload that sets nothing,
+/// and — only once something IS being set — a malformed colour, checked
+/// for EVERY colour field present before anything changes, so one bad
+/// field can never leave another already written.
 pub(super) fn update_card(
     project: &Project,
     payload: &UpdateCardPayload,

@@ -39,7 +39,7 @@ vi.mock("../src/logging", () => ({
 }));
 
 import { EditorPortError } from "../src/editor/port";
-import type { EditorOpenResult, EditorSnapshot, Project } from "../src/editorTypes";
+import type { EditorCommand, EditorOpenResult, EditorSnapshot, Project } from "../src/editorTypes";
 import { logWarning } from "../src/logging";
 import EditorRoot from "../src/roots/EditorRoot.vue";
 import { useEditorProjectStore } from "../src/stores/editorProject";
@@ -1288,5 +1288,48 @@ describe("EditorRoot", () => {
     // removed as a side effect of discarding an unrelated capture B.
     expect(closeCalls).toEqual([]);
     expect(discardCalls).toEqual(["cap two"]);
+  });
+
+  // Task 33 fix round 1 (review finding, Important #1): `TitlesLibrary.vue`
+  // was fully built and tested in isolation but never reachable from the
+  // running editor — `EditorRoot`'s `library` slot rendered only
+  // `MediaLibrary`. `LibraryPanel.vue` now fills that slot with a Media/
+  // Titles tablist; this test proves the switch, and the insert it gates,
+  // work end to end through the REAL root, not just `TitlesLibrary.vue`
+  // mounted standalone (`editorTitles.test.ts`'s own job).
+  it("reaches Titles from the editor root's library panel and inserts a card through editorProject.execute", async () => {
+    const executed: EditorCommand[] = [];
+    const store = useEditorProjectStore();
+    const withTrack = projectFixture({
+      tracks: [
+        { id: "v1", kind: "video", name: "v1", visible: true, locked: false, muted: false, solo: false, volume: 1 },
+      ],
+    });
+    store.setPort(
+      fakeEditorPort({
+        openStaged: (base) =>
+          Promise.resolve(openResultFixture({ sourceBase: base, project: withTrack })),
+        execute: (req) => {
+          executed.push(req.command);
+          return Promise.resolve({
+            snapshot: snapshotFixture({ revision: 2 }),
+            project: withTrack,
+          });
+        },
+      }),
+    );
+    const w = await open();
+    expect(w.find('[data-testid="editor-shell"]').exists()).toBe(true);
+
+    // MediaLibrary is the default tab; Titles is not shown until selected.
+    expect(w.find('[data-testid="titles-library"]').exists()).toBe(false);
+    await w.get('[data-testid="library-tab-titles"]').trigger("click");
+    expect(w.get('[data-testid="library-tab-titles"]').attributes("aria-selected")).toBe("true");
+    expect(w.find('[data-testid="titles-library"]').exists()).toBe(true);
+
+    await w.get('[data-testid="titles-add-chapter"]').trigger("click");
+    expect(executed).toEqual([
+      expect.objectContaining({ kind: "addCard", preset: "chapter", trackId: "v1" }),
+    ]);
   });
 });

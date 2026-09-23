@@ -173,6 +173,30 @@ fn add_card_refuses_overlapping_the_target_track() {
     assert!(err.message.contains("c1"), "{}", err.message);
 }
 
+// Fix round 1 (review finding, Minor #2): `addCard`'s own MIN_CLIP_MS floor
+// (shared with `insertIntro` via `checked_card_end`) had no direct test --
+// only `insertIntro`'s was exercised
+// (`insert_intro_refuses_a_too_short_duration`). A shared helper losing its
+// check for ONE caller while keeping it for the other is exactly the gap a
+// per-caller test closes.
+#[test]
+fn add_card_refuses_a_too_short_duration() {
+    let p = card_project();
+    let err = refusal(add(
+        &p,
+        CardPreset::Blank,
+        Some("v1"),
+        0,
+        limits::MIN_CLIP_MS - 1,
+    ));
+    assert!(err.message.contains("durationMs"), "{}", err.message);
+    assert!(
+        err.message.contains(&limits::MIN_CLIP_MS.to_string()),
+        "{}",
+        err.message
+    );
+}
+
 #[test]
 fn add_card_refuses_when_max_tracks_is_already_reached() {
     let mut p = card_project();

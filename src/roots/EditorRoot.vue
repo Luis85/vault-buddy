@@ -53,7 +53,7 @@ import InspectorPanel from "../components/editor/inspector/InspectorPanel.vue";
 import LayoutSection from "../components/editor/inspector/LayoutSection.vue";
 import SpeedSection from "../components/editor/inspector/SpeedSection.vue";
 import LegacyCaptureEditor from "../components/editor/LegacyCaptureEditor.vue";
-import MediaLibrary from "../components/editor/library/MediaLibrary.vue";
+import LibraryPanel from "../components/editor/library/LibraryPanel.vue";
 import PreviewSurface from "../components/editor/preview/PreviewSurface.vue";
 import EditorShell from "../components/editor/shell/EditorShell.vue";
 import TimelineView from "../components/editor/timeline/TimelineView.vue";
@@ -266,9 +266,13 @@ onBeforeUnmount(() => {
       </template>
       <!-- Task 25: the media library (search, asset cards, Import through
            Rust's own dialog, per-file results, "+" at the playhead) fills
-           the shell's `library` slot, the last of its four region slots. -->
+           the shell's `library` slot, the last of its four region slots --
+           Task 33 fix round 1 WRAPPED it in `LibraryPanel`'s Media/Titles
+           tablist rather than replacing it, so `TitlesLibrary.vue` (built
+           in Task 33 itself, unreachable until this fix round) has
+           somewhere to mount. -->
       <template #library>
-        <MediaLibrary />
+        <LibraryPanel />
       </template>
     </EditorShell>
     <!-- A multi-root component: its own root nodes (header, preview, strip,

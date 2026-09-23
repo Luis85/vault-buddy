@@ -30,8 +30,9 @@
  * five stay unmounted, the same "don't pay for a hidden tab" posture
  * `ScreenSourcePicker`'s `<TabGroup>` already uses elsewhere in this repo.
  */
-import { computed, nextTick, ref } from "vue";
+import { computed } from "vue";
 
+import { useRovingTablist } from "../../../composables/useRovingTablist";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 
 type CategoryId = "clip" | "layout" | "fades" | "audio" | "speed" | "color";
@@ -65,25 +66,15 @@ const hasSelection = computed(() => selectionCount.value > 0);
 const isMultiSelection = computed(() => selectionCount.value > 1);
 
 // ---- roving tabindex over the tablist (the PreviewToolbar/ContextMenu
-// precedent: arrow keys move focus, Home/End jump to the ends). ------------
-const tabEls = ref<(HTMLElement | null)[]>([]);
-function setTabRef(i: number, el: Element | null): void {
-  tabEls.value[i] = el as HTMLElement | null;
-}
-async function onTablistKeydown(event: KeyboardEvent): Promise<void> {
-  const n = CATEGORIES.length;
-  const current = CATEGORY_IDS.indexOf(activeTab.value);
-  let target: number;
-  if (event.key === "ArrowRight") target = (current + 1) % n;
-  else if (event.key === "ArrowLeft") target = (current - 1 + n) % n;
-  else if (event.key === "Home") target = 0;
-  else if (event.key === "End") target = n - 1;
-  else return;
-  event.preventDefault();
-  selectTab(CATEGORIES[target].id);
-  await nextTick();
-  tabEls.value[target]?.focus();
-}
+// precedent: arrow keys move focus, Home/End jump to the ends) -- via the
+// shared `useRovingTablist` composable (Task 33 fix round 1: this file's
+// own copy of the handler and `LibraryPanel.vue`'s were extracted into it
+// once `check:quality`'s clone-group gate caught the two as duplicates).
+const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
+  () => CATEGORIES.length,
+  () => CATEGORY_IDS.indexOf(activeTab.value),
+  (i) => selectTab(CATEGORIES[i].id),
+);
 </script>
 
 <template>
