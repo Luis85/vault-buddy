@@ -22,6 +22,12 @@
 //! track before it decides anything about audio) and what F-04 says
 //! ("invisible tracks are excluded from output"). The reference editor's
 //! `clipGain` ignores visibility; preview parity wins here (GAP-173).
+//! Chapters and burned-in captions are the one exception, and share ONE
+//! rule: they follow what their lists show (`src/editor/captionRules.ts`'
+//! `chapterRows` / `captionRows`, and the preview's caption overlay) -- a
+//! marker or caption inside its clip's source range counts WHATEVER its
+//! track's visibility. Teaching cues, which paint onto their clip, need a
+//! visible video track (`src/editor/cueGeometry.ts`).
 //!
 //! **Sources.** A clip's bytes live under its asset's `sources.json`
 //! record: the asset itself, or its `linked_asset` root for detached audio
@@ -144,6 +150,9 @@ pub struct VideoLayer {
     pub fade_curve: FadeCurve,
     pub adjustments: Option<Adjustments>,
     pub transition_in: Option<(TransitionKind, u64)>,
+    /// The transition this clip is the `from` side of: it fades out over
+    /// the last that-many ms of its original span, under the `to` clip.
+    pub transition_out: Option<(TransitionKind, u64)>,
     pub cut: Cut,
 }
 
@@ -161,6 +170,9 @@ pub struct PlannedCard {
     pub fade_out: u64,
     pub fade_curve: FadeCurve,
     pub transition_in: Option<(TransitionKind, u64)>,
+    /// The transition this clip is the `from` side of: it fades out over
+    /// the last that-many ms of its original span, under the `to` clip.
+    pub transition_out: Option<(TransitionKind, u64)>,
     pub card: Option<Card>,
     pub cut: Cut,
 }
@@ -346,14 +358,29 @@ fn even_px(v: f64) -> u32 {
     ((v / 2.0).round() * 2.0).max(0.0) as u32
 }
 
+/// One axis of a box: the two EDGES rounded to even pixels and clamped to
+/// the canvas, the size derived from them. Rounding the origin and the size
+/// separately let two odd ties push the far edge 2 px past the canvas
+/// (y 0.3375, h 0.6625 on 720: 244 + 478 = 722).
+fn even_span(origin: f64, size: f64, canvas: u32) -> (u32, u32) {
+    let extent = f64::from(canvas);
+    let far = even_px((origin + size) * extent).min(canvas);
+    let near = even_px(origin * extent).min(far);
+    (near, far - near)
+}
+
 fn bounds_of(clip: &Clip, canvas: &Canvas) -> PixelBox {
-    let (cw, ch) = (f64::from(canvas.width), f64::from(canvas.height));
-    PixelBox {
-        x: even_px(f64_of(Some(&clip.x), 0.0) * cw),
-        y: even_px(f64_of(Some(&clip.y), 0.0) * ch),
-        w: even_px(f64_of(Some(&clip.w), 1.0) * cw),
-        h: even_px(f64_of(Some(&clip.h), 1.0) * ch),
-    }
+    let (x, w) = even_span(
+        f64_of(Some(&clip.x), 0.0),
+        f64_of(Some(&clip.w), 1.0),
+        canvas.width,
+    );
+    let (y, h) = even_span(
+        f64_of(Some(&clip.y), 0.0),
+        f64_of(Some(&clip.h), 1.0),
+        canvas.height,
+    );
+    PixelBox { x, y, w, h }
 }
 
 /// The preview's own look defaults (`src/editor/previewTransform.ts`): a
@@ -387,6 +414,17 @@ pub(super) fn transition_into(project: &Project, clip_id: &str) -> Option<(Trans
         .map(|t| (t.kind, t.duration_ms))
 }
 
+/// The transition `clip` is the `from` side of, if any -- the outgoing half
+/// of the same overlap: without it the renderer would play `from` at full
+/// level under `to`'s fade-in.
+pub(super) fn transition_out_of(project: &Project, clip_id: &str) -> Option<(TransitionKind, u64)> {
+    project
+        .transitions
+        .iter()
+        .find(|t| t.from == clip_id)
+        .map(|t| (t.kind, t.duration_ms))
+}
+
 fn layer(
     project: &Project,
     clip: &Clip,
@@ -416,6 +454,7 @@ fn layer(
         fade_curve: clip.fade_curve,
         adjustments: clip.adjustments.clone(),
         transition_in: transition_into(project, &clip.id),
+        transition_out: transition_out_of(project, &clip.id),
         cut: placed.cut,
     }
 }
@@ -432,6 +471,7 @@ fn card(project: &Project, clip: &Clip, track_index: usize, placed: &Placed) -> 
         fade_out: clip.fade_out_ms,
         fade_curve: clip.fade_curve,
         transition_in: transition_into(project, &clip.id),
+        transition_out: transition_out_of(project, &clip.id),
         card: clip.card.clone(),
         cut: placed.cut,
     }
@@ -691,13 +731,13 @@ impl RenderPlan {
     /// that source's aspect EXACTLY the project canvas' (F5: aspect, never
     /// raw pixels -- a 1920x1080 capture on its nearest 1280x720 canvas
     /// qualifies, and the remux then runs at SOURCE resolution), nothing
-    /// drawn over it, and its own sound as the one contribution at unity.
+    /// drawn over it, and its sound: when the source HAS an audio stream,
+    /// that stream is the one contribution, at unity; when it has none,
+    /// there is no contribution at all -- the legacy fast path remuxed a
+    /// silent capture too (`Timeline::is_untouched`), and this successor
+    /// must not lose that (controller ruling, fix round 1).
     pub fn is_identity(&self) -> bool {
-        let ([layer], [input], [audio]) = (
-            self.video_layers.as_slice(),
-            self.inputs.as_slice(),
-            self.audio.as_slice(),
-        ) else {
+        let ([layer], [input]) = (self.video_layers.as_slice(), self.inputs.as_slice()) else {
             return false;
         };
         self.nothing_drawn_over()
@@ -706,8 +746,15 @@ impl RenderPlan {
             && layer.input == input.input_index
             && layer_is_whole(layer, input, self.duration_ms)
             && self.layer_is_plain(layer)
-            && audio.input == input.input_index
-            && audio_is_whole(audio, layer)
+            && self.sound_is_untouched(layer, input)
+    }
+
+    fn sound_is_untouched(&self, layer: &VideoLayer, input: &PlanInput) -> bool {
+        match (input.has_audio, self.audio.as_slice()) {
+            (false, []) => true,
+            (true, [audio]) => audio.input == input.input_index && audio_is_whole(audio, layer),
+            _ => false,
+        }
     }
 
     fn nothing_drawn_over(&self) -> bool {
@@ -736,6 +783,7 @@ impl RenderPlan {
             && layer.fade_in == 0
             && layer.fade_out == 0
             && layer.transition_in.is_none()
+            && layer.transition_out.is_none()
             && layer.adjustments.is_none()
             && layer.crop.is_none()
             && layer.rotation == Rotation::Deg0
@@ -762,9 +810,13 @@ fn audio_is_whole(audio: &AudioContribution, layer: &VideoLayer) -> bool {
         && audio.fade_in == 0
         && audio.fade_out == 0
         && audio.crossfade_in.is_none()
+        && audio.crossfade_out.is_none()
         && (audio.source_in, audio.source_out) == (layer.source_in, layer.source_out)
 }
 
+#[cfg(test)]
+#[path = "render_plan_range_tests.rs"]
+mod range_tests;
 #[cfg(test)]
 #[path = "render_plan_tests.rs"]
 mod tests;

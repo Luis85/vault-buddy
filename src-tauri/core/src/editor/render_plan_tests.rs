@@ -13,11 +13,11 @@ use crate::editor::test_support::{asset, clip, effect, minimal_project, track};
 use crate::editor::{EditorErrorCode, Map, Num};
 use crate::timeline::Timeline;
 
-fn num(v: f64) -> Num {
+pub(super) fn num(v: f64) -> Num {
     Num::from_f64(v).expect("finite")
 }
 
-fn source(input_index: usize, has_audio: bool) -> PlanSource {
+pub(super) fn source(input_index: usize, has_audio: bool) -> PlanSource {
     PlanSource {
         input_index,
         has_video: true,
@@ -39,30 +39,30 @@ fn audio_source(input_index: usize) -> PlanSource {
     }
 }
 
-fn sources(entries: &[(&str, PlanSource)]) -> BTreeMap<String, PlanSource> {
+pub(super) fn sources(entries: &[(&str, PlanSource)]) -> BTreeMap<String, PlanSource> {
     entries
         .iter()
         .map(|(id, s)| ((*id).to_string(), *s))
         .collect()
 }
 
-fn layer_ids(plan: &RenderPlan) -> Vec<&str> {
+pub(super) fn layer_ids(plan: &RenderPlan) -> Vec<&str> {
     plan.video_layers
         .iter()
         .map(|l| l.clip_id.as_str())
         .collect()
 }
 
-fn audio_ids(plan: &RenderPlan) -> Vec<&str> {
+pub(super) fn audio_ids(plan: &RenderPlan) -> Vec<&str> {
     plan.audio.iter().map(|a| a.clip_id.as_str()).collect()
 }
 
-fn hidden(mut t: Track) -> Track {
+pub(super) fn hidden(mut t: Track) -> Track {
     t.visible = false;
     t
 }
 
-fn marker(id: &str, clip_id: &str, source_ms: u64, title: &str) -> Marker {
+pub(super) fn marker(id: &str, clip_id: &str, source_ms: u64, title: &str) -> Marker {
     Marker {
         id: id.to_string(),
         clip_id: clip_id.to_string(),
@@ -72,7 +72,7 @@ fn marker(id: &str, clip_id: &str, source_ms: u64, title: &str) -> Marker {
     }
 }
 
-fn caption(id: &str, clip_id: &str, start_ms: u64, end_ms: u64) -> CaptionCue {
+pub(super) fn caption(id: &str, clip_id: &str, start_ms: u64, end_ms: u64) -> CaptionCue {
     CaptionCue {
         id: id.to_string(),
         clip_id: clip_id.to_string(),
@@ -83,7 +83,7 @@ fn caption(id: &str, clip_id: &str, start_ms: u64, end_ms: u64) -> CaptionCue {
     }
 }
 
-fn burned_in(cues: Vec<CaptionCue>) -> CaptionSettings {
+pub(super) fn burned_in(cues: Vec<CaptionCue>) -> CaptionSettings {
     CaptionSettings {
         enabled: true,
         burn_in: true,
@@ -430,12 +430,16 @@ fn migrated(segments: &serde_json::Value, duration_ms: u64, dims: (u32, u32)) ->
 }
 
 fn capture_source(dims: (u32, u32)) -> BTreeMap<String, PlanSource> {
+    capture_source_with(dims, true)
+}
+
+fn capture_source_with(dims: (u32, u32), has_audio: bool) -> BTreeMap<String, PlanSource> {
     sources(&[(
         "src",
         PlanSource {
             input_index: 0,
             has_video: true,
-            has_audio: true,
+            has_audio,
             width: dims.0,
             height: dims.1,
             is_image: false,
@@ -444,36 +448,58 @@ fn capture_source(dims: (u32, u32)) -> BTreeMap<String, PlanSource> {
 }
 
 /// R1's successor of `Timeline::is_untouched`: for every shared timeline
-/// case migrated through Task 4 (audio present, exact-aspect geometry --
-/// the two facts that would otherwise refuse identity for reasons this
-/// test is not about), the plan's identity answer equals the legacy
-/// predicate at every declared source duration.
+/// case migrated through Task 4, on exact-aspect geometry (the one fact
+/// that would otherwise refuse identity for a reason this test is not
+/// about), the plan's identity answer equals the legacy predicate at every
+/// declared source duration -- WITH and WITHOUT an audio stream, because
+/// the legacy fast path remuxed a silent capture too (controller ruling,
+/// fix round 1) and the new one must not lose it.
 #[test]
 fn identity_detection_matches_is_untouched() {
     let table: serde_json::Value = serde_json::from_str(TIMELINE_CASES).expect("json");
     let (mut rows, mut identities) = (0usize, 0usize);
-    for (n, case) in table["cases"].as_array().expect("cases").iter().enumerate() {
-        let name = case["name"].as_str().expect("name");
-        for row in case["isUntouched"].as_array().expect("isUntouched") {
-            let duration_ms = row[0].as_u64().expect("duration");
-            let dims = EXACT_DIMS[(n + rows) % EXACT_DIMS.len()];
-            let project = migrated(&case["segments"], duration_ms, dims);
-            let legacy = Timeline::from_sidecar_value(
-                &serde_json::json!({ "segments": case["segments"] }),
-                duration_ms,
-            );
-            let plan = plan(&project, &capture_source(dims), None).expect("plan");
-            assert_eq!(
-                plan.is_identity(),
-                legacy.is_untouched(duration_ms),
-                "case {name:?} at {duration_ms} ms ({dims:?})"
-            );
-            rows += 1;
-            identities += usize::from(plan.is_identity());
+    for has_audio in [true, false] {
+        for (n, case) in table["cases"].as_array().expect("cases").iter().enumerate() {
+            let name = case["name"].as_str().expect("name");
+            for row in case["isUntouched"].as_array().expect("isUntouched") {
+                let duration_ms = row[0].as_u64().expect("duration");
+                let dims = EXACT_DIMS[(n + rows) % EXACT_DIMS.len()];
+                let project = migrated(&case["segments"], duration_ms, dims);
+                let legacy = Timeline::from_sidecar_value(
+                    &serde_json::json!({ "segments": case["segments"] }),
+                    duration_ms,
+                );
+                let src = capture_source_with(dims, has_audio);
+                let plan = plan(&project, &src, None).expect("plan");
+                assert_eq!(
+                    plan.is_identity(),
+                    legacy.is_untouched(duration_ms),
+                    "case {name:?} at {duration_ms} ms ({dims:?}, audio {has_audio})"
+                );
+                rows += 1;
+                identities += usize::from(plan.is_identity());
+            }
         }
     }
-    assert!(rows >= 12, "only {rows} rows were cross-checked");
-    assert_eq!(identities, 2, "exactly two rows are untouched");
+    assert!(rows >= 24, "only {rows} rows were cross-checked");
+    assert_eq!(
+        identities, 4,
+        "two rows are untouched, with and without audio"
+    );
+}
+
+/// The other half of the audio rule: a source that HAS sound must still
+/// contribute it exactly once at unity -- muting it is an edit, and a remux
+/// would silently put the sound back.
+#[test]
+fn a_muted_capture_with_sound_is_not_identity() {
+    let dims = (1920, 1080);
+    let whole = serde_json::json!([{ "sourceStartMs": 0, "sourceEndMs": 6_000 }]);
+    let mut project = migrated(&whole, 6_000, dims);
+    project.clips[0].muted = true;
+    let plan = plan(&project, &capture_source(dims), None).expect("plan");
+    assert!(plan.audio.is_empty());
+    assert!(!plan.is_identity());
 }
 
 /// The GAP-136 trap: one segment that covers the source's LENGTH but starts

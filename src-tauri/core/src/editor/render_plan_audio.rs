@@ -20,7 +20,7 @@
 
 use super::model::{Clip, FadeCurve, Project, Track};
 use super::model_cues::TransitionKind;
-use super::render_plan::{f64_of, transition_into, Cut, Placed};
+use super::render_plan::{f64_of, transition_into, transition_out_of, Cut, Placed};
 
 /// One clip's contribution to the mix, OUTPUT time.
 #[derive(Debug, Clone, PartialEq)]
@@ -44,6 +44,9 @@ pub struct AudioContribution {
     /// The transition this clip is the `to` side of: its audio crossfades
     /// in over that many ms while the `from` clip fades out.
     pub crossfade_in: Option<(TransitionKind, u64)>,
+    /// The transition this clip is the `from` side of: its audio fades out
+    /// over the last that-many ms of its original span.
+    pub crossfade_out: Option<(TransitionKind, u64)>,
     pub cut: Cut,
 }
 
@@ -80,6 +83,7 @@ pub(super) fn contribution(
         fade_out: clip.fade_out_ms,
         curve: clip.fade_curve,
         crossfade_in: transition_into(project, &clip.id),
+        crossfade_out: transition_out_of(project, &clip.id),
         cut: placed.cut,
     }
 }
