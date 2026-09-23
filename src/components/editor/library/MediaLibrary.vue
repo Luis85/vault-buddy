@@ -18,8 +18,13 @@
  * stays the authority (an overlap there is refused and surfaces as the
  * store's error). A control that cannot act says why in its `title`
  * (`aria-disabled`, never the native attribute, so the reason stays
- * reachable — the `TrackHeader.vue` precedent). Dragging a card onto a lane
- * is Task 26's.
+ * reachable — the `TrackHeader.vue` precedent).
+ *
+ * **Dragging a card onto a lane (Task 26)** starts here — `LibraryAssetCard`
+ * itself owns the native `dragstart` (the DOM node it renders), encoding
+ * the asset's kind into the drag payload via `trackCompat.setAssetDragData`
+ * — but the DROP is `TimelineView.vue`/`TrackLane.vue`'s: this component
+ * originates the drag and never sees where it lands.
  *
  * `reconcile()` runs on mount: this webview mounts once per process, but a
  * reload mid-import would otherwise show nothing for a job still running in
@@ -162,6 +167,7 @@ onMounted(() => {
         :id="row.asset.id"
         :key="row.asset.id"
         :name="row.asset.name"
+        :kind="row.asset.kind"
         :kind-label="row.kindLabel"
         :duration="row.duration"
         :missing="row.missing"

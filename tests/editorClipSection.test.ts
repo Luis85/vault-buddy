@@ -325,6 +325,48 @@ describe("ClipSection — fields", () => {
   });
 });
 
+describe("ClipSection — image out bound (Task 26, F-10)", () => {
+  // Task 21's carried finding, fixed by Task 26 (which defines the image
+  // rule): before this fix, `assetDurationMs` bounded In/Out by the
+  // asset's own `duration_ms` for EVERY asset, including a still image --
+  // so an Out entry past the image's 5000ms import-time default was
+  // refused CLIENT-SIDE with an inline range error even though Rust's own
+  // `insertClip`/`trimClip` (`clips.rs`'s `out_ms_bound`) already allow an
+  // image to extend up to `MAX_DURATION_MS`.
+  it("an image clip's Out may extend past the asset's own duration_ms, sending trimClip", async () => {
+    executed = [];
+    await openProject({
+      assets: [{ id: "a1", kind: "video", name: "a1", duration_ms: 5_000, media_type: "image" }],
+      clips: [clip({ start_ms: 0, in_ms: 0, out_ms: 5_000 })],
+    });
+    const w = mount(ClipSection, { props: { clipIds: ["c1"] } });
+    await flushPromises();
+
+    const out = w.get('[data-testid="clip-section-out"]');
+    await out.setValue("6000"); // past the still's own 5_000 ms nominal duration
+    await out.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+
+    expect(w.find('[data-testid="clip-section-out-error"]').exists()).toBe(false);
+    expect(executed).toEqual([{ kind: "trimClip", clipId: "c1", startMs: 0, inMs: 0, outMs: 6_000 }]);
+  });
+
+  it("a NON-image clip's Out is still bounded by the asset's own duration_ms", async () => {
+    executed = [];
+    await openProject({ clips: [clip({ start_ms: 0, in_ms: 0, out_ms: 5_000 })] }); // asset a1: duration_ms 60_000
+    const w = mount(ClipSection, { props: { clipIds: ["c1"] } });
+    await flushPromises();
+
+    const out = w.get('[data-testid="clip-section-out"]');
+    await out.setValue("70000"); // past the asset's real 60_000 ms duration
+    await out.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+
+    expect(w.get('[data-testid="clip-section-out-error"]').text()).toContain("between 0 and 60000 ms");
+    expect(executed).toEqual([]);
+  });
+});
+
 describe("ClipSection — Earlier/Later", () => {
   it("reads enabled/reason from the SAME registry as the timeline toolbar", async () => {
     executed = [];

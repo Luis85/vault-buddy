@@ -226,6 +226,27 @@ describe("resolveActions — disabled actions carry a reason", () => {
       );
     }
   });
+
+  // Task 26: `addTrack` is no longer in `UNIMPLEMENTED_KINDS` (dropping a
+  // media asset below the timeline's last lane sends it directly through
+  // `editorProject.execute`, the `TrackHeader.vue` direct-call precedent) --
+  // but `addTrackVideo`/`addTrackAudio`, the only `ActionId`s that map to
+  // it, still have no keyboard/menu/toolbar surface consuming them, so
+  // `actions.ts` now gives them their OWN `RESOLVERS` entry reproducing the
+  // exact same disabled-with-reason text `UNIMPLEMENTED_KINDS` used to
+  // supply, rather than silently reporting `enabled:false, reason:null`
+  // (which the "every disabled action carries a reason" invariant below
+  // would catch).
+  it("addTrackVideo/addTrackAudio stay disabled with the same reason even though addTrack itself is ungated", () => {
+    const context = ctx({ project: project(), snapshot: snapshot() });
+    const resolved = resolveActions(context);
+    expect(resolved.addTrackVideo.enabled).toBe(false);
+    expect(resolved.addTrackVideo.reason).toBe("Add video track arrives in a later update.");
+    expect(resolved.addTrackAudio.enabled).toBe(false);
+    expect(resolved.addTrackAudio.reason).toBe("Add audio track arrives in a later update.");
+    expect(commandFor("addTrackVideo", context)).toBeNull();
+    expect(commandFor("addTrackAudio", context)).toBeNull();
+  });
 });
 
 describe("resolveActions — locked track disables every clip mutation", () => {
@@ -485,8 +506,8 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
 });
 
 describe("UNIMPLEMENTED_KINDS", () => {
-  it("carries exactly the 26 kinds this registry still gates", () => {
-    expect(UNIMPLEMENTED_KINDS.size).toBe(26);
+  it("carries exactly the 25 kinds this registry still gates", () => {
+    expect(UNIMPLEMENTED_KINDS.size).toBe(25);
     // The ten kinds an ActionId in this registry maps to that ARE
     // implemented must be absent, or every action built on them would be
     // wrongly gated -- plus the four track kinds Task 23 implemented that
@@ -501,10 +522,14 @@ describe("UNIMPLEMENTED_KINDS", () => {
       expect(UNIMPLEMENTED_KINDS.has(implemented)).toBe(false);
     }
     expect(UNIMPLEMENTED_KINDS.has("addEffect")).toBe(true);
-    // addTrack stays gated on purpose: addTrackVideo/addTrackAudio (the
-    // only actions that map to it) have no RESOLVERS/BUILDERS entry yet --
-    // see actionMeta.ts's own doc on this constant.
-    expect(UNIMPLEMENTED_KINDS.has("addTrack")).toBe(true);
+    // Task 26: `addTrack` is no longer gated -- dropping a media asset
+    // below the timeline's last lane sends it directly
+    // (`TimelineView.vue`'s `editorProject.execute`, the `TrackHeader.vue`
+    // direct-call precedent), which is a real UI consumer even though
+    // `addTrackVideo`/`addTrackAudio` (the only ActionIds that map to it)
+    // still have no RESOLVERS/BUILDERS entry of their own -- see
+    // actionMeta.ts's own doc on this constant.
+    expect(UNIMPLEMENTED_KINDS.has("addTrack")).toBe(false);
   });
 });
 

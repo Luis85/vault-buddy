@@ -140,17 +140,62 @@ pub(super) fn ensure_unlocked(project: &Project, track_id: &str) -> Result<(), E
     Ok(())
 }
 
+/// The maximum `out_ms` a clip against `asset` may carry, and whether that
+/// bound is the image exemption (Task 26, F-10): `limits::MAX_DURATION_MS`
+/// for a still image -- an image asset's `duration_ms` is only ever an
+/// IMPORT-TIME default (`probe::IMAGE_DEFAULT_DURATION_MS`, 5000 ms), never
+/// a real recorded length, so "images have no source bound beyond that" --
+/// or the asset's own `duration_ms` for anything else. Shared by
+/// `insert_clip` and `trim_clip` (and mirrored, read-only, by
+/// `validate::check_clip`'s own copy of this exact rule) so the two
+/// commands that decide it up front can never state the bound differently.
+fn out_ms_bound(asset: &Asset) -> (bool, u64) {
+    let is_image = matches!(asset.media_type, Some(MediaType::Image));
+    let bound = if is_image {
+        limits::MAX_DURATION_MS
+    } else {
+        asset.duration_ms
+    };
+    (is_image, bound)
+}
+
+/// Refuses `out_ms` when it exceeds `out_ms_bound(asset)` -- the one place
+/// `insert_clip`/`trim_clip` both apply that bound, so an `insertClip` of
+/// an image can extend past its nominal duration (up to
+/// `limits::MAX_DURATION_MS`) exactly as far as a later `trimClip` on the
+/// same clip already could, and a non-image clip is refused up front
+/// instead of only via `validate_project`'s own backstop copy of this rule.
+fn check_out_ms(asset: &Asset, out_ms: u64) -> Result<(), EditorError> {
+    let (is_image, bound) = out_ms_bound(asset);
+    if out_ms > bound {
+        return Err(invalid_request(format!(
+            "outMs {} exceeds the {} ms {}",
+            out_ms,
+            bound,
+            if is_image {
+                "maximum duration"
+            } else {
+                "asset duration"
+            }
+        )));
+    }
+    Ok(())
+}
+
 // ---- insertClip -----------------------------------------------------------
 
 /// `insertClip{assetId, trackId, startMs, inMs, outMs}`: mints a fresh
 /// `clip-…` id, applies the reference defaults (fades 0, curve `linear`,
 /// opacity 1, volume 1, muted false, `x 0, y 0, w 1, h 1`, speed unset —
 /// i.e. the implicit 1.0×), and refuses to overlap another clip already on
-/// the target track. **Decision, not in the brief**: the payload carries
-/// no `name` (the Contract reference lists only `assetId, trackId,
-/// startMs, inMs, outMs`), so the new clip's name defaults to the
-/// resolved asset's own name -- `updateClip` renames it afterward if the
-/// caller wants something else.
+/// the target track. `outMs` is bounded by `check_out_ms` (Task 26, F-10):
+/// an image asset may extend past its own (import-time-default)
+/// `duration_ms` up to `limits::MAX_DURATION_MS`, a non-image asset may
+/// not. **Decision, not in the brief**: the payload carries no `name` (the
+/// Contract reference lists only `assetId, trackId, startMs, inMs,
+/// outMs`), so the new clip's name defaults to the resolved asset's own
+/// name -- `updateClip` renames it afterward if the caller wants something
+/// else.
 pub(super) fn insert_clip(
     project: &Project,
     payload: &InsertClipPayload,
@@ -162,6 +207,7 @@ pub(super) fn insert_clip(
     if payload.in_ms >= payload.out_ms {
         return Err(invalid_request("inMs must be before outMs"));
     }
+    check_out_ms(asset, payload.out_ms)?;
 
     let new_span = ClipSpan {
         start_ms: payload.start_ms,
@@ -344,24 +390,7 @@ pub(super) fn trim_clip(
     }
 
     let asset = find_asset(project, &clip.asset_id)?;
-    let is_image = matches!(asset.media_type, Some(MediaType::Image));
-    let out_bound = if is_image {
-        limits::MAX_DURATION_MS
-    } else {
-        asset.duration_ms
-    };
-    if payload.out_ms > out_bound {
-        return Err(invalid_request(format!(
-            "outMs {} exceeds the {} ms {}",
-            payload.out_ms,
-            out_bound,
-            if is_image {
-                "maximum duration"
-            } else {
-                "asset duration"
-            }
-        )));
-    }
+    check_out_ms(asset, payload.out_ms)?;
 
     let speed = speed_or_default(clip.speed.as_ref());
     // F14: refused BEFORE the overlap scan, and computed straight from the

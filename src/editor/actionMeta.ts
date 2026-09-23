@@ -131,7 +131,7 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
 };
 
 /**
- * The exact twenty-six wire kinds this registry still gates. `undo`/
+ * The exact twenty-five wire kinds this registry still gates. `undo`/
  * `redo`/`splitClip`/`deleteClips`/`cutClips`/`pasteFragment`/
  * `duplicateClips`/`groupClips`/`ungroupClips`/`reorderClip` are
  * deliberately absent (those ten of the sixteen pre-Task-23 kinds are the
@@ -144,17 +144,26 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * ("delete the matching entry or every action that maps to that kind stays
  * wrongly disabled") satisfied for the part of it that applies.
  *
- * **`addTrack` is the one exception, deliberately still gated even though
- * Rust implements it.** `addTrackVideo`/`addTrackAudio` are the only
- * actions that map to it (`ACTION_KIND` above) and neither has a
- * `RESOLVERS`/`BUILDERS` entry in `actions.ts` — nobody has built an
- * "add a new track" UI surface yet (Task 23's own brief scopes
- * `TrackHeader` to an EXISTING track's controls only). Ungating `addTrack`
- * without those two entries would render `addTrackVideo`/`addTrackAudio`
- * as ENABLED buttons that `commandFor` still returns `null` for — a
- * broken control, worse than an honestly-disabled one. Whichever task
- * finally wires that surface removes this entry in the SAME commit it adds
- * the resolver/builder pair, per `mod.rs`'s own rule.
+ * **`addTrack` was the one exception through Task 23** — kept gated even
+ * though Rust already implemented it, because the two `ActionId`s that map
+ * to it (`addTrackVideo`/`addTrackAudio`, `ACTION_KIND` above) had no
+ * `RESOLVERS`/`BUILDERS` entry in `actions.ts`: nobody had built an "add a
+ * new track" UI surface yet (Task 23's own brief scoped `TrackHeader` to an
+ * EXISTING track's controls only), and ungating it without those two
+ * entries would have rendered `addTrackVideo`/`addTrackAudio` as ENABLED
+ * buttons `commandFor` still returned `null` for. **Task 26 is that
+ * surface's first consumer** — dropping a media asset below the timeline's
+ * last lane sends `addTrack` directly from `TimelineView.vue`
+ * (`editorProject.execute`, the `TrackHeader.vue` direct-call precedent
+ * above, never through this registry) — so the "no consuming UI yet"
+ * condition no longer holds for `addTrack` ITSELF, and it is removed from
+ * the set below in the same commit, per `mod.rs`'s own rule.
+ * `addTrackVideo`/`addTrackAudio` still have no keyboard/menu/toolbar
+ * surface of their own (a future one is still a later task's), so
+ * `actions.ts` gives them their own permanent `RESOLVERS` entry
+ * (`resolveNoTrackSurfaceYet`) reproducing the exact disabled-with-reason
+ * text this gate used to supply — never `BUILDERS`, since there is still
+ * nothing for either to build a command FOR.
  *
  * **This is a hand-copy with nothing keeping it in sync with Rust's own
  * table**, and Rust's `commands/mod.rs` module doc names this exact
@@ -166,7 +175,6 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * direction.
  */
 export const UNIMPLEMENTED_KINDS: ReadonlySet<string> = new Set([
-  "addTrack",
   "setClipMix", "setMasterGain", "detachAudio", "setFades",
   "addTransition", "setTransitionDuration", "removeTransition",
   "setSpeed", "setLayout", "setAdjustments", "setCanvas",

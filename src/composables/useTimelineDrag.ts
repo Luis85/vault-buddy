@@ -43,8 +43,10 @@ export const MIN_CLIP_MS = 100;
 /** How close (px) a dragged edge must land to a snap target to catch it —
  * no contract value names one, so this is this module's own constant, the
  * `BASE_PX_PER_MS`/`MIN_TICK_PX` precedent in `timelineLayout.ts` for a UX
- * constant with no Rust twin. */
-const SNAP_THRESHOLD_PX = 8;
+ * constant with no Rust twin. Exported (Task 26) so `TimelineView.vue`'s
+ * own asset-placement drop snaps against the exact same threshold a clip
+ * drag/trim already does, rather than a second hand-copied `8`. */
+export const SNAP_THRESHOLD_PX = 8;
 
 export interface MovePreview {
   deltaMs: number;
@@ -56,7 +58,7 @@ export interface TrimPreview {
   outMs: number;
 }
 
-interface SnapOptions {
+export interface SnapOptions {
   snapEnabled: boolean;
   targets: readonly number[];
   thresholdPx: number;
@@ -65,6 +67,18 @@ interface SnapOptions {
 
 function clipSpeed(clip: Clip): number {
   return clip.speed ?? 1;
+}
+
+/** Snaps `rawMs` against `opts` when enabled, else returns it unchanged —
+ * the one ternary `computeMoveDelta`/`computeTrimStart`/`computeTrimEnd`
+ * each repeated inline below. Factored out (Task 26) once `TimelineView`'s
+ * own asset-placement drop needed the exact same "snap if the toolbar's
+ * Snap toggle is on" behaviour as a THIRD consumer outside this file,
+ * rather than growing a second copy of that ternary beside
+ * `trackCompat.trackAccepts` (a different rule this same task also reuses
+ * rather than re-deriving). */
+export function snappedMs(rawMs: number, opts: SnapOptions): number {
+  return opts.snapEnabled ? snap(rawMs, opts.targets, opts.thresholdPx, opts.zoom) : rawMs;
 }
 
 /**
@@ -79,9 +93,7 @@ function clipSpeed(clip: Clip): number {
  */
 export function computeMoveDelta(clip: Clip, rawDeltaMs: number, opts: SnapOptions): number {
   const rawNewStart = clip.start_ms + rawDeltaMs;
-  const snappedStart = opts.snapEnabled
-    ? snap(rawNewStart, opts.targets, opts.thresholdPx, opts.zoom)
-    : rawNewStart;
+  const snappedStart = snappedMs(rawNewStart, opts);
   // Whole milliseconds: every `EditorCommand` time is an integer (Rust
   // decodes u64/i64), and a pointer offset at a non-integer px-per-ms is not.
   const clampedStart = Math.round(Math.max(0, snappedStart));
@@ -103,9 +115,7 @@ export function computeTrimStart(clip: Clip, rawOutputDeltaMs: number, opts: Sna
   const speed = clipSpeed(clip);
   const originalEnd = clip.start_ms + clipOutputDuration(clip.in_ms, clip.out_ms, speed);
   const rawNewStart = clip.start_ms + rawOutputDeltaMs;
-  const snappedStart = opts.snapEnabled
-    ? snap(rawNewStart, opts.targets, opts.thresholdPx, opts.zoom)
-    : rawNewStart;
+  const snappedStart = snappedMs(rawNewStart, opts);
   const minStart = Math.max(0, originalEnd - clipOutputDuration(0, clip.out_ms, speed));
   const maxStart = Math.max(minStart, originalEnd - MIN_CLIP_MS);
   const clampedStart = Math.round(Math.min(Math.max(snappedStart, minStart), maxStart));
@@ -127,7 +137,7 @@ export function computeTrimEnd(clip: Clip, rawOutputDeltaMs: number, opts: SnapO
   const speed = clipSpeed(clip);
   const originalEnd = clipOutputEnd({ start_ms: clip.start_ms, in_ms: clip.in_ms, out_ms: clip.out_ms, speed });
   const rawNewEnd = originalEnd + rawOutputDeltaMs;
-  const snappedEnd = opts.snapEnabled ? snap(rawNewEnd, opts.targets, opts.thresholdPx, opts.zoom) : rawNewEnd;
+  const snappedEnd = snappedMs(rawNewEnd, opts);
   const minEnd = clip.start_ms + MIN_CLIP_MS;
   const clampedEnd = Math.round(Math.max(snappedEnd, minEnd));
   const newDuration = clampedEnd - clip.start_ms;

@@ -19,21 +19,37 @@
  * the width directly. The un-overridden default (1000px) is deliberately a
  * plausible viewport width, not 0 — a real measurement failing silently
  * must not blank every clip on the timeline.
+ *
+ * **Multi-track placement and stills (Task 26)**: a `LibraryAssetCard`
+ * dropped onto an existing `TrackLane` inserts a clip at the drop's own
+ * snapped time (`TrackLane` decides ACCEPTANCE via `trackCompat.
+ * trackAccepts`/`dropRefusalReason` and emits `asset-drop`; this component
+ * alone knows the scroll offset and label width needed to turn the drop's
+ * `clientX` into a timeline `ms`, so it owns the actual `insertClip`).
+ * Dropping onto the strip BELOW the last lane mints a track of the dropped
+ * asset's own kind first (`addTrack`) and inserts onto it second
+ * (`insertClip`) — two separate `editorProject.execute` calls, so Undo
+ * sees two labelled steps, never one merged "add track and clip" edit
+ * Rust has no single command for.
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
+import { SNAP_THRESHOLD_PX, snappedMs } from "../../../composables/useTimelineDrag";
 import { baseActionContext } from "../../../editor/actionContext";
 import type { ActionId } from "../../../editor/actionMeta";
 import type { PointerTarget } from "../../../editor/actions";
 import { activateEditorAction } from "../../../editor/clipboard";
 import {
   fitZoom,
+  LANE_HEIGHT_PX,
   pxPerMs,
+  snapTargets,
   TRACK_LABEL_WIDTH_PX,
   visibleClips,
   xToMs,
 } from "../../../editor/timelineLayout";
-import type { Clip } from "../../../editorTypes";
+import { draggedAssetId, draggedAssetKind } from "../../../editor/trackCompat";
+import type { Asset, Clip, TrackKind } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import ContextMenu from "../menus/ContextMenu.vue";
@@ -189,6 +205,102 @@ function onClipContextMenu(payload: { clip: Clip; clientX: number; clientY: numb
 function onMenuActivate(actionId: ActionId) {
   activateEditorAction(actionId, menuContext.value, (cmd) => editorProject.execute(cmd));
 }
+
+// ---- native drag-and-drop: place a library asset (Task 26) ----------------
+
+/** `clientX` -> a snapped, non-negative integer `ms` -- the SAME snap
+ * targets/threshold a clip drag/trim already uses (`useTimelineDrag`'s
+ * exported `SNAP_THRESHOLD_PX`/`snappedMs`), so a dropped asset settles
+ * against the identical playhead/clip-edge magnets a dragged clip would. */
+function snappedMsFromClientX(clientX: number): number {
+  const raw = msFromClientX(clientX);
+  const snapped = snappedMs(raw, {
+    snapEnabled: workspace.snap,
+    targets: snapTargets(editorProject.project, workspace.playheadMs),
+    thresholdPx: SNAP_THRESHOLD_PX,
+    zoom: workspace.timelineZoom,
+  });
+  return Math.max(0, Math.round(snapped));
+}
+
+/** `TrackLane`'s own `asset-drop`: it already confirmed the lane accepts
+ * this asset's kind (`trackCompat.trackAccepts`) before emitting, so this
+ * only resolves the asset (for its default `outMs`) and the drop's time. */
+async function onAssetDrop(payload: { assetId: string; trackId: string; clientX: number }) {
+  const asset = editorProject.project?.assets.find((a) => a.id === payload.assetId);
+  if (!asset) return;
+  await editorProject.execute({
+    kind: "insertClip",
+    assetId: asset.id,
+    trackId: payload.trackId,
+    startMs: snappedMsFromClientX(payload.clientX),
+    inMs: 0,
+    outMs: asset.duration_ms,
+  });
+}
+
+/** The name a freshly-minted track gets when a drop below the last lane
+ * creates one -- "Video N"/"Audio N", N = one past however many tracks of
+ * that kind already exist. No contract value names a convention here (no
+ * "Add track" UI has existed before this task), so this is this module's
+ * own choice, kept in one place rather than inlined at the one call site. */
+function nextTrackName(kind: TrackKind): string {
+  const count = (editorProject.project?.tracks ?? []).filter((t) => t.kind === kind).length + 1;
+  return kind === "audio" ? `Audio ${count}` : `Video ${count}`;
+}
+
+function onBelowLanesDragOver(event: DragEvent) {
+  const dt = event.dataTransfer;
+  if (!dt || draggedAssetKind(dt) === null) return; // not one of ours
+  // Below the last lane always accepts a valid kind -- there is no existing
+  // track to refuse against, only one about to be minted.
+  event.preventDefault();
+  dt.dropEffect = "copy";
+}
+
+/** A native drag's asset id/kind pair, resolved into the real `Asset` and
+ * the `TrackKind` a fresh track would need to hold it -- `null` for a drag
+ * that is not one of ours, or whose id does not resolve (a payload from a
+ * since-closed project). Split out of `onBelowLanesDrop` below purely to
+ * keep that function's own branch count under the fallow complexity
+ * ceiling; `AssetKind`/`TrackKind` share the exact same two literals, so
+ * `draggedAssetKind`'s return needs no separate mapping to become one. */
+function resolveDraggedAsset(dt: DataTransfer): { asset: Asset; kind: TrackKind } | null {
+  const kind = draggedAssetKind(dt);
+  if (kind === null) return null;
+  const assetId = draggedAssetId(dt, kind);
+  const asset = assetId ? editorProject.project?.assets.find((a) => a.id === assetId) : undefined;
+  return asset ? { asset, kind } : null;
+}
+
+/** Two `editorProject.execute` calls, deliberately -- `addTrack` then
+ * `insertClip` -- rather than one command Rust has no shape for; Undo sees
+ * both as separate, labelled steps (the brief's own "two undo steps"). If
+ * `addTrack` is refused (e.g. `limits::MAX_TRACKS`) nothing is inserted. */
+async function addTrackThenInsert(kind: TrackKind, asset: Asset, startMs: number) {
+  const beforeIds = new Set((editorProject.project?.tracks ?? []).map((t) => t.id));
+  const index = editorProject.project?.tracks.length ?? 0;
+  const added = await editorProject.execute({ kind: "addTrack", trackKind: kind, name: nextTrackName(kind), index });
+  if (!added) return;
+  const newTrack = editorProject.project?.tracks.find((t) => !beforeIds.has(t.id));
+  if (!newTrack) return;
+  await editorProject.execute({
+    kind: "insertClip",
+    assetId: asset.id,
+    trackId: newTrack.id,
+    startMs,
+    inMs: 0,
+    outMs: asset.duration_ms,
+  });
+}
+
+async function onBelowLanesDrop(event: DragEvent) {
+  const dt = event.dataTransfer;
+  const resolved = dt ? resolveDraggedAsset(dt) : null;
+  if (!resolved) return;
+  event.preventDefault();
+  await addTrackThenInsert(resolved.kind, resolved.asset, snappedMsFromClientX(event.clientX));
+}
 </script>
 
 <template>
@@ -241,6 +353,17 @@ function onMenuActivate(actionId: ActionId) {
         :track-index="i"
         :track-order="orderedTrackIds"
         @context-menu="onClipContextMenu"
+        @asset-drop="onAssetDrop"
+      />
+      <!-- Multi-track placement (Task 26): dropping a library asset here
+           mints a track of its own kind first, then inserts onto it -- the
+           one drop target with no existing lane to accept/refuse against. -->
+      <div
+        data-testid="timeline-below-lanes"
+        class="relative"
+        :style="{ width: `${contentWidthPx + TRACK_LABEL_WIDTH_PX}px`, height: `${LANE_HEIGHT_PX}px` }"
+        @dragover="onBelowLanesDragOver"
+        @drop="onBelowLanesDrop"
       />
     </div>
 

@@ -60,12 +60,23 @@ const single = clip.value !== undefined;
 const MAX_NAME_CHARS = 300;
 const MAX_DURATION_MS = 7_200_000;
 
-/** The clip's own asset duration, bounding `in`/`out` — degrades to
- * `MAX_DURATION_MS` (never a crash) when the asset does not resolve, the
- * same defensive-read posture the rest of this codebase's client-side
- * mirrors take. */
+/** The clip's own asset duration, bounding `in`/`out` — Task 21's carried
+ * finding, fixed here (Task 26 defines the image rule this bound now
+ * mirrors): an IMAGE asset may extend up to `MAX_DURATION_MS` (Rust's own
+ * `insertClip`/`trimClip` exemption, `clips.rs`'s `out_ms_bound` — "images
+ * have no source bound beyond that"), never its own (import-time-default)
+ * `duration_ms`, which a numeric-entry Out past 5000ms would otherwise
+ * refuse client-side even though Rust would accept it. Degrades to
+ * `MAX_DURATION_MS` (never a crash) when the asset does not resolve at
+ * all, the same defensive-read posture the rest of this codebase's
+ * client-side mirrors take. */
+const clipAsset = editorProject.project?.assets.find((a) => a.id === clip.value?.asset_id);
 const assetDurationMs =
-  editorProject.project?.assets.find((a) => a.id === clip.value?.asset_id)?.duration_ms ?? MAX_DURATION_MS;
+  clipAsset === undefined
+    ? MAX_DURATION_MS
+    : clipAsset.media_type === "image"
+      ? MAX_DURATION_MS
+      : clipAsset.duration_ms;
 
 /** Both commits return `execute`'s outcome, so `useInspectorDraft` can drop
  * a value Rust refused instead of showing it as committed (fix round 1). */

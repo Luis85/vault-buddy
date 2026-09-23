@@ -283,6 +283,24 @@ function resolveRender(): Verdict {
   return { enabled: false, reason: RENDER_REASON };
 }
 
+/**
+ * `addTrackVideo`/`addTrackAudio` (Task 26): `addTrack` itself left
+ * `UNIMPLEMENTED_KINDS` this task (a real caller sends it now --
+ * `TimelineView.vue`'s below-the-last-lane asset drop, `editorProject.
+ * execute` directly, the `TrackHeader.vue` precedent, never through this
+ * registry), but neither `ActionId` that maps to it has a keyboard/menu/
+ * toolbar surface of its own yet. Without an explicit resolver these two
+ * would fall through `RESOLVERS[actionId]?.(ctx) ?? {enabled:false,
+ * reason:null}` in `resolveActions` below -- disabled with NO reason,
+ * which `editorActions.test.ts`'s "every disabled action carries a
+ * reason" invariant exists precisely to catch. Reusing `unavailableReason`
+ * keeps the user-facing text identical to what the old `UNIMPLEMENTED_KINDS`
+ * gate showed, even though the underlying mechanism changed.
+ */
+function resolveNoTrackSurfaceYet(actionId: ActionId): Verdict {
+  return { enabled: false, reason: unavailableReason(actionId) };
+}
+
 const RESOLVERS: Partial<Record<ActionId, (ctx: ActionContext) => Verdict>> = {
   split: resolveSplit,
   delete: resolveClipMutation,
@@ -306,6 +324,8 @@ const RESOLVERS: Partial<Record<ActionId, (ctx: ActionContext) => Verdict>> = {
   toggleLibrary: resolveAlways,
   toggleInspector: resolveAlways,
   focusPreview: resolveAlways,
+  addTrackVideo: () => resolveNoTrackSurfaceYet("addTrackVideo"),
+  addTrackAudio: () => resolveNoTrackSurfaceYet("addTrackAudio"),
 };
 
 function labelFor(actionId: ActionId, ctx: ActionContext): string {

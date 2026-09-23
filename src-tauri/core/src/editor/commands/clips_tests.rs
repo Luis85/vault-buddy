@@ -5,7 +5,7 @@
 //! accident).
 
 use super::*;
-use crate::editor::model::AssetKind;
+use crate::editor::model::{AssetKind, MediaType};
 use crate::editor::model_cues::{
     CaptionCue, CaptionPosition, CaptionSettings, Effect, EffectKind, Marker, Transition,
     TransitionKind,
@@ -157,6 +157,59 @@ fn insert_clip_refuses_a_start_ms_near_u64_max_instead_of_overflowing() {
             start_ms: u64::MAX - 10,
             in_ms: 0,
             out_ms: 1_000,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code, EditorErrorCode::InvalidRequest);
+}
+
+// ---- insertClip -- image out_ms exemption (Task 26, F-10) -----------------
+// Multi-track placement and stills: an image asset's `duration_ms` is only
+// ever the import-time default (`probe::IMAGE_DEFAULT_DURATION_MS`,
+// 5000 ms), never a real recorded length, so `insertClip` (like `trimClip`
+// already did before this task) must let an image clip's `outMs` extend
+// past it -- up to `limits::MAX_DURATION_MS` -- while a real video/audio
+// asset's own `duration_ms` stays a hard ceiling. Before this task
+// `insert_clip` had NO `outMs` bound check of its own at all (only
+// `trim_clip` and `validate_project`'s backstop did), so a video asset's
+// nominal duration was silently unenforced by this function in isolation.
+
+#[test]
+fn image_clips_may_extend_past_their_nominal_duration() {
+    let mut project = base_project();
+    project.tracks.push(track("v1", TrackKind::Video, false));
+    let mut still = asset("a1", AssetKind::Video, 5_000);
+    still.media_type = Some(MediaType::Image);
+    project.assets.push(still);
+
+    let (candidate, _) = insert_clip(
+        &project,
+        &InsertClipPayload {
+            asset_id: "a1".into(),
+            track_id: "v1".into(),
+            start_ms: 0,
+            in_ms: 0,
+            out_ms: 6_000, // past the still's own 5_000 ms nominal duration
+        },
+    )
+    .unwrap();
+    assert_eq!(candidate.clips[0].out_ms, 6_000);
+}
+
+#[test]
+fn video_clips_may_not() {
+    let mut project = base_project();
+    project.tracks.push(track("v1", TrackKind::Video, false));
+    project.assets.push(asset("a1", AssetKind::Video, 5_000));
+
+    let err = insert_clip(
+        &project,
+        &InsertClipPayload {
+            asset_id: "a1".into(),
+            track_id: "v1".into(),
+            start_ms: 0,
+            in_ms: 0,
+            out_ms: 6_000, // past the asset's real 5_000 ms duration
         },
     )
     .unwrap_err();

@@ -24,16 +24,21 @@
 //! **The frontend keeps its own copy of this table, and nothing enforces
 //! they agree.** `src/editor/actionMeta.ts`'s `UNIMPLEMENTED_KINDS`
 //! (re-exported from `src/editor/actions.ts`, Task 17) is a hand-copy of
-//! the SAME twenty-five kind strings `unimplemented_commands()` below lists
-//! -- it gates every teaching-tool/fade/transition/detachAudio/ratio
-//! action in the preview toolbar and context menu so none of them ever
-//! sends a command this file would reject. **One deliberate exception**
-//! (Task 23): the frontend set also keeps `addTrack` gated even though
-//! this file implements it, because the two `ActionId`s that map to it
-//! (`addTrackVideo`/`addTrackAudio`) have no command builder yet -- nobody
-//! has built an "add a new track" UI surface, so ungating it there would
-//! make an enabled button send nothing. See `actionMeta.ts`'s own doc on
-//! `UNIMPLEMENTED_KINDS` for the exact reasoning. There is no build-time or
+//! the SAME kind strings `unimplemented_commands()` below lists -- it gates
+//! every teaching-tool/fade/transition/detachAudio/ratio action in the
+//! preview toolbar and context menu so none of them ever sends a command
+//! this file would reject. **Task 23 left one deliberate exception**:
+//! the frontend set kept `addTrack` gated even though this file already
+//! implemented it, because the two `ActionId`s that map to it
+//! (`addTrackVideo`/`addTrackAudio`) had no command builder -- nobody had
+//! built an "add a new track" UI surface, so ungating it there would have
+//! made an enabled button send nothing. **Task 26 removed that exception**:
+//! dropping a media asset below the timeline's last lane now sends `addTrack`
+//! directly (`TimelineView.vue`, bypassing the `ActionId` registry the same
+//! way `TrackHeader.vue` already calls `editorProject.execute` directly for
+//! `renameTrack`/`moveTrack`/`setTrackFlags`/`deleteTrack`), so the "no
+//! consuming UI yet" condition no longer holds and `UNIMPLEMENTED_KINDS` no
+//! longer names `addTrack`. There is no build-time or
 //! test-time link between the two lists otherwise: a task that adds an arm
 //! here and deletes the row from `unimplemented_commands()` below MUST
 //! ALSO delete the matching entry from `UNIMPLEMENTED_KINDS` in the same
