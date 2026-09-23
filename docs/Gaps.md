@@ -2279,14 +2279,21 @@ render produces, and it says so nowhere on screen yet. What it does NOT show:
 2. **Effects, captions, markers and cards** — nothing clip-linked is
    drawn; a `card` (and every other `builtin` asset) has no file and is not
    laid out at all.
-3. **Rotation, mirror/flip, crop (`crop_zoom`/`crop_x`/`crop_y`), frame
-   shape and colour adjustments** — only the box, `fit` (`object-fit`) and
-   opacity are applied.
+3. **Colour adjustments.** Rotation, mirror/flip, crop (`crop_zoom`/
+   `crop_x`/`crop_y`), fit and frame shape ARE applied (tutorial-editor
+   Task 31): each visual layer sits in a clipping frame at its box, rounded
+   or circular per its shape, and `src/editor/previewTransform.ts` places
+   the picture inside it with the reference compositor's arithmetic. One
+   approximation remains there: an asset with no recorded `width`/`height`
+   is treated as frame-shaped and falls back to CSS `object-fit`, so its
+   crop anchor and zoom are not exact. Nothing has compared any of it to a
+   render yet (the render is a later task).
 4. **Timing** — sync is element-seek accurate, not frame accurate: a
    playing element is re-seeked only past 250 ms of drift, a cut shows as a
    seek, and audio/video from different elements are not sample-locked.
-   `speed` maps to `playbackRate` (`preserve_pitch` is the browser's
-   default, not the clip's setting).
+   `speed` maps to `playbackRate`, and the clip's `preserve_pitch` to the
+   element's `preservesPitch` (Task 31) — the browser's own time-stretch,
+   not the render's `atempo`.
 5. **More than 8 simultaneous layers** — the pool cap (`MAX_ELEMENTS`)
    shows the top-most 8 and logs once per overflow episode.
 

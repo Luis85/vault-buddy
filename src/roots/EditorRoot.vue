@@ -49,6 +49,8 @@ import AudioSection from "../components/editor/inspector/AudioSection.vue";
 import ClipSection from "../components/editor/inspector/ClipSection.vue";
 import FadesSection from "../components/editor/inspector/FadesSection.vue";
 import InspectorPanel from "../components/editor/inspector/InspectorPanel.vue";
+import LayoutSection from "../components/editor/inspector/LayoutSection.vue";
+import SpeedSection from "../components/editor/inspector/SpeedSection.vue";
 import LegacyCaptureEditor from "../components/editor/LegacyCaptureEditor.vue";
 import MediaLibrary from "../components/editor/library/MediaLibrary.vue";
 import PreviewSurface from "../components/editor/preview/PreviewSurface.vue";
@@ -222,6 +224,19 @@ onBeforeUnmount(() => {
           <!-- Task 29: the Fades category, keyed the same way. -->
           <template #fades="{ clipIds }">
             <FadesSection
+              :key="clipIds.join(',')"
+              :clip-ids="clipIds"
+            />
+          </template>
+          <!-- Task 31: the Layout and Speed categories, keyed the same way. -->
+          <template #layout="{ clipIds }">
+            <LayoutSection
+              :key="clipIds.join(',')"
+              :clip-ids="clipIds"
+            />
+          </template>
+          <template #speed="{ clipIds }">
+            <SpeedSection
               :key="clipIds.join(',')"
               :clip-ids="clipIds"
             />

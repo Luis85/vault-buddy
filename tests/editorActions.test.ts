@@ -594,8 +594,8 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
 });
 
 describe("UNIMPLEMENTED_KINDS", () => {
-  it("carries exactly the 18 kinds this registry still gates", () => {
-    expect(UNIMPLEMENTED_KINDS.size).toBe(18);
+  it("carries exactly the 16 kinds this registry still gates", () => {
+    expect(UNIMPLEMENTED_KINDS.size).toBe(16);
     // The ten kinds an ActionId in this registry maps to that ARE
     // implemented must be absent, or every action built on them would be
     // wrongly gated -- plus the four track kinds Task 23 implemented that
@@ -613,6 +613,8 @@ describe("UNIMPLEMENTED_KINDS", () => {
       "setFades",
       // Task 30: the transition action, and TransitionRow's two direct calls.
       "addTransition", "setTransitionDuration", "removeTransition",
+      // Task 31: the Speed/Layout inspector sections and LayoutHandles.
+      "setSpeed", "setLayout",
     ]) {
       expect(UNIMPLEMENTED_KINDS.has(implemented)).toBe(false);
     }

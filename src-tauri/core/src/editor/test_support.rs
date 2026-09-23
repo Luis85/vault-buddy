@@ -29,6 +29,7 @@ use super::commands::CommandContext;
 use super::model::{
     Asset, AssetKind, Canvas, Clip, Destination, FadeCurve, Project, Track, TrackKind,
 };
+use super::model_cues::{Effect, EffectKind};
 use super::{Map, Num, PROJECT_SCHEMA};
 
 fn num(v: i64) -> Num {
@@ -114,6 +115,36 @@ pub(crate) fn clip(
         crop_y: None,
         adjustments: None,
         card: None,
+        extra: Map::new(),
+    }
+}
+
+/// A highlight effect on `clip_id` over the SOURCE interval `[start_ms,
+/// end_ms)` (Task 31: the shared cue builder; `clips_tests.rs`,
+/// `groups_tests.rs` and `tracks_tests.rs` still carry their own older
+/// local copies of this same shape).
+pub(crate) fn effect(id: &str, clip_id: &str, start_ms: u64, end_ms: u64) -> Effect {
+    Effect {
+        id: id.to_string(),
+        clip_id: clip_id.to_string(),
+        kind: EffectKind::Highlight,
+        start_ms,
+        end_ms,
+        x: num(0),
+        y: num(0),
+        color: "#ffffff".to_string(),
+        text: None,
+        w: None,
+        h: None,
+        x2: None,
+        y2: None,
+        factor: None,
+        font_size: None,
+        stroke: None,
+        dim: None,
+        easing: None,
+        number: None,
+        background: None,
         extra: Map::new(),
     }
 }

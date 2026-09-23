@@ -21,19 +21,29 @@
  * "Edge fade envelopes multiply the clip's alpha/audio amplitude"), via
  * `fadeCurves.gainAt` — the same function `tests/editorFades.test.ts` and
  * Rust's `fades.rs` hold to one shared fixture table, so the preview and
- * that table can never silently disagree. What this deliberately still
- * does NOT model (docs/Gaps.md GAP-173 — the preview approximates the
- * render): transitions, effects, captions, cards and other SYNTHESIZED
- * builtin assets (they have no file to show), rotation/mirror/crop/
- * adjustments, and frame-accurate sync. The fade CURVE SHAPE is itself only
+ * that table can never silently disagree.
+ *
+ * **Layout** (Task 31; F-21, F-23) is modeled too: every visual layer
+ * carries its `look` — frame shape, fit, crop zoom/anchor, rotation, mirror
+ * and flip, plus the asset's recorded pixel size — which
+ * `previewTransform.mediaPlacement` turns into the media element's place
+ * inside the layer's clipping frame. The frame IS the clip's box, the same
+ * `clipBox` `LayoutHandles.vue` draws its handles around, so the handles
+ * and the picture cannot disagree. What this deliberately still does NOT
+ * model (docs/Gaps.md GAP-173 — the preview approximates the render):
+ * transitions, effects, captions, cards and other SYNTHESIZED builtin
+ * assets (they have no file to show), colour adjustments, and
+ * frame-accurate sync. The fade CURVE SHAPE is itself only
  * an approximation for `smooth` — GAP-173 records that the preview's
  * smoothstep and the render's ffmpeg `hsin` are close but not bit-identical.
  */
-import type { Asset, Builtin, Clip, Fit, Project, Track } from "../editorTypes";
+import type { Asset, Builtin, Clip, Project, Track } from "../editorTypes";
 import { gainAt } from "./fadeCurves";
 import { isTrackAudible } from "./mixRules";
 import type { Box, Size } from "./previewGeometry";
 import { clipBox, containRect } from "./previewGeometry";
+import type { LayerLook } from "./previewTransform";
+import { layerLook } from "./previewTransform";
 import { clipOutputEnd, sourceAt } from "./timeMap";
 
 export type LayerKind = "video" | "image" | "audio";
@@ -96,7 +106,10 @@ export interface PreviewLayer {
   /** The SOURCE instant this layer shows at the requested output time. */
   sourceMs: number;
   speed: number;
-  fit: Fit;
+  /** The clip's `preserve_pitch` (unset reads as on), for `preservesPitch`. */
+  preservePitch: boolean;
+  /** Everything about how the picture sits in its box (Task 31). */
+  look: LayerLook;
 }
 
 function layerKind(asset: Asset, track: Track): LayerKind {
@@ -158,7 +171,8 @@ export function computeLayers(
       gain: muted ? 0 : clip.volume * track.volume * project.master_gain * monitor.volume * fade,
       sourceMs,
       speed,
-      fit: clip.fit ?? "contain",
+      preservePitch: clip.preserve_pitch ?? true,
+      look: layerLook(clip, asset),
     });
   }
   return layers.sort((a, b) => b.z - a.z);

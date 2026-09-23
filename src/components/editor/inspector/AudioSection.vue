@@ -20,7 +20,7 @@
  */
 import { computed } from "vue";
 
-import { lockedReason } from "../../../editor/actionMeta";
+import { useSelectedClips } from "../../../composables/useSelectedClips";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import AudioDetachControl from "./AudioDetachControl.vue";
 import AudioVolumeField from "./AudioVolumeField.vue";
@@ -29,20 +29,11 @@ const props = defineProps<{ clipIds: string[] }>();
 
 const editorProject = useEditorProjectStore();
 
-const clips = computed(() =>
-  props.clipIds.map((id) => editorProject.clipById(id)).filter((c) => c !== undefined),
-);
+const { clips, lockReason } = useSelectedClips(() => props.clipIds);
 const clip = computed(() => (props.clipIds.length === 1 ? clips.value[0] : undefined));
 
 const asset = computed(() => editorProject.project?.assets.find((a) => a.id === clip.value?.asset_id));
 const isStill = computed(() => clip.value !== undefined && asset.value?.media_type === "image");
-
-/** The first locked track among the selection's, as Rust words it. */
-const lockReason = computed(() => {
-  const tracks = editorProject.project?.tracks ?? [];
-  const locked = clips.value.map((c) => tracks.find((t) => t.id === c.track_id)).find((t) => t?.locked);
-  return locked ? lockedReason(locked.name) : null;
-});
 
 const allMuted = computed(() => clips.value.length > 0 && clips.value.every((c) => c.muted));
 const muteLabel = computed(() => (allMuted.value ? "Unmute clip audio" : "Mute clip audio"));

@@ -263,6 +263,15 @@ fn check_clip(
         let v = as_f64(&clip.id, "crop_zoom", crop_zoom)?;
         check_range(&clip.id, "crop_zoom", v, 1.0, 3.0)?;
     }
+    // The crop anchor (`workspace.schema.json`: `[0,1]` each) -- Task 31's
+    // `setLayout` refuses it up front; this is the backstop for a document
+    // that arrives from elsewhere.
+    for (field, value) in [("crop_x", &clip.crop_x), ("crop_y", &clip.crop_y)] {
+        if let Some(value) = value.as_ref() {
+            let v = as_f64(&clip.id, field, value)?;
+            check_range(&clip.id, field, v, 0.0, 1.0)?;
+        }
+    }
 
     if clip.fade_in_ms.saturating_mul(2) > output_duration {
         return Err(invalid(format!(

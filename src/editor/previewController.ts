@@ -13,7 +13,10 @@
  *
  * Owns:
  * - one media element per ACTIVE clip — `<video>` for a video layer,
- *   `<img>` for an image, `<audio>` for an audio layer — POOLED: released
+ *   `<img>` for an image, `<audio>` for an audio layer — each visual one
+ *   inside its own clipping FRAME (a `div` at the clip's box, rounded or
+ *   circular per its shape; Task 31) so crop, rotation and mirror move the
+ *   picture within the box and never past it — POOLED: released
  *   elements are kept for reuse, and at most `MAX_ELEMENTS` (8) exist at
  *   once. Layers beyond that are not shown (top-most first), and the drop
  *   is logged once per overflow episode rather than silently;
@@ -35,6 +38,7 @@ import { logWarning } from "../logging";
 import type { Size } from "./previewGeometry";
 import type { LayerKind, MonitorState, PreviewLayer } from "./previewLayers";
 import { computeLayers } from "./previewLayers";
+import { mediaPlacement } from "./previewTransform";
 import { clipOutputEnd } from "./timeMap";
 
 export const MAX_ELEMENTS = 8;
@@ -87,6 +91,9 @@ type MediaEl = HTMLVideoElement | HTMLImageElement | HTMLAudioElement;
 interface Slot {
   kind: LayerKind;
   el: MediaEl;
+  /** The clipping frame a visual element sits in; `null` for audio. What
+   * is attached to the container is `frame ?? el`. */
+  frame: HTMLDivElement | null;
   gain: GainLike | null;
   assetId: string | null;
 }
@@ -326,7 +333,7 @@ export class PreviewController {
     slot ??= this.acquire(layer.kind);
     this.active.set(layer.clipId, slot);
     this.bindSource(slot, layer.assetId);
-    this.place(slot.el, layer);
+    this.place(slot, layer);
     this.mix(slot, layer);
     if (isMedia(slot.el)) this.syncMedia(slot.el, layer, forceSeek);
   }
@@ -335,7 +342,7 @@ export class PreviewController {
     const i = this.free.findIndex((s) => s.kind === kind);
     if (i >= 0) {
       const [slot] = this.free.splice(i, 1);
-      this.deps.container.appendChild(slot.el);
+      this.deps.container.appendChild(slot.frame ?? slot.el);
       return slot;
     }
     const el = document.createElement(TAG[kind]) as MediaEl;
@@ -349,15 +356,23 @@ export class PreviewController {
       el.preload = "auto";
       if (el instanceof HTMLVideoElement) el.playsInline = true;
     }
+    let frame: HTMLDivElement | null = null;
     if (kind === "audio") el.style.display = "none";
-    this.deps.container.appendChild(el);
-    return { kind, el, gain: isMedia(el) ? this.connect(el) : null, assetId: null };
+    else {
+      frame = document.createElement("div");
+      frame.dataset.previewFrame = kind;
+      frame.style.position = "absolute";
+      frame.style.overflow = "hidden";
+      frame.appendChild(el);
+    }
+    this.deps.container.appendChild(frame ?? el);
+    return { kind, el, frame, gain: isMedia(el) ? this.connect(el) : null, assetId: null };
   }
 
   private release(clipId: string, slot: Slot): void {
     this.active.delete(clipId);
     if (isMedia(slot.el)) slot.el.pause();
-    slot.el.remove();
+    (slot.frame ?? slot.el).remove();
     if (this.free.length + this.active.size < MAX_ELEMENTS) this.free.push(slot);
     else this.teardown(slot);
   }
@@ -372,7 +387,7 @@ export class PreviewController {
       slot.el.pause();
       slot.el.removeAttribute("src");
     }
-    slot.el.remove();
+    (slot.frame ?? slot.el).remove();
   }
 
   private audioContext(): AudioContextLike | null {
@@ -451,16 +466,28 @@ export class PreviewController {
     );
   }
 
-  private place(el: MediaEl, layer: PreviewLayer): void {
-    const style = el.style;
+  /** The frame takes the clip's box and shape; the element inside it
+   * takes `mediaPlacement`'s rect and turn (Task 31). */
+  private place(slot: Slot, layer: PreviewLayer): void {
+    const style = slot.el.style;
     style.zIndex = String(layer.z);
     style.opacity = String(layer.opacity);
-    if (!layer.box) return;
-    style.left = `${layer.box.left}px`;
-    style.top = `${layer.box.top}px`;
-    style.width = `${layer.box.width}px`;
-    style.height = `${layer.box.height}px`;
-    style.objectFit = layer.fit;
+    if (!layer.box || !slot.frame) return;
+    const box = layer.box;
+    const frame = slot.frame.style;
+    frame.zIndex = String(layer.z);
+    frame.left = `${box.left}px`;
+    frame.top = `${box.top}px`;
+    frame.width = `${box.width}px`;
+    frame.height = `${box.height}px`;
+    const media = mediaPlacement(box, layer.look);
+    frame.borderRadius = media.radius;
+    style.left = `${media.left}px`;
+    style.top = `${media.top}px`;
+    style.width = `${media.width}px`;
+    style.height = `${media.height}px`;
+    style.transform = media.transform;
+    style.objectFit = media.objectFit;
   }
 
   private mix(slot: Slot, layer: PreviewLayer): void {
@@ -477,6 +504,7 @@ export class PreviewController {
   private syncMedia(el: HTMLVideoElement | HTMLAudioElement, layer: PreviewLayer, forceSeek: boolean): void {
     const target = layer.sourceMs / 1000;
     el.playbackRate = layer.speed * this.rate;
+    el.preservesPitch = layer.preservePitch;
     // Playing: re-seek only past the drift tolerance (a seek per frame
     // would stall decoding). Still: re-seek whenever the frame differs, but
     // never re-set the same instant (a relayout on resize is not a seek).

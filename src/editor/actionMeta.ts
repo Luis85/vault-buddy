@@ -131,7 +131,7 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
 };
 
 /**
- * The exact eighteen wire kinds this registry still gates. `undo`/
+ * The exact sixteen wire kinds this registry still gates. `undo`/
  * `redo`/`splitClip`/`deleteClips`/`cutClips`/`pasteFragment`/
  * `duplicateClips`/`groupClips`/`ungroupClips`/`reorderClip` are
  * deliberately absent (those ten of the sixteen pre-Task-23 kinds are the
@@ -179,7 +179,9 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * context menu and the Fades inspector) got its own `RESOLVERS`/`BUILDERS`
  * entries over `transitionRules.ts`, and the Fades inspector's
  * `TransitionRow.vue` sends the other two directly (no `ActionId` maps to
- * either).
+ * either). **Task 31 removed `setSpeed`/`setLayout`, WITH consumers**: the
+ * Speed and Layout inspector sections and the preview's `LayoutHandles`
+ * send them directly (no `ActionId` maps to either).
  *
  * **This is a hand-copy with nothing keeping it in sync with Rust's own
  * table**, and Rust's `commands/mod.rs` module doc names this exact
@@ -191,7 +193,7 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * direction.
  */
 export const UNIMPLEMENTED_KINDS: ReadonlySet<string> = new Set([
-  "setSpeed", "setLayout", "setAdjustments", "setCanvas",
+  "setAdjustments", "setCanvas",
   "addCard", "updateCard", "insertIntro",
   "addEffect", "updateEffect", "removeEffect",
   "setCaptionSettings", "addCaption", "updateCaption", "splitCaption", "removeCaptions",

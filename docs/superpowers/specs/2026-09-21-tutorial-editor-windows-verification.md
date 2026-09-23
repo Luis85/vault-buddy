@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **14 rows** today (T1–T14), of which **0** carry a result. An
+This file carries **15 rows** today (T1–T15), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -157,3 +157,18 @@ decode stay off the UI thread on a long real recording.
 | # | Check | Steps | Result |
 | --- | --- | --- | --- |
 | T14 | **Waveforms and thumbnails on the timeline, and the no-ffmpeg hint** | Open a staged capture recorded WITH a microphone that is at least 10 minutes long, detach its audio (T12's steps) and zoom the timeline out. **Record**: (a) the audio clip draws a waveform that is flat where the recording was silent and tall where someone spoke; (b) while the first waveform is computing, the playhead, scrolling and the preview stay responsive; (c) the video clip shows a small poster frame at its left edge (the asset protocol serving `cache\<id>-<ms>.jpg`); (d) closing and reopening the editor draws the same waveform at once (from `cache\`, no second decode — the Rust log shows no `editor-peaks` work); (e) trimming the audio clip's start moves the drawn waveform with the handle. Then point Buddy settings → Integrations at a non-existent ffmpeg path (or rename ffmpeg), restart, open a project whose `cache\` has been deleted: **Record** that the audio lane reads "Install ffmpeg to see waveforms" and nothing else breaks. | |
+
+## Task 31's rows
+
+Task 31 adds speed, layout and transforms: `setSpeed`/`setLayout`
+(`core::editor::commands::layout`), the preview's picture-in-picture handles
+(`LayoutHandles.vue`, a sibling overlay of the stage) and the placement of each
+picture inside its box (`src/editor/previewTransform.ts`: fit, crop, rotation,
+mirror, flip, rounded and circular frames). Vitest measures the arithmetic and
+the DOM styles in happy-dom; nothing automated shows WebView2 clipping a
+playing `<video>` to a rounded or circular frame, rotating it, or honouring
+`preservesPitch`, and nothing drags a real handle with a real mouse.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T15 | **Picture-in-picture handles, transforms and speed in the real window** | Open a staged capture, import a second video (T11's steps) and place it on a new video track ABOVE the capture, so both show at once. Select the upper clip. (a) In the preview, drag its body, then its bottom-right handle, then its left edge handle; press Escape once while still holding a handle. (b) In the inspector's **Layout** tab press **Top right**, then choose **Circle**, then **Fill** with crop zoom 2 and Focus X 20, then rotation 90 and **Mirror**. (c) In the **Speed** tab press **2×**, play, then untick **Preserve pitch** and play again; then try **0.5×** where the next clip on the same track is close behind. **Record**: for (a), that the picture moved with the handles during each drag, that each drag is ONE Undo step (the header's Undo label reads "Change layout"), and that Escape put the box back with nothing committed; for (b), that the circle looks round (not an oval) and stays inside its frame edge while cropped, rotated and mirrored, and that the handles' box outline sits exactly on the picture; for (c), that playback is twice as fast with the voice at normal pitch, then higher-pitched with the box unticked, and that 0.5× is refused with a message naming the clip in the way (nothing else moved). | |

@@ -30,6 +30,13 @@
  * pointer on the stage into output-canvas pixels, undoing the letterbox;
  * the result is emitted as `canvas-pointerdown` for the canvas tools that
  * arrive in later tasks.
+ *
+ * **Layout handles** (Task 31): `LayoutHandles` is a SIBLING of the stage
+ * in one shared wrapper, never inside it — the stage is where the picture
+ * is composed. While a handle is dragged it hands back a transient project
+ * the controller shows (so the picture moves with the handles); the store
+ * is never touched until the one `setLayout` on release, and a `null`
+ * hands the controller back the store's own project.
  */
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -38,9 +45,11 @@ import { EditorPortError } from "../../../editor/port";
 import type { AudioContextLike } from "../../../editor/previewController";
 import { PreviewController } from "../../../editor/previewController";
 import { clientToCanvas, containRect } from "../../../editor/previewGeometry";
+import type { Project } from "../../../editorTypes";
 import { logWarning } from "../../../logging";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import LayoutHandles from "./LayoutHandles.vue";
 import TransportBar from "./TransportBar.vue";
 
 const props = defineProps<{
@@ -166,6 +175,11 @@ watch(
   },
 );
 
+/** A layout drag's transient project, or back to the committed one. */
+function onLayoutPreview(preview: Project | null): void {
+  controller?.setProject(preview ?? editorProject.project);
+}
+
 /** The mixer's peak meter reads the live controller, never a copy. */
 function readPeak(): number | null {
   return controller?.readPeak() ?? null;
@@ -189,26 +203,33 @@ function onPointerDown(event: PointerEvent): void {
     data-testid="preview-surface"
     class="flex min-h-0 grow flex-col gap-1"
   >
-    <div
-      ref="stageRef"
-      data-testid="preview-stage"
-      class="relative min-h-0 w-full grow basis-0 overflow-hidden rounded-control bg-stage"
-      @pointerdown="onPointerDown"
-    >
+    <div class="relative min-h-0 w-full grow basis-0">
       <div
-        data-testid="preview-canvas-frame"
-        class="absolute bg-black"
-        :style="{
-          left: `${frame.left}px`,
-          top: `${frame.top}px`,
-          width: `${frame.width}px`,
-          height: `${frame.height}px`,
-        }"
-      />
-      <div
-        ref="layerHostRef"
-        data-testid="preview-layers"
-        class="absolute inset-0"
+        ref="stageRef"
+        data-testid="preview-stage"
+        class="absolute inset-0 overflow-hidden rounded-control bg-stage"
+        @pointerdown="onPointerDown"
+      >
+        <div
+          data-testid="preview-canvas-frame"
+          class="absolute bg-black"
+          :style="{
+            left: `${frame.left}px`,
+            top: `${frame.top}px`,
+            width: `${frame.width}px`,
+            height: `${frame.height}px`,
+          }"
+        />
+        <div
+          ref="layerHostRef"
+          data-testid="preview-layers"
+          class="absolute inset-0"
+        />
+      </div>
+      <LayoutHandles
+        :frame="frame"
+        :canvas="canvas"
+        @preview="onLayoutPreview"
       />
     </div>
     <p

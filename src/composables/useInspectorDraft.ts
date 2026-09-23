@@ -100,6 +100,29 @@ export function numberField(opts: {
   };
 }
 
+/** Builds a PERCENT field over a stored fraction (Task 31, the Layout
+ * section): shown and typed as `0..100`, committed as `0..1`, with bounds
+ * that may FOLLOW the edit (X can only go as far as the width leaves room
+ * for), so `min`/`max` are read at parse time as fractions. */
+export function percentField(opts: {
+  value: () => number;
+  label: string;
+  min: () => number;
+  max: () => number;
+}): InspectorField<number> {
+  const pct = (fraction: number) => Math.round(fraction * 10_000) / 100;
+  return {
+    value: opts.value,
+    format: (v: number) => String(pct(v)),
+    // The bounds are read NOW, then checked by `numberField`'s own rules.
+    parse(raw: string): InspectorParseResult<number> {
+      const [min, max] = [pct(opts.min()), pct(opts.max())];
+      const typed = numberField({ ...opts, min, max, rangeLabel: `${min}% and ${max}%` }).parse(raw);
+      return typed.ok ? { ok: true, value: typed.value / 100 } : typed;
+    },
+  };
+}
+
 /**
  * Builds a plain trimmed-string field (Task 21, `ClipSection`'s Name field —
  * the first caller): a value getter and an inclusive character-count
