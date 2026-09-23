@@ -48,6 +48,20 @@
  * checks for unsaved changes an earlier run left behind; a Resume or
  * Discard opens a different session, which re-hydrates `editorWorkspace`
  * exactly like a fresh open does.
+ *
+ * Task 37 (Part B): `take_editor_request` widened from a bare
+ * `string | null` to `{kind: "staged" | "project", value: string} | null`,
+ * so a drain can carry either a staged capture's base (from
+ * `open_capture_editor`, the panel capture bar's/staged list's Edit) or a
+ * tutorial project's id (from `open_project_editor`, the panel's new
+ * "Tutorial projects" Resume — `StagedCaptureList.vue`). Only the `staged`
+ * arm touches `legacyBase`/`legacyRequestSeq`: the legacy phase-4 surface
+ * (`LegacyCaptureEditor`, `SHOW_LEGACY_EDITOR`) understands a staged
+ * capture's base, never a project id, and Task 21's real workspace UI is
+ * what a project open is FOR. Both arms run `editorProject`'s open and, on
+ * success, the same recovery check — a project opened plainly from the
+ * panel (`openProject(id, false)`) must offer to resume its own leftover
+ * `recovery.json` exactly like a freshly-opened capture does.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -136,28 +150,42 @@ const sessionMatchesLegacy = computed(
   () => editorProject.sourceBase !== null && editorProject.sourceBase === legacyBase.value,
 );
 
+/** `take_editor_request`'s widened reply (Task 37 Part B) — declared here,
+ * not in `editorTypes.ts`, because it is not one of the `editor_*` DTOs
+ * `src/editor/decode.ts` decodes: this command deliberately does not start
+ * with `editor_` and is drained straight into `invoke`'s own generic, the
+ * same posture the bare-string shape it replaces already had. */
+type EditorRequest = { kind: "staged" | "project"; value: string };
+
 /** Drain the stash and open whatever it held. Runs on mount AND on every
  * `editor:open`. An empty drain means "nothing new", never "close what is
  * showing" — blanking a live edit on a spurious or double-fired event would
  * be strictly worse than doing nothing, so `null` is simply never forwarded
- * to `legacyBase` or `editorProject.openStaged`. */
+ * to `legacyBase` or either `editorProject` open call. */
 async function openRequested() {
-  let base: string | null = null;
+  let request: EditorRequest | null = null;
   try {
-    base = await invoke<string | null>("take_editor_request");
+    request = await invoke<EditorRequest | null>("take_editor_request");
   } catch (e) {
     logWarning(`take_editor_request failed: ${String(e)}`);
   }
-  if (base === null) return;
-  legacyBase.value = base;
-  legacyRequestSeq.value += 1;
+  if (request === null) return;
   // Unconditional alongside the legacy load (this task's own Behavior
   // section): both open a session so the store/pin/recovery invariants are
   // exercised from here on. The store's own same-base guard (Task 15) is
   // what makes calling this on every drain safe rather than a duplicate
   // `editor_open_staged` round trip on a re-`editor:open` for the capture
-  // already showing.
-  await editorProject.openStaged(base);
+  // already showing. Only a STAGED open touches the legacy surface:
+  // `LegacyCaptureEditor` understands a staged capture's own base, never a
+  // tutorial project's id, and Task 21's real workspace UI (not yet wired
+  // here) is what a project open is for.
+  if (request.kind === "staged") {
+    legacyBase.value = request.value;
+    legacyRequestSeq.value += 1;
+    await editorProject.openStaged(request.value);
+  } else {
+    await editorProject.openProject(request.value, false);
+  }
   // Fix round 1: a failed open used to be silent — `lastError` was set on
   // the store and nothing else happened, so the only trace was whatever
   // `sessionMatchesLegacy` now hides. Logged here, not inside the store,
@@ -166,7 +194,8 @@ async function openRequested() {
   // that no longer exists) and must not itself become a warning line for
   // every one of them — this IS the one caller for which it always is.
   if (editorProject.lastError) {
-    logWarning(`editor_open_staged failed for ${base}: ${editorProject.lastError.message}`);
+    const cmd = request.kind === "staged" ? "editor_open_staged" : "editor_open_project";
+    logWarning(`${cmd} failed for ${request.value}: ${editorProject.lastError.message}`);
     return;
   }
   // Task 18 fix round 1 (controller ruling): without this call nothing in

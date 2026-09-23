@@ -129,7 +129,7 @@ describe("EditorRoot — never reads a vault id from the screenCapture store", (
     );
 
     mockIPC((cmd) => {
-      if (cmd === "take_editor_request") return "cap one";
+      if (cmd === "take_editor_request") return { kind: "staged", value: "cap one" };
       if (cmd === "load_staged_capture") return DETAIL;
       return undefined;
     });

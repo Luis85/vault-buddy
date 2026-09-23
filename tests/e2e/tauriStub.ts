@@ -93,7 +93,7 @@ export async function installTauriStub(page: Page) {
       // a behaviour change in the test rather than an unhandled rejection
       // that could be mistaken for a layout failure.
       const invoke = async (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "take_editor_request") return detail.base;
+        if (cmd === "take_editor_request") return { kind: "staged", value: detail.base };
         if (cmd === "load_staged_capture") return detail;
         if (cmd === "save_capture_timeline") return null;
         if (cmd === "editor_open_staged") return openResult;

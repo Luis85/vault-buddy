@@ -53,6 +53,14 @@ export const THREE = {
 export type Call = Record<string, unknown> & { cmd: string };
 type Wrapper = ReturnType<typeof mount>;
 
+/** `take_editor_request`'s widened reply (Task 37 Part B): every base this
+ * helper takes is wrapped into the `{kind: "staged", value}` shape Rust now
+ * sends, so callers can keep passing plain base strings (the pre-Task-37
+ * shape) without knowing the wire contract changed underneath them. */
+function stagedRequest(base: string | null): { kind: "staged"; value: string } | null {
+  return base === null ? null : { kind: "staged", value: base };
+}
+
 /** Serve one staged capture, plus whatever `take_editor_request` should hand
  * back on each successive drain. */
 export function mockEditor(
@@ -64,7 +72,9 @@ export function mockEditor(
   const queue = [...requests];
   mockIPC((cmd, args) => {
     seen.push({ cmd, ...(args as object) });
-    if (cmd === "take_editor_request") return queue.length > 0 ? queue.shift() : null;
+    if (cmd === "take_editor_request") {
+      return queue.length > 0 ? stagedRequest(queue.shift() ?? null) : null;
+    }
     if (cmd === "load_staged_capture") {
       const base = (args as { base: string }).base;
       return details?.[base] ?? detail;

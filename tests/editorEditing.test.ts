@@ -390,7 +390,7 @@ describe("EditorRoot editing", () => {
   // take the editor away: the edit is on screen and undo still works.
   it("says so when an edit could not be saved, and keeps the editor usable", async () => {
     mockIPC((cmd) => {
-      if (cmd === "take_editor_request") return "cap one";
+      if (cmd === "take_editor_request") return { kind: "staged", value: "cap one" };
       if (cmd === "load_staged_capture") return DETAIL;
       if (cmd === "save_capture_timeline") throw new Error("no space left on device");
       return undefined;

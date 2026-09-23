@@ -140,7 +140,7 @@ describe("EditorRoot", () => {
 
   it("surfaces a load failure inline rather than a blank window", async () => {
     mockIPC((cmd) => {
-      if (cmd === "take_editor_request") return "cap one";
+      if (cmd === "take_editor_request") return { kind: "staged", value: "cap one" };
       if (cmd === "load_staged_capture") throw new Error("That capture's video file is missing.");
       return undefined;
     });
@@ -385,7 +385,10 @@ describe("EditorRoot", () => {
     const queue = ["cap one", "cap two"];
     mockIPC((cmd, args) => {
       seen.push({ cmd, ...(args as object) });
-      if (cmd === "take_editor_request") return queue.shift() ?? null;
+      if (cmd === "take_editor_request") {
+        const base = queue.shift();
+        return base === undefined ? null : { kind: "staged", value: base };
+      }
       if (cmd === "load_staged_capture") {
         return (args as { base: string }).base === "cap two"
           ? { ...DETAIL, base: "cap two", sourceTitle: "Firefox" }
@@ -439,7 +442,7 @@ describe("EditorRoot", () => {
     const seen: Call[] = [];
     mockIPC((cmd, args) => {
       seen.push({ cmd, ...(args as object) });
-      if (cmd === "take_editor_request") return "cap two";
+      if (cmd === "take_editor_request") return { kind: "staged", value: "cap two" };
       if (cmd === "load_staged_capture")
         return { ...DETAIL, base: "cap two", sourceTitle: "Firefox" };
       return undefined;
@@ -1039,7 +1042,7 @@ describe("EditorRoot", () => {
   it("retries after a load_staged_capture failure when the same base is re-opened", async () => {
     let loadCalls = 0;
     mockIPC((cmd) => {
-      if (cmd === "take_editor_request") return "cap one";
+      if (cmd === "take_editor_request") return { kind: "staged", value: "cap one" };
       if (cmd === "load_staged_capture") {
         loadCalls += 1;
         if (loadCalls === 1) throw new Error("That capture's video file is missing.");

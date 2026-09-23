@@ -213,13 +213,14 @@ No automatic transcription, no tracked redaction, no loudness normalization, no 
 - Stores: `src/stores/{editorProject,editorWorkspace,editorJobs,editorOnboarding}.ts`.
 - Components: `src/components/editor/shell/{EditorShell,EditorHeader,PreviewToolbar,DialogHost}.vue`, `…/timeline/{TimelineView,TrackHeader,TrackLane,ClipItem,TimelineRuler,TimelineToolbar}.vue`, `…/preview/{PreviewSurface,CueOverlay,TransportBar}.vue`, `…/inspector/{InspectorPanel,ClipSection,LayoutSection,FadesSection,AudioSection,SpeedSection,ColorSection,EffectSection}.vue`, `…/library/{MediaLibrary,TitlesLibrary,CaptionsLibrary,ChaptersLibrary,ProductLibrary}.vue`, `…/dialogs/{SaveProjectDialog,RenderDialog,ChecksDialog,WebcamDialog,ReconnectDialog,CloseGuardDialog,RecoveryDialog}.vue`, `…/menus/ContextMenu.vue`, `…/guide/{GuideInvitation,GuideCoach,LearningCenter}.vue`.
 
-### 3.3 IPC contract (exact names; all `editor_*` are editor-window-only, R8)
+### 3.3 IPC contract (exact names; all `editor_*` are editor-window-only, R8 — `list_tutorial_projects` and `open_project_editor` are the documented exception: panel-callable, granted through `capabilities/default.json`, never `editor.json`, because neither name starts with `editor_` and neither lives under `src-tauri/src/editor/`)
 
 | Command | Sync/async | Args | Returns |
 |---|---|---|---|
 | `open_capture_editor` *(existing)* | sync | `base` | `()` |
 | `take_editor_request` *(existing, widened in Task 37)* | sync | — | `{ kind: "staged" \| "project", value: string } \| null` |
-| `open_project_editor` | sync | `projectFileId` | `()` — stash + `editor:open`, exactly like `open_capture_editor` |
+| `list_tutorial_projects` *(panel-callable, NOT editor-scoped — F4, Task 37 Part B)* | async | — | `ProjectSummaryDto[]` — the same listing `editor_list_projects` reads, without opening or touching a session |
+| `open_project_editor` *(panel-callable, NOT editor-scoped — F4, Task 37 Part B)* | sync | `projectFileId` | `()` — stash + `editor:open`, exactly like `open_capture_editor` |
 | `editor_open_staged` | async | `stagedBase: string` | `EditorOpenResult` |
 | `editor_open_project` | async | `projectFileId: string, useRecovery: boolean` | `EditorOpenResult` |
 | `editor_list_projects` | async | — | `ProjectSummaryDto[]` |

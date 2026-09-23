@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { computed, onMounted, ref } from "vue";
 
+import type { ProjectSummaryDto } from "../editorTypes";
 import { logWarning } from "../logging";
 import { useFfmpegStore } from "../stores/ffmpeg";
 import { useScreenCaptureStore } from "../stores/screenCapture";
@@ -12,6 +13,7 @@ import ScreenRegionPicker from "./ScreenRegionPicker.vue";
 import ScreenWindowPicker from "./ScreenWindowPicker.vue";
 import StagedCaptureList from "./StagedCaptureList.vue";
 import TabGroup from "./TabGroup.vue";
+import TutorialProjectsList from "./TutorialProjectsList.vue";
 import AppButton from "./ui/AppButton.vue";
 import Banner from "./ui/Banner.vue";
 import EmptyState from "./ui/EmptyState.vue";
@@ -239,9 +241,37 @@ async function onDiscardStaged(base: string) {
   }
 }
 
+/** Every tutorial project on disk (Task 37 Part B, F4). Same degrade posture
+ * as `loadStaged`: a transient read failure keeps whatever was on screen
+ * rather than blanking a list the user is reading. */
+const tutorialProjects = ref<ProjectSummaryDto[]>([]);
+
+async function loadTutorialProjects() {
+  try {
+    const rows = await invoke<ProjectSummaryDto[]>("list_tutorial_projects");
+    if (Array.isArray(rows)) tutorialProjects.value = rows;
+  } catch (e) {
+    logWarning(`list_tutorial_projects failed: ${String(e)}`);
+  }
+}
+
+/** Resume a tutorial project. `open_project_editor` is `open_capture_editor`'s
+ * own shape (stash + show), applied to a project id — see F4: this list
+ * offers no Discard, so there is no counterpart to `onDiscardStaged` here. */
+async function onResumeProject(projectFileId: string) {
+  error.value = null;
+  try {
+    await invoke("open_project_editor", { projectFileId });
+  } catch (e) {
+    logWarning(`open_project_editor failed: ${String(e)}`);
+    error.value = String(e);
+  }
+}
+
 onMounted(() => {
   void loadSources();
   void loadStaged();
+  void loadTutorialProjects();
   // Cached across opens by the store — a found ffmpeg is not re-probed, a
   // missing one is, so an install made in answer to the notice is picked up.
   void ffmpeg.ensureDetected();
@@ -284,6 +314,14 @@ async function onStart() {
       :disarm-nonce="stagedDisarm"
       @resume="onResumeStaged"
       @discard="onDiscardStaged"
+    />
+    <!-- Task 37 Part B (F4): its own component, extracted from
+         `StagedCaptureList` because a second section there crossed the
+         template complexity ratchet — see `TutorialProjectsList.vue`'s own
+         doc. -->
+    <TutorialProjectsList
+      :projects="tutorialProjects"
+      @resume-project="onResumeProject"
     />
     <TabGroup :tabs="[...TABS]">
       <template #screen>
