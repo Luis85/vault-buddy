@@ -192,7 +192,7 @@ describe("resolveActions — disabled actions carry a reason", () => {
     });
     const context = ctx({ project: proj, snapshot: snapshot(), selectedClipIds: ["c1"] });
     const resolved = resolveActions(context);
-    for (const id of ["addText", "addCaption", "addMarker", "addTrackVideo", "fadeIn", "transition", "ratio"] as const) {
+    for (const id of ["addText", "addCaption", "addMarker", "addTrackVideo", "transition", "ratio"] as const) {
       expect(resolved[id].enabled).toBe(false);
       expect(commandFor(id, context)).toBeNull();
     }
@@ -252,6 +252,43 @@ describe("resolveActions — disabled actions carry a reason", () => {
     }
   });
 
+  // Task 29: fadeIn/fadeOut's own quick-toggle command builder, independent
+  // of FadesSection's numeric drafts and ClipItem's handle drag (neither
+  // reads this registry at all).
+  it("fadeIn/fadeOut toggle a default fade on and off, clamped to half the clip's duration", () => {
+    const proj = project({
+      tracks: [track("v1")],
+      clips: [clip("c1", "v1", { out_ms: 1_000 })], // 1000ms duration, half 500ms
+    });
+    const context = ctx({ project: proj, snapshot: snapshot(), selectedClipIds: ["c1"] });
+    expect(resolveActions(context).fadeIn).toMatchObject({ enabled: true, reason: null });
+    expect(commandFor("fadeIn", context)).toEqual({ kind: "setFades", clipId: "c1", fadeInMs: 500 });
+    expect(commandFor("fadeOut", context)).toEqual({ kind: "setFades", clipId: "c1", fadeOutMs: 500 });
+
+    const alreadyFaded = project({
+      tracks: [track("v1")],
+      clips: [clip("c1", "v1", { out_ms: 1_000, fade_in_ms: 200, fade_out_ms: 200 })],
+    });
+    const faded = ctx({ project: alreadyFaded, snapshot: snapshot(), selectedClipIds: ["c1"] });
+    expect(commandFor("fadeIn", faded)).toEqual({ kind: "setFades", clipId: "c1", fadeInMs: 0 });
+    expect(commandFor("fadeOut", faded)).toEqual({ kind: "setFades", clipId: "c1", fadeOutMs: 0 });
+  });
+
+  it("fadeIn's default clamps below 500ms on a short clip, and a locked track refuses both", () => {
+    const short = project({
+      tracks: [track("v1")],
+      clips: [clip("c1", "v1", { out_ms: 300 })], // 300ms duration, half 150ms < the 500ms default
+    });
+    const context = ctx({ project: short, snapshot: snapshot(), selectedClipIds: ["c1"] });
+    expect(commandFor("fadeIn", context)).toEqual({ kind: "setFades", clipId: "c1", fadeInMs: 150 });
+
+    const locked = project({ tracks: [track("v1", { locked: true })], clips: [clip("c1", "v1")] });
+    const lockedCtx = ctx({ project: locked, snapshot: snapshot(), selectedClipIds: ["c1"] });
+    expect(resolveActions(lockedCtx).fadeIn).toMatchObject({ enabled: false, reason: "Track v1 is locked" });
+    expect(commandFor("fadeIn", lockedCtx)).toBeNull();
+    expect(commandFor("fadeOut", lockedCtx)).toBeNull();
+  });
+
   it("fix round 1, finding 1: a gated action's reason is human copy, never the raw Rust wire kind", () => {
     // A button labelled "Text" must never show the literal string
     // "addEffect" -- that is Rust's own error vocabulary
@@ -267,7 +304,6 @@ describe("resolveActions — disabled actions carry a reason", () => {
       addCaption: "Add caption arrives in a later update.",
       addMarker: "Add marker arrives in a later update.",
       addTrackVideo: "Add video track arrives in a later update.",
-      fadeIn: "Fade in arrives in a later update.",
       transition: "Add transition arrives in a later update.",
       ratio: "Aspect ratio arrives in a later update.",
     };
@@ -559,8 +595,8 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
 });
 
 describe("UNIMPLEMENTED_KINDS", () => {
-  it("carries exactly the 22 kinds this registry still gates", () => {
-    expect(UNIMPLEMENTED_KINDS.size).toBe(22);
+  it("carries exactly the 21 kinds this registry still gates", () => {
+    expect(UNIMPLEMENTED_KINDS.size).toBe(21);
     // The ten kinds an ActionId in this registry maps to that ARE
     // implemented must be absent, or every action built on them would be
     // wrongly gated -- plus the four track kinds Task 23 implemented that
@@ -574,6 +610,8 @@ describe("UNIMPLEMENTED_KINDS", () => {
       // Task 27: the three mix kinds, each with a consumer (AudioSection/
       // MixerPopover, and the detachAudio action).
       "setClipMix", "setMasterGain", "detachAudio",
+      // Task 29: fadeIn/fadeOut's own quick-toggle resolver/builder.
+      "setFades",
     ]) {
       expect(UNIMPLEMENTED_KINDS.has(implemented)).toBe(false);
     }

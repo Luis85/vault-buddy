@@ -2260,8 +2260,22 @@ letterboxed canvas, stacked by reverse track index, with `opacity` and a
 Web Audio gain per element for MONITORING. It is an approximation of what a
 render produces, and it says so nowhere on screen yet. What it does NOT show:
 
-1. **Fades and transitions** — a clip's `fade_in_ms`/`fade_out_ms`/
-   `fade_curve` and every `Transition` are ignored; clips cut hard.
+1. **Transitions** — every `Transition` is ignored; clips cut hard. **Fades
+   ARE applied** (tutorial-editor Task 29): `previewLayers.ts`'s
+   `fadeFactor` multiplies a clip's `opacity`/`gain` by
+   `src/editor/fadeCurves.ts`'s `gainAt(clip.fade_curve, …)` at the
+   requested output time, the same function Rust's
+   `core::editor::commands::fades::gain_at` implements independently and
+   both languages hold to one shared fixture table
+   (`tests/fixtures/editor-fade-cases.json`). But the CURVE SHAPE itself is
+   still only an approximation for `smooth`: this preview evaluates its own
+   smoothstep polynomial (`3u²−2u³`) directly, while the render (a later
+   task) hands the curve NAME to ffmpeg's `afade` filter (`smooth` →
+   `hsin`), which computes its own half-sine-based envelope. `linear`↔`tri`
+   and `equal-power`↔`qsin` are exact matches (both sides evaluate the same
+   closed form); only `hsin` is a close but not bit-identical stand-in for
+   smoothstep, so a fade drawn in the timeline/preview can cross very
+   slightly differently than the exported file's actual gain curve.
 2. **Effects, captions, markers and cards** — nothing clip-linked is
    drawn; a `card` (and every other `builtin` asset) has no file and is not
    laid out at all.

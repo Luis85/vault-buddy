@@ -378,6 +378,16 @@ pub(super) fn split_clip(
 /// Cue times are source-linked (`DATA-MODEL.md`: "Trim changes the
 /// visible intersection, not the original cue timestamps") -- this
 /// function touches no effect/caption/marker at all.
+///
+/// **F11 (Task 29): a trim that SHRINKS the clip clamps its own fades.**
+/// `trimClip` never refuses over a fade the caller didn't touch -- a trim
+/// the user just performed must not additionally fail because the clip
+/// happened to carry a longer fade than the new (shorter) half-duration
+/// allows. Each of `fade_in_ms`/`fade_out_ms` that now exceeds
+/// `fades::fade_limit` of the NEW output duration is clamped down to that
+/// limit, never refused, and the undo label names the adjustment
+/// ("Trim (fades adjusted)") so it is never silently different from what
+/// the user asked for.
 pub(super) fn trim_clip(
     project: &Project,
     payload: &TrimClipPayload,
@@ -427,15 +437,32 @@ pub(super) fn trim_clip(
         }
     }
 
+    // F11: decided against the NEW duration, before any mutation, so the
+    // label reflects exactly what is about to change.
+    let fade_limit = super::fades::fade_limit(new_duration);
+    let clamp_in = clip.fade_in_ms > fade_limit;
+    let clamp_out = clip.fade_out_ms > fade_limit;
+
     let mut candidate = project.clone();
     for c in candidate.clips.iter_mut() {
         if c.id == payload.clip_id {
             c.start_ms = payload.start_ms;
             c.in_ms = payload.in_ms;
             c.out_ms = payload.out_ms;
+            if clamp_in {
+                c.fade_in_ms = fade_limit;
+            }
+            if clamp_out {
+                c.fade_out_ms = fade_limit;
+            }
         }
     }
-    Ok((candidate, "Trim clip".to_string()))
+    let label = if clamp_in || clamp_out {
+        "Trim (fades adjusted)"
+    } else {
+        "Trim clip"
+    };
+    Ok((candidate, label.to_string()))
 }
 
 // ---- deleteClips ------------------------------------------------------------

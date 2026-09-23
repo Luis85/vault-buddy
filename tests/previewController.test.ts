@@ -234,6 +234,44 @@ describe("computeLayers / PreviewController.layout", () => {
   });
 });
 
+describe("fade envelope (Task 29; F-17, F-18)", () => {
+  it("a linear fade-in multiplies opacity and gain by progress, and is full past the fade window", () => {
+    const p = project(
+      [track("v")],
+      [clip("c", "v", { start_ms: 0, in_ms: 0, out_ms: 1_000, fade_in_ms: 400, opacity: 0.8, volume: 0.5 })],
+    );
+    const mid = computeLayers(p, 100, STAGE, LOUD)[0]; // 100/400 = 0.25 into the fade
+    expect(mid.opacity).toBeCloseTo(0.8 * 0.25, 6);
+    expect(mid.gain).toBeCloseTo(0.5 * 0.25, 6);
+
+    const after = computeLayers(p, 500, STAGE, LOUD)[0]; // past the fade window
+    expect(after.opacity).toBeCloseTo(0.8, 6);
+    expect(after.gain).toBeCloseTo(0.5, 6);
+  });
+
+  it("a fade-out attenuates toward the clip's own end, mirroring fade-in", () => {
+    const p = project([track("v")], [clip("c", "v", { start_ms: 0, in_ms: 0, out_ms: 1_000, fade_out_ms: 400 })]);
+    const preFade = computeLayers(p, 500, STAGE, LOUD)[0]; // outside the last 400ms
+    expect(preFade.opacity).toBe(1);
+
+    const quarterFromEnd = computeLayers(p, 900, STAGE, LOUD)[0]; // 100ms from the end -> 0.25 progress
+    expect(quarterFromEnd.opacity).toBeCloseTo(0.25, 6);
+  });
+
+  // The mutation this pins: swapping equal-power for a linear formula
+  // reddens this at 0.5, not 0.7071 -- wired through computeLayers/
+  // fadeFactor, not just gainAt called directly (the fadeCurves.ts suite's
+  // own job).
+  it("equal-power's midpoint is 0.7071, not 0.5, wired all the way through computeLayers", () => {
+    const p = project(
+      [track("v")],
+      [clip("c", "v", { start_ms: 0, in_ms: 0, out_ms: 1_000, fade_in_ms: 400, fade_curve: "equal-power" })],
+    );
+    const layer = computeLayers(p, 200, STAGE, LOUD)[0]; // 200/400 = 0.5 into the fade
+    expect(layer.opacity).toBeCloseTo(0.70710678, 6);
+  });
+});
+
 describe("monitoring", () => {
 
   beforeEach(() => setActivePinia(createPinia()));

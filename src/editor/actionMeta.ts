@@ -167,7 +167,13 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * `actions.ts` gives them their own permanent `RESOLVERS` entry
  * (`resolveNoTrackSurfaceYet`) reproducing the exact disabled-with-reason
  * text this gate used to supply — never `BUILDERS`, since there is still
- * nothing for either to build a command FOR.
+ * nothing for either to build a command FOR. **Task 29 removed
+ * `setFades` the same way, WITH a consumer**: `resolveFade`/`buildFade`
+ * (`actions.ts`) give `fadeIn`/`fadeOut` their own quick-toggle command
+ * (0 <-> a default duration), independent of `FadesSection`/`ClipItem`'s
+ * own gold-handle drag and numeric-entry paths, which call
+ * `editorProject.execute` directly (the `AudioSection`/`MixerPopover`
+ * precedent) and never go through this registry at all.
  *
  * **This is a hand-copy with nothing keeping it in sync with Rust's own
  * table**, and Rust's `commands/mod.rs` module doc names this exact
@@ -179,7 +185,6 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * direction.
  */
 export const UNIMPLEMENTED_KINDS: ReadonlySet<string> = new Set([
-  "setFades",
   "addTransition", "setTransitionDuration", "removeTransition",
   "setSpeed", "setLayout", "setAdjustments", "setCanvas",
   "addCard", "updateCard", "insertIntro",

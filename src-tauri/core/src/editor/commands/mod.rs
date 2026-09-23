@@ -2,7 +2,7 @@
 //! `InternalCommand` (native-only, never `Deserialize`), plus their
 //! dispatch (`apply`/`apply_internal`) into family modules (R14, F-13, F31).
 //!
-//! TWENTY-FOUR kinds are implemented so far: `rename`/`setDestination`
+//! TWENTY-FIVE kinds are implemented so far: `rename`/`setDestination`
 //! (Task 6, `meta.rs`), the two `EditorSession` intercepts before ever
 //! calling `apply` at all, `undo`/`redo` (see `session.rs`'s `execute`), the
 //! seven core clip commands `insertClip`/`updateClip`/`splitClip`/`trimClip`/
@@ -10,14 +10,17 @@
 //! reassignment for `splitClip` lives in the sibling `cue_follow.rs`),
 //! `groupClips`/`ungroupClips`/`duplicateClips`/`pasteFragment`/`cutClips`
 //! (Task 8, `groups.rs`), and `addTrack`/`renameTrack`/`moveTrack`/
-//! `setTrackFlags`/`deleteTrack` (Task 23, `tracks.rs`), and `setClipMix`/
+//! `setTrackFlags`/`deleteTrack` (Task 23, `tracks.rs`), `setClipMix`/
 //! `setMasterGain`/`detachAudio` (Task 27, `mix.rs` -- `detachAudio` is the
-//! one arm that reads `CommandContext`). `moveClips`'s own
-//! group-EXPANSION behaviour also landed with Task 8, but stays in
-//! `clips.rs` (F13: Task 7 shipped `moveClips` before any group could exist
-//! to expand into). Every other kind falls through to the shared "not
-//! available yet" arm below -- each later task adds its own explicit arm
-//! ABOVE the fallback and deletes that kind's row from
+//! one arm that reads `CommandContext`), and `setFades` (Task 29,
+//! `fades.rs` -- also the fade-clamp arm F11 adds to `clips::trim_clip`,
+//! which stays in `clips.rs` for the same "extend the owning file" reason
+//! `moveClips`' group expansion stayed in `clips.rs` under Task 8).
+//! `moveClips`'s own group-EXPANSION behaviour also landed with Task 8, but
+//! stays in `clips.rs` (F13: Task 7 shipped `moveClips` before any group
+//! could exist to expand into). Every other kind falls through to the
+//! shared "not available yet" arm below -- each later task adds its own
+//! explicit arm ABOVE the fallback and deletes that kind's row from
 //! `unimplemented_kinds_are_invalid_request_not_panic`'s table (this
 //! module's own tests), so the table shrinks monotonically task by task;
 //! say so explicitly in that task's own report rather than re-verifying the
@@ -49,6 +52,7 @@
 
 mod clips;
 mod cue_follow;
+pub mod fades;
 mod groups;
 mod meta;
 mod mix;
@@ -206,6 +210,7 @@ pub fn apply(
         EditorCommand::SetClipMix(p) => mix::set_clip_mix(project, p),
         EditorCommand::SetMasterGain(p) => mix::set_master_gain(project, p),
         EditorCommand::DetachAudio(p) => mix::detach_audio(project, p, ctx),
+        EditorCommand::SetFades(p) => fades::set_fades(project, p),
         EditorCommand::Undo | EditorCommand::Redo => Err(EditorError::new(
             EditorErrorCode::InvalidRequest,
             "undo/redo are dispatched by EditorSession::execute, never by apply",
@@ -246,18 +251,9 @@ mod tests {
     /// module doc). Each later task deletes its own row here as it
     /// replaces `apply`'s fallback with a real arm; report that removal
     /// explicitly in that task's own report rather than re-verifying the
-    /// whole table at once.
+    /// whole table at once. Task 29 deleted `setFades`'s row.
     fn unimplemented_commands() -> Vec<(&'static str, EditorCommand)> {
         vec![
-            (
-                "setFades",
-                EditorCommand::SetFades(SetFadesPayload {
-                    clip_id: "c1".into(),
-                    fade_in_ms: Some(100),
-                    fade_out_ms: None,
-                    fade_curve: None,
-                }),
-            ),
             (
                 "addTransition",
                 EditorCommand::AddTransition(AddTransitionPayload {
@@ -447,16 +443,16 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_commands_table_has_twenty_two_rows() {
+    fn unimplemented_commands_table_has_twenty_one_rows() {
         // A vacuity guard, the `shared_fixture_table_has_ten_cases`
         // precedent (`time.rs`): 46 total EditorCommand kinds minus the
-        // twenty-four implemented so far (rename, undo, redo, setDestination,
+        // twenty-five implemented so far (rename, undo, redo, setDestination,
         // insertClip, updateClip, splitClip, trimClip, deleteClips,
         // moveClips, reorderClip, groupClips, ungroupClips,
         // duplicateClips, pasteFragment, cutClips, addTrack, renameTrack,
         // moveTrack, setTrackFlags, deleteTrack, setClipMix, setMasterGain,
-        // detachAudio).
-        assert_eq!(unimplemented_commands().len(), 22);
+        // detachAudio, setFades).
+        assert_eq!(unimplemented_commands().len(), 21);
     }
 
     #[test]

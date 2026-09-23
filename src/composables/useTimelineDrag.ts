@@ -145,6 +145,31 @@ export function computeTrimEnd(clip: Clip, rawOutputDeltaMs: number, opts: SnapO
   return { startMs: clip.start_ms, inMs: clip.in_ms, outMs: newOut };
 }
 
+/** The clamped fade duration (ms) dragging `edge`'s handle by `rawDeltaMs`
+ * should produce — mirrors `core::editor::commands::fades::fade_limit`
+ * (`duration_ms / 2`, an integer floor) as a client-side preview clamp,
+ * never a substitute for Rust's own refusal on commit. The two handles sit
+ * at opposite visual corners, so their drag directions are opposite too:
+ * dragging the fade-IN handle RIGHTWARD (a positive `rawDeltaMs`) lengthens
+ * it, while dragging the fade-OUT handle LEFTWARD (a negative `rawDeltaMs`,
+ * toward the clip's start) lengthens IT — hence the sign flip on `edge ===
+ * "out"`. No snapping: SCREENS-AND-INTERACTIONS.md names snap only for
+ * move/trim, and a fade is a duration, not a position, so there is no
+ * timeline instant to snap onto. */
+export function computeFadeDrag(clip: Clip, edge: "in" | "out", rawDeltaMs: number): number {
+  const speed = clipSpeed(clip);
+  const duration = clipOutputDuration(clip.in_ms, clip.out_ms, speed);
+  const limit = Math.floor(duration / 2);
+  const start = edge === "in" ? clip.fade_in_ms : clip.fade_out_ms;
+  const signedDelta = edge === "in" ? rawDeltaMs : -rawDeltaMs;
+  return Math.round(Math.min(Math.max(start + signedDelta, 0), limit));
+}
+
+export interface FadePreview {
+  edge: "in" | "out";
+  ms: number;
+}
+
 export interface TimelineDragDeps {
   /** The clip THIS composable instance is scoped to — a getter so a caller
    * that re-renders with a fresh `Clip` object (every commit replaces the
@@ -183,6 +208,11 @@ export interface UseTimelineDrag {
   updateTrim: (clientX: number) => void;
   endTrim: () => Promise<void>;
   cancelTrim: () => void;
+  fadePreview: Ref<FadePreview | null>;
+  beginFade: (edge: "in" | "out", clientX: number) => void;
+  updateFade: (clientX: number) => void;
+  endFade: () => Promise<void>;
+  cancelFade: () => void;
   nudge: (deltaMs: number) => Promise<void>;
 }
 
@@ -304,6 +334,54 @@ export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
     trimPreview.value = null;
   }
 
+  // ---- fade handles (Task 29; F-17, F-18) --------------------------------
+  // The `beginTrim`/`updateTrim`/`endTrim`/`cancelTrim` shape exactly: a
+  // preview during the drag, ONE `setFades` on release, Escape discards
+  // with nothing sent — never a second drag model (the brief's own
+  // instruction). Unlike trim, a fade changes exactly one field per drag
+  // (`fadeInMs` XOR `fadeOutMs`), so the preview is a single `{edge, ms}`
+  // pair rather than a whole clip span.
+
+  const fadePreview = ref<FadePreview | null>(null);
+  let fadeEdge: "in" | "out" | null = null;
+  let fadeStartClientX = 0;
+
+  function beginFade(edge: "in" | "out", clientX: number): void {
+    fadeEdge = edge;
+    fadeStartClientX = clientX;
+    const clip = deps.clip();
+    fadePreview.value = { edge, ms: edge === "in" ? clip.fade_in_ms : clip.fade_out_ms };
+  }
+
+  function updateFade(clientX: number): void {
+    if (!fadeEdge) return;
+    const ppm = pxPerMs(deps.zoom());
+    const rawDeltaMs = ppm > 0 ? (clientX - fadeStartClientX) / ppm : 0;
+    fadePreview.value = { edge: fadeEdge, ms: computeFadeDrag(deps.clip(), fadeEdge, rawDeltaMs) };
+  }
+
+  async function endFade(): Promise<void> {
+    if (!fadeEdge) return;
+    const clip = deps.clip();
+    const preview = fadePreview.value;
+    const edge = fadeEdge;
+    fadeEdge = null;
+    fadePreview.value = null;
+    if (!preview) return;
+    const current = edge === "in" ? clip.fade_in_ms : clip.fade_out_ms;
+    if (preview.ms === current) return;
+    await deps.execute(
+      edge === "in"
+        ? { kind: "setFades", clipId: clip.id, fadeInMs: preview.ms }
+        : { kind: "setFades", clipId: clip.id, fadeOutMs: preview.ms },
+    );
+  }
+
+  function cancelFade(): void {
+    fadeEdge = null;
+    fadePreview.value = null;
+  }
+
   // ---- keyboard nudge -----------------------------------------------------
 
   /** One `moveClips` per key press, no preview step — a nudge commits
@@ -324,6 +402,11 @@ export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
     updateTrim,
     endTrim,
     cancelTrim,
+    fadePreview,
+    beginFade,
+    updateFade,
+    endFade,
+    cancelFade,
     nudge,
   };
 }

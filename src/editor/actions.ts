@@ -15,11 +15,10 @@
  * at this file's own 500-line cap) and is re-exported below, so nothing
  * outside these two files needs to know the split exists.
  *
- * **Which commands this task can send.** Twenty-four `EditorCommand` kinds
+ * **Which commands this task can send.** Twenty-five `EditorCommand` kinds
  * are implemented in Rust today (`core::editor::commands::mod.rs`'s own
- * count, as of Task 27's three mix commands); the other twenty-two are
- * rejected with `invalidRequest` and a message of the
- * shape `"<kind> is not available yet"`
+ * count, as of Task 29's `setFades`); the other twenty-one are rejected
+ * with `invalidRequest` and a message of the shape `"<kind> is not available yet"`
  * (`unimplemented_kinds_are_invalid_request_not_panic`, that module's own
  * test — its own module doc names `UNIMPLEMENTED_KINDS` back as the
  * frontend twin a task implementing a kind must also update). That message
@@ -278,6 +277,12 @@ function resolveDetach(ctx: ActionContext): Verdict {
   return reason ? { enabled: false, reason } : OK;
 }
 
+/** `fadeIn`/`fadeOut` (Task 29): needs only an unlocked target clip -- `FadesSection`/`ClipItem` call `execute` directly, never this registry. */
+function resolveFade(ctx: ActionContext): Verdict {
+  const target = requireUnlockedTargetClip(ctx);
+  return "clip" in target ? OK : target;
+}
+
 function resolveUndo(ctx: ActionContext): Verdict {
   return ctx.snapshot?.canUndo ? OK : { enabled: false, reason: "Nothing to undo" };
 }
@@ -327,6 +332,8 @@ const RESOLVERS: Partial<Record<ActionId, (ctx: ActionContext) => Verdict>> = {
   earlier: (ctx) => resolveReorder(ctx, "earlier"),
   later: (ctx) => resolveReorder(ctx, "later"),
   detachAudio: resolveDetach,
+  fadeIn: resolveFade,
+  fadeOut: resolveFade,
   save: resolveProjectGated,
   render: resolveRender,
   checks: resolveProjectGated,
@@ -488,6 +495,21 @@ function buildDetach(ctx: ActionContext): EditorCommand {
   return { kind: "detachAudio", clipId: clip.id, audioTrackId: freeAudioTrackFor(ctx.project as Project, clip) };
 }
 
+/** The toggle's default when turning a fade ON, clamped to the half-duration limit below. */
+const DEFAULT_FADE_MS = 500;
+
+/** `fadeIn`/`fadeOut` (Task 29, the `setClipMix` mute-toggle precedent): nonzero turns OFF, zero turns ON at `DEFAULT_FADE_MS`. */
+function buildFade(ctx: ActionContext, edge: "fadeIn" | "fadeOut"): EditorCommand {
+  const clip = primaryTargetClip(ctx) as Clip;
+  const durationMs = clipOutputEnd(clipSpanOf(clip)) - clip.start_ms;
+  const limitMs = Math.floor(durationMs / 2);
+  const current = edge === "fadeIn" ? clip.fade_in_ms : clip.fade_out_ms;
+  const next = current > 0 ? 0 : Math.min(DEFAULT_FADE_MS, limitMs);
+  return edge === "fadeIn"
+    ? { kind: "setFades", clipId: clip.id, fadeInMs: next }
+    : { kind: "setFades", clipId: clip.id, fadeOutMs: next };
+}
+
 const BUILDERS: Partial<Record<ActionId, Builder>> = {
   split: buildSplit,
   delete: buildDelete,
@@ -502,6 +524,8 @@ const BUILDERS: Partial<Record<ActionId, Builder>> = {
   redo: buildRedo,
   paste: buildPaste,
   detachAudio: buildDetach,
+  fadeIn: (ctx) => buildFade(ctx, "fadeIn"),
+  fadeOut: (ctx) => buildFade(ctx, "fadeOut"),
 };
 
 /**

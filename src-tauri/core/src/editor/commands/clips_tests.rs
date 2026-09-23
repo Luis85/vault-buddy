@@ -639,6 +639,66 @@ fn trim_to_exactly_the_minimum_is_accepted() {
     assert_eq!(candidate.clips[0].out_ms - candidate.clips[0].in_ms, 100);
 }
 
+// F11 (Task 29): trimClip clamps a clip's own fades when they no longer fit
+// half the SHRUNK output duration, rather than refusing a trim the user
+// never asked to touch a fade to perform.
+#[test]
+fn trim_that_shrinks_a_clip_clamps_its_fades_and_labels_the_step() {
+    // 1000ms clip, 400/400ms fades -- both already within the ORIGINAL
+    // 500ms half-duration limit, so nothing here is invalid before the trim.
+    let mut project = base_project();
+    project.tracks.push(track("v1", TrackKind::Video, false));
+    project.assets.push(asset("a1", AssetKind::Video, 5_000));
+    let mut c = clip("c1", "v1", "a1", 0, 0, 1_000);
+    c.fade_in_ms = 400;
+    c.fade_out_ms = 400;
+    project.clips.push(c);
+
+    // Trimmed to a 600ms output duration -- half is now 300ms, below both
+    // fades, which must clamp rather than make the trim itself fail.
+    let (candidate, label) = trim_clip(
+        &project,
+        &TrimClipPayload {
+            clip_id: "c1".into(),
+            start_ms: 0,
+            in_ms: 0,
+            out_ms: 600,
+        },
+    )
+    .unwrap();
+    let trimmed = &candidate.clips[0];
+    assert_eq!((trimmed.fade_in_ms, trimmed.fade_out_ms), (300, 300));
+    assert_eq!(label, "Trim (fades adjusted)");
+}
+
+#[test]
+fn trim_that_does_not_shrink_fades_below_their_limit_keeps_the_plain_label() {
+    // The other arm of the same branch: a fade that ALREADY fits the new
+    // half-duration is left untouched and the label stays the plain one --
+    // "adjusted" must never be claimed when nothing was.
+    let mut project = base_project();
+    project.tracks.push(track("v1", TrackKind::Video, false));
+    project.assets.push(asset("a1", AssetKind::Video, 5_000));
+    let mut c = clip("c1", "v1", "a1", 0, 0, 1_000);
+    c.fade_in_ms = 100;
+    c.fade_out_ms = 100;
+    project.clips.push(c);
+
+    let (candidate, label) = trim_clip(
+        &project,
+        &TrimClipPayload {
+            clip_id: "c1".into(),
+            start_ms: 0,
+            in_ms: 0,
+            out_ms: 600,
+        },
+    )
+    .unwrap();
+    let trimmed = &candidate.clips[0];
+    assert_eq!((trimmed.fade_in_ms, trimmed.fade_out_ms), (100, 100));
+    assert_eq!(label, "Trim clip");
+}
+
 #[test]
 fn trim_clip_refuses_a_start_ms_near_u64_max_instead_of_overflowing() {
     // Regression: same overflow class as insertClip's -- trimClip's own

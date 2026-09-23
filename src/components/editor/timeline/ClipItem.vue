@@ -31,6 +31,16 @@
  * because the async round trip to Rust can, in principle, let Vue swap the
  * underlying DOM node out from under a captured element reference.
  *
+ * The two GOLD FADE HANDLES (Task 29; F-17, F-18) follow the exact same
+ * pointer-capture lifecycle as the trim handles above, never a second drag
+ * model: preview during the drag (`drag.fadePreview`), exactly ONE
+ * `setFades` on release, Escape discards. They are always rendered (a fade
+ * has to be CREATED from zero, so the grab target must exist before there
+ * is anything to see) while the gold WEDGE beside each one — the visual
+ * indicator of how much fade there is — stays gated on a nonzero value, the
+ * behaviour `editorTimelineView.test.ts`'s own "renders a fade wedge only
+ * for a nonzero fade" test already pins.
+ *
  * `role="option"`, not `role="button"` (fix round 1, finding 3): `aria-
  * selected` is only a valid ARIA attribute on a handful of roles (option,
  * row, tab, gridcell, …) and `button` is not one of them —
@@ -193,6 +203,23 @@ async function onTrimPointerUp(event: PointerEvent) {
   await drag.endTrim();
 }
 
+// ---- fade handles (Task 29; F-17, F-18) ------------------------------------
+// The trim handles' own pointer-capture lifecycle, reused rather than a
+// second drag model (the brief's own instruction): `beginPress` captures
+// the pointer and focuses the clip so Escape mid-drag reaches `onKeydown`,
+// exactly as the body/trim handlers above already do.
+
+function onFadePointerDown(event: PointerEvent, edge: "in" | "out") {
+  if (beginPress(event)) drag.beginFade(edge, event.clientX);
+}
+function onFadePointerMove(event: PointerEvent) {
+  drag.updateFade(event.clientX);
+}
+async function onFadePointerUp(event: PointerEvent) {
+  endPress(event);
+  await drag.endFade();
+}
+
 /** The rendered left position: the committed `leftPx` prop, shifted by
  * whichever preview is currently live (a trim overrides it outright, since
  * trimming can move the START edge itself; a body drag adds its own delta
@@ -213,6 +240,27 @@ const previewWidthPx = computed(() => {
   );
   return end - start;
 });
+
+// ---- fade wedges (Task 29) --------------------------------------------------
+// The gold wedge's WIDTH is proportional to the fade duration it shows
+// (`msToX`, the same output-time-to-px scale `previewWidthPx` above uses),
+// clamped to at most half the clip's own current width so two wedges can
+// never overlap, and floored at a small minimum so even a very short fade
+// stays grabbable/visible. Driven by the LIVE drag preview (falling back to
+// the committed clip value) so dragging a fade handle from zero grows the
+// wedge as the user watches, exactly like `previewLeftPx`/`previewWidthPx`
+// do for a body/trim drag.
+const MIN_FADE_WEDGE_PX = 6;
+
+const previewFadeInMs = computed(() =>
+  drag.fadePreview.value?.edge === "in" ? drag.fadePreview.value.ms : props.clip.fade_in_ms,
+);
+const previewFadeOutMs = computed(() =>
+  drag.fadePreview.value?.edge === "out" ? drag.fadePreview.value.ms : props.clip.fade_out_ms,
+);
+function fadeWedgeWidthPx(ms: number): number {
+  return Math.min(previewWidthPx.value / 2, Math.max(msToX(ms, props.zoom), MIN_FADE_WEDGE_PX));
+}
 
 // ---- derived media (Task 28) -----------------------------------------------
 
@@ -261,6 +309,19 @@ async function onNudge(event: KeyboardEvent) {
   restored?.focus();
 }
 
+/** Cancels any in-progress body/trim/fade preview and reports whether one
+ * was actually active -- extracted out of `onKeydown`'s own Escape branch
+ * (fallow complexity: three previews `||`'d together there pushed that
+ * function's cyclomatic count over the ratchet) so the keydown dispatcher
+ * stays a flat table of single-condition branches. */
+function cancelActiveDrag(): boolean {
+  const active = drag.movePreview.value !== null || drag.trimPreview.value !== null || drag.fadePreview.value !== null;
+  drag.cancelBodyDrag();
+  drag.cancelTrim();
+  drag.cancelFade();
+  return active;
+}
+
 function onKeydown(event: KeyboardEvent) {
   if (isContextMenuShortcut(event)) {
     event.preventDefault();
@@ -273,9 +334,7 @@ function onKeydown(event: KeyboardEvent) {
     onSelect();
     return;
   }
-  if (event.key === "Escape" && (drag.movePreview.value || drag.trimPreview.value)) {
-    drag.cancelBodyDrag();
-    drag.cancelTrim();
+  if (event.key === "Escape" && cancelActiveDrag()) {
     return;
   }
   if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
@@ -306,16 +365,33 @@ function onKeydown(event: KeyboardEvent) {
     @pointerup="onBodyPointerUp"
   >
     <div
-      v-if="clip.fade_in_ms > 0"
+      v-if="previewFadeInMs > 0"
       :data-testid="`clip-${clip.id}-fade-in`"
-      class="pointer-events-none absolute inset-y-0 left-0 w-3 bg-gold/40"
-      style="clip-path: polygon(0 100%, 100% 100%, 0 0)"
+      class="pointer-events-none absolute inset-y-0 left-0 bg-gold/40"
+      :style="{ width: `${fadeWedgeWidthPx(previewFadeInMs)}px`, clipPath: 'polygon(0 100%, 100% 100%, 0 0)' }"
     />
     <div
-      v-if="clip.fade_out_ms > 0"
+      v-if="previewFadeOutMs > 0"
       :data-testid="`clip-${clip.id}-fade-out`"
-      class="pointer-events-none absolute inset-y-0 right-0 w-3 bg-gold/40"
-      style="clip-path: polygon(0 100%, 100% 100%, 100% 0)"
+      class="pointer-events-none absolute inset-y-0 right-0 bg-gold/40"
+      :style="{ width: `${fadeWedgeWidthPx(previewFadeOutMs)}px`, clipPath: 'polygon(0 100%, 100% 100%, 100% 0)' }"
+    />
+    <!-- Always-visible drag handles (never gated on a nonzero fade, unlike
+         the wedge above): a fade has to be CREATED from zero somehow, so
+         the grab target exists even when there is nothing to see yet. -->
+    <span
+      :data-testid="`clip-${clip.id}-fade-in-handle`"
+      class="absolute -top-0.5 left-0 z-10 h-2 w-2 -translate-x-0.5 cursor-ew-resize rounded-full bg-gold"
+      @pointerdown.stop="onFadePointerDown($event, 'in')"
+      @pointermove.stop="onFadePointerMove"
+      @pointerup.stop="onFadePointerUp"
+    />
+    <span
+      :data-testid="`clip-${clip.id}-fade-out-handle`"
+      class="absolute -top-0.5 right-0 z-10 h-2 w-2 translate-x-0.5 cursor-ew-resize rounded-full bg-gold"
+      @pointerdown.stop="onFadePointerDown($event, 'out')"
+      @pointermove.stop="onFadePointerMove"
+      @pointerup.stop="onFadePointerUp"
     />
     <!-- F-26 (Task 28): the waveform of an audio clip, and a poster frame
          for a video clip whose asset has a real file. Both mount only with

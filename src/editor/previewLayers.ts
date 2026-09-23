@@ -15,16 +15,26 @@
  *   workspace's `monitor_muted`. The last one is LOCAL preview state
  *   (`editorWorkspace`), never an edit: monitoring is not mixing.
  *
- * What this deliberately does NOT model (docs/Gaps.md GAP-173 — the preview
- * approximates the render): fades, transitions, effects, captions, cards
- * and other SYNTHESIZED builtin assets (they have no file to show),
- * rotation/mirror/crop/adjustments, and frame-accurate sync.
+ * **Fades** (Task 29; F-17, F-18) ARE modeled, as of this task: `fadeFactor`
+ * multiplies both `opacity` and `gain` by the clip's own fade envelope at
+ * the requested OUTPUT time `t` (DATA-MODEL.md § Fade and transition rules:
+ * "Edge fade envelopes multiply the clip's alpha/audio amplitude"), via
+ * `fadeCurves.gainAt` — the same function `tests/editorFades.test.ts` and
+ * Rust's `fades.rs` hold to one shared fixture table, so the preview and
+ * that table can never silently disagree. What this deliberately still
+ * does NOT model (docs/Gaps.md GAP-173 — the preview approximates the
+ * render): transitions, effects, captions, cards and other SYNTHESIZED
+ * builtin assets (they have no file to show), rotation/mirror/crop/
+ * adjustments, and frame-accurate sync. The fade CURVE SHAPE is itself only
+ * an approximation for `smooth` — GAP-173 records that the preview's
+ * smoothstep and the render's ffmpeg `hsin` are close but not bit-identical.
  */
 import type { Asset, Builtin, Clip, Fit, Project, Track } from "../editorTypes";
+import { gainAt } from "./fadeCurves";
 import { isTrackAudible } from "./mixRules";
 import type { Box, Size } from "./previewGeometry";
 import { clipBox, containRect } from "./previewGeometry";
-import { sourceAt } from "./timeMap";
+import { clipOutputEnd, sourceAt } from "./timeMap";
 
 export type LayerKind = "video" | "image" | "audio";
 
@@ -99,6 +109,22 @@ function isMuted(clip: Clip, track: Track, tracks: readonly Track[], monitor: Mo
   return monitor.muted || clip.muted || !isTrackAudible(track, tracks);
 }
 
+/** The fade envelope's gain (0..1) at OUTPUT time `t` — 1 outside both
+ * fade windows, `gainAt(clip.fade_curve, …)` inside either, and the
+ * PRODUCT of both when a very short clip's fades overlap (each edge's
+ * envelope attenuates independently, DATA-MODEL.md's "multiply"). */
+function fadeFactor(clip: Clip, t: number): number {
+  const end = clipOutputEnd({ start_ms: clip.start_ms, in_ms: clip.in_ms, out_ms: clip.out_ms, speed: clip.speed ?? 1 });
+  let factor = 1;
+  if (clip.fade_in_ms > 0 && t < clip.start_ms + clip.fade_in_ms) {
+    factor *= gainAt(clip.fade_curve, (t - clip.start_ms) / clip.fade_in_ms);
+  }
+  if (clip.fade_out_ms > 0 && t > end - clip.fade_out_ms) {
+    factor *= gainAt(clip.fade_curve, (end - t) / clip.fade_out_ms);
+  }
+  return factor;
+}
+
 /** Every layer active at output time `t`, sorted top-most first. */
 export function computeLayers(
   project: Project,
@@ -120,15 +146,16 @@ export function computeLayers(
     if (sourceMs === null) continue;
     const kind = layerKind(asset, track);
     const muted = kind === "image" || isMuted(clip, track, project.tracks, monitor);
+    const fade = fadeFactor(clip, t);
     layers.push({
       clipId: clip.id,
       assetId: asset.id,
       kind,
       box: kind === "audio" ? null : clipBox(canvasBox, clip),
-      opacity: clip.opacity,
+      opacity: clip.opacity * fade,
       z: project.tracks.length - index,
       muted,
-      gain: muted ? 0 : clip.volume * track.volume * project.master_gain * monitor.volume,
+      gain: muted ? 0 : clip.volume * track.volume * project.master_gain * monitor.volume * fade,
       sourceMs,
       speed,
       fit: clip.fit ?? "contain",

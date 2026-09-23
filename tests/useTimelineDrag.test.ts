@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  computeFadeDrag,
   computeMoveDelta,
   computeTrimEnd,
   computeTrimStart,
@@ -385,6 +386,94 @@ describe("trim snapping (the dragged EDGE, not the delta)", () => {
     // end 4000 dragged -70 -> 3930; a target at 3900 is 30ms away.
     const preview = computeTrimEnd(clip(), -70, { ...noSnap, snapEnabled: true, targets: [3_900] });
     expect(preview).toEqual({ startMs: 3_000, inMs: 500, outMs: 1_400 });
+  });
+});
+
+describe("computeFadeDrag", () => {
+  // clip(): 1000ms output duration (in 500, out 1500, unit speed), so the
+  // half-duration limit is 500ms and the default fade_in_ms/fade_out_ms are
+  // both 0 -- distinct enough that a swapped edge or sign fails outright.
+  it("dragging the fade-IN handle rightward lengthens it", () => {
+    expect(computeFadeDrag(clip(), "in", 200)).toBe(200);
+  });
+
+  it("dragging the fade-OUT handle LEFTWARD lengthens it -- the opposite sign from fade-in", () => {
+    expect(computeFadeDrag(clip(), "out", -150)).toBe(150);
+  });
+
+  it("clamps to half the clip's own output duration", () => {
+    expect(computeFadeDrag(clip(), "in", 900)).toBe(500);
+  });
+
+  it("clamps to zero rather than going negative", () => {
+    expect(computeFadeDrag(clip({ fade_in_ms: 50 }), "in", -900)).toBe(0);
+  });
+});
+
+describe("useTimelineDrag — fade (Task 29; F-17, F-18)", () => {
+  function deps(execute: (c: EditorCommand) => void) {
+    return {
+      clip: () => clip(),
+      zoom: () => 1,
+      snapEnabled: () => false,
+      snapTargets: () => [] as number[],
+      moveTargetClipIds: () => ["c1"],
+      trackOrder: () => ["v1"] as const,
+      trackIndex: () => 0,
+      trackAccepts: () => true,
+      execute,
+    };
+  }
+
+  it("a fade-in drag submits exactly one setFades on pointer-up", async () => {
+    const execute = vi.fn();
+    const drag = useTimelineDrag(deps(execute));
+
+    drag.beginFade("in", 0);
+    drag.updateFade(200 * PPM);
+    await drag.endFade();
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledWith({ kind: "setFades", clipId: "c1", fadeInMs: 200 });
+  });
+
+  it("a fade-out drag submits fadeOutMs, sign-flipped from fade-in", async () => {
+    const execute = vi.fn();
+    const drag = useTimelineDrag(deps(execute));
+
+    drag.beginFade("out", 500);
+    drag.updateFade(500 - 150 * PPM); // 150ms to the LEFT lengthens fade-out
+    await drag.endFade();
+
+    expect(execute).toHaveBeenCalledWith({ kind: "setFades", clipId: "c1", fadeOutMs: 150 });
+  });
+
+  it("Escape during a fade drag sends nothing and restores the preview", async () => {
+    const execute = vi.fn();
+    const drag = useTimelineDrag(deps(execute));
+
+    drag.beginFade("in", 0);
+    drag.updateFade(200 * PPM);
+    expect(drag.fadePreview.value).not.toBeNull();
+
+    drag.cancelFade();
+
+    expect(drag.fadePreview.value).toBeNull();
+    drag.updateFade(300 * PPM); // still pressed after Escape
+    expect(drag.fadePreview.value).toBeNull();
+    await drag.endFade();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("an unchanged fade sends nothing", async () => {
+    const execute = vi.fn();
+    const drag = useTimelineDrag(deps(execute));
+
+    drag.beginFade("in", 0);
+    drag.updateFade(0);
+    await drag.endFade();
+
+    expect(execute).not.toHaveBeenCalled();
   });
 });
 

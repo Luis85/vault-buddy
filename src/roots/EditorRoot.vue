@@ -47,6 +47,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import AudioSection from "../components/editor/inspector/AudioSection.vue";
 import ClipSection from "../components/editor/inspector/ClipSection.vue";
+import FadesSection from "../components/editor/inspector/FadesSection.vue";
 import InspectorPanel from "../components/editor/inspector/InspectorPanel.vue";
 import LegacyCaptureEditor from "../components/editor/LegacyCaptureEditor.vue";
 import MediaLibrary from "../components/editor/library/MediaLibrary.vue";
@@ -214,6 +215,13 @@ onBeforeUnmount(() => {
           <!-- Task 27: the Audio category, keyed the same way. -->
           <template #audio="{ clipIds }">
             <AudioSection
+              :key="clipIds.join(',')"
+              :clip-ids="clipIds"
+            />
+          </template>
+          <!-- Task 29: the Fades category, keyed the same way. -->
+          <template #fades="{ clipIds }">
+            <FadesSection
               :key="clipIds.join(',')"
               :clip-ids="clipIds"
             />
