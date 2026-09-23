@@ -214,6 +214,13 @@ impl JobRegistry {
             .collect()
     }
 
+    /// Is a job of `kind` still running in `session_id`?
+    fn is_running(&self, session_id: &str, kind: JobKind) -> bool {
+        self.jobs
+            .values()
+            .any(|r| r.session_id == session_id && r.kind == kind && !r.phase.is_terminal())
+    }
+
     /// Is any job, of any session, still running? The question a later
     /// shutdown gate asks before letting the app exit mid-write.
     #[allow(dead_code)] // First production reader: the shutdown gate (Task 46).
@@ -231,14 +238,26 @@ impl JobRegistry {
 }
 
 /// Register a job for a LIVE session — `sessionGone` otherwise, before
-/// anything is registered.
+/// anything is registered — refusing a second job of the same kind while
+/// one is still running in that session (fix round 1: two imports racing
+/// the per-file capacity check could make one batch's `AddAssets` fail and
+/// roll the whole batch back; the UI's own guard is not the authority). The
+/// check and the registration happen under ONE lock, so two concurrent
+/// starts cannot both pass it.
 pub(crate) fn start_job_in(
     state: &EditorState,
     session_id: &str,
     kind: JobKind,
 ) -> Result<(String, Arc<AtomicBool>), EditorError> {
     drop(require_session(state, session_id)?);
-    Ok(lock_ignoring_poison(&state.jobs).register(session_id, kind))
+    let mut jobs = lock_ignoring_poison(&state.jobs);
+    if jobs.is_running(session_id, kind) {
+        return Err(EditorError::new(
+            EditorErrorCode::InvalidRequest,
+            "An import is already running in this editing session. Wait for it to finish or cancel it.",
+        ));
+    }
+    Ok(jobs.register(session_id, kind))
 }
 
 /// `editor_cancel_job`'s body: the session must be live, and the job its own.
@@ -520,6 +539,41 @@ pub(crate) mod tests {
             jobs_in(&state, "ses-gone").unwrap_err().code,
             EditorErrorCode::SessionGone
         );
+    }
+
+    // Fix round 1: Rust, not only the UI, refuses a second import in a
+    // session while one is running — two batches racing the capacity check
+    // near MAX_ASSETS could otherwise make one batch's AddAssets fail and
+    // roll that whole batch back. Another session, or a finished job, does
+    // not block.
+    #[test]
+    fn a_second_import_in_the_same_session_is_refused_while_one_runs() {
+        use vault_buddy_core::editor::EditorSession;
+
+        use crate::editor::project_store::minimal_project;
+
+        let state = EditorState::default();
+        for id in ["ses-a", "ses-b"] {
+            lock_ignoring_poison(&state.sessions).insert(
+                id.to_string(),
+                EditorSession::resume(id, minimal_project("proj1"), 1),
+            );
+        }
+        let (first, _) = start_job_in(&state, "ses-a", JobKind::Import).unwrap();
+        let e = start_job_in(&state, "ses-a", JobKind::Import).unwrap_err();
+        assert_eq!(e.code, EditorErrorCode::InvalidRequest);
+        assert!(e.message.contains("already running"), "{}", e.message);
+        assert_eq!(
+            jobs_in(&state, "ses-a").unwrap().len(),
+            1,
+            "nothing registered"
+        );
+        start_job_in(&state, "ses-b", JobKind::Import).unwrap();
+
+        let sink = CollectingSink::default();
+        JobReporter::new(&state.jobs, &sink, "ses-a", &first, JobKind::Import)
+            .finish(JobPhase::Complete, JobTerminal::default());
+        start_job_in(&state, "ses-a", JobKind::Import).unwrap();
     }
 
     // A terminal phase handed to `progress` must not become a second

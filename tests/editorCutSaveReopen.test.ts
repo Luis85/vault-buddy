@@ -37,6 +37,7 @@ import type { Clip, EditorCommand, EditorOpenResult, EditorSnapshot, Project } f
 import EditorRoot from "../src/roots/EditorRoot.vue";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { mockEditor } from "./helpers/editorMount";
+import { fakeEditorPort } from "./helpers/fakeEditorPort";
 
 enableAutoUnmount(afterEach);
 
@@ -117,7 +118,7 @@ function cannedPort() {
   const saves: { sessionId: string; expectedRevision: number }[] = [];
   let live = { snapshot: snapshot(1, null, 4_000), project: BEFORE };
   let disk: typeof live | null = null;
-  const port: EditorPort = {
+  const port = fakeEditorPort({
     openStaged: (base) =>
       Promise.resolve<EditorOpenResult>({
         ...(disk ?? live),
@@ -137,18 +138,11 @@ function cannedPort() {
       disk = live;
       return Promise.resolve({ sessionId, savedRevision: expectedRevision, projectFileId: "project-a" });
     },
-    openProject: () => Promise.reject(new Error("not used")),
-    listProjects: () => Promise.reject(new Error("not used")),
-    getSnapshot: () => Promise.reject(new Error("not used")),
-    closeSession: () => Promise.reject(new Error("not used")),
-    hideWindow: () => Promise.reject(new Error("not used")),
     getWorkspace: () => Promise.resolve({}),
     saveWorkspace: () => Promise.resolve(),
     mediaUrl: () => Promise.reject(new Error("no media in this test")),
-    importMedia: () => Promise.reject(new Error("not used")),
-    cancelJob: () => Promise.reject(new Error("not used")),
     getJobs: () => Promise.resolve([]),
-  };
+  });
   return { port, sent, saves };
 }
 

@@ -433,3 +433,31 @@ fn an_import_for_a_closed_session_fails_before_copying() {
     assert_eq!(messages[0].phase, JobPhase::Failed);
     assert!(fx.media_files().is_empty());
 }
+
+// Fix round 1: a per-file error carries a DISPLAY name and a message, never
+// an app-internal path. An unreadable `sources.json` (here a directory
+// wearing its name) used to surface `store_io`'s "Cannot read <full path>"
+// verbatim; the path goes to the log instead, and the copy is removed.
+#[test]
+fn an_unreadable_source_registry_never_puts_a_path_in_a_per_file_error() {
+    let fx = Fixture::new();
+    let sources = project_dir(fx.root.path(), "proj1")
+        .unwrap()
+        .join("sources.json");
+    std::fs::remove_file(&sources).unwrap();
+    std::fs::create_dir(&sources).unwrap();
+    let files = [fx.original("clip.mp4", b"VIDEO:1000")];
+    let messages = fx.import(&FakeIo::default(), &AtomicBool::new(false), &files);
+
+    let t = terminal(&messages);
+    assert_eq!(per_file_names(t), ["clip.mp4"]);
+    let error = &t.per_file.as_ref().unwrap()[0].error;
+    let root = fx.root.path().to_string_lossy();
+    assert!(!error.contains(&*root), "path leaked: {error}");
+    assert!(
+        !error.contains("sources.json"),
+        "internal file named: {error}"
+    );
+    assert!(fx.assets().is_empty());
+    assert!(fx.media_files().is_empty(), "{:?}", fx.media_files());
+}

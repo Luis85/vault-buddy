@@ -114,74 +114,78 @@ pub(crate) struct SourceFacts {
     pub has_video: bool,
     pub has_audio: bool,
     /// The first audio stream's sample rate. Read by the media import
-    /// (`probe_media`): an audio-only file whose one stream reports no rate
+    /// (`editor::media_probe::probe_media`): an audio-only file whose one stream reports no rate
     /// is a stream ffprobe found but cannot describe — a damaged file —
     /// and is refused rather than registered as a silent asset.
     pub audio_rate: Option<u32>,
 }
 
-/// Parse `ffprobe -show_entries stream=codec_type,width,height,sample_rate
-/// -of default=noprint_wrappers=1` output.
-///
-/// Parsed by GROUPING on each `codec_type=` line rather than scanning for the
-/// first `width=`/`sample_rate=` anywhere: ffprobe emits one block per stream
-/// and a file whose audio stream comes first would otherwise contribute its
-/// own (absent or `N/A`) dimensions to the video's. Width/height are read
-/// from the FIRST video group; `sample_rate` from the FIRST audio group;
-/// `has_audio` is "any audio group at all".
-///
-/// Returns `None` only when there is NEITHER a usable video stream NOR any
-/// audio stream at all — a file this function can say nothing about. A video
-/// stream that IS present but whose dimensions are absent, zero, or odd is
-/// ALSO a hard `None` (never silently downgraded to "no video"): H.264 4:2:0
-/// requires even dimensions, and a zero would reach the encoder as an
-/// invalid frame size and fail deep in the filter graph with an unreadable
-/// error. A file with no video stream but a real audio one now succeeds with
-/// `has_video: false` (Task 24) — the export path's own "video required"
-/// rule lives in `probe_source`, not here, so this function can serve a
-/// general media-import probe too.
-pub(crate) fn parse_probe_output(stdout: &str) -> Option<SourceFacts> {
-    let mut has_audio = false;
-    let mut audio_rate: Option<u32> = None;
-    let mut kind: Option<&str> = None;
-    let mut video: Option<(Option<u32>, Option<u32>)> = None;
+/// One stream block of ffprobe's `default=noprint_wrappers=1` output.
+#[derive(Debug, Default)]
+struct ProbeStream<'a> {
+    kind: &'a str,
+    width: Option<u32>,
+    height: Option<u32>,
+    sample_rate: Option<u32>,
+    /// `DISPOSITION:attached_pic=1` — an embedded cover picture, which
+    /// ffprobe lists as a video stream. Only reported when the query asks
+    /// for `stream_disposition=attached_pic` (the import's does).
+    attached_pic: bool,
+}
+
+/// Split ffprobe output into its stream blocks, GROUPING on each
+/// `codec_type=` line rather than scanning for the first `width=` or
+/// `sample_rate=` anywhere: a file whose audio stream comes first would
+/// otherwise lend its own (absent or `N/A`) dimensions to the video's.
+/// Fields before the first `codec_type=` belong to no stream and are
+/// dropped; an unparseable number (`N/A`) reads as absent.
+fn probe_streams(stdout: &str) -> Vec<ProbeStream<'_>> {
+    let mut streams: Vec<ProbeStream> = Vec::new();
     for line in stdout.lines() {
-        let line = line.trim();
-        let Some((key, value)) = line.split_once('=') else {
+        let Some((key, value)) = line.trim().split_once('=') else {
+            continue;
+        };
+        if key == "codec_type" {
+            streams.push(ProbeStream {
+                kind: value,
+                ..ProbeStream::default()
+            });
+            continue;
+        }
+        let Some(stream) = streams.last_mut() else {
             continue;
         };
         match key {
-            "codec_type" => {
-                kind = Some(value);
-                if value == "audio" {
-                    has_audio = true;
-                } else if value == "video" && video.is_none() {
-                    video = Some((None, None));
-                }
-            }
-            // Only the FIRST video block's dimensions count; a later video
-            // stream (or an audio block's `N/A`) must not overwrite them.
-            "width" | "height" if kind == Some("video") => {
-                if let Some((w, h)) = video.as_mut() {
-                    let slot = if key == "width" { w } else { h };
-                    if slot.is_none() {
-                        *slot = value.parse::<u32>().ok();
-                    }
-                }
-            }
-            // Only the FIRST audio block's sample rate counts, mirroring
-            // the video dimensions' first-group rule.
-            "sample_rate" if kind == Some("audio") && audio_rate.is_none() => {
-                audio_rate = value.parse::<u32>().ok();
-            }
+            "width" => stream.width = value.parse().ok(),
+            "height" => stream.height = value.parse().ok(),
+            "sample_rate" => stream.sample_rate = value.parse().ok(),
+            "DISPOSITION:attached_pic" => stream.attached_pic = value == "1",
             _ => {}
         }
     }
-    match video {
-        Some((Some(width), Some(height)))
-            if width != 0 && height != 0 && width % 2 == 0 && height % 2 == 0 =>
-        {
-            Some(SourceFacts {
+    streams
+}
+
+/// The facts both parsers share, with the frame-size rule as the one thing
+/// that differs: the FIRST video stream that is not cover art supplies the
+/// dimensions and must satisfy `frame_ok` (a video stream that exists but
+/// fails it is a hard `None`, never silently "no video"); the FIRST audio
+/// stream supplies the sample rate; `has_audio` is any audio stream at all.
+/// `None` also when there is neither video nor audio.
+fn facts_from_streams(
+    streams: &[ProbeStream],
+    frame_ok: impl Fn(u32, u32) -> bool,
+) -> Option<SourceFacts> {
+    let audio = streams.iter().find(|s| s.kind == "audio");
+    let has_audio = audio.is_some();
+    let audio_rate = audio.and_then(|s| s.sample_rate);
+    match streams
+        .iter()
+        .find(|s| s.kind == "video" && !s.attached_pic)
+    {
+        Some(video) => {
+            let (width, height) = (video.width?, video.height?);
+            frame_ok(width, height).then_some(SourceFacts {
                 width,
                 height,
                 has_video: true,
@@ -189,10 +193,6 @@ pub(crate) fn parse_probe_output(stdout: &str) -> Option<SourceFacts> {
                 audio_rate,
             })
         }
-        // A video stream exists but is unusable (missing/zero/odd
-        // dimensions) — reject the whole file rather than reporting it as
-        // if it had no video at all.
-        Some(_) => None,
         None if has_audio => Some(SourceFacts {
             width: 0,
             height: 0,
@@ -204,13 +204,41 @@ pub(crate) fn parse_probe_output(stdout: &str) -> Option<SourceFacts> {
     }
 }
 
+/// Parse `ffprobe -show_entries stream=codec_type,width,height,sample_rate
+/// -of default=noprint_wrappers=1` output for the EXPORT path.
+///
+/// Returns `None` when there is NEITHER a usable video stream NOR any audio
+/// stream. A video stream that IS present but whose dimensions are absent,
+/// zero, or ODD is also a hard `None`: the export encodes H.264 at the
+/// SOURCE size, 4:2:0 requires even dimensions, and a zero would reach the
+/// encoder as an invalid frame size and fail deep in the filter graph with
+/// an unreadable error. A file with no video but a real audio stream
+/// succeeds with `has_video: false`; the export's own "video required" rule
+/// lives in `probe_source`. The media import does NOT use this rule — see
+/// `parse_import_probe`.
+pub(crate) fn parse_probe_output(stdout: &str) -> Option<SourceFacts> {
+    facts_from_streams(&probe_streams(stdout), |w, h| {
+        w != 0 && h != 0 && w % 2 == 0 && h % 2 == 0
+    })
+}
+
+/// The media IMPORT's reading of the same output (Task 25 fix round 1):
+/// non-zero dimensions, parity IGNORED — an imported asset is scaled onto
+/// one of the editor's even canvases, so its native frame size never
+/// reaches an encoder, and a 1366x767 capture or an odd-sized phone clip is
+/// ordinary media. Cover art (`DISPOSITION:attached_pic=1`) is not video,
+/// so an audio-only `.mp4` with an embedded picture reads as audio.
+pub(crate) fn parse_import_probe(stdout: &str) -> Option<SourceFacts> {
+    facts_from_streams(&probe_streams(stdout), |w, h| w != 0 && h != 0)
+}
+
 /// Convert this shell's own ffprobe facts into the core-owned `ProbeFacts`
 /// `asset_from_probe` reads (F22: `core` cannot name `SourceFacts`, which
 /// is `pub(crate)` here and carries `audio_rate`, a field `asset_from_probe`
 /// has no use for). `duration_ms` is separate because `SourceFacts` itself
 /// has no duration field — the export path never needed one, and Task 25
 /// (media import, this function's caller) reads it from ffprobe's
-/// `format=duration` separately (`parse_probe_duration_ms`).
+/// `format=duration` separately (`editor::media_probe`).
 pub(crate) fn source_facts_to_probe_facts(
     facts: &SourceFacts,
     duration_ms: u64,
@@ -330,64 +358,6 @@ pub(crate) fn probe_source(tools: &FfmpegTools, path: &Path) -> Result<SourceFac
         return Err("The capture has no usable video stream.".to_string());
     }
     Ok(facts)
-}
-
-/// ffprobe's `format=duration` line (`duration=12.345000`, seconds) in
-/// whole milliseconds, rounded down. `None` for an absent line, `N/A`, a
-/// negative or non-finite value — a length ffprobe could not measure is
-/// unknown, never zero-by-default.
-pub(crate) fn parse_probe_duration_ms(stdout: &str) -> Option<u64> {
-    let seconds: f64 = stdout
-        .lines()
-        .filter_map(|l| l.trim().split_once('='))
-        .find(|(key, _)| *key == "duration")?
-        .1
-        .parse()
-        .ok()?;
-    if !seconds.is_finite() || seconds < 0.0 {
-        return None;
-    }
-    Some((seconds * 1000.0).floor() as u64)
-}
-
-/// Probe an IMPORTED file (Task 25): stream facts plus the container's
-/// duration, as the core `ProbeFacts` the asset builder reads.
-///
-/// `audio_only` adds `-select_streams a` for a file the allowlist named as
-/// audio: an MP3's or M4A's embedded cover art is a video stream to
-/// ffprobe, often with ODD dimensions, and `parse_probe_output` refuses a
-/// video stream it cannot encode — so without the selector every audio file
-/// with cover art would be refused as unusable video. The error strings are
-/// shown to the user beside the file's display name; they never carry a
-/// path.
-pub(crate) fn probe_media(
-    tools: &FfmpegTools,
-    path: &Path,
-    audio_only: bool,
-) -> Result<vault_buddy_core::editor::probe::ProbeFacts, String> {
-    let mut cmd = tool_command(&tools.ffprobe);
-    cmd.args(["-v", "error"]);
-    if audio_only {
-        cmd.args(["-select_streams", "a"]);
-    }
-    cmd.args([
-        "-show_entries",
-        "stream=codec_type,width,height,sample_rate:format=duration",
-    ])
-    .args(["-of", "default=noprint_wrappers=1"])
-    .arg(path);
-    let (ok, stdout) = run_capturing(cmd, PROBE_TIMEOUT, Capture::Stdout)
-        .map_err(|e| format!("Could not run ffprobe: {e}"))?;
-    if !ok {
-        return Err("ffprobe could not read the file; it may be damaged.".to_string());
-    }
-    let facts = parse_probe_output(&stdout)
-        .ok_or_else(|| "The file has no usable video or audio stream.".to_string())?;
-    if !facts.has_video && facts.audio_rate.is_none_or(|rate| rate == 0) {
-        return Err("The file's audio stream is unreadable; it may be damaged.".to_string());
-    }
-    let duration_ms = parse_probe_duration_ms(&stdout).unwrap_or(0);
-    Ok(source_facts_to_probe_facts(&facts, duration_ms))
 }
 
 /// The ffmpeg detection status the settings UI renders, mirroring
@@ -642,135 +612,5 @@ mod tests {
         assert_eq!(facts.height, None);
         assert!(!facts.has_video);
         assert!(facts.has_audio);
-    }
-
-    #[test]
-    fn the_format_duration_is_read_in_whole_milliseconds() {
-        let out = "codec_type=video
-width=1280
-height=720
-duration=12.3456
-";
-        assert_eq!(parse_probe_duration_ms(out), Some(12_345));
-        assert_eq!(
-            parse_probe_duration_ms(
-                "duration=N/A
-"
-            ),
-            None
-        );
-        assert_eq!(
-            parse_probe_duration_ms(
-                "duration=-1
-"
-            ),
-            None
-        );
-        assert_eq!(
-            parse_probe_duration_ms(
-                "duration=inf
-"
-            ),
-            None
-        );
-        assert_eq!(
-            parse_probe_duration_ms(
-                "codec_type=audio
-"
-            ),
-            None
-        );
-    }
-
-    fn run_ffmpeg(args: &[&str]) -> bool {
-        tool_command("ffmpeg")
-            .args(["-v", "error", "-y"])
-            .args(args)
-            .status()
-            .is_ok_and(|s| s.success())
-    }
-
-    // `probe_media` against a REAL ffprobe (Task 25): a synthesized video
-    // probes with its dimensions and length, and an MP3 carrying ODD-sized
-    // cover art -- a video stream `parse_probe_output` would refuse --
-    // still probes as audio, because an audio import selects audio streams
-    // only. Skips VISIBLY without ffmpeg (a skip proves nothing).
-    #[test]
-    fn probe_media_reads_real_files_and_ignores_cover_art() {
-        if !run_ffmpeg(&["-version"]) {
-            eprintln!("SKIP probe_media_reads_real_files_and_ignores_cover_art: no ffmpeg on PATH");
-            return;
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let tools = FfmpegTools {
-            ffmpeg: "ffmpeg".into(),
-            ffprobe: "ffprobe".into(),
-            version: (0, 0),
-            h264_encoder: None,
-            version_line: String::new(),
-        };
-        let video = dir.path().join("clip.mp4");
-        assert!(run_ffmpeg(&[
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc=size=320x180:rate=10",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:sample_rate=44100",
-            "-t",
-            "2",
-            "-c:v",
-            "mpeg4",
-            "-c:a",
-            "aac",
-            video.to_str().unwrap(),
-        ]));
-        let facts = probe_media(&tools, &video, false).unwrap();
-        assert_eq!((facts.width, facts.height), (Some(320), Some(180)));
-        assert!(facts.has_video && facts.has_audio);
-        assert!((1_900..=2_200).contains(&facts.duration_ms), "{facts:?}");
-
-        let cover = dir.path().join("cover.jpg");
-        assert!(run_ffmpeg(&[
-            "-f",
-            "lavfi",
-            "-i",
-            "color=c=red:size=301x201",
-            "-frames:v",
-            "1",
-            cover.to_str().unwrap(),
-        ]));
-        let song = dir.path().join("song.mp3");
-        if !run_ffmpeg(&[
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:sample_rate=44100",
-            "-i",
-            cover.to_str().unwrap(),
-            "-map",
-            "0",
-            "-map",
-            "1",
-            "-t",
-            "1",
-            "-c:a",
-            "libmp3lame",
-            "-c:v",
-            "copy",
-            "-disposition:v",
-            "attached_pic",
-            song.to_str().unwrap(),
-        ]) {
-            eprintln!("SKIP the cover-art half: this ffmpeg cannot write an MP3 with a picture");
-            return;
-        }
-        let err = probe_media(&tools, &song, false).unwrap_err();
-        assert!(err.contains("no usable"), "cover art alone refuses: {err}");
-        let facts = probe_media(&tools, &song, true).unwrap();
-        assert!(facts.has_audio && !facts.has_video, "{facts:?}");
-        assert!(facts.duration_ms > 0);
     }
 }

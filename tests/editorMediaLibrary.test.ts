@@ -24,6 +24,7 @@ import type {
 import { useEditorJobsStore } from "../src/stores/editorJobs";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
+import { fakeEditorPort } from "./helpers/fakeEditorPort";
 
 enableAutoUnmount(afterEach);
 
@@ -63,10 +64,6 @@ function project(tracks: Track[]): Project {
   };
 }
 
-const unimplemented = (name: string) => (): never => {
-  throw new Error(`fakePort.${name} not stubbed for this test`);
-};
-
 let executed: EditorCommand[] = [];
 
 async function mountLibrary(
@@ -95,26 +92,15 @@ async function mountLibrary(
     sourceBase: "base",
     recovered: false,
   };
-  const port: EditorPort = {
+  const port = fakeEditorPort({
     openStaged: () => Promise.resolve(open),
-    openProject: unimplemented("openProject"),
-    listProjects: unimplemented("listProjects"),
-    getSnapshot: unimplemented("getSnapshot"),
     execute: (req) => {
       executed.push(req.command);
       return Promise.resolve({ snapshot: { ...open.snapshot, revision: 6 }, project: p });
     },
-    save: unimplemented("save"),
-    closeSession: unimplemented("closeSession"),
-    hideWindow: unimplemented("hideWindow"),
-    getWorkspace: unimplemented("getWorkspace"),
-    saveWorkspace: unimplemented("saveWorkspace"),
-    mediaUrl: unimplemented("mediaUrl"),
-    importMedia: unimplemented("importMedia"),
-    cancelJob: unimplemented("cancelJob"),
     getJobs: () => Promise.resolve([]),
     ...extra,
-  };
+  });
   const store = useEditorProjectStore();
   store.setPort(port);
   await store.openStaged("base");

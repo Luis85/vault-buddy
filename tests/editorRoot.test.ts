@@ -38,7 +38,6 @@ vi.mock("../src/logging", () => ({
   logWarning: vi.fn(),
 }));
 
-import type { EditorPort } from "../src/editor/port";
 import { EditorPortError } from "../src/editor/port";
 import type { EditorOpenResult, EditorSnapshot, Project } from "../src/editorTypes";
 import { logWarning } from "../src/logging";
@@ -55,6 +54,7 @@ import {
   THREE,
   video,
 } from "./helpers/editorMount";
+import { fakeEditorPort } from "./helpers/fakeEditorPort";
 
 // The strip's window-level pointerup listener (and the editor's own future
 // listeners) must not outlive their test.
@@ -203,7 +203,6 @@ describe("EditorRoot", () => {
     expect(w.text()).toContain("Screen 1");
     expect(w.text()).not.toContain("No capture open");
   });
-
 
   it("scrubs in output time and seeks the element in source time", async () => {
     const w = await open({
@@ -373,7 +372,6 @@ describe("EditorRoot", () => {
     expect(src).toBe(`http://asset.localhost/${encodeURIComponent(STAGED_MP4)}`);
   });
 
-
   // m-8. `load` replaces the composable outright, abandoning its save chain,
   // and that chain writes the very sidecar the next load reads. Reopening
   // inside the write window seeded the editor from the PRE-write content, so
@@ -426,7 +424,6 @@ describe("EditorRoot", () => {
     expect(empty).not.toMatch(/revert/i);
     expect(empty).not.toMatch(/undo/i);
   });
-
 
   // ---- Export: Save, Discard, progress (spec 8.3, 10) --------------------
 
@@ -806,28 +803,6 @@ describe("EditorRoot", () => {
    * seam without a full `mockIPC`-decoded round trip — `editorPort.test.ts`
    * already pins the `editor_open_staged` wire mapping; this level pins that
    * `EditorRoot` calls it exactly the way the store expects. */
-  function fakeEditorPort(overrides: Partial<EditorPort> = {}): EditorPort {
-    const unimplemented = (name: string) => (): never => {
-      throw new Error(`fakeEditorPort.${name} not stubbed for this test`);
-    };
-    return {
-      openStaged: unimplemented("openStaged"),
-      openProject: unimplemented("openProject"),
-      listProjects: unimplemented("listProjects"),
-      getSnapshot: unimplemented("getSnapshot"),
-      execute: unimplemented("execute"),
-      save: unimplemented("save"),
-      closeSession: unimplemented("closeSession"),
-      hideWindow: unimplemented("hideWindow"),
-      getWorkspace: unimplemented("getWorkspace"),
-      saveWorkspace: unimplemented("saveWorkspace"),
-      mediaUrl: unimplemented("mediaUrl"),
-      importMedia: unimplemented("importMedia"),
-      cancelJob: unimplemented("cancelJob"),
-      getJobs: unimplemented("getJobs"),
-      ...overrides,
-    };
-  }
 
   // Fix round 1: the shell's duration must use the shared
   // `src/utils/formatDuration.ts` (h:mm:ss, negative-clamped), not a local

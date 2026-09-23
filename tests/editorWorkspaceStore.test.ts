@@ -9,7 +9,6 @@
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { EditorPort } from "../src/editor/port";
 import type {
   EditorOpenResult,
   EditorProjection,
@@ -20,6 +19,7 @@ import type {
 import * as logging from "../src/logging";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
+import { fakeEditorPort as fakePort } from "./helpers/fakeEditorPort";
 
 function snapshot(overrides: Partial<EditorSnapshot> = {}): EditorSnapshot {
   return {
@@ -94,28 +94,6 @@ function openResult(overrides: Partial<EditorOpenResult> = {}): EditorOpenResult
  * rejects loudly, so a test exercising one path never silently passes
  * through a code path it forgot to stub (the `editorProjectStore.test.ts`
  * precedent). */
-function fakePort(overrides: Partial<EditorPort> = {}): EditorPort {
-  const unimplemented = (name: string) => (): never => {
-    throw new Error(`fakePort.${name} not stubbed for this test`);
-  };
-  return {
-    openStaged: unimplemented("openStaged"),
-    openProject: unimplemented("openProject"),
-    listProjects: unimplemented("listProjects"),
-    getSnapshot: unimplemented("getSnapshot"),
-    execute: unimplemented("execute"),
-    save: unimplemented("save"),
-    closeSession: unimplemented("closeSession"),
-    hideWindow: unimplemented("hideWindow"),
-    getWorkspace: unimplemented("getWorkspace"),
-    saveWorkspace: unimplemented("saveWorkspace"),
-    mediaUrl: unimplemented("mediaUrl"),
-    importMedia: unimplemented("importMedia"),
-    cancelJob: unimplemented("cancelJob"),
-    getJobs: unimplemented("getJobs"),
-    ...overrides,
-  };
-}
 
 beforeEach(() => {
   setActivePinia(createPinia());

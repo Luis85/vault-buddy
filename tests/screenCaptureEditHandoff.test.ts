@@ -29,12 +29,12 @@ vi.mock("../src/logging", () => ({
   logWarning: vi.fn(),
 }));
 
-import type { EditorPort } from "../src/editor/port";
 import type { EditorOpenResult, EditorSnapshot, Project } from "../src/editorTypes";
 import EditorRoot from "../src/roots/EditorRoot.vue";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useScreenCaptureStore } from "../src/stores/screenCapture";
 import { DETAIL } from "./helpers/editorMount";
+import { fakeEditorPort as fakePort } from "./helpers/fakeEditorPort";
 
 enableAutoUnmount(afterEach);
 
@@ -97,29 +97,6 @@ describe("EditorRoot — never reads a vault id from the screenCapture store", (
       transitions: [],
       captions: null,
       destination: { vault: "vault-a", folder: "", dated: false },
-      ...overrides,
-    };
-  }
-
-  function fakePort(overrides: Partial<EditorPort> = {}): EditorPort {
-    const unimplemented = (name: string) => (): never => {
-      throw new Error(`fakePort.${name} not stubbed for this test`);
-    };
-    return {
-      openStaged: unimplemented("openStaged"),
-      openProject: unimplemented("openProject"),
-      listProjects: unimplemented("listProjects"),
-      getSnapshot: unimplemented("getSnapshot"),
-      execute: unimplemented("execute"),
-      save: unimplemented("save"),
-      closeSession: unimplemented("closeSession"),
-      hideWindow: unimplemented("hideWindow"),
-      getWorkspace: unimplemented("getWorkspace"),
-      saveWorkspace: unimplemented("saveWorkspace"),
-      mediaUrl: unimplemented("mediaUrl"),
-      importMedia: unimplemented("importMedia"),
-      cancelJob: unimplemented("cancelJob"),
-      getJobs: unimplemented("getJobs"),
       ...overrides,
     };
   }

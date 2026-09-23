@@ -2285,6 +2285,40 @@ Required media fixtures), so parity is measured rather than asserted; the
 Review render (a real file, `cache\review-<jobId>.mp4`) remains the only
 thing that shows the exported result.
 
+### GAP-174 · Low · A crash mid-import leaves unreferenced media in the project, and the editor's job registry is never pruned
+`src-tauri/src/editor/media_import.rs` + `src-tauri/src/editor/media_jobs.rs`
+(tutorial-editor Task 25). Two crash windows and one retention gap, all
+disk- or memory-only — no edit is lost and nothing wrong is shown:
+
+1. **Between a file's registration and the batch's `AddAssets`.** Each
+   imported file is copied to `media\<assetId>.<ext>` and recorded in
+   `sources.json` as it finishes; the batch lands in the graph as ONE
+   `InternalCommand::AddAssets` at the end (one undo step). A crash (or a
+   kill) in between leaves copies and `sources.json` records the graph never
+   references. `editor_media_url` already refuses them (it requires the
+   asset in the LIVE graph), so they are invisible — just wasted disk. The
+   in-process failure of the same step (a refused `AddAssets`) rolls the
+   batch back; only a crash escapes that.
+2. **Mid-copy.** A crash while a file is being copied leaves its
+   dot-prefixed `media\.<assetId>.<ext>.part`. Nothing sweeps `media\`
+   (the staging sweep, `screen_recovery`, covers only the staging
+   directory), and every later import mints a fresh asset id, so the part
+   is never reused either.
+3. **`JobRegistry` is never pruned.** `EditorState::jobs` keeps every job's
+   record for the life of the process — terminal ones included, so
+   `editor_get_jobs` can answer a reconcile after a reload. Records are
+   small and imports are user-paced, so this is bounded in practice, but
+   render (Task 46) and the shutdown gate REUSE this registry and will add
+   records at a higher rate.
+
+**Fix:** a project-store sweep on project open (Task 37's recovery is the
+natural home): delete owned `media\.*.part` files, and drop `media\` files
+plus `sources.json` records whose asset id the project graph does not hold —
+no-follow, owned names only (`<assetId>.<ext>` with a valid entity id). For
+the registry, prune a session's TERMINAL records when the session closes
+(`drop_session`), keeping running ones until their terminal lands; Task 46
+should decide this before it adds render jobs.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md

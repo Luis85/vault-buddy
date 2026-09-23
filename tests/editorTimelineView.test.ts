@@ -17,11 +17,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import TimelineRuler from "../src/components/editor/timeline/TimelineRuler.vue";
 import TimelineView from "../src/components/editor/timeline/TimelineView.vue";
 import { clearClipboardForTest } from "../src/editor/clipboard";
-import type { EditorPort } from "../src/editor/port";
 import { pxPerMs } from "../src/editor/timelineLayout";
 import type { Asset, Clip, EditorOpenResult, EditorSnapshot, Project, Track } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
+import { fakeEditorPort as fakePort } from "./helpers/fakeEditorPort";
 
 enableAutoUnmount(afterEach);
 
@@ -101,29 +101,6 @@ function snapshot(overrides: Partial<EditorSnapshot> = {}): EditorSnapshot {
     canRedo: false,
     undoLabel: null,
     redoLabel: null,
-    ...overrides,
-  };
-}
-
-function fakePort(overrides: Partial<EditorPort> = {}): EditorPort {
-  const unimplemented = (name: string) => (): never => {
-    throw new Error(`fakePort.${name} not stubbed for this test`);
-  };
-  return {
-    openStaged: unimplemented("openStaged"),
-    openProject: unimplemented("openProject"),
-    listProjects: unimplemented("listProjects"),
-    getSnapshot: unimplemented("getSnapshot"),
-    execute: unimplemented("execute"),
-    save: unimplemented("save"),
-    closeSession: unimplemented("closeSession"),
-    hideWindow: unimplemented("hideWindow"),
-    getWorkspace: unimplemented("getWorkspace"),
-    saveWorkspace: unimplemented("saveWorkspace"),
-    mediaUrl: unimplemented("mediaUrl"),
-    importMedia: unimplemented("importMedia"),
-    cancelJob: unimplemented("cancelJob"),
-    getJobs: unimplemented("getJobs"),
     ...overrides,
   };
 }

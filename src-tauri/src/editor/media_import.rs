@@ -44,12 +44,13 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::require_session;
 use super::media_jobs::{JobPhase, JobReporter, JobTerminal, PerFileError};
+use super::media_probe::probe_media;
 use super::prefs_commands::project_id_for;
 use super::project_store::{project_dir, SourceLocator, SourceMediaKind, SourceRecord};
 use super::save_commands::session_save_lock;
 use super::store_io::{load_sources, write_sources};
 use super::EditorState;
-use crate::ffmpeg::{probe_media, resolve_working_ffmpeg, FfmpegTools};
+use crate::ffmpeg::{resolve_working_ffmpeg, FfmpegTools};
 
 /// How much of an image is read for `sniff_image` — twice its own JPEG
 /// scan cap, so a JPEG whose SOF marker sits right at that cap is still
@@ -428,14 +429,22 @@ fn register_source(
 ) -> Result<(), EditorError> {
     let lock = session_save_lock(job.state, job.session_id)?;
     let _guard = lock_ignoring_poison(&lock);
-    let mut sources = load_sources(job.root, project_id)?;
+    let mut sources = load_sources(job.root, project_id)
+        .map_err(|e| unrecorded(&format!("{file}: {}", e.message)))?;
     sources.insert(asset_id.to_string(), record);
-    write_sources(job.root, project_id, &sources).map_err(|e| {
-        err(
-            EditorErrorCode::Internal,
-            format!("Could not record the imported file {file}: {e}"),
-        )
-    })
+    write_sources(job.root, project_id, &sources).map_err(|e| unrecorded(&format!("{file}: {e}")))
+}
+
+/// A `sources.json` failure as the user sees it — path-free (fix round 1:
+/// `store_io`'s read error names the file's full path under LOCALAPPDATA,
+/// and a per-file error carries a display name and a message, nothing
+/// else). The full detail goes to the log.
+fn unrecorded(detail: &str) -> EditorError {
+    log::warn!("editor import: could not update the project's source registry: {detail}");
+    err(
+        EditorErrorCode::Internal,
+        "The file could not be recorded in the project. See the log for details.",
+    )
 }
 
 /// The batch's ONE graph edit — so Undo removes the whole import at once.

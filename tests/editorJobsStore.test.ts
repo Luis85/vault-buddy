@@ -21,6 +21,7 @@ import type {
 } from "../src/editorTypes";
 import { useEditorJobsStore } from "../src/stores/editorJobs";
 import { useEditorProjectStore } from "../src/stores/editorProject";
+import { fakeEditorPort } from "./helpers/fakeEditorPort";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -79,10 +80,6 @@ function msg(overrides: Partial<JobProgressDto> = {}): JobProgressDto {
   };
 }
 
-const unimplemented = (name: string) => (): never => {
-  throw new Error(`fakePort.${name} not stubbed for this test`);
-};
-
 /** Opens session `ses-a` and returns the captured `onProgress` plus a
  * resolver for `importMedia`'s `{ jobId }` reply. */
 async function setup(extra: Partial<EditorPort> = {}) {
@@ -91,28 +88,17 @@ async function setup(extra: Partial<EditorPort> = {}) {
   const getSnapshot = vi.fn(() =>
     Promise.resolve({ snapshot: { ...openResult().snapshot, revision: 4 }, project: project() }),
   );
-  const port: EditorPort = {
+  const port = fakeEditorPort({
     openStaged: () => Promise.resolve(openResult()),
-    openProject: unimplemented("openProject"),
-    listProjects: unimplemented("listProjects"),
     getSnapshot,
-    execute: unimplemented("execute"),
-    save: unimplemented("save"),
-    closeSession: unimplemented("closeSession"),
-    hideWindow: unimplemented("hideWindow"),
-    getWorkspace: unimplemented("getWorkspace"),
-    saveWorkspace: unimplemented("saveWorkspace"),
-    mediaUrl: unimplemented("mediaUrl"),
     importMedia: (_sessionId, onProgress) => {
       deliver = onProgress;
       return new Promise((resolve) => {
         resolveStart = resolve;
       });
     },
-    cancelJob: unimplemented("cancelJob"),
-    getJobs: unimplemented("getJobs"),
     ...extra,
-  };
+  });
   const project$ = useEditorProjectStore();
   project$.setPort(port);
   await project$.openStaged("base");
@@ -245,6 +231,23 @@ describe("editorJobs — reconcile", () => {
     // The Channel's stale tail can no longer overwrite the registry's answer.
     send(msg({ sequence: 3, fraction: 0.6 }));
     expect(jobs.jobs["job-1"].phase).toBe("complete");
+  });
+
+  // Fix round 1: the registry reply and the Channel travel separately, so
+  // a reply read BEFORE the terminal can land AFTER it. It must not revive
+  // the finished job (that would pin "An import is already running").
+  it("a late reconcile reply cannot revive a job the store already holds as terminal", async () => {
+    const stale: JobRecordDto[] = [
+      { jobId: "job-1", kind: "import", phase: "preparing", fraction: 0.4, terminal: null },
+    ];
+    const { jobs, send, start } = await setup({ getJobs: () => Promise.resolve(stale) });
+    await start();
+    const done = { assetIds: [], perFile: [] };
+    send(msg({ sequence: 2, phase: "complete", fraction: 1, terminal: done }));
+    await jobs.reconcile();
+    expect(jobs.jobs["job-1"].phase).toBe("complete");
+    expect(jobs.jobs["job-1"].terminal).toEqual(done);
+    expect(jobs.activeImport).toBeNull();
   });
 
   it("a failed reconcile keeps what the store had and surfaces the error", async () => {

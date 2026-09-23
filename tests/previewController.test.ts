@@ -12,7 +12,6 @@
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { EditorPort } from "../src/editor/port";
 import type { AudioContextLike, GainLike } from "../src/editor/previewController";
 import { MAX_ELEMENTS, PreviewController } from "../src/editor/previewController";
 import { clientToCanvas, containRect } from "../src/editor/previewGeometry";
@@ -21,6 +20,7 @@ import type { Asset, Clip, Project, Track } from "../src/editorTypes";
 import * as logging from "../src/logging";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
+import { fakeEditorPort as fakePort } from "./helpers/fakeEditorPort";
 
 function track(id: string, overrides: Partial<Track> = {}): Track {
   return { id, kind: "video", name: id, visible: true, locked: false, muted: false, solo: false, volume: 1, ...overrides };
@@ -235,28 +235,6 @@ describe("computeLayers / PreviewController.layout", () => {
 });
 
 describe("monitoring", () => {
-  function fakePort(overrides: Partial<EditorPort> = {}): EditorPort {
-    const unimplemented = (name: string) => (): never => {
-      throw new Error(`fakePort.${name} not stubbed for this test`);
-    };
-    return {
-      openStaged: unimplemented("openStaged"),
-      openProject: unimplemented("openProject"),
-      listProjects: unimplemented("listProjects"),
-      getSnapshot: unimplemented("getSnapshot"),
-      execute: unimplemented("execute"),
-      save: unimplemented("save"),
-      closeSession: unimplemented("closeSession"),
-      hideWindow: unimplemented("hideWindow"),
-      getWorkspace: unimplemented("getWorkspace"),
-      saveWorkspace: () => Promise.resolve(),
-      mediaUrl: unimplemented("mediaUrl"),
-      importMedia: unimplemented("importMedia"),
-      cancelJob: unimplemented("cancelJob"),
-      getJobs: unimplemented("getJobs"),
-      ...overrides,
-    };
-  }
 
   beforeEach(() => setActivePinia(createPinia()));
 

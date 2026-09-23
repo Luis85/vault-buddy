@@ -19,10 +19,13 @@
  * known, so an early `queued`/`preparing` is neither lost nor misfiled.
  *
  * `reconcile()` asks Rust's job registry (`editor_get_jobs`) and installs
- * its answer OVER whatever the Channel said — the registry is updated
- * before every message is sent, so it is never older than the stream. The
- * last sequence seen is kept across a reconcile, so a stale message still
- * in flight cannot drag a reconciled job backwards.
+ * its answer OVER whatever the Channel said for every job still running —
+ * the registry is updated before every message is sent, so it is never
+ * older than the stream AT READ TIME. A job the store already holds as
+ * terminal is skipped: the reply travels separately from the Channel, so a
+ * read taken before the terminal can land after it. The last sequence seen
+ * is kept across a reconcile, so a stale message still in flight cannot
+ * drag a reconciled job backwards.
  *
  * A terminal that imported assets asks `editorProject` to re-read the
  * projection: the batch's `AddAssets` landed in Rust before the terminal
@@ -164,7 +167,12 @@ export const useEditorJobsStore = defineStore("editorJobs", {
       }
       if (project.sessionId !== sessionId) return;
       for (const row of rows) {
-        this.install({ ...row, sessionId }, this.jobs[row.jobId]?.sequence ?? 0);
+        const held = this.jobs[row.jobId];
+        // A job the store already holds as terminal keeps its outcome: the
+        // reply and the Channel travel separately, so a registry read taken
+        // BEFORE the terminal can land after it (fix round 1).
+        if (held && held.terminal !== null) continue;
+        this.install({ ...row, sessionId }, held?.sequence ?? 0);
       }
     },
   },

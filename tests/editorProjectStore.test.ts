@@ -14,7 +14,6 @@
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { EditorPort } from "../src/editor/port";
 import { EditorPortError } from "../src/editor/port";
 import type {
   EditorCommand,
@@ -26,6 +25,7 @@ import type {
   SaveReceipt,
 } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
+import { fakeEditorPort as fakePort } from "./helpers/fakeEditorPort";
 
 function snapshot(overrides: Partial<EditorSnapshot> = {}): EditorSnapshot {
   return {
@@ -87,28 +87,6 @@ function editorError(overrides: Partial<EditorError> = {}): EditorError {
 /** A minimal fake `EditorPort` — every method a test doesn't override
  * rejects loudly, so a test exercising one path can never accidentally
  * pass through a code path it forgot to stub. */
-function fakePort(overrides: Partial<EditorPort> = {}): EditorPort {
-  const unimplemented = (name: string) => (): never => {
-    throw new Error(`fakePort.${name} not stubbed for this test`);
-  };
-  return {
-    openStaged: unimplemented("openStaged"),
-    openProject: unimplemented("openProject"),
-    listProjects: unimplemented("listProjects"),
-    getSnapshot: unimplemented("getSnapshot"),
-    execute: unimplemented("execute"),
-    save: unimplemented("save"),
-    closeSession: unimplemented("closeSession"),
-    hideWindow: unimplemented("hideWindow"),
-    getWorkspace: unimplemented("getWorkspace"),
-    saveWorkspace: unimplemented("saveWorkspace"),
-    mediaUrl: unimplemented("mediaUrl"),
-    importMedia: unimplemented("importMedia"),
-    cancelJob: unimplemented("cancelJob"),
-    getJobs: unimplemented("getJobs"),
-    ...overrides,
-  };
-}
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
