@@ -22,6 +22,7 @@ pub mod media_jobs;
 pub mod media_probe;
 pub mod prefs_commands;
 pub mod project_store;
+pub mod recovery;
 pub mod save_commands;
 pub mod session_commands;
 pub mod store_io;
@@ -92,6 +93,11 @@ use vault_buddy_core::editor::EditorSession;
 /// import in flight (`caption_commands::claim_caption_import`), so a second
 /// one is refused rather than opening a second dialog. A leaf lock: taken
 /// only to insert or remove one id.
+///
+/// `journal` (Task 37) is the recovery journal's per-session debounce
+/// state (`recovery::JournalQueue`) — a leaf lock, taken only to schedule,
+/// take or forget one entry. Every journal WRITE runs under the session's
+/// save lock instead (`recovery.rs`' module doc).
 #[derive(Default)]
 pub struct EditorState {
     pub open: Mutex<()>,
@@ -101,4 +107,5 @@ pub struct EditorState {
     pub jobs: Mutex<media_jobs::JobRegistry>,
     pub thumbnails: media_derive::ThumbnailRenders,
     pub caption_imports: Mutex<HashSet<String>>,
+    pub journal: recovery::JournalQueue,
 }

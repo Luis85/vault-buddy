@@ -34,6 +34,7 @@ use super::project_store::{
     pin_staged, pinned_project, project_dir, resolve_source, unpin_staged, SourceLocator,
     SourceMediaKind, SourceRecord,
 };
+use super::recovery;
 use super::store_io::{create_project, list_projects, load_project, load_sources, remove_project};
 use super::EditorState;
 use crate::editor_commands::is_safe_base;
@@ -253,21 +254,35 @@ pub(crate) fn register_session(
     project: Project,
     revision: u64,
 ) -> EditorProjection {
+    register_session_with(state, project, |id, project| {
+        EditorSession::resume(id, project, revision)
+    })
+    .0
+}
+
+/// `register_session`'s find-or-mint, with the session a fresh mint starts
+/// as supplied by `make` (Task 37: a recovered open starts DIRTY). The
+/// boolean is whether `make` ran — `false` means a live session was reused.
+pub(crate) fn register_session_with(
+    state: &EditorState,
+    project: Project,
+    make: impl FnOnce(String, Project) -> EditorSession,
+) -> (EditorProjection, bool) {
     let mut by_project = lock_ignoring_poison(&state.by_project);
     let mut sessions = lock_ignoring_poison(&state.sessions);
     if let Some(live) = by_project
         .get(&project.id)
         .and_then(|sid| sessions.get(sid))
     {
-        return EditorProjection::of(live);
+        return (EditorProjection::of(live), false);
     }
     let session_id = new_entity_id("ses");
     let project_id = project.id.clone();
-    let session = EditorSession::resume(session_id.clone(), project, revision);
+    let session = make(session_id.clone(), project);
     let projection = EditorProjection::of(&session);
     sessions.insert(session_id.clone(), session);
     by_project.insert(project_id, session_id);
-    projection
+    (projection, true)
 }
 
 /// `open_staged_in` + `register_session` + the open result.
@@ -339,7 +354,11 @@ pub(crate) fn execute_in(
         .get_mut(&request.session_id)
         .ok_or_else(|| internal("session vanished under its own lock"))?;
     session.execute(request, &ctx)?;
-    Ok(EditorProjection::of(session))
+    let projection = EditorProjection::of(session);
+    drop(sessions);
+    // Task 37: every acknowledged command schedules the recovery journal.
+    recovery::note_acknowledged(state, root, &request.session_id);
+    Ok(projection)
 }
 
 pub(crate) fn snapshot_in(
@@ -376,6 +395,9 @@ fn drop_session(state: &EditorState, session_id: &str) {
     // with sessions currently open rather than every session ever opened
     // in this process's life.
     lock_ignoring_poison(&state.save_locks).remove(session_id);
+    // Whatever journal write was still pending has either been flushed
+    // (`keep`) or must never happen (`discard*`).
+    state.journal.forget(session_id);
     // A running import (Task 25) of a closing session stops before its next
     // file; its results would have no session to land in. Its peaks decodes
     // are jobs too; its thumbnail renders are not (Task 28).
@@ -390,17 +412,19 @@ fn drop_session(state: &EditorState, session_id: &str) {
 /// capture refuses Discard. The recording itself is never touched (R6).
 /// On any failure the session stays open so the user can retry.
 ///
-/// **`discardProject` holds the per-session SAVE lock** (Task 12 fix round
-/// 2, finding 2 — `save_commands::session_save_lock`, the same lock
-/// `editor_save_project` holds for its own whole read-through-write
-/// sequence) across its unpin-then-remove sequence: without it, a save
-/// that is mid-write when a discard runs could have `remove_project` walk
-/// and delete the directory while the write is still in flight, or the
-/// write's temp-file rename could land into a directory that no longer
-/// exists. Taking the lock here blocks a concurrent discard behind an
-/// in-flight save (never the reverse — a save cannot start once discard
-/// already holds it and the session is about to vanish) rather than racing
-/// either one against the other.
+/// **Every disposition holds the per-session SAVE lock** (Task 12 fix round
+/// 2 for `discardProject`; Task 37 for `keep` and `discardRecovery`) — the
+/// lock `editor_save_project` holds for its whole read-through-write
+/// sequence and every recovery-journal write runs under. Without it a
+/// discard could remove the directory under an in-flight save, a `keep`
+/// could flush a journal beside a save that is deleting it, and a
+/// `discardRecovery` could delete a journal a racing write then recreates.
+/// A concurrent close waits behind an in-flight save, never the reverse.
+///
+/// `drop_session` runs INSIDE that lock (`close_locked`), so a save queued
+/// behind this close finds the session gone (`sessionGone`) rather than
+/// finding it still registered and failing against a removed directory
+/// with a generic write error (Task 12 review, carried to Task 37).
 pub(crate) fn close_in(
     state: &EditorState,
     root: &Path,
@@ -408,38 +432,56 @@ pub(crate) fn close_in(
     session_id: &str,
     disposition: CloseDisposition,
 ) -> Result<(), EditorError> {
-    let project_id = {
-        let sessions = require_session(state, session_id)?;
-        sessions
-            .get(session_id)
-            .map(|s| s.project().id.clone())
-            .ok_or_else(|| internal("session vanished under its own lock"))?
-    };
+    let project_id = project_id_for(state, session_id)?;
+    if disposition == CloseDisposition::DiscardProject {
+        // Task 28 fix round 1: derived media (an ffmpeg holding a file of
+        // this project open, a late cache write) must be stopped BEFORE
+        // the save lock is taken — their final write needs that lock.
+        super::media_derive::stop_session_derivations(state, session_id);
+    }
+    let session_lock = super::save_commands::session_save_lock(state, session_id)?;
+    let _save_guard = lock_ignoring_poison(&session_lock);
+    close_locked(
+        state,
+        root,
+        staging_dir,
+        session_id,
+        &project_id,
+        disposition,
+    )
+}
+
+/// The part of `close_in` that runs under the session's save lock — ending
+/// with `drop_session`, so nothing queued on that lock ever sees a session
+/// whose project this close has already changed underneath it.
+pub(crate) fn close_locked(
+    state: &EditorState,
+    root: &Path,
+    staging_dir: &Path,
+    session_id: &str,
+    project_id: &str,
+    disposition: CloseDisposition,
+) -> Result<(), EditorError> {
     match disposition {
-        CloseDisposition::Keep => {}
+        // Task 37: the pending journal write lands before the session goes.
+        CloseDisposition::Keep => recovery::flush_locked(state, session_id),
+        // Task 37: only `recovery.json` goes (owned-file check); the saved
+        // project, its sources and the pin are untouched.
         CloseDisposition::DiscardRecovery => {
-            return Err(err(
-                EditorErrorCode::InvalidRequest,
-                "Discarding recovered changes is not available yet.",
-            ));
+            state.journal.forget(session_id);
+            recovery::remove_journal(root, project_id)
+                .map_err(|e| internal(format!("Could not discard the unsaved changes: {e}")))?;
         }
         CloseDisposition::DiscardProject => {
-            // Task 28 fix round 1: derived media (an ffmpeg holding a file of
-            // this project open, a late cache write) must be stopped BEFORE
-            // the save lock is taken — their final write needs that lock.
-            super::media_derive::stop_session_derivations(state, session_id);
-            let session_lock = super::save_commands::session_save_lock(state, session_id)?;
-            let _save_guard = lock_ignoring_poison(&session_lock);
-
-            let sources = load_sources(root, &project_id)?;
+            let sources = load_sources(root, project_id)?;
             for record in sources.values() {
                 if let SourceLocator::Staging { base } = &record.locator {
-                    unpin_staged(staging_dir, base, &project_id).map_err(|e| {
+                    unpin_staged(staging_dir, base, project_id).map_err(|e| {
                         internal(format!("Could not unlink the capture {base:?}: {e}"))
                     })?;
                 }
             }
-            remove_project(root, &project_id)?;
+            remove_project(root, project_id)?;
         }
     }
     drop_session(state, session_id);

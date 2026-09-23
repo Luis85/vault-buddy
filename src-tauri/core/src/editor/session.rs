@@ -118,6 +118,24 @@ impl EditorSession {
         }
     }
 
+    /// A session resumed from a recovery journal (Task 37): `revision` is
+    /// the journal's working revision, `persisted_revision` the one the
+    /// project store last committed. The two differ, so the session opens
+    /// dirty: the recovered edits are exactly what is NOT on disk yet. The
+    /// caller keeps `revision > persisted_revision` (monotonic across the
+    /// project's life, the `resume` rule).
+    pub fn resume_recovered(
+        session_id: impl Into<String>,
+        project: Project,
+        revision: u64,
+        persisted_revision: u64,
+    ) -> Self {
+        Self {
+            persisted_revision: Some(persisted_revision),
+            ..Self::resume(session_id, project, revision)
+        }
+    }
+
     /// `ctx` carries the facts a command needs from outside the graph
     /// (`commands::CommandContext`, Task 27 F15) -- the shell builds it
     /// from the project's `sources.json` before calling in.
@@ -562,6 +580,19 @@ mod tests {
             !snap.can_undo,
             "a resumed session starts with no local history"
         );
+    }
+
+    // Task 37: a session resumed from a recovery journal carries the
+    // journal's revision but only the STORE's committed revision as
+    // persisted -- it must open dirty, or the recovered edits would read as
+    // already saved and a close would never offer to keep them.
+    #[test]
+    fn resume_recovered_starts_dirty_at_the_journal_revision() {
+        let session = EditorSession::resume_recovered("s1", minimal_project(), 9, 4);
+        let snap = session.snapshot();
+        assert_eq!(snap.revision, 9);
+        assert_eq!(snap.persisted_revision, Some(4));
+        assert_ne!(snap.revision, snap.persisted_revision.unwrap());
     }
 
     // Task 12 fix round 1: two concurrent saves racing on one session must

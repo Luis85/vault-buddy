@@ -20,13 +20,15 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, WebviewWindow};
 use vault_buddy_core::editor::{
-    self, sanitize, EditorError, EditorErrorCode, EditorOpenResult, Map, Record, WorkspaceEnvelope,
+    self, sanitize, EditorError, EditorErrorCode, EditorOpenResult, EditorSession, Map, Record,
+    WorkspaceEnvelope,
 };
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::{require_editor_window, require_session};
 use super::prefs_commands::read_workspace;
-use super::session_commands::{missing_media, register_session};
+use super::recovery::load_journal;
+use super::session_commands::{missing_media, register_session, register_session_with};
 use super::store_io::{
     self, commit_project, load_project, project_file_exists, source_base_of, ProjectSummaryDto,
     ProjectWriter, RealWriter,
@@ -117,20 +119,30 @@ fn map_write_error(e: io::Error) -> EditorError {
 /// stale/bogus/already-closed id a caller ever passes. Checking first, via
 /// the same `require_session` every other caller uses, means a save (or a
 /// discard) on an unknown session leaves `save_locks` untouched.
+///
+/// **Check, insert, RE-check** (Task 12 review, carried to Task 37): the
+/// session can be dropped between the first check and the insert —
+/// `drop_session` prunes `save_locks` only for an entry that already
+/// exists, so an insert landing after its prune would be an entry nothing
+/// ever removes. Re-checking after the insert closes that: a session gone
+/// by then has its fresh entry removed here and the caller gets
+/// `sessionGone`. Neither lock is held while the other is taken, so this
+/// adds no lock-ordering rule (`drop_session` takes `sessions` then the
+/// `save_locks` map; this takes them one at a time).
 pub(crate) fn session_save_lock(
     state: &EditorState,
     session_id: &str,
 ) -> Result<Arc<Mutex<()>>, EditorError> {
-    {
-        // Existence only -- the guard is dropped at the end of this block,
-        // well before anything here touches `save_locks`.
-        let _existence_guard = require_session(state, session_id)?;
-    }
-    let mut locks = lock_ignoring_poison(&state.save_locks);
-    Ok(locks
+    drop(require_session(state, session_id)?);
+    let lock = lock_ignoring_poison(&state.save_locks)
         .entry(session_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone())
+        .clone();
+    if let Err(gone) = require_session(state, session_id).map(drop) {
+        lock_ignoring_poison(&state.save_locks).remove(session_id);
+        return Err(gone);
+    }
+    Ok(lock)
 }
 
 /// The `AppHandle`-free half of `editor_save_project`, injectable with a
@@ -202,7 +214,11 @@ pub(crate) fn save_project_with(
     // written. The one remaining degrade is still logged rather than
     // swallowed (AGENTS.md's "no swallowed error" diagnostics invariant).
     let now = chrono::Local::now().to_rfc3339();
-    let created_at = if project_file_exists(root, &project_id) {
+    let created_at = if project_file_exists(root, &project_id).map_err(|e| {
+        internal(format!(
+            "Could not save the project: could not check whether it was saved before: {e}"
+        ))
+    })? {
         match load_project(root, &project_id) {
             Ok((envelope, _sources)) => envelope.record.created_at,
             Err(e) => return Err(e),
@@ -266,9 +282,24 @@ pub(crate) fn save_project_with(
     // `injected_write_failure_keeps_the_last_good_file` fail — the session
     // would report a revision as persisted that a failed write never
     // actually landed on disk.
-    let mut sessions = lock_ignoring_poison(&state.sessions);
-    if let Some(session) = sessions.get_mut(session_id) {
-        session.mark_saved(revision);
+    let current = lock_ignoring_poison(&state.sessions)
+        .get_mut(session_id)
+        .map(|session| {
+            session.mark_saved(revision);
+            session.snapshot().revision
+        });
+    // Task 37: a save of the session's CURRENT revision leaves nothing to
+    // recover, so its journal goes (still under the save lock, so no
+    // journal write can land after this delete). A save of an OLDER
+    // revision (an edit landed during the write) keeps it: that edit exists
+    // only in memory and in the journal.
+    if current == Some(revision) {
+        state.journal.forget(session_id);
+        if let Err(e) = super::recovery::remove_journal(root, &project_id) {
+            log::warn!(
+                "editor_save_project: saved {project_id:?} but could not remove its                  recovery journal: {e}"
+            );
+        }
     }
     Ok(SaveReceipt {
         session_id: session_id.to_string(),
@@ -296,12 +327,26 @@ pub(crate) fn open_project_session(
     state: &EditorState,
     root: &Path,
     project_file_id: &str,
+    use_recovery: bool,
 ) -> Result<EditorOpenResult, EditorError> {
     let _open = lock_ignoring_poison(&state.open);
     let (envelope, sources) = load_project(root, project_file_id)?;
     let workspace = sanitize(&envelope.workspace);
-    let revision = envelope.record.revision;
-    let projection = register_session(state, envelope.project, revision);
+    let committed = envelope.record.revision;
+    let (projection, recovered) = if use_recovery {
+        // Task 37: the journal is the working copy; the store's committed
+        // revision stays the persisted one, so the session opens DIRTY. The
+        // working revision never falls to or below the committed one (a
+        // journal older than the last save must not make time run
+        // backwards, the Task 12 monotonic-revision ruling).
+        let journal = load_journal(root, project_file_id)?;
+        let revision = journal.session_revision.max(committed + 1);
+        register_session_with(state, journal.project, |id, project| {
+            EditorSession::resume_recovered(id, project, revision, committed)
+        })
+    } else {
+        (register_session(state, envelope.project, committed), false)
+    };
     let missing = missing_media(root, &projection.project, &sources);
     Ok(EditorOpenResult {
         snapshot: projection.snapshot,
@@ -309,7 +354,7 @@ pub(crate) fn open_project_session(
         workspace,
         missing,
         source_base: source_base_of(&sources),
-        recovered: false,
+        recovered,
     })
 }
 
@@ -347,22 +392,8 @@ pub async fn editor_list_projects(
     blocking(move || Ok(store_io::list_projects(&root))).await
 }
 
-/// `use_recovery` is Task 37's — `recovery.json` does not exist yet, so
-/// anything other than `false` is `invalidRequest` rather than silently
-/// ignored (R20: nothing is faked). Split out as a pure check so it is
-/// unit-testable without a live `WebviewWindow`.
-fn refuse_recovery_flag(use_recovery: bool) -> Result<(), EditorError> {
-    if use_recovery {
-        Err(err(
-            EditorErrorCode::InvalidRequest,
-            "Recovery is not available yet.",
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-/// ASYNC: reads `project.json` and registers (or reuses) a session over it.
+/// ASYNC: reads `project.json` (and, with `use_recovery`, `recovery.json`
+/// as the working copy — Task 37) and registers (or reuses) a session.
 #[tauri::command]
 pub async fn editor_open_project(
     window: WebviewWindow,
@@ -371,10 +402,16 @@ pub async fn editor_open_project(
     use_recovery: bool,
 ) -> Result<EditorOpenResult, EditorError> {
     require_editor_window(&window)?;
-    refuse_recovery_flag(use_recovery)?;
     let root = local_data(&app)?;
-    blocking(move || open_project_session(&app.state::<EditorState>(), &root, &project_file_id))
-        .await
+    blocking(move || {
+        open_project_session(
+            &app.state::<EditorState>(),
+            &root,
+            &project_file_id,
+            use_recovery,
+        )
+    })
+    .await
 }
 
 #[cfg(test)]

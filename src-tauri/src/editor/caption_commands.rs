@@ -189,7 +189,13 @@ pub async fn editor_import_captions(
             };
             let text = read_caption_file(&path)?;
             let state = app.state::<EditorState>();
-            import_captions_in(&state, &session_id, &clip_id, replace, &text).map(Some)
+            let imported = import_captions_in(&state, &session_id, &clip_id, replace, &text)?;
+            // Task 37: an acknowledged edit like any `editor_execute`.
+            match app.path().app_local_data_dir() {
+                Ok(root) => super::recovery::note_acknowledged(&state, &root, &session_id),
+                Err(e) => log::warn!("editor captions: no data directory to journal into: {e}"),
+            }
+            Ok(Some(imported))
         };
         let handle = std::thread::Builder::new()
             .name("editor-captions".into())

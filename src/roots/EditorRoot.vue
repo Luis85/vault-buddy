@@ -40,11 +40,21 @@
  * session id to hydrate against, and `editorWorkspace`'s own fields already
  * reset to defaults the next time a real session opens (its `hydrate`'s own
  * doc).
+ *
+ * Task 37 (Part A): the window's X now reaches this root as
+ * `editor:closeRequested` (emitted to the editor window alone) instead of a
+ * hide, and `CloseGuardDialog` decides — a close with only the legacy
+ * surface open still just hides. After every NEW session `RecoveryDialog`
+ * checks for unsaved changes an earlier run left behind; a Resume or
+ * Discard opens a different session, which re-hydrates `editorWorkspace`
+ * exactly like a fresh open does.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
+import CloseGuardDialog from "../components/editor/dialogs/CloseGuardDialog.vue";
+import RecoveryDialog from "../components/editor/dialogs/RecoveryDialog.vue";
 import AudioSection from "../components/editor/inspector/AudioSection.vue";
 import ClipSection from "../components/editor/inspector/ClipSection.vue";
 import ColorSection from "../components/editor/inspector/ColorSection.vue";
@@ -111,6 +121,17 @@ const legacyRequestSeq = ref(0);
  * longer needs its own `shellDuration`/`shellVault` computeds; it keeps only
  * the gate deciding WHETHER to show the shell at all.
  */
+const closeGuard = ref<InstanceType<typeof CloseGuardDialog> | null>(null);
+const recovery = ref<InstanceType<typeof RecoveryDialog> | null>(null);
+
+/** Hydrate `editorWorkspace` for the session `editorProject` now holds —
+ * only when it is a genuinely NEW one (Task 18 fix round 2's rule, below). */
+function hydrateNewSession(): boolean {
+  if (!editorProject.sessionId || editorProject.sessionId === editorWorkspace.sessionId) return false;
+  void editorWorkspace.hydrate(editorProject.sessionId);
+  return true;
+}
+
 const sessionMatchesLegacy = computed(
   () => editorProject.sourceBase !== null && editorProject.sourceBase === legacyBase.value,
 );
@@ -169,9 +190,7 @@ async function openRequested() {
   // against `editorWorkspace.sessionId` (the id its OWN last `hydrate`
   // call set, synchronously, before any await) is what tells a genuinely
   // new session apart from a duplicate resolve of the same one.
-  if (editorProject.sessionId && editorProject.sessionId !== editorWorkspace.sessionId) {
-    void editorWorkspace.hydrate(editorProject.sessionId);
-  }
+  if (hydrateNewSession()) await recovery.value?.check();
 }
 
 const unlisteners: (() => void)[] = [];
@@ -180,6 +199,9 @@ onMounted(async () => {
   // Subscribed BEFORE the first drain, so a request arriving while that
   // drain is in flight is not lost — the `region:begin` rule applied here.
   unlisteners.push(await listen("editor:open", () => void openRequested()));
+  unlisteners.push(
+    await listen("editor:closeRequested", () => void closeGuard.value?.request()),
+  );
   await openRequested();
 });
 onBeforeUnmount(() => {
@@ -295,6 +317,14 @@ onBeforeUnmount(() => {
       v-if="SHOW_LEGACY_EDITOR"
       :staged-base="legacyBase"
       :request-seq="legacyRequestSeq"
+    />
+    <!-- Task 37: both render nothing until they open, and `DialogHost` is
+         fixed-position when they do, so neither adds a flex child the
+         layout contract above measures. -->
+    <CloseGuardDialog ref="closeGuard" />
+    <RecoveryDialog
+      ref="recovery"
+      @session-changed="hydrateNewSession"
     />
   </main>
 </template>

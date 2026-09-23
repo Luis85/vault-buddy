@@ -18,6 +18,9 @@
 //!   windows are built once at startup; a destroyed editor makes
 //!   `get_webview_window("editor")` return `None` for the rest of the
 //!   process, with no way back short of restarting the app.
+//! - Task 37: that close is first offered to the editor webview as
+//!   `editor:closeRequested` (emitted to the editor window only), with the
+//!   hide kept as the fallback when the request cannot be delivered.
 
 #[cfg(test)]
 mod tests {
@@ -65,6 +68,51 @@ mod tests {
         assert!(
             src.contains("fn handle_main_close"),
             "handle_main_close must exist as the main-only close path"
+        );
+    }
+
+    // Task 37: the editor's X no longer hides on its own — it ASKS the
+    // editor webview (`editor:closeRequested`, emitted to that window
+    // alone), which decides between the close guard and a plain hide. The
+    // structural half pins the literal event and its single-window target;
+    // the unit half pins the routing: a successful emit never hides by
+    // itself, a failed one ALWAYS falls back to hiding (never stranding a
+    // window whose X did nothing).
+    #[test]
+    fn window_close_emits_close_requested_for_the_editor() {
+        let src = normalize_whitespace(include_str!("window_close.rs"));
+        let pos = src
+            .find(r#""editor" =>"#)
+            .expect("an editor-specific branch must exist");
+        let body = &src[pos..(pos + 600).min(src.len())];
+        assert!(
+            body.contains(r#"emit_to("editor", "editor:closeRequested", serde_json::json!({}))"#),
+            "the editor's X must emit editor:closeRequested to the editor window only"
+        );
+
+        use crate::window_close::{route_editor_close, EditorCloseRoute};
+        let hid = std::cell::Cell::new(false);
+        let route = route_editor_close(
+            || Ok::<(), String>(()),
+            || {
+                hid.set(true);
+                Ok::<(), String>(())
+            },
+        );
+        assert_eq!(route, EditorCloseRoute::AskedTheEditor);
+        assert!(!hid.get(), "a delivered close request must not also hide");
+
+        let route = route_editor_close(
+            || Err::<(), String>("webview gone".into()),
+            || {
+                hid.set(true);
+                Ok::<(), String>(())
+            },
+        );
+        assert_eq!(route, EditorCloseRoute::HidFallback);
+        assert!(
+            hid.get(),
+            "an undeliverable close request must fall back to hiding"
         );
     }
 

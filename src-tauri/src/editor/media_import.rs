@@ -457,9 +457,11 @@ fn add_assets(job: &ImportJob, imported: &[Imported]) -> Result<(), EditorError>
         )
     })?;
     let assets = imported.iter().map(|i| i.asset.clone()).collect();
-    session
-        .execute_internal(&InternalCommand::AddAssets(AddAssetsPayload { assets }))
-        .map(|_| ())
+    session.execute_internal(&InternalCommand::AddAssets(AddAssetsPayload { assets }))?;
+    drop(sessions);
+    // Task 37: an acknowledged edit like any `editor_execute`.
+    super::recovery::note_acknowledged(job.state, job.root, job.session_id);
+    Ok(())
 }
 
 /// Undo a batch whose `AddAssets` was refused: its source records and its

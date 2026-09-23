@@ -335,25 +335,6 @@ fn close_discard_project_removes_the_project_and_unpins_the_capture() {
 }
 
 #[test]
-fn close_discard_recovery_is_refused_until_it_exists_and_keeps_the_session() {
-    let f = Fixture::new();
-    f.stage(&sidecar(BASE, "vaultA"));
-    let state = EditorState::default();
-    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
-    let sid = open.snapshot.session_id.clone();
-    let e = close_in(
-        &state,
-        f.root(),
-        &f.staging(),
-        &sid,
-        CloseDisposition::DiscardRecovery,
-    )
-    .unwrap_err();
-    assert_eq!(e.code, EditorErrorCode::InvalidRequest);
-    assert!(snapshot_in(&state, &sid).is_ok());
-}
-
-#[test]
 fn close_disposition_decodes_the_wire_spelling() {
     for (wire, want) in [
         ("\"keep\"", CloseDisposition::Keep),

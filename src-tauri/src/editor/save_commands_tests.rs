@@ -327,7 +327,7 @@ fn reopen_after_save_restores_clips_and_cues() {
 
     close_in(&state, f.root(), &f.staging(), &sid, CloseDisposition::Keep).unwrap();
 
-    let reopened = open_project_session(&state, f.root(), &pid).unwrap();
+    let reopened = open_project_session(&state, f.root(), &pid, false).unwrap();
     assert_eq!(
         reopened.project, trimmed.project,
         "reopening a closed, saved project must restore the exact edited graph"
@@ -393,13 +393,6 @@ fn save_receipt_wire_literal() {
             "projectFileId": "proj-1",
         }),
     );
-}
-
-#[test]
-fn use_recovery_true_is_refused() {
-    let e = refuse_recovery_flag(true).unwrap_err();
-    assert_eq!(e.code, EditorErrorCode::InvalidRequest);
-    assert!(refuse_recovery_flag(false).is_ok());
 }
 
 #[test]
@@ -697,7 +690,7 @@ fn record_revision_is_monotonic_across_a_close_and_reopen() {
     // MUTATION CHECK: minting the resumed session via `EditorSession::new`
     // (always revision 1) instead of `EditorSession::resume` makes this
     // assertion fail.
-    let reopened = open_project_session(&state, f.root(), &pid).unwrap();
+    let reopened = open_project_session(&state, f.root(), &pid, false).unwrap();
     assert_eq!(
         reopened.snapshot.revision, 3,
         "reopen must resume at the saved revision, not reset to 1"

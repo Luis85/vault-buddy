@@ -317,6 +317,17 @@ fn a_batch_is_one_undo_step() {
     assert!(session.project().assets.is_empty());
 }
 
+// Task 37: a finished import is an acknowledged edit the user would lose
+// to a crash like any other, so it schedules the recovery journal.
+#[test]
+fn a_finished_import_schedules_the_recovery_journal() {
+    let fx = Fixture::new();
+    let files = [fx.original("b.png", &png_bytes())];
+    fx.import(&FakeIo::default(), &AtomicBool::new(false), &files);
+    assert_eq!(fx.assets().len(), 1);
+    assert!(fx.state.journal.is_pending(SESSION));
+}
+
 // A copy that dies partway leaves no `.part` (and no copy) behind, and the
 // other file in the batch still lands.
 #[test]

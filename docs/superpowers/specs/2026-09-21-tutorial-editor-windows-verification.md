@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **18 rows** today (T1–T18), of which **0** carry a result. An
+This file carries **20 rows** today (T1–T20), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -217,3 +217,18 @@ text over a playing picture.
 | # | Check | Steps | Result |
 | --- | --- | --- | --- |
 | T18 | **Caption import, editing and chapters in the real window** | Open a staged capture and select its clip. (a) In the library's **Captions** tab press **Import SRT / WebVTT**, pick a real `.srt` saved with Windows line endings by another tool (and later a `.vtt` with a `STYLE` block), whose last cue starts after the clip ends. **Record**: the native dialog opens over the editor and lists `.srt`, `.vtt` and `.txt`; the status line reads "Imported N captions ... 1 cue fell outside the clip and was skipped."; one Ctrl+Z removes the whole import. Then pick a file with a broken timestamp: **Record** that the error names its line and no file path. (b) Play across a caption. **Record**: its text shows over the picture at the bottom; switching **Position** to Top and **Size** to 50 moves and enlarges it; unticking **Show captions** hides it. (c) Speed the clip to 2× (inspector **Speed**) and **Record** that the caption list's times halve while the captions still line up with the same words. (d) In the **Chapters** tab press **Add chapter at playhead**, rename it, then trim the clip's head past it. **Record** that the chapter's time follows the trim and that it leaves the list once trimmed away. | |
+
+## Task 37's rows
+
+Task 37 (Part A) adds the recovery journal (`recovery.json`, written by the
+`editor-journal` thread after every acknowledged edit), the close guard (the
+editor's X now emits `editor:closeRequested` to the editor window instead of
+hiding it) and the startup re-pin sweep (`editor-recovery-sweep`). Rust tests
+cover the journal's write/delete rules and the sweep on a tempdir, and Vitest
+the dialogs; nothing automated kills a real process mid-edit, relaunches it,
+or clicks a real WebView2 titlebar X.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T19 | **Kill mid-edit, relaunch, Resume restores the last acknowledged edit** | Open a staged capture in the editor and make three distinct edits (e.g. rename the project, split the clip, nudge the second clip). Wait one second, then end the process from Task Manager (End task on Vault Buddy — no Save, no close). **Record**: that `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\recovery.json` exists and its `sessionRevision` is higher than `project.json`'s `record.revision`. Relaunch and open the same capture again. **Record**: whether the "Unsaved changes from last time" dialog names the project; press **Resume** and record whether all three edits are back and the header reads unsaved. Then save and **Record** that `recovery.json` is gone. Repeat once pressing **Discard** instead: record that the saved project opens without the three edits, `recovery.json` is gone and `project.json` is byte-identical to before (compare file hashes). | |
+| T20 | **Close with unsaved changes → Keep for later → reopen** | Open a staged capture, make one edit, and click the editor window's titlebar X. **Record**: the close guard shows **Save project**, **Keep for later**, **Discard changes** and **Cancel**. Press **Keep for later**: the window hides. Reopen the same capture from the capture bar's **Edit**. **Record**: the edit is still there, the header still reads unsaved, and NO recovery dialog appeared (the journal is this session's own). Then click the X on a CLEAN editor (after a save) and **Record** that it hides at once with no dialog; and with only the legacy editor showing (no new session), that the X still hides as it always did. | |

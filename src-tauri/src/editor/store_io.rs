@@ -28,7 +28,7 @@ use super::project_store::{project_dir, store_dir, SourceRecord};
 
 const PROJECT_FILE: &str = "project.json";
 const SOURCES_FILE: &str = "sources.json";
-const RECOVERY_FILE: &str = "recovery.json";
+pub(crate) const RECOVERY_FILE: &str = "recovery.json";
 
 fn invalid_id(id: &str) -> io::Error {
     io::Error::new(
@@ -153,7 +153,7 @@ pub fn commit_project(
     write_json_with(writer, &dir.join(PROJECT_FILE), envelope)
 }
 
-fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, EditorError> {
+pub(crate) fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, EditorError> {
     let meta = std::fs::metadata(path).map_err(|e| {
         EditorError::new(
             EditorErrorCode::Internal,
@@ -188,19 +188,19 @@ fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, EditorError> {
 /// meaningful, so the save must refuse rather than silently overwrite it
 /// with a fresh `{}` workspace.
 ///
-/// Deliberately `Path::exists` (a `metadata`-based presence check), never
-/// `is_file`: an unreadable path is not necessarily an ordinary file
-/// a caller could tell apart from a permission-denied one without trying
-/// to read it — and this module's own tests simulate exactly that
-/// (`PermissionDenied`/a sharing violation) the portable, Windows-honest
-/// way, by swapping a DIRECTORY in for `project.json`'s own name. `exists`
-/// reports that as present (refuse, correctly); `is_file` would have
-/// reported it as absent (wrongly degrade, exactly the bug this function
-/// exists to close).
-pub fn project_file_exists(root: &Path, id: &str) -> bool {
-    project_dir(root, id)
-        .map(|dir| dir.join(PROJECT_FILE).exists())
-        .unwrap_or(false)
+/// `Path::try_exists`, never `Path::exists` or `is_file` (Task 12 review,
+/// carried to Task 37): `exists` answers `false` for ANY metadata failure —
+/// a permission problem, an invalid name, a sharing violation — which the
+/// save would then misread as "never saved" and degrade on. Only a
+/// genuine not-found is `Ok(false)`; every other failure is an `Err` the
+/// save refuses on. A DIRECTORY swapped in for `project.json` (this
+/// module's tests' portable stand-in for an unreadable file) still reports
+/// present, so the save refuses rather than overwriting it.
+pub fn project_file_exists(root: &Path, id: &str) -> io::Result<bool> {
+    match project_dir(root, id) {
+        Some(dir) => dir.join(PROJECT_FILE).try_exists(),
+        None => Ok(false),
+    }
 }
 
 /// Load a project's saved envelope and its sources, refusing anything that

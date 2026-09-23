@@ -25,23 +25,62 @@
 //!   unsaved edits with no way back. The user clicking the editor's own X
 //!   is an explicit instruction about that one window, which is why
 //!   answering it with a hide is not a contradiction.
+//! - **Task 37**: the editor's X no longer hides by itself. It emits
+//!   `editor:closeRequested` to the editor window ALONE (`emit_to`, the
+//!   `editor:open` shape) and the webview decides: a dirty session or a
+//!   live render gets the close guard, anything else hides at once through
+//!   `editor_hide_window`. Only if that emit fails does this fall back to
+//!   hiding directly (`route_editor_close`), so the X can never do nothing.
 //!
 //! Every other window (panel/bubble/overlay) falls through to Tauri's
 //! default close, untouched by either rule.
 
-use tauri::{CloseRequestApi, Manager, Window};
+use tauri::{CloseRequestApi, Emitter, Manager, Window};
 
 pub(crate) fn handle_close_requested(window: &Window, api: &CloseRequestApi) {
     match window.label() {
         "main" => handle_main_close(window, api),
         "editor" => {
             api.prevent_close();
-            if let Err(e) = window.hide() {
-                log::warn!("could not hide the editor window on close: {e}");
-            }
+            let app = window.app_handle();
+            route_editor_close(
+                || app.emit_to("editor", "editor:closeRequested", serde_json::json!({})),
+                || window.hide(),
+            );
         }
         _ => {}
     }
+}
+
+/// What the editor's close did (Task 37).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EditorCloseRoute {
+    /// `editor:closeRequested` reached the editor webview, which now owns
+    /// the decision (close guard, or `editor_hide_window` when clean).
+    AskedTheEditor,
+    /// The request could not be delivered, so the window was hidden
+    /// directly — exactly the pre-Task-37 behaviour.
+    HidFallback,
+}
+
+/// The editor X's routing, split out so it is unit-testable without a live
+/// `Window`: ask the editor webview first, and ONLY if that request cannot
+/// be delivered fall back to hiding. A successful emit never hides here —
+/// that would close the window under the close guard it just asked for — and
+/// a failed one always does: an X that does nothing, with no webview left
+/// to answer, would strand the window on screen.
+pub(crate) fn route_editor_close<E: std::fmt::Display, H: std::fmt::Display>(
+    emit: impl FnOnce() -> Result<(), E>,
+    hide: impl FnOnce() -> Result<(), H>,
+) -> EditorCloseRoute {
+    let Err(e) = emit() else {
+        return EditorCloseRoute::AskedTheEditor;
+    };
+    log::warn!("could not ask the editor about its close, hiding it instead: {e}");
+    if let Err(e) = hide() {
+        log::warn!("could not hide the editor window on close: {e}");
+    }
+    EditorCloseRoute::HidFallback
 }
 
 fn handle_main_close(window: &Window, api: &CloseRequestApi) {

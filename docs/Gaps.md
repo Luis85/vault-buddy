@@ -2530,6 +2530,25 @@ confirming no migration or fixture writes an out-of-range value (the
 paste path's default font size was 16 until Task 36 moved it to the shared
 30).
 
+### GAP-180 · Low · After an unreadable `recovery.json`, "Open saved project" keeps it only until the next edit journals over it
+`src/composables/useEditorRecovery.ts` (`openSaved`),
+`src-tauri/src/editor/recovery.rs` (`write_locked`).
+Found by Task 37. A malformed journal is reported and left byte-identical
+by the load (A27), and the recovery dialog offers Discard or "Open saved
+project". The second opens a clean session over `project.json`, and the
+FIRST acknowledged edit in it schedules a journal write that REPLACES the
+unreadable file. The dialog says so in plain words ("leaves the unreadable
+changes on disk until your next edit replaces them"), so nothing is lost
+silently, but the only way to keep those bytes is to copy the file out of
+`editor-projects\<projectId>\` by hand before editing. There is no
+quarantine step and no "Save a copy" (PERSISTENCE-AND-SECURITY.md lists it
+beside Resume and Discard).
+
+**Fix:** on "Open saved project", rename the unreadable journal aside
+(`recovery.unreadable-<timestamp>.json`, owned-file rails) before the new
+session can journal, and have `list_projects` keep reporting it so the
+user can export or discard it later.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md
