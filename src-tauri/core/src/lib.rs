@@ -8,6 +8,7 @@ pub mod companion_placement;
 pub mod config_merge;
 pub mod crash;
 pub mod daily_notes;
+pub mod device_names;
 pub mod discovery;
 pub mod document_import;
 pub mod document_import_config;

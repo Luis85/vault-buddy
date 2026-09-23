@@ -709,3 +709,8 @@ fn extracting_an_absent_entry_is_refused() {
         .expect_err("absent");
     assert_eq!(err.code, EditorErrorCode::InvalidProject);
 }
+
+// Task 38 fix round 1: one test per rule the first round left untested,
+// nested (the validate_transitions_tests.rs precedent) at the 800-line cap.
+#[path = "package_rules_tests.rs"]
+mod rules;

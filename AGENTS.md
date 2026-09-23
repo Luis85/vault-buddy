@@ -214,9 +214,12 @@ vault-buddy/
 │   │                           #     in core because the one collision-suffix minter,
 │   │                           #     capture_paths::candidate, is pub(crate) to this crate),
 │   │                           #   app_diagnostics, vault_walk, crash, throttle, sync_util,
+│   │                           #   device_names (Windows CON/NUL/COM1... component check),
 │   │                           #   editor/ (the tutorial editor's pure model, commands,
 │   │                           #     validation; package.rs = the portable-package
-│   │                           #     validator/writer, the crate's ONE `zip` use, ADR R9)
+│   │                           #     validator/writer, the crate's ONE `zip` use (major 4,
+│   │                           #     the same 4.6.1 tauri-plugin-updater locks), ADR R9;
+│   │                           #     package_archive.rs = its raw end-record/directory walk)
 │   ├── capture/src/            # AUDIO engine: devices, mixer, encoder, session,
 │   │                           #   recovery, rename
 │   ├── mcp/src/                # MCP server: service (7 tools), http (guards+runner),

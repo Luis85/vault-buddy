@@ -23,6 +23,7 @@ pub mod migrate;
 pub mod model;
 pub mod model_cues;
 pub mod package;
+mod package_archive;
 pub mod peaks;
 pub mod probe;
 pub mod projection;

@@ -48,8 +48,10 @@ use super::ids::is_valid_id;
 use super::limits;
 use super::model::{Asset, Builtin};
 use super::model_cues::WorkspaceEnvelope;
+use super::package_archive::{read_end_record, walk_central_directory, MAX_ENTRY_NAME_BYTES};
 use super::validate::validate_envelope;
 use super::PACKAGE_SCHEMA;
+use crate::device_names::is_reserved_device_name;
 
 /// The manifest's entry name; always the archive's first entry.
 pub const MANIFEST_NAME: &str = "package.json";
@@ -58,9 +60,6 @@ pub const MANIFEST_NAME: &str = "package.json";
 pub const WORKSPACE_NAME: &str = "workspace.json";
 const MEDIA_DIR: &str = "media";
 const PRODUCTS_DIR: &str = "products";
-/// An entry name's cap, in bytes (the brief's ≤ 255; also comfortably
-/// inside every filesystem's own component limit once extracted).
-const MAX_ENTRY_NAME_BYTES: usize = 255;
 /// The manifest lists at most `MAX_ASSETS + MAX_PRODUCTS` files of a few
 /// hundred bytes each; 1 MiB is two orders of magnitude of headroom and
 /// still bounds the one read that happens before anything is validated.
@@ -69,8 +68,6 @@ const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 /// `wav`, `png`...). The name is otherwise fixed to the asset id, so the
 /// extension is the only free text in a media path.
 const MAX_EXTENSION_CHARS: usize = 8;
-/// The ZIP end-of-central-directory record's fixed size (APPNOTE 4.3.16).
-const END_RECORD_LEN: u64 = 22;
 /// `st_mode`'s file-type bits and the one type a package entry may carry.
 const S_IFMT: u32 = 0o170_000;
 const S_IFREG: u32 = 0o100_000;
@@ -170,7 +167,10 @@ fn zip_write_failed(e: ZipError) -> EditorError {
 /// `workspace.json` or something under `media/` or `products/`. A
 /// backslash is refused anywhere (not only in front): it is a separator on
 /// Windows, so `media\..\..\x` would traverse there. A `:` is refused
-/// anywhere too -- a drive prefix, or an NTFS alternate data stream.
+/// anywhere too -- a drive prefix, or an NTFS alternate data stream. And a
+/// last segment whose stem is a Windows device (`media/CON.mp4`: `CON` is a
+/// valid asset id) is refused, because extracting it would open the device
+/// (`crate::device_names`).
 pub fn validate_entry_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("an entry name is empty".to_string());
@@ -197,6 +197,9 @@ pub fn validate_entry_name(name: &str) -> Result<(), String> {
     {
         return Err("has an empty, `.` or `..` path segment".to_string());
     }
+    if segments.last().is_some_and(|s| is_reserved_device_name(s)) {
+        return Err("is a reserved device name (CON, NUL, COM1...) on Windows".to_string());
+    }
     let allowed = match segments.as_slice() {
         [only] => *only == MANIFEST_NAME || *only == WORKSPACE_NAME,
         [dir, _, ..] => *dir == MEDIA_DIR || *dir == PRODUCTS_DIR,
@@ -206,64 +209,6 @@ pub fn validate_entry_name(name: &str) -> Result<(), String> {
         return Err("is not a package entry".to_string());
     }
     Ok(())
-}
-
-/// The ZIP end record, read by hand from the archive's last 22 bytes.
-///
-/// `zip::ZipArchive` indexes entries by name and silently keeps ONE of two
-/// entries that share an exact name (its central directory is an
-/// `IndexMap` keyed on the name), so a second `workspace.json` could hide
-/// behind the first. Comparing this record's own entry count with the
-/// crate's `len()` is the only way to see that collapse. Requiring the
-/// record to be the final 22 bytes (no archive comment, nothing trailing,
-/// which `write_package` never emits) pins it to the one record the crate
-/// tries first, so the two cannot be reading different directories.
-struct EndRecord {
-    entries: u64,
-    directory_offset: u64,
-}
-
-fn read_end_record<R: Read + Seek>(reader: &mut R, len: u64) -> Result<EndRecord, EditorError> {
-    if len < END_RECORD_LEN {
-        return Err(invalid("the project package is too short to be an archive"));
-    }
-    let mut rec = [0u8; END_RECORD_LEN as usize];
-    reader
-        .seek(SeekFrom::Start(len - END_RECORD_LEN))
-        .and_then(|_| reader.read_exact(&mut rec))
-        .map_err(unreadable)?;
-    let u16_at = |i: usize| u64::from(u16::from_le_bytes([rec[i], rec[i + 1]]));
-    let u32_at = |i: usize| {
-        u64::from(u32::from_le_bytes([
-            rec[i],
-            rec[i + 1],
-            rec[i + 2],
-            rec[i + 3],
-        ]))
-    };
-    if rec[..4] != [0x50, 0x4b, 0x05, 0x06] || u16_at(20) != 0 {
-        return Err(invalid(
-            "the project package must end with a plain ZIP end record (no comment or trailing data)",
-        ));
-    }
-    let (entries, directory_size, directory_offset) = (u16_at(10), u32_at(12), u32_at(16));
-    if u16_at(4) != 0 || u16_at(6) != 0 || u16_at(8) != entries {
-        return Err(invalid("the project package spans several disks"));
-    }
-    if entries == 0xFFFF || directory_offset == 0xFFFF_FFFF || directory_size == 0xFFFF_FFFF {
-        return Err(invalid(
-            "the project package uses ZIP64, which no package needs",
-        ));
-    }
-    if directory_offset + directory_size != len - END_RECORD_LEN {
-        return Err(invalid(
-            "the project package's central directory does not end at its end record",
-        ));
-    }
-    Ok(EndRecord {
-        entries,
-        directory_offset,
-    })
 }
 
 /// The facts the per-entry scan keeps: every name's declared size, and the
@@ -295,6 +240,10 @@ fn scan_entries<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<EntryScan
                 "package entry {name:?} is a duplicate (names are compared case-insensitively)"
             )));
         }
+        // `unix_mode()` is `None` for an entry made on a host other than Unix
+        // or DOS, so a link flagged that way passes this rule. That is safe
+        // only because Task 39 copies bytes into files IT names and never
+        // materialises a link -- keep it so.
         if file
             .unix_mode()
             .is_some_and(|m| m & S_IFMT != 0 && m & S_IFMT != S_IFREG)
@@ -303,22 +252,13 @@ fn scan_entries<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<EntryScan
                 "package entry {name:?} is not a regular file (a symlink or special entry)"
             )));
         }
-        if file.encrypted() {
-            return Err(invalid(format!("package entry {name:?} is encrypted")));
-        }
+        // Encryption and the compression method were refused earlier, from
+        // the raw directory (`package_archive::walk_central_directory`).
         let (size, compressed) = (file.size(), file.compressed_size());
-        match file.compression() {
-            CompressionMethod::Stored if size != compressed => {
-                return Err(invalid(format!(
-                    "package entry {name:?} is stored with inconsistent sizes"
-                )));
-            }
-            CompressionMethod::Stored | CompressionMethod::Deflated => {}
-            other => {
-                return Err(invalid(format!(
-                    "package entry {name:?} uses unsupported compression {other}"
-                )));
-            }
+        if file.compression() == CompressionMethod::Stored && size != compressed {
+            return Err(invalid(format!(
+                "package entry {name:?} is stored with inconsistent sizes"
+            )));
         }
         if size > compressed.max(1).saturating_mul(limits::MAX_ENTRY_RATIO) {
             return Err(invalid(format!(
@@ -504,7 +444,8 @@ fn check_manifest(m: &PackageManifest, scan: &EntryScan) -> Result<(), EditorErr
 /// Cross-checks the manifest against the validated envelope and returns
 /// the missing asset ids (A17's lightweight semantics).
 ///
-/// An asset needs no packaged bytes when it is a `card` builtin (the one
+/// An asset needs no packaged bytes when EVERY definition of it (the live
+/// graph's and each snapshot's) is a `card` builtin (the one
 /// asset kind the native app synthesizes from the project itself) or a
 /// `linked_asset` (detached audio: its bytes are its source's, and that
 /// source is itself in the referenced set). Every OTHER builtin kind
@@ -542,21 +483,28 @@ fn cross_check(m: &PackageManifest, env: &WorkspaceEnvelope) -> Result<Vec<Strin
         .products
         .iter()
         .filter_map(|p| p.snapshot.as_deref());
-    let mut assets: HashMap<&str, &Asset> = HashMap::new();
+    // Every definition of an id, across the live graph AND each snapshot:
+    // each graph is validated on its own, but nothing makes them agree, so
+    // an id may be a card in one and the real screen recording in another.
+    let mut definitions: HashMap<&str, Vec<&Asset>> = HashMap::new();
     for asset in std::iter::once(&env.project)
         .chain(snapshots)
         .flat_map(|p| &p.assets)
     {
-        assets.entry(asset.id.as_str()).or_insert(asset);
+        definitions
+            .entry(asset.id.as_str())
+            .or_default()
+            .push(asset);
     }
+    let needs_bytes = |a: &&Asset| a.builtin != Some(Builtin::Card) && a.linked_asset.is_none();
     let packaged: HashSet<&str> = m.media.iter().map(|f| f.asset_id.as_str()).collect();
     Ok(referenced
         .into_iter()
         .filter(|id| !packaged.contains(id.as_str()))
         .filter(|id| {
-            assets
+            definitions
                 .get(id.as_str())
-                .is_none_or(|a| a.builtin != Some(Builtin::Card) && a.linked_asset.is_none())
+                .is_none_or(|defs| defs.iter().any(needs_bytes))
         })
         .collect())
 }
@@ -580,12 +528,15 @@ pub fn inspect_archive<R: Read + Seek>(mut reader: R) -> Result<PackageIndex, Ed
             limits::MAX_PACKAGE_ENTRIES
         )));
     }
+    walk_central_directory(&mut reader, &end)?;
     reader.seek(SeekFrom::Start(0)).map_err(unreadable)?;
     let mut archive = ZipArchive::new(reader).map_err(unreadable)?;
-    if archive.len() as u64 != end.entries
-        || archive.central_directory_start() != end.directory_offset
-        || archive.offset() != 0
-    {
+    if archive.central_directory_start() != end.directory_offset || archive.offset() != 0 {
+        return Err(invalid(
+            "the zip reader chose a different central directory than the package's end record names",
+        ));
+    }
+    if archive.len() as u64 != end.entries {
         return Err(invalid(
             "the project package holds duplicate entry names (its directory lists more entries than distinct names)",
         ));
@@ -666,10 +617,16 @@ pub fn extract_entry_bounded<R: Read + Seek, W: Write>(
 /// Writes a package: `package.json` first, then `workspace.json` (both
 /// Deflated), then each `(name, reader)` of `files` Stored and streamed --
 /// media is already compressed, and Stored keeps our own output far from
-/// the ratio guard. Every file must be a manifest-listed path, written
-/// once, at exactly its listed size, and every listed path must be
-/// written: a package this function produces always passes
-/// `inspect_archive`'s structural rules, or it is not produced at all.
+/// the ratio guard.
+///
+/// What it enforces is the FILE SET, and only that: the manifest lists no
+/// path twice, every file is a listed path that passes
+/// `validate_entry_name`, written once, at exactly its listed size (an
+/// oversized input is refused after one byte past that size, never read
+/// to its end), and every listed path is written. It does NOT validate the
+/// manifest's ids, path shapes or digests, the 200 MiB media limit or the
+/// workspace -- the caller builds those from an already-valid project,
+/// and `inspect_archive` remains the one judge of a package.
 pub fn write_package<W, N, R>(
     writer: W,
     manifest: &PackageManifest,
@@ -682,12 +639,17 @@ where
     R: Read,
 {
     let internal = |m: String| EditorError::new(EditorErrorCode::Internal, m);
-    let mut pending: HashMap<&str, u64> = manifest
+    let mut pending: HashMap<&str, u64> = HashMap::new();
+    let listed = manifest
         .media
         .iter()
         .map(|f| (f.path.as_str(), f.size))
-        .chain(manifest.products.iter().map(|f| (f.path.as_str(), f.size)))
-        .collect();
+        .chain(manifest.products.iter().map(|f| (f.path.as_str(), f.size)));
+    for (path, size) in listed {
+        if pending.insert(path, size).is_some() {
+            return Err(internal(format!("the manifest lists {path} twice")));
+        }
+    }
     let json = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
     let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
     let manifest_json = serde_json::to_vec_pretty(manifest)
@@ -701,14 +663,20 @@ where
         zip.start_file(name, json).map_err(zip_write_failed)?;
         zip.write_all(bytes).map_err(|e| write_failed(&e))?;
     }
-    for (name, mut reader) in files {
+    for (name, reader) in files {
         let name = name.as_ref();
         validate_entry_name(name).map_err(|why| internal(format!("{name:?} {why}")))?;
         let expected = pending
             .remove(name)
             .ok_or_else(|| internal(format!("{name} is not an unwritten manifest path")))?;
         zip.start_file(name, stored).map_err(zip_write_failed)?;
-        let copied = io::copy(&mut reader, &mut zip).map_err(|e| write_failed(&e))?;
+        let mut bounded = reader.take(expected.saturating_add(1));
+        let copied = io::copy(&mut bounded, &mut zip).map_err(|e| write_failed(&e))?;
+        if copied > expected {
+            return Err(internal(format!(
+                "{name} is larger than the {expected} bytes the manifest lists"
+            )));
+        }
         if copied != expected {
             return Err(internal(format!(
                 "{name} is {copied} bytes but the manifest lists {expected}"
