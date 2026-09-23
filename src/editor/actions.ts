@@ -91,6 +91,7 @@ import {
   targetGroupId,
   targetTrackId,
 } from "./actionTargets";
+import { buildCue, resolveCue } from "./cueActions";
 import type { EditorCommand } from "./editorCommandTypes";
 import { detachRefusal, freeAudioTrackFor } from "./mixRules";
 import { clipOutputEnd } from "./timeMap";
@@ -222,23 +223,19 @@ function resolveRender(): Verdict {
 }
 
 /**
- * `addTrackVideo`/`addTrackAudio` (Task 26) and the seven teaching-cue
- * actions `addText`/`addArrow`/`addHighlight`/`addSpotlight`/`addZoom`/
- * `addStep`/`addMask` (Task 34): each maps to a wire kind (`addTrack`,
- * `addEffect`) Rust NOW accepts (a real caller sends `addTrack` --
+ * `addTrackVideo`/`addTrackAudio` (Task 26): each maps to a wire kind
+ * (`addTrack`) Rust NOW accepts (a real caller sends it --
  * `TimelineView.vue`'s below-the-last-lane asset drop, `editorProject.
  * execute` directly, the `TrackHeader.vue` precedent, never through this
- * registry; nothing yet sends `addEffect` -- there is no teaching-cue
- * toolbar in this repo for a later task to wire up), but none of these
- * NINE `ActionId`s has a keyboard/menu/toolbar surface of its own yet.
- * Without an explicit resolver they would fall through
+ * registry), but neither `ActionId` has a keyboard/menu/toolbar surface of
+ * its own yet. Without an explicit resolver they would fall through
  * `RESOLVERS[actionId]?.(ctx) ?? {enabled:false, reason:null}` in
  * `resolveActions` below -- disabled with NO reason, which
  * `editorActions.test.ts`'s "every disabled action carries a reason"
  * invariant exists precisely to catch. Reusing `unavailableReason` keeps
  * the user-facing text identical to what `UNIMPLEMENTED_KINDS`'s gate
- * showed before each kind's own task removed it from that set, even
- * though the underlying mechanism changed.
+ * showed before. (Task 34 parked the seven teaching-cue actions here too;
+ * Task 35 replaced them with the real `cueActions.ts` pair below.)
  */
 function resolveNoSurfaceYet(actionId: ActionId): Verdict {
   return { enabled: false, reason: unavailableReason(actionId) };
@@ -277,13 +274,15 @@ const RESOLVERS: Partial<Record<ActionId, (ctx: ActionContext) => Verdict>> = {
   focusPreview: resolveAlways,
   addTrackVideo: () => resolveNoSurfaceYet("addTrackVideo"),
   addTrackAudio: () => resolveNoSurfaceYet("addTrackAudio"),
-  addText: () => resolveNoSurfaceYet("addText"),
-  addArrow: () => resolveNoSurfaceYet("addArrow"),
-  addHighlight: () => resolveNoSurfaceYet("addHighlight"),
-  addSpotlight: () => resolveNoSurfaceYet("addSpotlight"),
-  addZoom: () => resolveNoSurfaceYet("addZoom"),
-  addStep: () => resolveNoSurfaceYet("addStep"),
-  addMask: () => resolveNoSurfaceYet("addMask"),
+  // Task 35: the teaching tools (`cueActions.ts` -- which clip, which
+  // source span, the default length).
+  addText: resolveCue,
+  addArrow: resolveCue,
+  addHighlight: resolveCue,
+  addSpotlight: resolveCue,
+  addZoom: resolveCue,
+  addStep: resolveCue,
+  addMask: resolveCue,
 };
 
 function labelFor(actionId: ActionId, ctx: ActionContext): string {
@@ -466,6 +465,13 @@ const BUILDERS: Partial<Record<ActionId, Builder>> = {
   fadeIn: (ctx) => buildFade(ctx, "fadeIn"),
   fadeOut: (ctx) => buildFade(ctx, "fadeOut"),
   transition: (ctx) => addTransitionCommand(ctx.project as Project, primaryTargetClip(ctx) as Clip),
+  addText: buildCue,
+  addArrow: buildCue,
+  addHighlight: buildCue,
+  addSpotlight: buildCue,
+  addZoom: buildCue,
+  addStep: buildCue,
+  addMask: buildCue,
 };
 
 /**

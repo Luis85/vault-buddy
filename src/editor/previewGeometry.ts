@@ -76,3 +76,9 @@ export function clientToCanvas(
     y: (localY / box.height) * canvas.height,
   };
 }
+
+/** A box as an absolutely-positioned element's inline style (stage px) —
+ * how the cue layers sit exactly on the letterboxed canvas. */
+export function boxStyle(box: Box): Record<"left" | "top" | "width" | "height", string> {
+  return { left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px` };
+}

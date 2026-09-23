@@ -275,12 +275,17 @@ describe("PreviewToolbar — overflow moves into More, never a second toolbar", 
     expect(w.emitted("focus-preview")).toHaveLength(1);
   });
 
-  it("a still-unimplemented tool (e.g. addText) renders disabled with its reason as the title", () => {
+  it("a disabled tool (e.g. addText with no project) renders disabled with its reason as the title", () => {
     const w = mount(PreviewToolbar, { props: { overflowCount: 0 } });
     const addText = w.get('[data-testid="preview-toolbar-addText"]');
     expect(addText.attributes("aria-disabled")).toBe("true");
     // Fix round 1, finding 1: human copy, never the raw Rust wire kind.
-    expect(addText.attributes("title")).toBe("Text arrives in a later update.");
+    // Task 35: the teaching tools are real now, so the reason is their own
+    // resolver's ("arrives in a later update" was Task 34's placeholder).
+    expect(addText.attributes("title")).toBe("No project is open.");
+    expect(w.get('[data-testid="preview-toolbar-render"]').attributes("title")).toBe(
+      "Rendering a video arrives in a later update.",
+    );
   });
 
   it("reflects libraryOpen/inspectorOpen as aria-pressed on their own toggle buttons only", () => {

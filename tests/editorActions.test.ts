@@ -195,7 +195,9 @@ describe("resolveActions — disabled actions carry a reason", () => {
     // Task 32: `ratio` left this list -- it is no longer gated by an
     // unimplemented wire kind (`setCanvas` shipped), so with a project open
     // it is now enabled; see "sends setCanvas..." below for its own coverage.
-    for (const id of ["addText", "addCaption", "addMarker", "addTrackVideo"] as const) {
+    // Task 35: `addText` left it too -- the teaching tools are real now
+    // (`cueActions.ts`, covered in tests/editorCueOverlay.test.ts).
+    for (const id of ["addCaption", "addMarker", "addTrackVideo"] as const) {
       expect(resolved[id].enabled).toBe(false);
       expect(commandFor(id, context)).toBeNull();
     }
@@ -303,9 +305,10 @@ describe("resolveActions — disabled actions carry a reason", () => {
     const resolved = resolveActions(context);
     // Task 32: `ratio` left this map too -- with a project open (as this
     // context has) it is now enabled and carries no reason at all.
+    // Task 35: `addText`/`addArrow` left this map -- the teaching tools
+    // have real resolvers now, whose reasons are their own (e.g. "No
+    // visible clip at the playhead to add a cue to").
     const expectedReasons: Partial<Record<string, string>> = {
-      addText: "Text arrives in a later update.",
-      addArrow: "Arrow arrives in a later update.",
       addCaption: "Add caption arrives in a later update.",
       addMarker: "Add marker arrives in a later update.",
       addTrackVideo: "Add video track arrives in a later update.",
@@ -627,10 +630,9 @@ describe("UNIMPLEMENTED_KINDS", () => {
       // TitlesLibrary.vue sends addCard directly through
       // editorProject.execute, the MediaLibrary.vue "+" precedent.
       "addCard", "updateCard", "insertIntro",
-      // Task 34: Rust now accepts all three teaching-cue commands, so the
-      // ROW is gone -- no ActionId has ever mapped to any of them yet
-      // (there is no teaching-cue toolbar in this repo to wire), so this
-      // is bookkeeping-only, same as `addCard`'s own three rows above.
+      // Task 34: Rust now accepts all three teaching-cue commands; Task 35
+      // wired them (the seven teaching tools -> addEffect via cueActions.ts;
+      // CueHandles/EffectSection send updateEffect/removeEffect directly).
       "addEffect", "updateEffect", "removeEffect",
     ]) {
       expect(UNIMPLEMENTED_KINDS.has(implemented)).toBe(false);

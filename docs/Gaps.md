@@ -2276,9 +2276,22 @@ render produces, and it says so nowhere on screen yet. What it does NOT show:
    closed form); only `hsin` is a close but not bit-identical stand-in for
    smoothstep, so a fade drawn in the timeline/preview can cross very
    slightly differently than the exported file's actual gain curve.
-2. **Effects, captions, markers and cards** — nothing clip-linked is
-   drawn; a `card` (and every other `builtin` asset) has no file and is not
-   laid out at all.
+2. **Effects, captions, markers and cards** — captions and markers are
+   not drawn; a `card` (and every other `builtin` asset) has no file and is
+   not laid out as media. **Teaching cues ARE drawn** (tutorial-editor
+   Task 35): `src/components/editor/preview/CueOverlay.vue` paints each
+   active cue as SVG in canvas pixels from `src/editor/cueShapes.ts`, and an
+   active zoom scales the media and the cues (`cueGeometry.zoomTransform`).
+   Only the ARROW is held to the render by construction (its polygons come
+   from `cueGeometry.arrowPath`, the shared `tests/fixtures/
+   editor-arrow-cases.json` Task 43's `ass.rs` reads). The rest are
+   approximations: text is not wrapped (only the user's own newlines break
+   a line) and a step's pill is sized from an average glyph width, where
+   libass measures real glyphs; the zoom ramp follows the preview's 10 Hz
+   time report, so it steps rather than glides; and whether the render
+   applies a zoom to the burned-in cues as the preview does (the reference
+   compositor draws cues under the same camera) is Task 42/43's to match or
+   record.
 3. **Layout and colour.** Rotation, mirror/flip, crop (`crop_zoom`/
    `crop_x`/`crop_y`), fit and frame shape ARE applied (tutorial-editor
    Task 31): each visual layer sits in a clipping frame at its box, rounded

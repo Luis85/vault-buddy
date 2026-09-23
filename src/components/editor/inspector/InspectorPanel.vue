@@ -8,7 +8,8 @@
  * §02: "Unselected states teach what to do next rather than filling the
  * inspector with disabled controls.").
  *
- * The six category tabs are always shown (a `role="tablist"` bound to
+ * The six category tabs are shown whenever no teaching cue is selected (see
+ * below) (a `role="tablist"` bound to
  * `editorWorkspace.propertyTab`, the persisted `property_tab` field —
  * choosing a tab is a view preference independent of what's selected right
  * now, so it survives across selections and a reopen). What renders BELOW
@@ -29,10 +30,17 @@
  * shell changing. Only the ACTIVE category's slot is rendered; the other
  * five stay unmounted, the same "don't pay for a hidden tab" posture
  * `ScreenSourcePicker`'s `<TabGroup>` already uses elsewhere in this repo.
+ *
+ * **A selected teaching cue** (Task 35) is a different object from its clip,
+ * so while one is selected (`cueActions.selectedEffectOf`) the `#effect`
+ * slot replaces the clip categories entirely, with a "Clip settings" button
+ * back to them (it drops the cue selection, keeping the clip selected).
  */
 import { computed } from "vue";
 
 import { useRovingTablist } from "../../../composables/useRovingTablist";
+import { selectedEffectOf } from "../../../editor/cueActions";
+import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 
 type CategoryId = "clip" | "layout" | "fades" | "audio" | "speed" | "color";
@@ -48,6 +56,11 @@ const CATEGORIES: { id: CategoryId; label: string }[] = [
 const CATEGORY_IDS = CATEGORIES.map((c) => c.id);
 
 const workspace = useEditorWorkspaceStore();
+const editorProject = useEditorProjectStore();
+
+const selectedEffectId = computed(
+  () => selectedEffectOf(editorProject.project, workspace.selected, workspace.selectionClipIds)?.id ?? null,
+);
 
 /** Falls back to the first category when the persisted tab is unset or
  * names something this shell no longer recognizes (a stale `workspace.json`
@@ -83,59 +96,79 @@ const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
     class="flex h-full flex-col gap-2"
   >
     <div
-      role="tablist"
-      aria-label="Inspector categories"
-      data-testid="inspector-tablist"
-      class="flex flex-wrap gap-1"
-      @keydown="onTablistKeydown"
+      v-if="selectedEffectId"
+      data-testid="inspector-effect"
+      class="flex flex-1 flex-col gap-2 text-micro text-fg-subtle"
     >
       <button
-        v-for="(cat, i) in CATEGORIES"
-        :id="`inspector-tab-${cat.id}`"
-        :key="cat.id"
-        :ref="(el) => setTabRef(i, el as Element | null)"
         type="button"
-        role="tab"
-        :data-testid="`inspector-tab-${cat.id}`"
-        :aria-selected="cat.id === activeTab"
-        :aria-controls="`inspector-tabpanel-${cat.id}`"
-        :tabindex="cat.id === activeTab ? 0 : -1"
-        class="cursor-pointer rounded px-1.5 py-0.5 text-micro transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-        :class="cat.id === activeTab ? 'bg-accent/20 text-accent-fg' : 'text-fg-subtle'"
-        @click="selectTab(cat.id)"
+        data-testid="inspector-effect-back"
+        class="cursor-pointer self-start rounded px-1.5 py-0.5 text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        @click="workspace.setSelected(null)"
       >
-        {{ cat.label }}
+        ← Clip settings
       </button>
+      <slot
+        name="effect"
+        :effect-id="selectedEffectId"
+      />
     </div>
-
-    <div
-      :id="`inspector-tabpanel-${activeTab}`"
-      role="tabpanel"
-      :aria-labelledby="`inspector-tab-${activeTab}`"
-      data-testid="inspector-body"
-      class="flex-1 text-micro text-fg-subtle"
-    >
-      <p
-        v-if="!hasSelection"
-        data-testid="inspector-empty"
+    <template v-else>
+      <div
+        role="tablist"
+        aria-label="Inspector categories"
+        data-testid="inspector-tablist"
+        class="flex flex-wrap gap-1"
+        @keydown="onTablistKeydown"
       >
-        Select a clip to adjust it…
-      </p>
-      <template v-else>
+        <button
+          v-for="(cat, i) in CATEGORIES"
+          :id="`inspector-tab-${cat.id}`"
+          :key="cat.id"
+          :ref="(el) => setTabRef(i, el as Element | null)"
+          type="button"
+          role="tab"
+          :data-testid="`inspector-tab-${cat.id}`"
+          :aria-selected="cat.id === activeTab"
+          :aria-controls="`inspector-tabpanel-${cat.id}`"
+          :tabindex="cat.id === activeTab ? 0 : -1"
+          class="cursor-pointer rounded px-1.5 py-0.5 text-micro transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          :class="cat.id === activeTab ? 'bg-accent/20 text-accent-fg' : 'text-fg-subtle'"
+          @click="selectTab(cat.id)"
+        >
+          {{ cat.label }}
+        </button>
+      </div>
+
+      <div
+        :id="`inspector-tabpanel-${activeTab}`"
+        role="tabpanel"
+        :aria-labelledby="`inspector-tab-${activeTab}`"
+        data-testid="inspector-body"
+        class="flex-1 text-micro text-fg-subtle"
+      >
         <p
-          v-if="isMultiSelection"
-          data-testid="inspector-scope"
-          class="mb-2 text-fg-muted"
+          v-if="!hasSelection"
+          data-testid="inspector-empty"
         >
-          {{ selectionCount }} clips selected
+          Select a clip to adjust it…
         </p>
-        <slot
-          :name="activeTab"
-          :clip-ids="workspace.selectionClipIds"
-        >
-          This section arrives in a later task.
-        </slot>
-      </template>
-    </div>
+        <template v-else>
+          <p
+            v-if="isMultiSelection"
+            data-testid="inspector-scope"
+            class="mb-2 text-fg-muted"
+          >
+            {{ selectionCount }} clips selected
+          </p>
+          <slot
+            :name="activeTab"
+            :clip-ids="workspace.selectionClipIds"
+          >
+            This section arrives in a later task.
+          </slot>
+        </template>
+      </div>
+    </template>
   </div>
 </template>

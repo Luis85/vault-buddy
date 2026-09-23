@@ -22,9 +22,9 @@
  * window's floor size — the transport row stays reachable regardless.
  *
  * The preview APPROXIMATES the render (docs/Gaps.md GAP-173): it shows
- * source media placed, stacked, faded by opacity and mixed for monitoring;
- * it does not show effects, captions, cards, transitions or fades, and its
- * sync is element-seek accurate, not frame accurate.
+ * source media placed, stacked, faded by opacity and mixed for monitoring,
+ * plus teaching cues (below); it does not show captions or transitions, and
+ * its sync is element-seek accurate, not frame accurate.
  *
  * `clientToCanvas` (`editor/previewGeometry.ts`, pure and tested) maps a
  * pointer on the stage into output-canvas pixels, undoing the letterbox;
@@ -37,18 +37,31 @@
  * the controller shows (so the picture moves with the handles); the store
  * is never touched until the one `setLayout` on release, and a `null`
  * hands the controller back the store's own project.
+ *
+ * **Teaching cues** (Task 35; F-27–F-33) come in two layers, split exactly
+ * like the layout handles: `CueOverlay` (the cues as rendered) sits INSIDE
+ * the stage above the media, and `CueHandles` (selection, grab handles, the
+ * zoom's focal marker) is a sibling AFTER `LayoutHandles`, so a cue over a
+ * full-frame clip stays reachable. An active zoom cue scales the media
+ * layers and the cue overlay alike (`cueGeometry.activeZoom`), clipped to
+ * the canvas frame so a zoom never spills into the letterbox; it follows
+ * the controller's 10 Hz time, so the ramp steps rather than glides. A
+ * click on the bare stage drops a cue selection.
  */
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
+import { activeCues, activeZoom } from "../../../editor/cueGeometry";
 import { EditorPortError } from "../../../editor/port";
 import type { AudioContextLike } from "../../../editor/previewController";
 import { PreviewController } from "../../../editor/previewController";
 import { clientToCanvas, containRect } from "../../../editor/previewGeometry";
-import type { Project } from "../../../editorTypes";
+import type { Effect, Project } from "../../../editorTypes";
 import { logWarning } from "../../../logging";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import CueHandles from "./CueHandles.vue";
+import CueOverlay from "./CueOverlay.vue";
 import LayoutHandles from "./LayoutHandles.vue";
 import TransportBar from "./TransportBar.vue";
 
@@ -82,6 +95,27 @@ let observer: ResizeObserver | null = null;
 
 const canvas = computed(() => editorProject.project?.canvas ?? { width: 16, height: 9 });
 const frame = computed(() => containRect(canvas.value, stageSize.value));
+
+/** A cue drag's transient copy of one effect (R14), or `null`. */
+const cueDraft = ref<Effect | null>(null);
+const zoom = computed(() => activeZoom(activeCues(editorProject.project, currentMs.value), currentMs.value));
+
+/** The media layers under the zoom, scaled about the canvas frame's origin. */
+const layersStyle = computed(() => {
+  const [z, f] = [zoom.value, frame.value];
+  return {
+    transformOrigin: `${f.left}px ${f.top}px`,
+    transform: `translate(${z.tx * f.width}px, ${z.ty * f.height}px) scale(${z.scale})`,
+  };
+});
+/** While zoomed in, the scaled layers are clipped to the canvas frame. */
+const zoomClip = computed(() => {
+  if (zoom.value.scale <= 1) return {};
+  const f = frame.value;
+  const right = stageSize.value.width - f.left - f.width;
+  const bottom = stageSize.value.height - f.top - f.height;
+  return { clipPath: `inset(${f.top}px ${right}px ${bottom}px ${f.left}px)` };
+});
 
 function assetName(assetId: string): string {
   return editorProject.project?.assets.find((a) => a.id === assetId)?.name ?? assetId;
@@ -192,6 +226,7 @@ function togglePlay(): void {
 }
 
 function onPointerDown(event: PointerEvent): void {
+  if (workspace.selected?.type === "effect") workspace.setSelected(null);
   const el = stageRef.value;
   if (!el) return;
   emit("canvas-pointerdown", clientToCanvas(event, el.getBoundingClientRect(), canvas.value));
@@ -221,15 +256,35 @@ function onPointerDown(event: PointerEvent): void {
           }"
         />
         <div
-          ref="layerHostRef"
-          data-testid="preview-layers"
           class="absolute inset-0"
+          :style="zoomClip"
+        >
+          <div
+            ref="layerHostRef"
+            data-testid="preview-layers"
+            class="absolute inset-0"
+            :style="layersStyle"
+          />
+        </div>
+        <CueOverlay
+          :project="editorProject.project"
+          :time-ms="currentMs"
+          :frame="frame"
+          :zoom="zoom"
+          :draft="cueDraft"
         />
       </div>
       <LayoutHandles
         :frame="frame"
         :canvas="canvas"
         @preview="onLayoutPreview"
+      />
+      <CueHandles
+        :frame="frame"
+        :canvas="canvas"
+        :time-ms="currentMs"
+        :zoom="zoom"
+        @preview="cueDraft = $event"
       />
     </div>
     <p

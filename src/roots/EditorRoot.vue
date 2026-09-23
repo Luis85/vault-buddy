@@ -48,6 +48,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import AudioSection from "../components/editor/inspector/AudioSection.vue";
 import ClipSection from "../components/editor/inspector/ClipSection.vue";
 import ColorSection from "../components/editor/inspector/ColorSection.vue";
+import EffectSection from "../components/editor/inspector/EffectSection.vue";
 import FadesSection from "../components/editor/inspector/FadesSection.vue";
 import InspectorPanel from "../components/editor/inspector/InspectorPanel.vue";
 import LayoutSection from "../components/editor/inspector/LayoutSection.vue";
@@ -247,6 +248,14 @@ onBeforeUnmount(() => {
             <ColorSection
               :key="clipIds.join(',')"
               :clip-ids="clipIds"
+            />
+          </template>
+          <!-- Task 35: a selected teaching cue, keyed on the cue itself (a
+               cue's kind fixes its field list). -->
+          <template #effect="{ effectId }">
+            <EffectSection
+              :key="effectId"
+              :effect-id="effectId"
             />
           </template>
         </InspectorPanel>

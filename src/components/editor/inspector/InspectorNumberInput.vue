@@ -8,12 +8,18 @@
  */
 import type { InspectorDraft } from "../../../composables/useInspectorDraft";
 
-const props = defineProps<{
-  field: InspectorDraft;
-  label: string;
-  testid: string;
-  disabled?: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    field: InspectorDraft;
+    label: string;
+    testid: string;
+    disabled?: boolean;
+    /** Task 35: a cue's Text field reuses this for its Enter/blur/Escape
+     * draft behaviour, and must not ask for a numeric keypad. */
+    inputmode?: "decimal" | "text";
+  }>(),
+  { disabled: false, inputmode: "decimal" },
+);
 
 function onInput(event: Event): void {
   const buffer = props.field.draft;
@@ -27,7 +33,7 @@ function onInput(event: Event): void {
     <input
       :data-testid="testid"
       type="text"
-      inputmode="decimal"
+      :inputmode="inputmode"
       class="rounded border border-line bg-stage px-1 py-0.5 text-fg disabled:opacity-50"
       :disabled="disabled"
       :value="field.draft.value"

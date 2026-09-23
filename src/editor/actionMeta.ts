@@ -209,12 +209,12 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * name `setCanvas` here purely to stay gated — now has its own `RESOLVERS`
  * entry and sends `setCanvas` directly from its ratio control in
  * `PreviewToolbar.vue`, never through `commandFor`. **Task 34 removed
- * `addEffect`/`updateEffect`/`removeEffect`, WITHOUT consumers**: Rust now
- * accepts all three (`core::editor::commands::cues`), but no `ActionId` in
- * this registry has ever mapped to any of them -- there is no
- * teaching-cue toolbar in this repo yet for a later task to wire up. The
- * row is gone purely because it would otherwise be a false claim that
- * Rust still refuses the kind.
+ * `addEffect`/`updateEffect`/`removeEffect`**, and Task 35 gave them their
+ * consumers: the seven teaching tools map to `addEffect` through
+ * `cueActions.ts`'s resolver/builder pair, while `updateEffect`/
+ * `removeEffect` are sent directly by `CueHandles.vue` and
+ * `EffectSection.vue` (the `ColorSection` precedent), never through this
+ * registry.
  */
 export const UNIMPLEMENTED_KINDS: ReadonlySet<string> = new Set([
   "setCaptionSettings", "addCaption", "updateCaption", "splitCaption", "removeCaptions",

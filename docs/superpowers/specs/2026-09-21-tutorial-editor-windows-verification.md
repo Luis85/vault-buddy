@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **16 rows** today (T1–T16), of which **0** carry a result. An
+This file carries **17 rows** today (T1–T17), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -188,3 +188,18 @@ aspect ratio or rendering `brightness()`/`contrast()`/`saturate()`/
 | # | Check | Steps | Result |
 | --- | --- | --- | --- |
 | T16 | **Canvas ratio and colour presets in the real window** | Open a staged capture (landscape source). (a) In the preview toolbar's **Aspect ratio** control, pick **9:16 Portrait**, then **1:1 Square**, then **4:3 Classic**, then back to **16:9 Landscape**. **Record**: that the stage letterboxes/pillarboxes correctly at each pick, that a small toast appears each time naming Checks and disappears on its own after a few seconds (or on its own Dismiss button), and that re-picking the CURRENTLY active ratio does nothing (no toast, no Undo entry). (b) Select a video clip, open the inspector's **Color** tab, and click through **Vivid**, **Warm**, **Cool**, **Mono** and **Sepia** while the clip plays. **Record**: that each preset visibly changes the picture (Vivid punchier, Warm more orange, Cool slightly desaturated, Mono black-and-white, Sepia brown-toned) and that the teaching-tool overlays (if any are on screen) are NOT tinted — only the source picture. (c) Drag the Saturation slider to its two extremes (0 and 2) and the Sepia/Grayscale sliders to 1: **Record** that the picture responds live as you drag, with no flash or a lag longer than a frame or two. (d) Select a title-card clip (Insert intro, or any `addCard` clip once one exists) and open **Color**: **Record** that the tab shows "Colour applies to footage, not title cards." instead of controls. | |
+
+## Task 35's row
+
+Task 35 adds the teaching cues' preview surface: the seven toolbar tools
+(`src/editor/cueActions.ts`), the SVG overlay drawn into the stage
+(`CueOverlay.vue`), the separate grab layer beside it (`CueHandles.vue`),
+the zoom's stage transform and the effect inspector (`EffectSection.vue`).
+Vitest checks the commands sent, the SVG attributes and the DOM layering in
+happy-dom; nothing automated shows WebView2 drawing the SVG exactly over the
+playing video at a real window size, the zoom's clip-path inside the
+letterbox, or a pointer reaching a cue's hit shape through a real layout box.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T17 | **Teaching cues drawn over the video, grabbed, zoomed** | Open a staged capture and select its (full-frame) clip with the playhead on it. (a) Press **Arrow** in the preview toolbar. **Record**: an arrow appears over the picture, its endpoints show as round handles, and the inspector switches to the arrow's fields with **Starts at (ms)** equal to the playhead. (b) Drag the arrow's head handle somewhere else, release, then press Ctrl+Z. **Record**: the arrow follows the pointer while dragging, the header's Undo label reads "Update effect" after release, and one Undo puts it back. (c) Press **Zoom**, then scrub the playhead through the zoom's span. **Record**: the picture scales up towards the focal marker and back, never showing black bars or the letterbox inside the canvas, and the arrow (if on screen) scales with the picture. (d) Press **Privacy cover**. **Record**: an opaque box covers that area of the picture, and the inspector shows "Covers pixels only while visible. It does not track motion and the original recording is unchanged." (e) Click the bare picture: **Record** that the cue selection drops and the clip's layout box (Task 31) is back; move the playhead before the clip starts and **Record** that the layout box disappears. (f) Resize the editor window: **Record** that the cues stay pinned to the same spots of the picture. | |

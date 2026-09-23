@@ -25,10 +25,13 @@
  */
 import { computed, ref } from "vue";
 
+import { clipSpanOf } from "../../../editor/actionTargets";
+import { selectedEffectOf } from "../../../editor/cueActions";
 import type { Handle, NormBox } from "../../../editor/layoutGeometry";
 import { HANDLES, moveBox, resizeFromHandle, roundBox } from "../../../editor/layoutGeometry";
 import type { Box, Size } from "../../../editor/previewGeometry";
-import { clientToCanvas, clipBox } from "../../../editor/previewGeometry";
+import { boxStyle as styleOfBox, clientToCanvas, clipBox } from "../../../editor/previewGeometry";
+import { clipIsActive } from "../../../editor/timeMap";
 import type { Clip, Project } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -62,15 +65,23 @@ interface Drag {
 let drag: Drag | null = null;
 
 /** One selected clip on a visible, unlocked video track — the only thing
- * that has a box to handle. */
+ * that has a box to handle — and only while it is ON SCREEN and no teaching
+ * cue on it is selected (Task 35, closing Task 31's carried finding: a
+ * full-frame clip's box covers the whole canvas, so it swallowed every
+ * stage pointerdown, even with the playhead nowhere near the clip). A
+ * selected cue owns the pointer through `CueHandles` instead. */
 const target = computed<Clip | null>(() => {
   const ids = workspace.selectionClipIds;
-  if (ids.length !== 1) return null;
-  const clip = editorProject.clipById(ids[0]);
-  const track = clip ? editorProject.project?.tracks.find((t) => t.id === clip.track_id) : undefined;
-  if (!clip || !track || track.kind !== "video" || !track.visible || track.locked) return null;
-  return clip;
+  const clip = ids.length === 1 ? editorProject.clipById(ids[0]) : undefined;
+  if (!clip || !onEditableVideoTrack(clip)) return null;
+  if (!clipIsActive(clipSpanOf(clip), workspace.playheadMs)) return null;
+  return selectedEffectOf(editorProject.project, workspace.selected, ids) ? null : clip;
 });
+
+function onEditableVideoTrack(clip: Clip): boolean {
+  const track = editorProject.project?.tracks.find((t) => t.id === clip.track_id);
+  return track !== undefined && track.kind === "video" && track.visible && !track.locked;
+}
 
 const box = computed<NormBox | null>(() => {
   const clip = target.value;
@@ -79,8 +90,7 @@ const box = computed<NormBox | null>(() => {
 
 const boxStyle = computed(() => {
   if (!box.value) return {};
-  const px = clipBox(props.frame, box.value);
-  return { left: `${px.left}px`, top: `${px.top}px`, width: `${px.width}px`, height: `${px.height}px` };
+  return styleOfBox(clipBox(props.frame, box.value));
 });
 
 const isCircle = computed(() => target.value?.frame_shape === "circle");

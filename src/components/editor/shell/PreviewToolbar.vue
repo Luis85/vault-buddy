@@ -32,6 +32,11 @@
  * layout engine, so `overflowCount` is also a prop: a test drives it
  * directly, production leaves it unset and the observer computes it.
  *
+ * **Teaching tools (Task 35; F-27–F-33)** go through the same registry
+ * (`cueActions.ts` resolves which clip and which source span); the one
+ * extra step here is selecting the cue a successful add created, so the
+ * user lands on its handles and inspector instead of hunting for it.
+ *
  * **The ratio control (Task 32; F-38)** is the one item in `TOOLBAR_ITEMS`
  * that is not a plain button: it is a native `<select>` over the four
  * canvas presets (`CANVAS_RATIOS`, mirroring `core::editor::limits::
@@ -63,6 +68,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { baseActionContext } from "../../../editor/actionContext";
 import type { ActionContext, ActionId } from "../../../editor/actions";
 import { commandFor, resolveActions } from "../../../editor/actions";
+import { addedEffectId } from "../../../editor/cueActions";
+import type { AddEffectCommand } from "../../../editor/editorCommandTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import { useNotificationsStore } from "../../../stores/notifications";
@@ -212,8 +219,21 @@ function onActivate(id: ActionId) {
   }
   if (!resolved.value[id].enabled) return;
   const command = commandFor(id, context.value);
-  if (command) void editorProject.execute(command);
+  if (command?.kind === "addEffect") void addCue(command);
+  else if (command) void editorProject.execute(command);
   closeMore();
+}
+
+/** A teaching tool (Task 35): add the cue, then select it so its handles
+ * and the effect inspector are up at once — the new id is whichever effect
+ * the committed project has that the one before it did not. */
+async function addCue(command: AddEffectCommand): Promise<void> {
+  const before = editorProject.project;
+  if (!(await editorProject.execute(command))) return;
+  const id = addedEffectId(before, editorProject.project);
+  if (!id) return;
+  editorWorkspace.select([command.clipId]);
+  editorWorkspace.setSelected({ type: "effect", id });
 }
 
 const activeIndex = ref(0);
