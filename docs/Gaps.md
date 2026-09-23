@@ -2686,6 +2686,25 @@ other surface that the project's sources changed. **Fix (only if it
 confuses users):** give a sources-only revision its own flag so the header
 does not call it an unsaved edit.
 
+### GAP-185 · Low · A reference project's file-less placeholder media (presenter, detail, cues, ambient) cannot be rendered
+`src-tauri/core/src/editor/render_plan.rs` (`plan`), found by Task 41.
+The render plan synthesizes exactly one kind of builtin asset: the title
+`card`. Every other asset must have a `sources.json` record the shell can
+hand it as a `PlanSource` — including a migrated capture's `builtin: screen`,
+which IS a real file (GAP-175). The browser reference format also defines
+`presenter`, `detail`, `cues` and `ambient` builtins that are drawn
+procedurally by the reference editor and have no file at all; the preview
+already skips them (`src/editor/previewLayers.ts`' `BUILTIN_HAS_FILE`). A
+project opened from a reference document that still places one of them on a
+visible track (or audibly) therefore fails the render with `sourceMissing`
+naming that asset, and `editor_relink_media` has no file to reconnect it to.
+Refusing is deliberate (R20: a silent black layer or a silent gap in the mix
+would be a faked render), and deleting those clips renders normally. **Fix:**
+either give the Checks panel (Task 54) a blocking finding that names these
+placeholders as "not renderable — replace or delete" so the refusal is
+explained before Render, or map each placeholder to a documented synthetic
+source.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md

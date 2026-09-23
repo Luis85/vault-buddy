@@ -30,6 +30,8 @@ pub mod peaks;
 pub mod probe;
 pub mod projection;
 pub mod relink;
+pub mod render_plan;
+mod render_plan_audio;
 pub mod session;
 #[cfg(test)]
 pub(crate) mod test_support;
