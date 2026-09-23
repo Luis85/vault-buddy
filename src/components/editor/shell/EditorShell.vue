@@ -59,6 +59,15 @@
  * up entirely — so the stage never pushes Save off-screen (the
  * `tests/e2e/editorLayout.spec.ts` contract). `min-height` stays `auto`
  * everywhere: the shell never shrinks below its own content.
+ *
+ * **`NotificationHost` (Task 32 fix round 1).** The editor window had no
+ * toast surface at all until `PreviewToolbar`'s ratio control needed one —
+ * mounted here, once, the same `useNotificationsStore`/`NotificationHost`
+ * pair `ActionPanel.vue` already uses in the panel window (each webview
+ * gets its own Pinia instance, AGENTS.md's window model, so this is a
+ * distinct store from the panel's). The root below gains `relative` so the
+ * host's own `absolute inset-x-3 bottom-3` anchors to this shell rather
+ * than whatever positioned ancestor happens to sit further up the tree.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
@@ -67,6 +76,7 @@ import { activateEditorAction } from "../../../editor/clipboard";
 import { matchShortcut, shouldHandle } from "../../../editor/shortcuts";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import NotificationHost from "../../NotificationHost.vue";
 import EditorHeader from "./EditorHeader.vue";
 import PreviewToolbar from "./PreviewToolbar.vue";
 
@@ -177,7 +187,7 @@ function onShellKeydown(event: KeyboardEvent) {
 <template>
   <div
     data-testid="editor-shell"
-    class="flex grow flex-col gap-2 text-fg"
+    class="relative flex grow flex-col gap-2 text-fg"
     @keydown="onShellKeydown"
   >
     <EditorHeader
@@ -253,6 +263,8 @@ function onShellKeydown(event: KeyboardEvent) {
         Timeline — arrives in a later task.
       </slot>
     </section>
+
+    <NotificationHost />
   </div>
 </template>
 

@@ -242,18 +242,32 @@ fn sets_nothing(p: &SetLayoutPayload) -> bool {
         && p.flip_y.is_none()
 }
 
-/// Every target resolves, sits on an unlocked VIDEO track (an audio clip
-/// has no picture to lay out) -- checked for all of them before anything
-/// changes, which is what makes a multi-clip `setLayout` atomic.
-fn check_targets(project: &Project, clip_ids: &[String]) -> Result<(), EditorError> {
+/// Every target resolves, sits on an unlocked VIDEO track -- checked for
+/// all of them before anything changes, which is what makes a multi-clip
+/// `setLayout`/`setAdjustments` atomic. `command`/`noun` name the calling
+/// command in the two messages this shared loop produces (fix round 1:
+/// `setAdjustments` used to carry a byte-for-byte copy of this exact loop
+/// under its own name, `check_color_targets`, differing only in these two
+/// strings -- `check_color_targets` below now calls THIS function and adds
+/// only its own extra card rule on top): `("setLayout", "layout")` (an
+/// audio clip has no picture to lay out) and `("setAdjustments", "colour")`
+/// (an audio clip has nothing to colour).
+fn check_targets(
+    project: &Project,
+    clip_ids: &[String],
+    command: &str,
+    noun: &str,
+) -> Result<(), EditorError> {
     if clip_ids.is_empty() {
-        return Err(invalid_request("setLayout needs at least one clip"));
+        return Err(invalid_request(format!(
+            "{command} needs at least one clip"
+        )));
     }
     for id in clip_ids {
         let clip = find_clip(project, id)?;
         if find_track(project, &clip.track_id)?.kind != TrackKind::Video {
             return Err(invalid_request(format!(
-                "clip {id} is an audio clip and has no layout"
+                "clip {id} is an audio clip and has no {noun}"
             )));
         }
         ensure_unlocked(project, &clip.track_id)?;
@@ -298,7 +312,7 @@ pub(super) fn set_layout(
             in_range(field, v, lo, hi)?;
         }
     }
-    check_targets(project, &payload.clip_ids)?;
+    check_targets(project, &payload.clip_ids, "setLayout", "layout")?;
 
     let targets: HashSet<&str> = payload.clip_ids.iter().map(String::as_str).collect();
     let mut candidate = project.clone();
@@ -362,27 +376,21 @@ fn validate_adjustments(adjustments: &Adjustments) -> Result<(), EditorError> {
     Ok(())
 }
 
-/// Every target of `setAdjustments` resolves, sits on an unlocked VIDEO
-/// track (colour has no meaning for an audio clip, `check_targets`'s own
-/// video-track rule for `setLayout`) and is not a title-card clip -- see
-/// the module doc for how "is a card" is decided. Checked for every target
-/// BEFORE anything changes, so a multi-clip `setAdjustments` is atomic like
-/// `setLayout`.
+/// Every target of `setAdjustments` gets `check_targets`'s shared resolve/
+/// video-track/unlocked discipline (`("setAdjustments", "colour")`), plus
+/// ONE rule that command alone does not need: not a title-card clip -- see
+/// the module doc for how "is a card" is decided. The card pass runs
+/// SECOND, over its own loop, only once `check_targets` has already proven
+/// every id resolves -- so `find_asset` below can never fail on an unknown
+/// clip. Checked for every target BEFORE anything changes, so a multi-clip
+/// `setAdjustments` is atomic like `setLayout`.
 fn check_color_targets(project: &Project, clip_ids: &[String]) -> Result<(), EditorError> {
-    if clip_ids.is_empty() {
-        return Err(invalid_request("setAdjustments needs at least one clip"));
-    }
+    check_targets(project, clip_ids, "setAdjustments", "colour")?;
     for id in clip_ids {
         let clip = find_clip(project, id)?;
-        if find_track(project, &clip.track_id)?.kind != TrackKind::Video {
-            return Err(invalid_request(format!(
-                "clip {id} is an audio clip and has no colour"
-            )));
-        }
-        ensure_unlocked(project, &clip.track_id)?;
         if find_asset(project, &clip.asset_id)?.builtin == Some(Builtin::Card) {
             return Err(invalid_request(
-                "Colour applies to footage, not title cards",
+                "Colour applies to footage, not title cards.",
             ));
         }
     }

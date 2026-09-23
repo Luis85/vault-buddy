@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import ColorSection from "../src/components/editor/inspector/ColorSection.vue";
 import PreviewToolbar from "../src/components/editor/shell/PreviewToolbar.vue";
 import ToolbarOverflowMenu from "../src/components/editor/shell/ToolbarOverflowMenu.vue";
+import NotificationHost from "../src/components/NotificationHost.vue";
 import { baseActionContext } from "../src/editor/actionContext";
 import { resolveActions } from "../src/editor/actions";
 import type { ColorPresetId } from "../src/editor/colorPresets";
@@ -19,6 +20,7 @@ import { adjustmentsFilter, COLOR_PRESETS, findColorPreset } from "../src/editor
 import type { EditorCommand } from "../src/editor/editorCommandTypes";
 import type { Asset, Clip, Project, Track } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
+import { useNotificationsStore } from "../src/stores/notifications";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
 
 enableAutoUnmount(afterEach);
@@ -255,26 +257,40 @@ describe("ColorSection", () => {
 
 describe("PreviewToolbar — ratio control", () => {
   // Named test (brief): "ratio control sends setCanvas".
-  it("sends setCanvas for the chosen aspect ratio and shows the one-time toast pointing at Checks", async () => {
+  it("sends setCanvas for the chosen aspect ratio and raises the one-time toast through the shared notifications store", async () => {
     await open(project([clip("c1")], undefined, undefined, { width: 1280, height: 720, fps: 30 }));
+    const notifications = useNotificationsStore();
     const w = mount(PreviewToolbar, { props: { overflowCount: 0 } });
     const select = w.get('[data-testid="preview-toolbar-ratio"]');
     expect((select.element as HTMLSelectElement).value).toBe("1280x720");
     await select.setValue("720x1280");
     await flushPromises();
     expect(executed).toEqual([{ kind: "setCanvas", width: 720, height: 1280 }]);
-    const toast = w.get('[data-testid="preview-toolbar-canvas-toast"]');
-    expect(toast.text()).toContain("Checks");
+    // Fix round 1 (Important 2): the toast is `useNotificationsStore`'s own
+    // "info" item, not a hand-rolled local one -- PreviewToolbar itself no
+    // longer renders any toast markup at all.
+    expect(notifications.items).toHaveLength(1);
+    expect(notifications.items[0]).toMatchObject({
+      kind: "info",
+      message: "Canvas changed. Review crop, text and caption placement in Checks.",
+    });
   });
 
-  it("dismisses the toast on its own button", async () => {
+  it("the toast is dismissible through NotificationHost, the same pair ActionPanel.vue already uses", async () => {
     await open(project([clip("c1")]));
-    const w = mount(PreviewToolbar, { props: { overflowCount: 0 } });
-    await w.get('[data-testid="preview-toolbar-ratio"]').setValue("720x1280");
+    const notifications = useNotificationsStore();
+    const toolbar = mount(PreviewToolbar, { props: { overflowCount: 0 } });
+    // Fix round 1: EditorShell.vue mounts ONE NotificationHost for the
+    // whole editor window (AGENTS.md's per-window-Pinia model, so a
+    // separately-mounted host here shares the SAME active store the
+    // toolbar just wrote to).
+    const host = mount(NotificationHost);
+    await toolbar.get('[data-testid="preview-toolbar-ratio"]').setValue("720x1280");
     await flushPromises();
-    expect(w.find('[data-testid="preview-toolbar-canvas-toast"]').exists()).toBe(true);
-    await w.get('[data-testid="preview-toolbar-canvas-toast-dismiss"]').trigger("click");
-    expect(w.find('[data-testid="preview-toolbar-canvas-toast"]').exists()).toBe(false);
+    expect(host.get('[data-testid="notification"]').text()).toContain("Checks");
+    await host.get('[data-testid="notification-dismiss"]').trigger("click");
+    expect(notifications.items).toHaveLength(0);
+    expect(host.find('[data-testid="notification"]').exists()).toBe(false);
   });
 
   it("the ratio control is disabled with no project open", () => {
@@ -282,11 +298,14 @@ describe("PreviewToolbar — ratio control", () => {
     expect(w.get('[data-testid="preview-toolbar-ratio"]').attributes("disabled")).toBeDefined();
   });
 
-  it("a second pick before the first toast expires resets its own timer rather than stacking two", async () => {
+  it("a second pick before the first toast expires restarts its TTL rather than stacking a second toast", async () => {
     await open(project([clip("c1")]));
+    const notifications = useNotificationsStore();
     const w = mount(PreviewToolbar, { props: { overflowCount: 0 } });
     await w.get('[data-testid="preview-toolbar-ratio"]').setValue("720x1280");
     await flushPromises();
+    expect(notifications.items).toHaveLength(1);
+    const firstId = notifications.items[0]!.id;
     // The project the fake port returns never changes, so the SAME pick
     // fires no native `change` (already selected) -- pick a THIRD ratio to
     // trigger a second, genuine toast while the first is still showing.
@@ -296,7 +315,11 @@ describe("PreviewToolbar — ratio control", () => {
       { kind: "setCanvas", width: 720, height: 1280 },
       { kind: "setCanvas", width: 720, height: 720 },
     ]);
-    expect(w.find('[data-testid="preview-toolbar-canvas-toast"]').exists()).toBe(true);
+    // The message is the SAME constant string both times, so the store's
+    // own dedupe (notifications.ts's isRepeat) reuses the one notification
+    // and restarts its TTL, rather than pushing a second toast.
+    expect(notifications.items).toHaveLength(1);
+    expect(notifications.items[0]!.id).toBe(firstId);
   });
 
   it("reaching the ratio control via ArrowRight focuses its native select", async () => {

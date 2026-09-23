@@ -695,7 +695,9 @@ fn cards_refuse_adjustments() {
         },
     ] {
         let err = refusal(set_adjustments(&p, &payload));
-        assert_eq!(err.message, "Colour applies to footage, not title cards");
+        // Fix round 1 (minor 3): byte-identical with the frontend's
+        // CARD_NOTE (ColorSection.vue), trailing period included.
+        assert_eq!(err.message, "Colour applies to footage, not title cards.");
     }
 }
 

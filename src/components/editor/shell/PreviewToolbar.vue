@@ -48,12 +48,14 @@
  * nothing to guard against twice.
  *
  * A successful `setCanvas` shows a one-time toast (F-38: "crop/caption
- * warnings prompt a review") naming Checks — a plain flow-layout sibling
- * of the toolbar row, not absolutely positioned, so it can never be
- * clipped by the row's own `overflow-hidden` (used to move overflowing
- * buttons into "More") the way an absolutely-positioned popup nested
- * inside that row would risk being. It auto-dismisses after
- * `CANVAS_TOAST_MS` or on its own Dismiss button, whichever comes first.
+ * warnings prompt a review") naming Checks — through the SAME shared
+ * mechanism `ActionPanel.vue` already uses, `useNotificationsStore().info()`
+ * + `NotificationHost.vue` (mounted once in `EditorShell.vue`, fix round 1),
+ * rather than a second hand-rolled timer/dismiss here. The store's own
+ * dedupe (`notifications.ts`'s `isRepeat`) is what gives "one-time" its
+ * exact meaning: a repeat of the SAME message text restarts that toast's
+ * TTL instead of stacking a second one, which is why the message below is
+ * one constant string regardless of which ratio was picked.
  */
 import type { ComponentPublicInstance } from "vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -63,6 +65,7 @@ import type { ActionContext, ActionId } from "../../../editor/actions";
 import { commandFor, resolveActions } from "../../../editor/actions";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import { useNotificationsStore } from "../../../stores/notifications";
 import RatioSelect from "./RatioSelect.vue";
 import ToolbarOverflowMenu from "./ToolbarOverflowMenu.vue";
 
@@ -91,6 +94,7 @@ const emit = defineEmits<{
 
 const editorProject = useEditorProjectStore();
 const editorWorkspace = useEditorWorkspaceStore();
+const notifications = useNotificationsStore();
 
 const context = computed<ActionContext>(() =>
   baseActionContext(
@@ -168,28 +172,11 @@ const canvasValue = computed(() => {
   return canvas ? `${canvas.width}x${canvas.height}` : "";
 });
 
-const CANVAS_TOAST_MS = 5_000;
-const canvasToastVisible = ref(false);
-let canvasToastTimer: ReturnType<typeof setTimeout> | null = null;
-
-function showCanvasToast(): void {
-  canvasToastVisible.value = true;
-  if (canvasToastTimer) clearTimeout(canvasToastTimer);
-  canvasToastTimer = setTimeout(() => {
-    canvasToastVisible.value = false;
-    canvasToastTimer = null;
-  }, CANVAS_TOAST_MS);
-}
-function dismissCanvasToast(): void {
-  canvasToastVisible.value = false;
-  if (canvasToastTimer) {
-    clearTimeout(canvasToastTimer);
-    canvasToastTimer = null;
-  }
-}
-onBeforeUnmount(() => {
-  if (canvasToastTimer) clearTimeout(canvasToastTimer);
-});
+/** The one-time toast's exact text (fix round 1: constant on purpose — see
+ * the module doc, `useNotificationsStore`'s own dedupe keys on kind+message
+ * equality, so a second pick before the first toast's TTL expires must send
+ * this SAME string to restart it rather than push a second toast). */
+const CANVAS_TOAST_MESSAGE = "Canvas changed. Review crop, text and caption placement in Checks.";
 
 /** `RatioSelect`'s own `change` handler — bypasses `commandFor`/`BUILDERS`
  * entirely (see the module doc): `ratio` needs the CHOSEN pair, which
@@ -198,7 +185,7 @@ async function onRatioChange(value: string): Promise<void> {
   const [width, height] = value.split("x").map(Number);
   closeMore();
   const ok = await editorProject.execute({ kind: "setCanvas", width, height });
-  if (ok) showCanvasToast();
+  if (ok) notifications.info(CANVAS_TOAST_MESSAGE);
 }
 
 // ---- activation + roving tabindex over the visible row ----------------------
@@ -354,25 +341,5 @@ function itemClass(id: ActionId): string {
         @ratio-change="onRatioChange"
       />
     </div>
-  </div>
-
-  <!-- The one-time toast after a successful setCanvas (F-38) -- a plain flow
-       sibling of the toolbar row, never clipped by its overflow-hidden
-       (see the module doc). -->
-  <div
-    v-if="canvasToastVisible"
-    data-testid="preview-toolbar-canvas-toast"
-    role="status"
-    class="flex shrink-0 items-center gap-2 rounded-control border border-line bg-raised px-2 py-1 text-micro text-fg-subtle"
-  >
-    <span>Canvas changed. Review crop, text and caption placement in Checks.</span>
-    <button
-      type="button"
-      data-testid="preview-toolbar-canvas-toast-dismiss"
-      class="cursor-pointer text-fg-subtle hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      @click="dismissCanvasToast"
-    >
-      Dismiss
-    </button>
   </div>
 </template>
