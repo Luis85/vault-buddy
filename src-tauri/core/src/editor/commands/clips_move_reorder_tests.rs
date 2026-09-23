@@ -133,6 +133,53 @@ fn move_clips_refuses_track_id_with_multiple_clips_and_a_kind_incompatible_track
     assert_eq!(mismatched.code, EditorErrorCode::InvalidRequest);
 }
 
+// ---- moveClips preserves cue links across a cross-track move (fix round 2,
+// Task 26 review) --------------------------------------------------------
+//
+// `move_clips` only ever writes `start_ms`/`track_id` on the moved clip
+// itself (see its own doc comment in `clips.rs`) -- it reads and rewrites
+// no cue collection (`effects`/`markers`/`captions`/`transitions`) at all,
+// so a marker linked to a clip BY ID survives a cross-track move by
+// construction. Nothing at the Rust level pinned that before this test:
+// the frontend's own "cross-lane move keeps cue ids"
+// (`tests/editorPlacement.test.ts`) exercises a LOCAL fake reducer
+// standing in for this function, never this function itself, so a real
+// regression here (e.g. a future refactor that copy-pastes
+// `delete_clips`'s own `.retain(|m| !ids.contains(m.clip_id))` cleanup
+// into this command) would pass every existing test untouched.
+
+#[test]
+fn cross_track_move_leaves_the_moved_clips_cues_untouched() {
+    let mut project = base_project();
+    project.tracks.push(track("v1", TrackKind::Video, false));
+    project.tracks.push(track("v2", TrackKind::Video, false));
+    project.assets.push(asset("a1", AssetKind::Video, 5_000));
+    project.clips.push(clip("c1", "v1", "a1", 100, 0, 200));
+    project.markers.push(marker("m1", "c1", 50));
+
+    let (candidate, _) = move_clips(
+        &project,
+        &MoveClipsPayload {
+            clip_ids: vec!["c1".into()],
+            delta_ms: 0,
+            track_id: Some("v2".into()),
+        },
+    )
+    .unwrap();
+
+    let moved = candidate.clips.iter().find(|c| c.id == "c1").unwrap();
+    assert_eq!(
+        moved.track_id, "v2",
+        "the clip itself really crossed tracks -- otherwise the marker \
+         assertion below would hold trivially for the wrong reason"
+    );
+    assert_eq!(
+        candidate.markers, project.markers,
+        "moveClips must not touch the marker collection at all: same id, \
+         same clip_id ('c1'), same source_ms"
+    );
+}
+
 // ---- moveClips group expansion (Task 8, F13) ------------------------------
 
 #[test]
