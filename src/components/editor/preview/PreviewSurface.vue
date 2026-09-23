@@ -40,7 +40,9 @@
  *
  * **Teaching cues** (Task 35; F-27–F-33) come in two layers, split exactly
  * like the layout handles: `CueOverlay` (the cues as rendered) sits INSIDE
- * the stage above the media, and `CueHandles` (selection, grab handles, the
+ * the stage above the media (with Task 36's `CaptionOverlay` above the
+ * cues, unzoomed: a caption sits on the frame, not on the footage), and
+ * `CueHandles` (selection, grab handles, the
  * zoom's focal marker) is a sibling AFTER `LayoutHandles`, so a cue over a
  * full-frame clip stays reachable. An active zoom cue scales the media
  * layers and the cue overlay alike (`cueGeometry.activeZoom`), clipped to
@@ -60,6 +62,7 @@ import type { Effect, Project } from "../../../editorTypes";
 import { logWarning } from "../../../logging";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import CaptionOverlay from "./CaptionOverlay.vue";
 import CueHandles from "./CueHandles.vue";
 import CueOverlay from "./CueOverlay.vue";
 import LayoutHandles from "./LayoutHandles.vue";
@@ -272,6 +275,11 @@ function onPointerDown(event: PointerEvent): void {
           :frame="frame"
           :zoom="zoom"
           :draft="cueDraft"
+        />
+        <CaptionOverlay
+          :project="editorProject.project"
+          :time-ms="currentMs"
+          :frame="frame"
         />
       </div>
       <LayoutHandles

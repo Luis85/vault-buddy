@@ -121,7 +121,7 @@ fn extend_captions(project: &mut Project, new_cues: Vec<CaptionCue>) {
             project.captions = Some(CaptionSettings {
                 enabled: false,
                 burn_in: false,
-                font_size: Num::from(16),
+                font_size: Num::from(super::captions::DEFAULT_FONT_SIZE),
                 position: CaptionPosition::Bottom,
                 background: false,
                 cues: new_cues,

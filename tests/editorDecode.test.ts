@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  decodeCaptionImportResult,
   decodeEditorError,
   decodeJobProgress,
   decodeJobRecords,
@@ -318,5 +319,31 @@ describe("decodeJobRecords / decodeJobStarted", () => {
   it("decodes { jobId } and refuses an invalid id", () => {
     expect(decodeJobStarted({ jobId: "job-b" })).toEqual({ jobId: "job-b" });
     expect(() => decodeJobStarted({ jobId: "../x" })).toThrow(ProtocolError);
+  });
+});
+
+describe("decodeCaptionImportResult", () => {
+  it("accepts the Rust literal (projection.rs caption_import_result_serializes_the_contract_shape)", () => {
+    const decoded = decodeCaptionImportResult({
+      projection: { snapshot: PROJECTION_SNAPSHOT_LITERAL, project: MINIMAL_PROJECT_LITERAL },
+      imported: 12,
+      skipped: 3,
+    });
+    expect(decoded).not.toBeNull();
+    expect(decoded?.imported).toBe(12);
+    expect(decoded?.skipped).toBe(3);
+    expect(decoded?.projection.snapshot.revision).toBe(3);
+  });
+
+  it("decodes a cancelled dialog (null) as null", () => {
+    expect(decodeCaptionImportResult(null)).toBeNull();
+  });
+
+  it("rejects a negative or fractional count and a missing projection", () => {
+    const projection = { snapshot: PROJECTION_SNAPSHOT_LITERAL, project: MINIMAL_PROJECT_LITERAL };
+    expect(() => decodeCaptionImportResult({ projection, imported: -1, skipped: 0 })).toThrow(ProtocolError);
+    expect(() => decodeCaptionImportResult({ projection, imported: 1.5, skipped: 0 })).toThrow(ProtocolError);
+    expect(() => decodeCaptionImportResult({ projection, imported: 1 })).toThrow(ProtocolError);
+    expect(() => decodeCaptionImportResult({ imported: 1, skipped: 0 })).toThrow(ProtocolError);
   });
 });

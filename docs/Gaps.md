@@ -2498,6 +2498,31 @@ batch exactly when a carried transition explains it — the
 `transitions::overlap_refusal` shape. A wire change to `ClipboardFragment`,
 so it needs the TS decoder/type and a literal-JSON pin in the same commit.
 
+### GAP-179 · Low · A caption or chapter trimmed out of its clip is kept but listed nowhere, and `validate_project` does not bound caption settings or text
+`src/editor/captionRules.ts` (`captionRows`, `chapterRows`),
+`src-tauri/core/src/editor/commands/cues.rs` (`chapters`),
+`src-tauri/core/src/editor/validate.rs` (`check_caption`, `check_marker`).
+Found by Task 36. Captions and markers are stored in SOURCE time and follow
+their footage, so a trim that cuts past one does not delete it -- extending
+the trim again brings it back (the reference editor's own behaviour, and
+DATA-MODEL.md's "trim changes the visible intersection, not the original cue
+timestamps"). But while it is trimmed away it has no OUTPUT time, and both
+libraries list only what the edit shows: nothing in the UI can select, edit
+or delete it, and it still counts toward `MAX_CAPTIONS`/`MAX_MARKERS`.
+Separately, the commands enforce the reference's bounds (caption font size
+18-56, text non-empty and at most 500 characters, chapter titles at most
+160) but `validate_project` does not, so a hand-edited `project.json` can
+carry values the commands would refuse -- nothing crashes (they render or
+are rejected downstream), it is just not the single authority it is for
+every other field.
+
+**Fix:** list trimmed-away cues and markers under a "Not in the edit" group
+in each library (delete-only), and fold the three bounds into
+`check_caption`/`check_marker` plus a `check_caption_settings` -- after
+confirming no migration or fixture writes an out-of-range value (the
+paste path's default font size was 16 until Task 36 moved it to the shared
+30).
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md

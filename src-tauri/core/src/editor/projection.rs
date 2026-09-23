@@ -65,6 +65,18 @@ pub struct EditorOpenResult {
     pub recovered: bool,
 }
 
+/// What `editor_import_captions` returns once the user picked a file (ADR
+/// §3.3; `null` on the wire when the dialog was cancelled): the projection
+/// after the ONE import edit, how many cues landed on the clip, and how
+/// many fell outside it -- reported, never silently dropped (Task 36).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionImportResult {
+    pub projection: EditorProjection,
+    pub imported: usize,
+    pub skipped: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +213,25 @@ mod tests {
         let p = EditorProjection::of(&session);
         assert_eq!(p.snapshot.session_id, "ses-9");
         assert_eq!(p.project, minimal_project());
+    }
+
+    #[test]
+    fn caption_import_result_serializes_the_contract_shape() {
+        let r = CaptionImportResult {
+            projection: EditorProjection {
+                snapshot: snapshot(),
+                project: minimal_project(),
+            },
+            imported: 12,
+            skipped: 3,
+        };
+        assert_eq!(
+            serde_json::to_value(&r).unwrap(),
+            json!({
+                "projection": { "snapshot": snapshot_json(), "project": minimal_project_json() },
+                "imported": 12,
+                "skipped": 3
+            })
+        );
     }
 }

@@ -361,6 +361,17 @@ export interface EditorProjection {
   project: Project;
 }
 
+/** `editor_import_captions`' reply once a file was picked
+ * (`core::editor::projection::CaptionImportResult`, Task 36): the
+ * projection after the ONE import edit, the cues that landed on the clip,
+ * and the ones that fell outside it (reported, never dropped silently).
+ * The command answers `null` instead when the dialog was cancelled. */
+export interface CaptionImportResult {
+  projection: EditorProjection;
+  imported: number;
+  skipped: number;
+}
+
 /** One source a freshly opened project references but whose file is not on
  * disk (`core::editor::projection::MissingMedia`). Never a path. */
 export interface MissingMedia {

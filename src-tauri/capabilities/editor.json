@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "editor",
-  "description": "The tutorial editor window alone: the editor_* session commands (open a staged capture into a session, read its snapshot, execute a command, close the session, hide the window), the durable save/list/reopen commands (save a project, list every project on disk, reopen one by id) and the workspace view-preference commands (read/write the sanitized selection/playhead/panel-layout/theme blob, never the project's revision or history), the media-URL lookup (the absolute path of a REGISTERED asset or product only, for the preview), the waveform-peaks and thumbnail lookups over those same registered assets (derived by ffmpeg into the project's own cache), the media import job and its cancel/reconcile pair (editor_import_media opens its own native dialog; no frontend path is ever accepted) that build.rs's app manifest takes out of every other window's reach, plus the file dialogs its save/import flows need. No other capability grants any allow-editor-* permission.",
+  "description": "The tutorial editor window alone: the editor_* session commands (open a staged capture into a session, read its snapshot, execute a command, close the session, hide the window), the durable save/list/reopen commands (save a project, list every project on disk, reopen one by id) and the workspace view-preference commands (read/write the sanitized selection/playhead/panel-layout/theme blob, never the project's revision or history), the media-URL lookup (the absolute path of a REGISTERED asset or product only, for the preview), the waveform-peaks and thumbnail lookups over those same registered assets (derived by ffmpeg into the project's own cache), the media import job and its cancel/reconcile pair (editor_import_media opens its own native dialog; no frontend path is ever accepted), the caption import (editor_import_captions, likewise its own native dialog) that build.rs's app manifest takes out of every other window's reach, plus the file dialogs its save/import flows need. No other capability grants any allow-editor-* permission.",
   "windows": ["editor"],
   "permissions": [
     "allow-editor-open-staged",
@@ -20,6 +20,7 @@
     "allow-editor-import-media",
     "allow-editor-cancel-job",
     "allow-editor-get-jobs",
+    "allow-editor-import-captions",
     "dialog:allow-open",
     "dialog:allow-save"
   ]

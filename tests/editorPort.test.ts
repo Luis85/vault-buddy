@@ -297,6 +297,30 @@ describe("EditorPort", () => {
     }
   });
 
+  // Task 36: the caption import. Rust opens its own dialog; the port sends
+  // only ids and the replace flag, and a cancelled dialog comes back null.
+  it("importCaptions sends { sessionId, clipId, replace } and decodes both replies", async () => {
+    const calls: { cmd: string; args: unknown }[] = [];
+    let reply: unknown = { projection: PROJECTION_REPLY, imported: 4, skipped: 1 };
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "editor_import_captions") return reply;
+      throw new Error(`unexpected command ${cmd}`);
+    });
+
+    const port = createTauriEditorPort();
+    const result = await port.importCaptions("ses-1", "c1", true);
+    expect(result?.imported).toBe(4);
+    expect(result?.skipped).toBe(1);
+    expect(result?.projection.snapshot.revision).toBe(2);
+    expect(calls).toEqual([
+      { cmd: "editor_import_captions", args: { sessionId: "ses-1", clipId: "c1", replace: true } },
+    ]);
+
+    reply = null;
+    await expect(port.importCaptions("ses-1", "c1", false)).resolves.toBeNull();
+  });
+
   // Task 25: the import job. `onProgress` crosses as a Tauri `Channel`
   // (created inside the port, never by a caller); each message is DECODED
   // before the callback sees it, and an undecodable one is dropped rather

@@ -44,13 +44,16 @@
 
 use crate::editor::commands::clips::{ensure_unlocked, find_clip, invalid_request};
 use crate::editor::commands::payloads::{
-    AddEffectPayload, EffectProps, RemoveEffectPayload, UpdateEffectPayload,
+    AddEffectPayload, AddMarkerPayload, EffectProps, RemoveEffectPayload, RemoveMarkerPayload,
+    UpdateEffectPayload, UpdateMarkerPayload,
 };
 use crate::editor::error::EditorError;
 use crate::editor::ids::new_entity_id;
 use crate::editor::limits;
 use crate::editor::model::{Clip, Project};
-use crate::editor::model_cues::{Effect, EffectKind};
+use crate::editor::model_cues::{Effect, EffectKind, Marker};
+use crate::editor::time::{output_at, ClipSpan};
+use crate::editor::validate::speed_or_default;
 use crate::editor::{Map, Num};
 
 /// Every kind's own default position (JS reference `drawing-primitives.js`
@@ -117,7 +120,7 @@ fn find_effect<'a>(project: &'a Project, id: &str) -> Result<&'a Effect, EditorE
 /// `add_effect` (the new cue's span) and `update_effect` (its span AFTER
 /// applying whatever `startMs`/`endMs` the caller sent, defaulting to the
 /// effect's current ones).
-fn check_cue_range(start_ms: u64, end_ms: u64, clip: &Clip) -> Result<(), EditorError> {
+pub(super) fn check_cue_range(start_ms: u64, end_ms: u64, clip: &Clip) -> Result<(), EditorError> {
     if start_ms >= end_ms {
         return Err(invalid_request("startMs must be before endMs"));
     }
@@ -374,6 +377,160 @@ pub(super) fn remove_effect(
     let mut candidate = project.clone();
     candidate.effects.retain(|e| e.id != payload.effect_id);
     Ok((candidate, "Remove effect".to_string()))
+}
+
+// ---- chapter markers (Task 36; F-36) ---------------------------------------
+//
+// A marker is an INSTANT on a clip's source, `source_ms` stored verbatim --
+// the effects' rule above, for the same reason: it follows its footage
+// through every move/trim/speed change for free, and through `splitClip`
+// via `cue_follow::reassign_markers` (the half-open half containing it).
+// Its OUTPUT time is derived on demand (`chapters` below), never stored.
+
+/// One chapter as the timeline shows it right now: its marker, where it
+/// plays in OUTPUT time, and its title.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Chapter {
+    pub marker_id: String,
+    pub output_ms: u64,
+    pub title: String,
+}
+
+/// Every marker whose source instant is still inside its clip's CURRENT
+/// source range, mapped to output time through `time::output_at`, sorted
+/// by output time (then title, for a stable order between two markers on
+/// the same instant). A marker trimmed out of its clip -- or orphaned by a
+/// hand-edited document -- is simply not a chapter of THIS edit; the
+/// marker itself stays, so extending the trim again brings it back. The
+/// companion note and the render plan (Tasks 41, 48) read this list.
+pub fn chapters(project: &Project) -> Vec<Chapter> {
+    let mut out: Vec<Chapter> = project
+        .markers
+        .iter()
+        .filter_map(|m| {
+            let clip = project.clips.iter().find(|c| c.id == m.clip_id)?;
+            let span = ClipSpan {
+                start_ms: clip.start_ms,
+                in_ms: clip.in_ms,
+                out_ms: clip.out_ms,
+                speed: speed_or_default(clip.speed.as_ref()),
+            };
+            Some(Chapter {
+                marker_id: m.id.clone(),
+                output_ms: output_at(&span, m.source_ms)?,
+                title: m.title.clone(),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.output_ms
+            .cmp(&b.output_ms)
+            .then_with(|| a.title.cmp(&b.title))
+    });
+    out
+}
+
+fn find_marker<'a>(project: &'a Project, id: &str) -> Result<&'a Marker, EditorError> {
+    project
+        .markers
+        .iter()
+        .find(|m| m.id == id)
+        .ok_or_else(|| invalid_request(format!("chapter marker {id} does not resolve")))
+}
+
+/// A marker must sit on a frame its clip actually plays: the HALF-OPEN
+/// `[in_ms, out_ms)` (at `out_ms` it would resolve to no output time at
+/// all, so `chapters` could never show it).
+fn check_marker_instant(source_ms: u64, clip: &Clip) -> Result<(), EditorError> {
+    if source_ms < clip.in_ms || source_ms >= clip.out_ms {
+        return Err(invalid_request(format!(
+            "The chapter's source time {source_ms} must lie within clip {}'s source range [{}, {})",
+            clip.id, clip.in_ms, clip.out_ms
+        )));
+    }
+    Ok(())
+}
+
+/// Trimmed, non-empty, at most `MAX_TITLE_CHARS` characters.
+fn checked_title(title: &str) -> Result<String, EditorError> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(invalid_request("A chapter needs a title"));
+    }
+    if title.chars().count() > limits::MAX_TITLE_CHARS {
+        return Err(invalid_request(format!(
+            "Chapter titles are limited to {} characters",
+            limits::MAX_TITLE_CHARS
+        )));
+    }
+    Ok(title.to_string())
+}
+
+/// `addMarker{clipId, sourceMs, title}`.
+pub(super) fn add_marker(
+    project: &Project,
+    payload: &AddMarkerPayload,
+) -> Result<(Project, String), EditorError> {
+    let clip = find_clip(project, &payload.clip_id)?;
+    ensure_unlocked(project, &clip.track_id)?;
+    check_marker_instant(payload.source_ms, clip)?;
+    let title = checked_title(&payload.title)?;
+    if project.markers.len() >= limits::MAX_MARKERS {
+        return Err(invalid_request(format!(
+            "A project may hold at most {} chapter markers",
+            limits::MAX_MARKERS
+        )));
+    }
+    let mut candidate = project.clone();
+    candidate.markers.push(Marker {
+        id: new_entity_id("marker"),
+        clip_id: payload.clip_id.clone(),
+        source_ms: payload.source_ms,
+        title,
+        extra: Map::new(),
+    });
+    Ok((candidate, "Add chapter".to_string()))
+}
+
+/// `updateMarker{markerId, sourceMs?, title?}` -- it stays on its clip.
+pub(super) fn update_marker(
+    project: &Project,
+    payload: &UpdateMarkerPayload,
+) -> Result<(Project, String), EditorError> {
+    let marker = find_marker(project, &payload.marker_id)?;
+    let clip = find_clip(project, &marker.clip_id)?;
+    ensure_unlocked(project, &clip.track_id)?;
+    if payload.source_ms.is_none() && payload.title.is_none() {
+        return Err(invalid_request("updateMarker must set at least one field"));
+    }
+    let source_ms = payload.source_ms.unwrap_or(marker.source_ms);
+    check_marker_instant(source_ms, clip)?;
+    let title = payload.title.as_deref().map(checked_title).transpose()?;
+
+    let mut candidate = project.clone();
+    let target = candidate
+        .markers
+        .iter_mut()
+        .find(|m| m.id == payload.marker_id)
+        .expect("marker_id was just resolved above against this same project");
+    target.source_ms = source_ms;
+    if let Some(title) = title {
+        target.title = title;
+    }
+    Ok((candidate, "Edit chapter".to_string()))
+}
+
+/// `removeMarker{markerId}`.
+pub(super) fn remove_marker(
+    project: &Project,
+    payload: &RemoveMarkerPayload,
+) -> Result<(Project, String), EditorError> {
+    let marker = find_marker(project, &payload.marker_id)?;
+    let clip = find_clip(project, &marker.clip_id)?;
+    ensure_unlocked(project, &clip.track_id)?;
+    let mut candidate = project.clone();
+    candidate.markers.retain(|m| m.id != payload.marker_id);
+    Ok((candidate, "Delete chapter".to_string()))
 }
 
 // Tests live in the sibling `cues_tests.rs`, the `clips.rs`/

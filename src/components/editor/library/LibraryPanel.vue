@@ -1,13 +1,15 @@
 <script setup lang="ts">
 /**
- * Switches the editor shell's `library` slot between `MediaLibrary` and
- * `TitlesLibrary` (Task 33 fix round 1; review finding, Important #1):
+ * Switches the editor shell's `library` slot between `MediaLibrary`,
+ * `TitlesLibrary`, and (Task 36) `CaptionsLibrary`/`ChaptersLibrary` -- the
+ * library that "owns Media/Titles/Captions/Chapters" (SCREENS-AND-
+ * INTERACTIONS.md) (Task 33 fix round 1; review finding, Important #1):
  * `TitlesLibrary.vue` was fully built and tested in isolation but never
  * mounted anywhere, so F-37 — inserting a title card — was unreachable
  * from the running editor. `EditorRoot.vue` now fills its `library` slot
  * with THIS component instead of `MediaLibrary` directly.
  *
- * A two-tab `role="tablist"`: `aria-selected` + a `tabindex="0"` only on
+ * A four-tab `role="tablist"`: `aria-selected` + a `tabindex="0"` only on
  * the active tab, only the active tab's panel mounted ("don't pay for a
  * hidden tab" — the `InspectorPanel.vue` precedent), and roving-tabindex
  * keyboard behavior via the shared `useRovingTablist` composable
@@ -23,14 +25,18 @@
 import { ref } from "vue";
 
 import { useRovingTablist } from "../../../composables/useRovingTablist";
+import CaptionsLibrary from "./CaptionsLibrary.vue";
+import ChaptersLibrary from "./ChaptersLibrary.vue";
 import MediaLibrary from "./MediaLibrary.vue";
 import TitlesLibrary from "./TitlesLibrary.vue";
 
-type LibraryTab = "media" | "titles";
+type LibraryTab = "media" | "titles" | "captions" | "chapters";
 
 const TABS: { id: LibraryTab; label: string }[] = [
   { id: "media", label: "Media" },
   { id: "titles", label: "Titles" },
+  { id: "captions", label: "Captions" },
+  { id: "chapters", label: "Chapters" },
 ];
 
 const activeTab = ref<LibraryTab>("media");
@@ -83,7 +89,9 @@ const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
       class="min-h-0 flex-1"
     >
       <MediaLibrary v-if="activeTab === 'media'" />
-      <TitlesLibrary v-else />
+      <TitlesLibrary v-else-if="activeTab === 'titles'" />
+      <CaptionsLibrary v-else-if="activeTab === 'captions'" />
+      <ChaptersLibrary v-else />
     </div>
   </div>
 </template>

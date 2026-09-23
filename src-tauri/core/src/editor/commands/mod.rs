@@ -2,7 +2,8 @@
 //! `InternalCommand` (native-only, never `Deserialize`), plus their
 //! dispatch (`apply`/`apply_internal`) into family modules (R14, F-13, F31).
 //!
-//! THIRTY-EIGHT kinds are implemented so far: `rename`/`setDestination`
+//! ALL forty-six kinds are implemented (Task 36 landed the last eight):
+//! `rename`/`setDestination`
 //! (Task 6, `meta.rs`), the two `EditorSession` intercepts before ever
 //! calling `apply` at all, `undo`/`redo` (see `session.rs`'s `execute`), the
 //! seven core clip commands `insertClip`/`updateClip`/`splitClip`/`trimClip`/
@@ -37,21 +38,27 @@
 //! are SOURCE time, stored verbatim, which is what makes a cue survive
 //! `splitClip`'s already-shipped `cue_follow.rs` reassignment and every
 //! other clip command's move/trim/speed change untouched -- Task 7's own
-//! claim, exercised here rather than re-implemented).
+//! claim, exercised here rather than re-implemented), and
+//! `setCaptionSettings`/`addCaption`/`updateCaption`/`splitCaption`/
+//! `removeCaptions` (Task 36, `captions.rs` -- plus
+//! `InternalCommand::ImportCaptions`) and `addMarker`/`updateMarker`/
+//! `removeMarker` (Task 36, beside the teaching cues in `cues.rs`, with the
+//! derived output-time `chapters` list).
 //! `moveClips`'s own group-EXPANSION behaviour also landed with Task 8, but
 //! stays in `clips.rs` (F13: Task 7 shipped `moveClips` before any group
-//! could exist to expand into). Every other kind falls through to the
-//! shared "not available yet" arm below -- each later task adds its own
-//! explicit arm ABOVE the fallback and deletes that kind's row from
-//! `unimplemented_kinds_are_invalid_request_not_panic`'s table (this
-//! module's own tests), so the table shrinks monotonically task by task;
-//! say so explicitly in that task's own report rather than re-verifying the
-//! whole table at the end.
+//! could exist to expand into). `apply`'s match has NO wildcard arm any
+//! more: the "not available yet" fallback went with the last eight kinds,
+//! so a NEW `EditorCommand` variant now fails to compile until it gets an
+//! arm (the exhaustiveness the old shrinking table only approximated).
+//! `not_yet` survives for `apply_internal`'s two still-unimplemented
+//! native-only kinds.
 //!
-//! **The frontend keeps its own copy of this table, and nothing enforces
-//! they agree.** `src/editor/actionMeta.ts`'s `UNIMPLEMENTED_KINDS`
-//! (re-exported from `src/editor/actions.ts`, Task 17) is a hand-copy of
-//! the SAME kind strings `unimplemented_commands()` below lists -- it gates
+//! **The frontend kept its own copy of this table, and nothing enforced
+//! they agreed.** `src/editor/actionMeta.ts`'s `UNIMPLEMENTED_KINDS`
+//! (re-exported from `src/editor/actions.ts`, Task 17) was a hand-copy of
+//! the SAME kind strings the old `unimplemented_commands()` table listed --
+//! both are EMPTY since Task 36 (the frontend set stays, pinned at size 0,
+//! so a future gated kind has somewhere to go). It gated
 //! every teaching-tool/fade/transition/detachAudio/ratio action in the
 //! preview toolbar and context menu so none of them ever sends a command
 //! this file would reject. **Task 23 left one deliberate exception**:
@@ -65,17 +72,17 @@
 //! way `TrackHeader.vue` already calls `editorProject.execute` directly for
 //! `renameTrack`/`moveTrack`/`setTrackFlags`/`deleteTrack`), so the "no
 //! consuming UI yet" condition no longer holds and `UNIMPLEMENTED_KINDS` no
-//! longer names `addTrack`. There is no build-time or
-//! test-time link between the two lists otherwise: a task that adds an arm
-//! here and deletes the row from `unimplemented_commands()` below MUST
-//! ALSO delete the matching entry from `UNIMPLEMENTED_KINDS` in the same
-//! commit UNLESS that same "no consuming UI yet" condition holds, or the
-//! frontend keeps refusing an action Rust would now accept.
+//! longer names `addTrack`. There was no build-time or test-time link
+//! between the two lists: a new `EditorCommand` kind that ships gated must
+//! be added to `UNIMPLEMENTED_KINDS` by hand, and removed from it in the
+//! commit that gives it an arm here.
 
+pub mod captions;
 mod cards;
 mod clips;
 mod cue_follow;
 mod cues;
+pub use cues::{chapters, Chapter};
 pub mod fades;
 mod groups;
 mod layout;
@@ -190,17 +197,6 @@ fn not_yet(kind: &str) -> EditorError {
     )
 }
 
-/// The wire `kind` tag string for `cmd`, read back off its own `Serialize`
-/// impl rather than duplicated in a second match arm-by-arm -- the two can
-/// never drift apart this way (a renamed variant renames its own message
-/// for free).
-fn kind_of(cmd: &EditorCommand) -> String {
-    serde_json::to_value(cmd)
-        .ok()
-        .and_then(|v| v.get("kind").and_then(|k| k.as_str().map(str::to_string)))
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
 /// Applies one `EditorCommand` to `project`, returning a candidate project
 /// plus a human-readable undo label. This function NEVER installs the
 /// candidate itself -- `EditorSession::execute` runs `validate_project` on
@@ -250,11 +246,18 @@ pub fn apply(
         EditorCommand::AddEffect(p) => cues::add_effect(project, p),
         EditorCommand::UpdateEffect(p) => cues::update_effect(project, p),
         EditorCommand::RemoveEffect(p) => cues::remove_effect(project, p),
+        EditorCommand::SetCaptionSettings(p) => captions::set_caption_settings(project, p),
+        EditorCommand::AddCaption(p) => captions::add_caption(project, p),
+        EditorCommand::UpdateCaption(p) => captions::update_caption(project, p),
+        EditorCommand::SplitCaption(p) => captions::split_caption(project, p),
+        EditorCommand::RemoveCaptions(p) => captions::remove_captions(project, p),
+        EditorCommand::AddMarker(p) => cues::add_marker(project, p),
+        EditorCommand::UpdateMarker(p) => cues::update_marker(project, p),
+        EditorCommand::RemoveMarker(p) => cues::remove_marker(project, p),
         EditorCommand::Undo | EditorCommand::Redo => Err(EditorError::new(
             EditorErrorCode::InvalidRequest,
             "undo/redo are dispatched by EditorSession::execute, never by apply",
         )),
-        other => Err(not_yet(&kind_of(other))),
     }
 }
 
@@ -268,7 +271,7 @@ pub fn apply_internal(
 ) -> Result<(Project, String), EditorError> {
     match cmd {
         InternalCommand::AddAssets(p) => meta::add_assets(project, p),
-        InternalCommand::ImportCaptions(_) => Err(not_yet("importCaptions")),
+        InternalCommand::ImportCaptions(p) => captions::import_captions(project, p),
         InternalCommand::RestoreSnapshot(_) => Err(not_yet("restoreSnapshot")),
         InternalCommand::RelinkAssets(_) => Err(not_yet("relinkAssets")),
     }
@@ -281,24 +284,23 @@ mod tests {
     use crate::editor::model_cues::{EffectKind, TransitionKind};
     use crate::editor::test_support::{minimal_project, no_context};
 
-    /// Every `EditorCommand` kind NOT implemented so far (`rename`, `undo`,
-    /// `redo`, `setDestination`, and the seven clip commands are -- see the
-    /// module doc). Each later task deletes its own row here as it
-    /// replaces `apply`'s fallback with a real arm; report that removal
-    /// explicitly in that task's own report rather than re-verifying the
-    /// whole table at once. Task 29 deleted `setFades`'s row; Task 30 deleted
-    /// `addTransition`/`setTransitionDuration`/`removeTransition`'s three;
-    /// Task 31 deleted `setSpeed`/`setLayout`'s two; Task 32 deleted
-    /// `setAdjustments`/`setCanvas`'s two; Task 34 deleted `addEffect`/
-    /// `updateEffect`/`removeEffect`'s three.
-    fn unimplemented_commands() -> Vec<(&'static str, EditorCommand)> {
+    /// The last eight kinds the old "not available yet" table listed, which
+    /// Task 36 implemented (the table shrank task by task from Task 6 on:
+    /// Task 29 took `setFades`, Task 30 the three transition kinds, Task 31
+    /// `setSpeed`/`setLayout`, Task 32 `setAdjustments`/`setCanvas`, Task 34
+    /// the three effect kinds). Kept as a regression table: each one must
+    /// now reach a REAL arm -- refused for its own reason against a project
+    /// with no such clip/caption/marker, never by the vanished fallback.
+    fn formerly_unimplemented_commands() -> Vec<(&'static str, EditorCommand)> {
         vec![
             (
                 "setCaptionSettings",
+                // An out-of-range font: the only way this kind can be
+                // refused without a clip to point at.
                 EditorCommand::SetCaptionSettings(SetCaptionSettingsPayload {
-                    enabled: Some(true),
+                    enabled: None,
                     burn_in: None,
-                    font_size: None,
+                    font_size: Some(crate::editor::Num::from(99)),
                     position: None,
                     background: None,
                 }),
@@ -360,36 +362,19 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_commands_table_has_eight_rows() {
-        // A vacuity guard, the `shared_fixture_table_has_ten_cases`
-        // precedent (`time.rs`): 46 total EditorCommand kinds minus the
-        // thirty-eight implemented so far (rename, undo, redo, setDestination,
-        // insertClip, updateClip, splitClip, trimClip, deleteClips,
-        // moveClips, reorderClip, groupClips, ungroupClips,
-        // duplicateClips, pasteFragment, cutClips, addTrack, renameTrack,
-        // moveTrack, setTrackFlags, deleteTrack, setClipMix, setMasterGain,
-        // detachAudio, setFades, addTransition, setTransitionDuration,
-        // removeTransition, setSpeed, setLayout, setAdjustments, setCanvas,
-        // addCard, updateCard, insertIntro, addEffect, updateEffect,
-        // removeEffect).
-        assert_eq!(unimplemented_commands().len(), 8);
-    }
-
-    #[test]
-    fn unimplemented_kinds_are_invalid_request_not_panic() {
+    fn formerly_unimplemented_kinds_reach_a_real_arm() {
+        let rows = formerly_unimplemented_commands();
+        // Vacuity guard: all eight, not a silently shortened table.
+        assert_eq!(rows.len(), 8);
         let project = minimal_project();
-        for (kind, cmd) in unimplemented_commands() {
+        for (kind, cmd) in rows {
             let err = apply(&project, &cmd, &no_context())
                 .err()
-                .unwrap_or_else(|| panic!("{kind}: apply() must reject an unimplemented kind"));
-            assert_eq!(
-                err.code,
-                EditorErrorCode::InvalidRequest,
-                "{kind}: wrong error code"
-            );
+                .unwrap_or_else(|| panic!("{kind}: no clip/caption/marker exists to act on"));
+            assert_eq!(err.code, EditorErrorCode::InvalidRequest, "{kind}");
             assert!(
-                err.message.contains(kind) && err.message.contains("is not available yet"),
-                "{kind}: message {:?} does not name the kind",
+                !err.message.contains("is not available yet"),
+                "{kind}: still reaches the old fallback: {:?}",
                 err.message
             );
         }

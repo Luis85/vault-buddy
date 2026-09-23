@@ -454,3 +454,209 @@ fn remove_effect_deletes_it() {
         &RemoveEffectPayload { effect_id },
     ));
 }
+
+// ---- chapter markers (Task 36; F-36) --------------------------------------
+//
+// `splitClip`'s marker rule -- a marker exactly on the cut belongs to the
+// RIGHT half only -- is already pinned by Task 7's
+// `clips_tests::split_assigns_a_marker_on_the_cut_to_exactly_one_half`
+// (the brief's `marker_on_a_cut_belongs_to_one_half`); it is referenced
+// here, not duplicated.
+
+use crate::editor::commands::clips::trim_clip;
+use crate::editor::commands::payloads::{
+    AddMarkerPayload, RemoveMarkerPayload, TrimClipPayload, UpdateMarkerPayload,
+};
+use crate::editor::model_cues::Marker;
+
+fn add_marker_at(
+    p: &Project,
+    source_ms: u64,
+    title: &str,
+) -> Result<(Project, String), EditorError> {
+    add_marker(
+        p,
+        &AddMarkerPayload {
+            clip_id: "c1".into(),
+            source_ms,
+            title: title.into(),
+        },
+    )
+}
+
+fn marker_with(p: &mut Project, id: &str, source_ms: u64, title: &str) {
+    p.markers.push(Marker {
+        id: id.into(),
+        clip_id: "c1".into(),
+        source_ms,
+        title: title.into(),
+        extra: crate::editor::Map::new(),
+    });
+}
+
+#[test]
+fn chapters_resolve_to_output_time_after_trim() {
+    // c1: output 700, source [1000, 9000). Three markers, then the head is
+    // trimmed off (in 2000, start 1700 -- the kept frames stay put) and the
+    // clip sped up to 2x. Output time is DERIVED, never stored: m2 was
+    // trimmed away and is gone from the list, m1/m3 land where the new
+    // mapping puts them, and the list is sorted by output time -- m3 was
+    // added last but plays first.
+    let mut p = project();
+    marker_with(&mut p, "m1", 5_000, "Late");
+    marker_with(&mut p, "m2", 1_500, "Trimmed away");
+    marker_with(&mut p, "m3", 3_000, "Early");
+    let (trimmed, _) = trim_clip(
+        &p,
+        &TrimClipPayload {
+            clip_id: "c1".into(),
+            start_ms: 1_700,
+            in_ms: 2_000,
+            out_ms: 9_000,
+        },
+    )
+    .unwrap();
+    let (sped, _) = set_speed(
+        &trimmed,
+        &SetSpeedPayload {
+            clip_id: "c1".into(),
+            speed: n(2.0),
+            preserve_pitch: false,
+        },
+    )
+    .unwrap();
+    validate_project(&sped).unwrap();
+    let got: Vec<(String, u64, String)> = chapters(&sped)
+        .into_iter()
+        .map(|c| (c.marker_id, c.output_ms, c.title))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("m3".into(), 1_700 + (3_000 - 2_000) / 2, "Early".into()),
+            ("m1".into(), 1_700 + (5_000 - 2_000) / 2, "Late".into()),
+        ]
+    );
+    // The markers themselves were never rewritten: source time, verbatim.
+    assert_eq!(
+        sped.markers.iter().map(|m| m.source_ms).collect::<Vec<_>>(),
+        vec![5_000, 1_500, 3_000]
+    );
+}
+
+#[test]
+fn add_marker_stores_source_time_and_trimmed_title() {
+    let (after, label) = add_marker_at(&project(), 4_321, "  Intro  ").unwrap();
+    validate_project(&after).unwrap();
+    assert_eq!(label, "Add chapter");
+    let m = &after.markers[0];
+    assert_eq!(
+        (m.clip_id.as_str(), m.source_ms, m.title.as_str()),
+        ("c1", 4_321, "Intro")
+    );
+    assert!(crate::editor::is_valid_id(&m.id));
+}
+
+#[test]
+fn add_marker_refuses_outside_the_clip_empty_or_long_titles_and_locks() {
+    refusal(add_marker_at(&project(), 999, "Before"));
+    refusal(add_marker_at(&project(), 9_000, "At the half-open end"));
+    assert!(add_marker_at(&project(), 1_000, "At the start").is_ok());
+    refusal(add_marker_at(&project(), 2_000, "  "));
+    let err = refusal(add_marker_at(&project(), 2_000, &"t".repeat(161)));
+    assert!(err.message.contains("160"), "{}", err.message);
+    let mut locked = project();
+    locked.tracks[0].locked = true;
+    refusal(add_marker_at(&locked, 2_000, "Locked"));
+}
+
+#[test]
+fn add_marker_refuses_past_the_marker_limit() {
+    let mut p = project();
+    for i in 0..crate::editor::limits::MAX_MARKERS {
+        marker_with(&mut p, &format!("m{i}"), 2_000, "M");
+    }
+    let err = refusal(add_marker_at(&p, 2_000, "One more"));
+    assert!(err.message.contains("300"), "{}", err.message);
+}
+
+#[test]
+fn update_marker_moves_and_renames() {
+    let mut p = project();
+    marker_with(&mut p, "m1", 2_000, "Old");
+    let (after, label) = update_marker(
+        &p,
+        &UpdateMarkerPayload {
+            marker_id: "m1".into(),
+            source_ms: Some(8_999),
+            title: Some("New".into()),
+        },
+    )
+    .unwrap();
+    validate_project(&after).unwrap();
+    assert_eq!(label, "Edit chapter");
+    assert_eq!(
+        (after.markers[0].source_ms, after.markers[0].title.as_str()),
+        (8_999, "New")
+    );
+    let patch = |source_ms, title: Option<&str>| UpdateMarkerPayload {
+        marker_id: "m1".into(),
+        source_ms,
+        title: title.map(str::to_string),
+    };
+    refusal(update_marker(&p, &patch(None, None)));
+    refusal(update_marker(&p, &patch(Some(9_000), None)));
+    refusal(update_marker(&p, &patch(None, Some(""))));
+    refusal(update_marker(
+        &p,
+        &UpdateMarkerPayload {
+            marker_id: "nope".into(),
+            ..patch(None, Some("x"))
+        },
+    ));
+}
+
+#[test]
+fn remove_marker_removes_exactly_one() {
+    let mut p = project();
+    marker_with(&mut p, "m1", 2_000, "A");
+    marker_with(&mut p, "m2", 3_000, "B");
+    let (after, label) = remove_marker(
+        &p,
+        &RemoveMarkerPayload {
+            marker_id: "m1".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(label, "Delete chapter");
+    assert_eq!(
+        after
+            .markers
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["m2"]
+    );
+    refusal(remove_marker(
+        &p,
+        &RemoveMarkerPayload {
+            marker_id: "nope".into(),
+        },
+    ));
+}
+
+#[test]
+fn chapters_skip_a_marker_whose_clip_is_gone() {
+    let mut p = project();
+    p.markers.push(Marker {
+        id: "orphan".into(),
+        clip_id: "missing".into(),
+        source_ms: 0,
+        title: "Orphan".into(),
+        extra: crate::editor::Map::new(),
+    });
+    marker_with(&mut p, "m1", 1_000, "Start");
+    let got: Vec<String> = chapters(&p).into_iter().map(|c| c.marker_id).collect();
+    assert_eq!(got, vec!["m1"]);
+    assert_eq!(chapters(&p)[0].output_ms, 700);
+}

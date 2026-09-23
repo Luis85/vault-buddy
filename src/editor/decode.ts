@@ -19,6 +19,7 @@
  * number this app's arithmetic can trust.
  */
 import type {
+  CaptionImportResult,
   EditorError,
   EditorErrorCode,
   EditorOpenResult,
@@ -158,6 +159,23 @@ export function decodeProjection(value: unknown): EditorProjection {
   return {
     snapshot: decodeSnapshot(v.snapshot),
     project: decodeProject(v.project),
+  };
+}
+
+/** `editor_import_captions`' reply: `null` for a cancelled dialog, else
+ * `CaptionImportResult` with non-negative integer counts. */
+export function decodeCaptionImportResult(value: unknown): CaptionImportResult | null {
+  if (value === null) return null;
+  const v = asObject(value, "captionImport");
+  const count = (raw: unknown, field: string): number => {
+    const n = asInteger(raw, `captionImport.${field}`);
+    if (n < 0) fail(`captionImport.${field} must not be negative`);
+    return n;
+  };
+  return {
+    projection: decodeProjection(v.projection),
+    imported: count(v.imported, "imported"),
+    skipped: count(v.skipped, "skipped"),
   };
 }
 

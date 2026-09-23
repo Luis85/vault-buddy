@@ -197,7 +197,10 @@ describe("resolveActions — disabled actions carry a reason", () => {
     // it is now enabled; see "sends setCanvas..." below for its own coverage.
     // Task 35: `addText` left it too -- the teaching tools are real now
     // (`cueActions.ts`, covered in tests/editorCueOverlay.test.ts).
-    for (const id of ["addCaption", "addMarker", "addTrackVideo"] as const) {
+    // Task 36: `addCaption`/`addMarker` left it -- real resolvers now
+    // (`captionRules.ts`), covered in "addCaption/addMarker target the
+    // clip under the playhead" below.
+    for (const id of ["addTrackVideo"] as const) {
       expect(resolved[id].enabled).toBe(false);
       expect(commandFor(id, context)).toBeNull();
     }
@@ -308,9 +311,9 @@ describe("resolveActions — disabled actions carry a reason", () => {
     // Task 35: `addText`/`addArrow` left this map -- the teaching tools
     // have real resolvers now, whose reasons are their own (e.g. "No
     // visible clip at the playhead to add a cue to").
+    // Task 36: `addCaption`/`addMarker` left too -- their reasons are
+    // their own now ("No clip at the playhead to add a caption to").
     const expectedReasons: Partial<Record<string, string>> = {
-      addCaption: "Add caption arrives in a later update.",
-      addMarker: "Add marker arrives in a later update.",
       addTrackVideo: "Add video track arrives in a later update.",
     };
     for (const [id, expected] of Object.entries(expectedReasons)) {
@@ -600,9 +603,43 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
   });
 });
 
+describe("addCaption / addMarker (Task 36)", () => {
+  it("addCaption/addMarker target the clip under the playhead, in its SOURCE time", () => {
+    // c1 at output 500 playing source [2000, 6000) at speed 2.
+    const proj = project({
+      tracks: [track("v1")],
+      clips: [clip("c1", "v1", { start_ms: 500, in_ms: 2_000, out_ms: 6_000, speed: 2 })],
+    });
+    const at = ctx({ project: proj, snapshot: snapshot(), playheadMs: 1_000 });
+    const resolved = resolveActions(at);
+    expect(resolved.addCaption.enabled).toBe(true);
+    expect(resolved.addMarker.enabled).toBe(true);
+    // Output 1000 -> source 2000 + 500 * 2 = 3000.
+    expect(commandFor("addCaption", at)).toEqual({
+      kind: "addCaption", clipId: "c1", startMs: 3_000, endMs: 6_000, text: "New caption",
+    });
+    expect(commandFor("addMarker", at)).toEqual({
+      kind: "addMarker", clipId: "c1", sourceMs: 3_000, title: "Chapter 1",
+    });
+
+    const away = resolveActions(ctx({ project: proj, snapshot: snapshot(), playheadMs: 9_000 }));
+    expect(away.addCaption.enabled).toBe(false);
+    expect(away.addCaption.reason).toMatch(/clip/i);
+    expect(away.addMarker.enabled).toBe(false);
+    expect(away.addMarker.reason).toMatch(/clip/i);
+  });
+
+  it("a locked track refuses both with the lock reason", () => {
+    const proj = project({ tracks: [track("v1", { locked: true })], clips: [clip("c1", "v1")] });
+    const resolved = resolveActions(ctx({ project: proj, snapshot: snapshot(), playheadMs: 100 }));
+    expect(resolved.addCaption.reason).toBe("Track v1 is locked");
+    expect(resolved.addMarker.reason).toBe("Track v1 is locked");
+  });
+});
+
 describe("UNIMPLEMENTED_KINDS", () => {
-  it("carries exactly the 8 kinds this registry still gates", () => {
-    expect(UNIMPLEMENTED_KINDS.size).toBe(8);
+  it("is empty: every EditorCommand kind is implemented (Task 36 took the last eight)", () => {
+    expect(UNIMPLEMENTED_KINDS.size).toBe(0);
     // The ten kinds an ActionId in this registry maps to that ARE
     // implemented must be absent, or every action built on them would be
     // wrongly gated -- plus the four track kinds Task 23 implemented that
@@ -634,6 +671,10 @@ describe("UNIMPLEMENTED_KINDS", () => {
       // wired them (the seven teaching tools -> addEffect via cueActions.ts;
       // CueHandles/EffectSection send updateEffect/removeEffect directly).
       "addEffect", "updateEffect", "removeEffect",
+      // Task 36: CaptionsLibrary/ChaptersLibrary send these directly; the
+      // addCaption/addMarker actions have their own resolvers.
+      "setCaptionSettings", "addCaption", "updateCaption", "splitCaption", "removeCaptions",
+      "addMarker", "updateMarker", "removeMarker",
     ]) {
       expect(UNIMPLEMENTED_KINDS.has(implemented)).toBe(false);
     }

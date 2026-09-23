@@ -59,7 +59,7 @@ use std::path::{Path, PathBuf};
 use crate::structural_scan::code_only;
 
 /// The `editor_*` session, save/list/reopen, workspace, media and job commands —
-/// sixteen as of Task 28 (`editor_media_peaks`, `editor_media_thumbnail`). Add a new one here in the same commit that adds it to
+/// seventeen as of Task 36 (`editor_import_captions`). Add a new one here in the same commit that adds it to
 /// `generate_handler!` (`lib.rs`), `build.rs`'s `ALL_COMMANDS`, and
 /// `capabilities/editor.json`'s `permissions` — never to
 /// `capabilities/default.json`.
@@ -71,6 +71,7 @@ const EXPECTED_EDITOR: &[&str] = &[
     "editor_get_snapshot",
     "editor_get_workspace",
     "editor_hide_window",
+    "editor_import_captions",
     "editor_import_media",
     "editor_list_projects",
     "editor_media_peaks",

@@ -214,12 +214,13 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * `cueActions.ts`'s resolver/builder pair, while `updateEffect`/
  * `removeEffect` are sent directly by `CueHandles.vue` and
  * `EffectSection.vue` (the `ColorSection` precedent), never through this
- * registry.
+ * registry. **Task 36 emptied the set**: the last eight kinds (the five
+ * caption kinds and the three marker kinds) are implemented, sent directly
+ * by `CaptionsLibrary`/`ChaptersLibrary`, and the `addCaption`/`addMarker`
+ * actions resolve through `captionRules.ts`. It stays, empty, as the place
+ * a future kind that ships ahead of its Rust arm is gated.
  */
-export const UNIMPLEMENTED_KINDS: ReadonlySet<string> = new Set([
-  "setCaptionSettings", "addCaption", "updateCaption", "splitCaption", "removeCaptions",
-  "addMarker", "updateMarker", "removeMarker",
-]);
+export const UNIMPLEMENTED_KINDS: ReadonlySet<string> = new Set<string>([]);
 
 /**
  * The human copy shown for an action `UNIMPLEMENTED_KINDS` gates — NEVER

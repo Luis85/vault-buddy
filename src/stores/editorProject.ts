@@ -340,6 +340,27 @@ export const useEditorProjectStore = defineStore("editorProject", {
       }
     },
     /**
+     * Import a subtitle file onto `clipId` (Task 36): Rust opens its own
+     * dialog and applies the whole file as ONE edit, so the reply installs
+     * exactly like an `execute` reply (same generation/session/revision
+     * guards). Resolves the counts for the caller's status line, or `null`
+     * -- a cancelled dialog, no session, or a refusal (which, like every
+     * other refused edit, surfaces through `lastError`).
+     */
+    async importCaptions(clipId: string, replace: boolean): Promise<{ imported: number; skipped: number } | null> {
+      if (!this.snapshot || !this.sessionId) return null;
+      const generation = this.generation;
+      try {
+        const result = await this.port.importCaptions(this.sessionId, clipId, replace);
+        if (!result) return null;
+        this.applyExecuteResult(generation, result.projection);
+        return { imported: result.imported, skipped: result.skipped };
+      } catch (e) {
+        if (generation === this.generation) this.lastError = toEditorError(e);
+        return null;
+      }
+    },
+    /**
      * Resend the command parked in `conflictIntent` (fix round 1) — the
      * explicit Retry affordance `execute` itself deliberately never drives
      * on its own (R20). Clears `conflictIntent` BEFORE awaiting `execute`,

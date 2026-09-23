@@ -91,6 +91,7 @@ import {
   targetGroupId,
   targetTrackId,
 } from "./actionTargets";
+import { buildAddCaption, buildAddMarker, resolveAddCaption, resolveAddMarker } from "./captionRules";
 import { buildCue, resolveCue } from "./cueActions";
 import type { EditorCommand } from "./editorCommandTypes";
 import { detachRefusal, freeAudioTrackFor } from "./mixRules";
@@ -283,6 +284,10 @@ const RESOLVERS: Partial<Record<ActionId, (ctx: ActionContext) => Verdict>> = {
   addZoom: resolveCue,
   addStep: resolveCue,
   addMask: resolveCue,
+  // Task 36: the clip under the playhead (`captionRules.ts`, shared with
+  // CaptionsLibrary/ChaptersLibrary's own "at the playhead" buttons).
+  addCaption: resolveAddCaption,
+  addMarker: resolveAddMarker,
 };
 
 function labelFor(actionId: ActionId, ctx: ActionContext): string {
@@ -472,6 +477,8 @@ const BUILDERS: Partial<Record<ActionId, Builder>> = {
   addZoom: buildCue,
   addStep: buildCue,
   addMask: buildCue,
+  addCaption: buildAddCaption,
+  addMarker: buildAddMarker,
 };
 
 /**

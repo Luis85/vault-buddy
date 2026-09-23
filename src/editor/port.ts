@@ -21,6 +21,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 
 import type {
+  CaptionImportResult,
   CloseDisposition,
   EditorError,
   EditorOpenResult,
@@ -36,6 +37,7 @@ import type {
 } from "../editorTypes";
 import { logWarning } from "../logging";
 import {
+  decodeCaptionImportResult,
   decodeEditorError,
   decodeJobProgress,
   decodeJobRecords,
@@ -144,6 +146,11 @@ export interface EditorPort {
   cancelJob(sessionId: string, jobId: string): Promise<void>;
   /** `editor_get_jobs` — the authoritative job states, oldest first. */
   getJobs(sessionId: string): Promise<JobRecordDto[]>;
+  /** `editor_import_captions` — Rust opens its OWN native dialog (SRT,
+   * WebVTT, `.txt`), reads the file bounded and imports it onto `clipId`
+   * as ONE edit; `replace` drops that clip's existing cues in the same
+   * step. `null` when the dialog was cancelled. */
+  importCaptions(sessionId: string, clipId: string, replace: boolean): Promise<CaptionImportResult | null>;
 }
 
 /** The per-job Channel (Tauri's ordered, subscriber-scoped delivery) —
@@ -221,6 +228,9 @@ export function createTauriEditorPort(): EditorPort {
     },
     getJobs(sessionId) {
       return call("editor_get_jobs", { sessionId }, decodeJobRecords);
+    },
+    importCaptions(sessionId, clipId, replace) {
+      return call("editor_import_captions", { sessionId, clipId, replace }, decodeCaptionImportResult);
     },
   };
 }

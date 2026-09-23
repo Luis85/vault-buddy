@@ -12,6 +12,7 @@
 //! `editor/` (validation, time mapping, migration, …) rather than growing
 //! this file.
 
+pub mod captions_io;
 pub mod commands;
 pub mod error;
 pub mod fingerprint;
@@ -39,7 +40,7 @@ pub use history::History;
 pub use ids::{is_valid_id, new_entity_id, new_project_id};
 pub use model::*;
 pub use model_cues::*;
-pub use projection::{EditorOpenResult, EditorProjection, MissingMedia};
+pub use projection::{CaptionImportResult, EditorOpenResult, EditorProjection, MissingMedia};
 pub use session::{EditorSession, EditorSnapshot, ExecuteRequest};
 pub use validate::{validate_envelope, validate_project};
 pub use workspace::{sanitize, DeleteMode, Selected, Theme, Workspace};

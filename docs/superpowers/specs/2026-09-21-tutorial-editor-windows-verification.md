@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **17 rows** today (T1–T17), of which **0** carry a result. An
+This file carries **18 rows** today (T1–T18), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -203,3 +203,17 @@ letterbox, or a pointer reaching a cue's hit shape through a real layout box.
 | # | Check | Steps | Result |
 | --- | --- | --- | --- |
 | T17 | **Teaching cues drawn over the video, grabbed, zoomed** | Open a staged capture and select its (full-frame) clip with the playhead on it. (a) Press **Arrow** in the preview toolbar. **Record**: an arrow appears over the picture, its endpoints show as round handles, and the inspector switches to the arrow's fields with **Starts at (ms)** equal to the playhead. (b) Drag the arrow's head handle somewhere else, release, then press Ctrl+Z. **Record**: the arrow follows the pointer while dragging, the header's Undo label reads "Update effect" after release, and one Undo puts it back. (c) Press **Zoom**, then scrub the playhead through the zoom's span. **Record**: the picture scales up towards the focal marker and back, never showing black bars or the letterbox inside the canvas, and the arrow (if on screen) scales with the picture. (d) Press **Privacy cover**. **Record**: an opaque box covers that area of the picture, and the inspector shows "Covers pixels only while visible. It does not track motion and the original recording is unchanged." (e) Click the bare picture: **Record** that the cue selection drops and the clip's layout box (Task 31) is back; move the playhead before the clip starts and **Record** that the layout box disappears. (f) Resize the editor window: **Record** that the cues stay pinned to the same spots of the picture. | |
+
+## Task 36's row
+
+Task 36 adds captions and chapters: `editor_import_captions`' native open
+dialog on the `editor-captions` thread, the Captions and Chapters library
+tabs, and the preview's caption layer (`CaptionOverlay.vue`). Rust and Vitest
+cover the parser, the output-to-source conversion, the commands sent and the
+DOM; nothing automated opens the real Windows file dialog, reads a real
+subtitle file written by another tool, or shows WebView2 drawing the caption
+text over a playing picture.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T18 | **Caption import, editing and chapters in the real window** | Open a staged capture and select its clip. (a) In the library's **Captions** tab press **Import SRT / WebVTT**, pick a real `.srt` saved with Windows line endings by another tool (and later a `.vtt` with a `STYLE` block), whose last cue starts after the clip ends. **Record**: the native dialog opens over the editor and lists `.srt`, `.vtt` and `.txt`; the status line reads "Imported N captions ... 1 cue fell outside the clip and was skipped."; one Ctrl+Z removes the whole import. Then pick a file with a broken timestamp: **Record** that the error names its line and no file path. (b) Play across a caption. **Record**: its text shows over the picture at the bottom; switching **Position** to Top and **Size** to 50 moves and enlarges it; unticking **Show captions** hides it. (c) Speed the clip to 2× (inspector **Speed**) and **Record** that the caption list's times halve while the captions still line up with the same words. (d) In the **Chapters** tab press **Add chapter at playhead**, rename it, then trim the clip's head past it. **Record** that the chapter's time follows the trim and that it leaves the list once trimmed away. | |
