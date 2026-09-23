@@ -228,8 +228,20 @@ impl JobRegistry {
             .collect()
     }
 
+    /// Stop `session_id`'s jobs of one `kind` — a discard stopping its
+    /// derived-media decodes before it removes the project (Task 28).
+    pub(crate) fn cancel_session_kind(&self, session_id: &str, kind: JobKind) {
+        for record in self
+            .jobs
+            .values()
+            .filter(|r| r.session_id == session_id && r.kind == kind)
+        {
+            record.cancel.store(true, Ordering::SeqCst);
+        }
+    }
+
     /// Is a job of `kind` still running in `session_id`?
-    fn is_running(&self, session_id: &str, kind: JobKind) -> bool {
+    pub(crate) fn is_running(&self, session_id: &str, kind: JobKind) -> bool {
         self.jobs
             .values()
             .any(|r| r.session_id == session_id && r.kind == kind && !r.phase.is_terminal())

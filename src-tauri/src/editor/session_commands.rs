@@ -377,8 +377,10 @@ fn drop_session(state: &EditorState, session_id: &str) {
     // in this process's life.
     lock_ignoring_poison(&state.save_locks).remove(session_id);
     // A running import (Task 25) of a closing session stops before its next
-    // file; its results would have no session to land in.
+    // file; its results would have no session to land in. Its peaks decodes
+    // are jobs too; its thumbnail renders are not (Task 28).
     lock_ignoring_poison(&state.jobs).cancel_session(session_id);
+    super::media_derive::cancel_session_thumbnails(state, session_id);
 }
 
 /// Close a session. `discardProject` UNPINS the staged capture first and
@@ -422,6 +424,10 @@ pub(crate) fn close_in(
             ));
         }
         CloseDisposition::DiscardProject => {
+            // Task 28 fix round 1: derived media (an ffmpeg holding a file of
+            // this project open, a late cache write) must be stopped BEFORE
+            // the save lock is taken — their final write needs that lock.
+            super::media_derive::stop_session_derivations(state, session_id);
             let session_lock = super::save_commands::session_save_lock(state, session_id)?;
             let _save_guard = lock_ignoring_poison(&session_lock);
 

@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use serde_json::json;
@@ -559,4 +560,164 @@ fn a_closing_session_cancels_a_running_decode() {
     assert!(lock_ignoring_poison(&state.jobs)
         .records_for(SESSION)
         .is_empty());
+}
+
+// ---- fix round 1 -----------------------------------------------------------
+
+// Review Minor 9: the whole point of `create_dir` over `create_dir_all` —
+// a project directory that is gone stays gone.
+#[test]
+fn ensure_cache_dir_never_recreates_a_removed_project() {
+    let root = tempfile::tempdir().unwrap();
+    let state = EditorState::default();
+    opened(root.path(), &state, &[]);
+    let dir = project_dir(root.path(), PROJECT).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    let e = ensure_cache_dir(root.path(), PROJECT).unwrap_err();
+    assert_eq!(e.code, EditorErrorCode::SourceMissing);
+    assert!(!dir.exists(), "the project directory was recreated");
+}
+
+// Review Minor 2: discarding a project while a thumbnail renders stops the
+// render (it is killed, not waited out for 30 s) and nothing it made is
+// left behind — no project directory, no cache.
+#[test]
+fn discarding_a_project_mid_render_stops_the_render() {
+    use crate::editor::session_commands::{close_in, CloseDisposition};
+
+    let root = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let staging = tempfile::tempdir().unwrap();
+    let state = EditorState::default();
+    let media = opened(
+        root.path(),
+        &state,
+        &[(
+            "pic",
+            AssetKind::Video,
+            record("pic.mp4", SourceMediaKind::Video, 2_000),
+        )],
+    );
+    std::fs::write(media.join("pic.mp4"), b"mp4").unwrap();
+    let program = slow_tool(tools.path());
+    let found = move || Some(program.clone());
+    let started = std::time::Instant::now();
+
+    let (render, discard) = std::thread::scope(|scope| {
+        let render = std::thread::Builder::new()
+            .name("test-thumbnail".into())
+            .spawn_scoped(scope, || {
+                thumbnail_in(&state, root.path(), &req("pic"), 0, &found)
+            })
+            .unwrap();
+        // Long enough for the child to be running: this is a KILL.
+        std::thread::sleep(Duration::from_millis(700));
+        let discard = close_in(
+            &state,
+            root.path(),
+            staging.path(),
+            SESSION,
+            CloseDisposition::DiscardProject,
+        );
+        // The render had ENDED before the project was removed (the discard
+        // stops and waits for it first), not merely been told to stop by
+        // the session's close afterwards.
+        assert!(
+            !derivations_running(&state, SESSION),
+            "a render was still in flight when the discard returned"
+        );
+        (render.join().unwrap(), discard)
+    });
+
+    discard.expect("the discard succeeds");
+    let code = render.expect_err("the render was stopped").code;
+    assert!(
+        matches!(
+            code,
+            EditorErrorCode::Cancelled | EditorErrorCode::SessionGone
+        ),
+        "{code:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "the render was killed, not waited out: {:?}",
+        started.elapsed()
+    );
+    assert!(!project_dir(root.path(), PROJECT).unwrap().exists());
+}
+
+// Review Minor 2, the peaks half: a waveform that finishes after its
+// session closed is not written into the project (the cache write takes
+// the session's save lock and needs the session live under it).
+#[test]
+fn a_waveform_finished_after_its_session_closed_is_not_cached() {
+    let root = tempfile::tempdir().unwrap();
+    let state = EditorState::default();
+    opened(root.path(), &state, &[]);
+    lock_ignoring_poison(&state.sessions).remove(SESSION);
+    let cached = CachedPeaks {
+        stamp: SourceStamp {
+            source_size: 3,
+            source_modified_ms: 4,
+        },
+        peaks: vec![0.5],
+    };
+
+    write_cached_peaks(
+        &state,
+        root.path(),
+        SESSION,
+        PROJECT,
+        "snd.peaks.1.json",
+        &cached,
+    );
+
+    assert!(!cache_path(root.path(), PROJECT).unwrap().exists());
+}
+
+// Review Minor 4: the remembered ffmpeg is keyed on the configured
+// override, so changing the path in settings (`set_ffmpeg_path`, or a
+// hand edit of config.json) resolves again instead of running the old
+// binary until it happens to fail with NotFound.
+#[test]
+fn the_remembered_ffmpeg_follows_the_configured_override() {
+    use std::cell::Cell;
+    let cell = Mutex::new(None);
+    let calls = Cell::new(0);
+    let resolve = |program: &'static str| {
+        calls.set(calls.get() + 1);
+        Some(program.to_string())
+    };
+
+    assert_eq!(
+        remembered_ffmpeg(&cell, None, || resolve("path-ffmpeg")).as_deref(),
+        Some("path-ffmpeg")
+    );
+    assert_eq!(
+        remembered_ffmpeg(&cell, None, || resolve("unused")).as_deref(),
+        Some("path-ffmpeg")
+    );
+    assert_eq!(calls.get(), 1, "a remembered program is reused");
+
+    let chosen = Some("D:/tools/ffmpeg.exe".to_string());
+    assert_eq!(
+        remembered_ffmpeg(&cell, chosen.clone(), || resolve("override-ffmpeg")).as_deref(),
+        Some("override-ffmpeg")
+    );
+    assert_eq!(calls.get(), 2, "a changed override resolves again");
+
+    assert_eq!(
+        remembered_ffmpeg(&cell, chosen.clone(), || None),
+        Some("override-ffmpeg".to_string())
+    );
+    assert_eq!(
+        remembered_ffmpeg(&cell, None, || None),
+        None,
+        "a miss is not remembered"
+    );
+    assert_eq!(
+        remembered_ffmpeg(&cell, None, || resolve("again")).as_deref(),
+        Some("again")
+    );
 }

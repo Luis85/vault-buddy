@@ -108,8 +108,15 @@ pub(crate) fn run_streaming<S: Send + 'static>(
             let _ = child.wait();
             return Ok(Streamed::Cancelled);
         }
-        if let Some(status) = child.try_wait()? {
-            break status.success();
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None) => {}
+            Err(e) => {
+                // Never return with the child still running unreaped.
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
         }
         if start.elapsed() >= timeout {
             let _ = child.kill();
@@ -245,5 +252,20 @@ mod tests {
         .unwrap_err();
         assert_eq!(e.kind(), std::io::ErrorKind::TimedOut);
         assert!(start.elapsed() < Duration::from_secs(10));
+    }
+
+    // Fix round 1 (review Minor 3): once the child is spawned, NO exit may
+    // leave it running unreaped. `try_wait()?` returned straight out of the
+    // poll loop on an error, leaving ffmpeg writing and the reader folding.
+    // (A real `GetExitCodeProcess` failure cannot be provoked here, so the
+    // rule is pinned in the source.)
+    #[test]
+    fn no_exit_after_the_spawn_leaves_the_child_unreaped() {
+        let src = include_str!("external_stream.rs");
+        let body = src.split("#[cfg(test)]").next().unwrap();
+        assert!(
+            !body.contains("try_wait()?"),
+            "a try_wait error must kill and reap the child before returning"
+        );
     }
 }

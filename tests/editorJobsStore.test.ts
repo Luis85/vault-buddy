@@ -250,6 +250,26 @@ describe("editorJobs — reconcile", () => {
     expect(jobs.activeImport).toBeNull();
   });
 
+  // Task 28 fix round 1: a peaks decode's record is FORGOTTEN by Rust once
+  // its command replies (it has no Channel to recover). A reconcile that
+  // caught it mid-decode must not leave it "preparing" forever: the next
+  // reconcile, not finding it in the registry, drops it. An import the
+  // registry still lists is untouched.
+  it("a job the registry has forgotten is dropped on the next reconcile", async () => {
+    const peaks: JobRecordDto = { jobId: "job-p", kind: "peaks", phase: "preparing", fraction: 0, terminal: null };
+    const importRow: JobRecordDto = { jobId: "job-1", kind: "import", phase: "preparing", fraction: 0.2, terminal: null };
+    let rows: JobRecordDto[] = [importRow, peaks];
+    const { jobs, start } = await setup({ getJobs: () => Promise.resolve(rows) });
+    await start();
+    await jobs.reconcile();
+    expect(jobs.jobs["job-p"]?.phase).toBe("preparing");
+
+    rows = [importRow];
+    await jobs.reconcile();
+    expect(jobs.jobs["job-p"]).toBeUndefined();
+    expect(jobs.jobs["job-1"].phase).toBe("preparing");
+  });
+
   it("a failed reconcile keeps what the store had and surfaces the error", async () => {
     const { jobs, send, start } = await setup({
       getJobs: () => Promise.reject(new Error("transport down")),

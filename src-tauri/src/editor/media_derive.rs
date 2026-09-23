@@ -33,29 +33,47 @@
 //! the timeline turns into "Install ffmpeg to see waveforms" — but a cache
 //! HIT never needs ffmpeg at all.
 //!
+//! **Nothing lands in a closing project (fix round 1, review Minor 2).**
+//! Every write into `cache\` — a thumbnail's commit and prune, a waveform's
+//! cache file — goes through `with_live_project`: it holds the session's
+//! SAVE lock (the one `editor_close_session{discardProject}` holds across
+//! its unpin-then-remove) and requires the session to be live under it, and
+//! `ensure_cache_dir` refuses a project directory that is gone. A thumbnail
+//! is rendered into the OS temp directory first, never into `cache\`, so an
+//! ffmpeg still writing cannot hold a file open inside a project being
+//! removed. A discard first STOPS the session's derived work
+//! (`stop_session_derivations`: peaks jobs cancelled, thumbnail renders
+//! killed through `EditorState::thumbnails`) and waits a bounded time for it
+//! to end; a closing session cancels both too (`drop_session`).
+//!
 //! **Lock order:** `PEAKS_GATE`/`THUMBNAIL_GATE` are outermost — never
 //! taken while any `EditorState` lock is held; inside them only the
-//! `jobs` leaf lock is taken, briefly.
+//! `jobs` leaf lock is taken, briefly. A session's save lock is taken only
+//! AFTER a gate is released, never inside one. `EditorState::thumbnails` and
+//! `RESOLVED_FFMPEG` are leaf locks.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use vault_buddy_core::capture_config;
 use vault_buddy_core::capture_note::write_atomic_replacing;
 use vault_buddy_core::editor::peaks::{expected_samples, fold_s16le, PeakState, MAX_BUCKETS};
 use vault_buddy_core::editor::{is_valid_id, new_entity_id, EditorError, EditorErrorCode};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
+use super::authz::require_session;
 use super::media_commands::{resolve_asset, ResolvedAsset};
-use super::media_jobs::{start_job_in, JobKind, JobPhase, JobReporter, NoSubscriber};
+use super::media_jobs::{start_job_in, JobKind, JobPhase, JobReporter, JobTerminal, NoSubscriber};
 use super::prefs_commands::project_id_for;
 use super::project_store::{project_dir, SourceMediaKind};
+use super::save_commands::session_save_lock;
 use super::EditorState;
 use crate::external_stream::{run_streaming, Streamed};
-use crate::external_tool::{run_capturing, tool_command, Capture};
+use crate::external_tool::tool_command;
 
 /// Thumbnails are one per this many ms of source time, at most.
 pub(crate) const THUMBNAIL_STEP_MS: u64 = 250;
@@ -68,6 +86,13 @@ const PEAKS_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(30);
 /// A cached peaks file larger than this is not ours (4000 floats is ~50 KB).
 const MAX_PEAKS_CACHE_BYTES: u64 = 1024 * 1024;
+/// A rendered thumbnail larger than this is not a 160 px JPEG.
+const MAX_THUMBNAIL_BYTES: u64 = 1024 * 1024;
+/// How long a discard waits for the session's derived work to stop. A
+/// cancelled child is killed within `external_stream`'s 50 ms poll, so
+/// this is only ever reached by a wedged one; the discard then proceeds,
+/// still protected by `with_live_project`.
+const STOP_WAIT: Duration = Duration::from_secs(5);
 
 const NO_FFMPEG_WAVEFORM: &str = "Install ffmpeg to see waveforms.";
 const NO_FFMPEG_THUMBNAIL: &str = "Install ffmpeg to see thumbnails.";
@@ -75,9 +100,24 @@ const NO_FFMPEG_THUMBNAIL: &str = "Install ffmpeg to see thumbnails.";
 static PEAKS_GATE: Mutex<()> = Mutex::new(());
 static THUMBNAIL_GATE: Mutex<()> = Mutex::new(());
 /// The resolved ffmpeg, remembered once found (a resolve spawns two
-/// probes). A MISS is never remembered, so installing ffmpeg while the app
-/// runs is picked up by the next request.
-static RESOLVED_FFMPEG: Mutex<Option<String>> = Mutex::new(None);
+/// probes), KEYED on the ffmpeg path configured when it was resolved: a
+/// changed setting (`set_ffmpeg_path`, or a hand edit of config.json)
+/// resolves again (fix round 1, review Minor 4). A MISS is never
+/// remembered, so installing ffmpeg while the app runs is picked up by the
+/// next request.
+static RESOLVED_FFMPEG: Mutex<Option<Remembered>> = Mutex::new(None);
+
+struct Remembered {
+    configured: Option<String>,
+    program: String,
+}
+
+/// `EditorState::thumbnails`: the thumbnail renders in flight, by session,
+/// each with its own cancel flag. Not `JobRegistry` jobs: no wire `JobKind`
+/// names a thumbnail, and a row the frontend cannot decode would break
+/// `editor_get_jobs`. Per STATE rather than a process static, so two
+/// states (two test cases) can never see — or cancel — each other's.
+pub type ThumbnailRenders = Mutex<Vec<(String, Arc<AtomicBool>)>>;
 
 /// `editor_media_peaks`' reply: `{ peaks: number[] }`, each in `0..=1`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -102,13 +142,31 @@ fn no_ffmpeg(message: &str) -> EditorError {
 
 /// The ffmpeg the editor's derived media runs — see `RESOLVED_FFMPEG`.
 pub(crate) fn editor_ffmpeg() -> Option<String> {
-    if let Some(program) = lock_ignoring_poison(&RESOLVED_FFMPEG).clone() {
-        return Some(program);
+    let configured = capture_config::load_config().document_import.ffmpeg_path;
+    remembered_ffmpeg(&RESOLVED_FFMPEG, configured, || {
+        crate::ffmpeg::resolve_working_ffmpeg().map(|tools| tools.ffmpeg)
+    })
+}
+
+/// `cell`'s program while it was resolved under `configured`, else a fresh
+/// `resolve` (run WITHOUT the lock held: a resolve spawns processes).
+fn remembered_ffmpeg(
+    cell: &Mutex<Option<Remembered>>,
+    configured: Option<String>,
+    resolve: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    if let Some(known) = lock_ignoring_poison(cell)
+        .as_ref()
+        .filter(|known| known.configured == configured)
+    {
+        return Some(known.program.clone());
     }
-    // Resolved WITHOUT the lock held: a resolve spawns processes.
-    let program = crate::ffmpeg::resolve_working_ffmpeg()?.ffmpeg;
-    *lock_ignoring_poison(&RESOLVED_FFMPEG) = Some(program.clone());
-    Some(program)
+    let program = resolve();
+    *lock_ignoring_poison(cell) = program.clone().map(|program| Remembered {
+        configured,
+        program,
+    });
+    program
 }
 
 /// A remembered ffmpeg that no longer spawns (uninstalled, moved) is
@@ -265,16 +323,39 @@ fn read_cached_peaks(path: &Path, buckets: usize, stamp: SourceStamp) -> Option<
     valid.then_some(cached.peaks)
 }
 
-/// Best-effort: a waveform that could not be cached is still drawn.
-fn write_cached_peaks(root: &Path, project_id: &str, name: &str, cached: &CachedPeaks) {
-    let written = ensure_cache_dir(root, project_id)
-        .map_err(|e| e.message)
-        .and_then(|dir| {
-            let json = serde_json::to_string(cached).map_err(|e| e.to_string())?;
-            write_atomic_replacing(&dir.join(name), &json).map_err(|e| e.to_string())
-        });
+/// Run `write` only while `session_id` is live, holding its SAVE lock —
+/// the lock a discard holds across its unpin-then-remove, so a cache write
+/// never interleaves with `remove_project` (module doc).
+fn with_live_project<T>(
+    state: &EditorState,
+    session_id: &str,
+    write: impl FnOnce() -> Result<T, EditorError>,
+) -> Result<T, EditorError> {
+    let lock = session_save_lock(state, session_id)?;
+    let _no_discard_meanwhile = lock_ignoring_poison(&lock);
+    drop(require_session(state, session_id)?);
+    write()
+}
+
+/// Best-effort: a waveform that could not be cached is still drawn, and
+/// one that finished after its session closed is not cached at all.
+fn write_cached_peaks(
+    state: &EditorState,
+    root: &Path,
+    session_id: &str,
+    project_id: &str,
+    name: &str,
+    cached: &CachedPeaks,
+) {
+    let written = with_live_project(state, session_id, || {
+        let dir = ensure_cache_dir(root, project_id)?;
+        let json = serde_json::to_string(cached)
+            .map_err(|e| err(EditorErrorCode::Internal, e.to_string()))?;
+        write_atomic_replacing(&dir.join(name), &json)
+            .map_err(|e| err(EditorErrorCode::Internal, e.to_string()))
+    });
     if let Err(e) = written {
-        log::warn!("editor peaks: the waveform could not be cached: {e}");
+        log::warn!("editor peaks: the waveform was not cached: {}", e.message);
     }
 }
 
@@ -301,10 +382,15 @@ pub(crate) fn decode_peaks(
             success: true,
             state,
         }) => Ok(state.finish()),
-        Ok(Streamed::Finished { success: false, .. }) => Err(err(
-            EditorErrorCode::UnsupportedMedia,
-            "ffmpeg could not decode this asset's sound.",
-        )),
+        Ok(Streamed::Finished { success: false, .. }) => {
+            // stderr is nulled (it names the source's path, and an unread
+            // pipe could wedge the child), so say at least which file.
+            log::warn!("editor peaks: ffmpeg exited with an error decoding {src:?}");
+            Err(err(
+                EditorErrorCode::UnsupportedMedia,
+                "ffmpeg could not decode this asset's sound.",
+            ))
+        }
         Ok(Streamed::Cancelled) => Err(err(
             EditorErrorCode::Cancelled,
             "The waveform was cancelled.",
@@ -323,28 +409,79 @@ pub(crate) fn decode_peaks(
     }
 }
 
-/// One decode as a registered `peaks` job — see the module doc.
+/// What one peaks request decodes, and where its answer is cached.
+struct PeaksPlan<'a> {
+    asset: &'a ResolvedAsset,
+    project_id: &'a str,
+    cache_name: String,
+    cached: PathBuf,
+    stamp: SourceStamp,
+    buckets: usize,
+}
+
+/// The phase and terminal a finished decode is recorded with.
+fn peaks_terminal(outcome: &Result<Vec<f32>, EditorError>) -> (JobPhase, JobTerminal) {
+    let phase = match outcome {
+        Ok(_) => JobPhase::Complete,
+        Err(e) if e.code == EditorErrorCode::Cancelled => JobPhase::Cancelled,
+        Err(_) => JobPhase::Failed,
+    };
+    let terminal = JobTerminal {
+        error: outcome.as_ref().err().cloned(),
+        ..JobTerminal::default()
+    };
+    (phase, terminal)
+}
+
+/// One decode as a registered `peaks` job — see the module doc. Re-reads
+/// the cache once the gate is held (a request for the same record that
+/// queued behind this one finds it there instead of decoding again — review
+/// Minor 6), writes the cache BEFORE the record is forgotten (so a discard
+/// waiting for the job also waits for its write), and ends the record with
+/// a terminal (review Minor 1).
 fn run_peaks_job(
     state: &EditorState,
+    root: &Path,
     session_id: &str,
     program: &str,
-    asset: &ResolvedAsset,
-    buckets: usize,
+    plan: &PeaksPlan,
 ) -> Result<Vec<f32>, EditorError> {
     let (job_id, cancel) = start_job_in(state, session_id, JobKind::Peaks)?;
     let result = {
         let _one_at_a_time = lock_ignoring_poison(&PEAKS_GATE);
-        JobReporter::new(
+        let mut reporter = JobReporter::new(
             &state.jobs,
             &NoSubscriber,
             session_id,
             &job_id,
             JobKind::Peaks,
-        )
-        .progress(JobPhase::Preparing, 0.0);
-        let duration = asset.record.duration_ms;
-        decode_peaks(program, &asset.path, duration, buckets, &cancel)
+        );
+        reporter.progress(JobPhase::Preparing, 0.0);
+        let decoded = read_cached_peaks(&plan.cached, plan.buckets, plan.stamp).map_or_else(
+            || {
+                let (src, duration) = (&plan.asset.path, plan.asset.record.duration_ms);
+                decode_peaks(program, src, duration, plan.buckets, &cancel)
+            },
+            Ok,
+        );
+        let (phase, terminal) = peaks_terminal(&decoded);
+        reporter.finish(phase, terminal);
+        decoded
     };
+    if let Ok(peaks) = &result {
+        let record = CachedPeaks {
+            stamp: plan.stamp,
+            peaks: peaks.clone(),
+        };
+        write_cached_peaks(
+            state,
+            root,
+            session_id,
+            plan.project_id,
+            &plan.cache_name,
+            &record,
+        );
+    }
     lock_ignoring_poison(&state.jobs).forget(&job_id);
     result
 }
@@ -377,19 +514,75 @@ pub(crate) fn peaks_in(
             "This asset has no sound to draw.",
         ));
     }
-    let stamp = SourceStamp::of(&asset.path)?;
-    let name = format!("{}.peaks.{buckets}.json", asset.record_id);
-    let cached = cache_path(root, &project_id)?.join(&name);
-    if let Some(peaks) = read_cached_peaks(&cached, buckets, stamp) {
+    let cache_name = format!("{}.peaks.{buckets}.json", asset.record_id);
+    let plan = PeaksPlan {
+        cached: cache_path(root, &project_id)?.join(&cache_name),
+        stamp: SourceStamp::of(&asset.path)?,
+        asset: &asset,
+        project_id: &project_id,
+        cache_name,
+        buckets,
+    };
+    if let Some(peaks) = read_cached_peaks(&plan.cached, buckets, plan.stamp) {
         return Ok(MediaPeaks { peaks });
     }
     let program = ffmpeg().ok_or_else(|| no_ffmpeg(NO_FFMPEG_WAVEFORM))?;
-    let peaks = run_peaks_job(state, request.session_id, &program, &asset, buckets)?;
-    let record = CachedPeaks { stamp, peaks };
-    write_cached_peaks(root, &project_id, &name, &record);
-    Ok(MediaPeaks {
-        peaks: record.peaks,
-    })
+    let peaks = run_peaks_job(state, root, request.session_id, &program, &plan)?;
+    Ok(MediaPeaks { peaks })
+}
+
+/// One thumbnail render's entry in `EditorState::thumbnails`, removed when
+/// dropped — i.e. after the render AND its commit, whichever way they end.
+struct InFlight<'a> {
+    renders: &'a ThumbnailRenders,
+    cancel: Arc<AtomicBool>,
+}
+
+impl<'a> InFlight<'a> {
+    fn register(renders: &'a ThumbnailRenders, session_id: &str) -> Self {
+        let cancel = Arc::new(AtomicBool::new(false));
+        lock_ignoring_poison(renders).push((session_id.to_string(), Arc::clone(&cancel)));
+        Self { renders, cancel }
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        lock_ignoring_poison(self.renders).retain(|(_, c)| !Arc::ptr_eq(c, &self.cancel));
+    }
+}
+
+/// Stop `session_id`'s thumbnail renders (a closing session — `drop_session`).
+pub(crate) fn cancel_session_thumbnails(state: &EditorState, session_id: &str) {
+    for (_, cancel) in lock_ignoring_poison(&state.thumbnails)
+        .iter()
+        .filter(|(s, _)| s == session_id)
+    {
+        cancel.store(true, Ordering::SeqCst);
+    }
+}
+
+fn derivations_running(state: &EditorState, session_id: &str) -> bool {
+    lock_ignoring_poison(&state.jobs).is_running(session_id, JobKind::Peaks)
+        || lock_ignoring_poison(&state.thumbnails)
+            .iter()
+            .any(|(s, _)| s == session_id)
+}
+
+/// Cancel `session_id`'s peaks decodes and thumbnail renders and wait (at
+/// most `STOP_WAIT`) for them to end — a discard's first step, taken BEFORE
+/// it holds the session's save lock (their final cache write needs it).
+pub(crate) fn stop_session_derivations(state: &EditorState, session_id: &str) {
+    lock_ignoring_poison(&state.jobs).cancel_session_kind(session_id, JobKind::Peaks);
+    cancel_session_thumbnails(state, session_id);
+    let started = std::time::Instant::now();
+    while derivations_running(state, session_id) {
+        if started.elapsed() >= STOP_WAIT {
+            log::warn!("editor: derived media of session {session_id} did not stop in time");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn remove_quietly(path: &Path) {
@@ -400,34 +593,55 @@ fn remove_quietly(path: &Path) {
     }
 }
 
-/// Render one thumbnail into an owned temp beside `dest`, then rename it
-/// into place — a reader never sees half a JPEG. ffmpeg's stderr is
-/// logged, not returned: it names the source file's path.
-fn render_thumbnail(program: &str, src: &Path, at_ms: u64, dest: &Path) -> Result<(), EditorError> {
-    let file = dest.file_name().map(|n| n.to_string_lossy().into_owned());
-    let tmp = dest.with_file_name(format!(
-        ".{}.{}.tmp",
-        file.unwrap_or_default(),
-        new_entity_id("t")
-    ));
+/// The bytes of a rendered frame, if ffmpeg really made one.
+fn read_frame(tmp: &Path) -> Option<Vec<u8>> {
+    let meta = std::fs::symlink_metadata(tmp).ok()?;
+    let plausible = meta.is_file() && meta.len() > 0 && meta.len() <= MAX_THUMBNAIL_BYTES;
+    plausible.then(|| std::fs::read(tmp).ok()).flatten()
+}
+
+/// Render one frame into an owned temp in the OS temp directory — never
+/// inside a project (module doc) — and return its bytes. Cancelable:
+/// `cancel` kills ffmpeg. Stdout and stderr are nulled/unused (stderr
+/// names the source's path); a frame-less exit is logged.
+fn render_thumbnail(
+    program: &str,
+    src: &Path,
+    at_ms: u64,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, EditorError> {
+    let tmp =
+        std::env::temp_dir().join(format!("vault-buddy-{}.thumbnail.tmp", new_entity_id("t")));
     let mut cmd = tool_command(program);
     cmd.args(thumbnail_args(src, at_ms, &tmp));
-    let result = match run_capturing(cmd, THUMBNAIL_TIMEOUT, Capture::Stderr) {
-        Ok((true, _)) if std::fs::metadata(&tmp).is_ok_and(|m| m.len() > 0) => {
-            std::fs::rename(&tmp, dest).map_err(|e| {
-                err(
-                    EditorErrorCode::Internal,
-                    format!("The thumbnail could not be stored: {e}"),
-                )
-            })
-        }
-        Ok((ok, stderr)) => {
-            log::warn!("editor thumbnail: ffmpeg made no frame (ok={ok}): {stderr}");
+    let ignore = |_: &[u8], _: &mut ()| {};
+    let outcome = run_streaming(
+        cmd,
+        "editor-thumbnail",
+        cancel,
+        THUMBNAIL_TIMEOUT,
+        (),
+        ignore,
+    );
+    let result = match outcome {
+        Ok(Streamed::Finished { success: true, .. }) => read_frame(&tmp).ok_or_else(|| {
+            log::warn!("editor thumbnail: ffmpeg made no frame of {src:?} at {at_ms} ms");
+            err(
+                EditorErrorCode::UnsupportedMedia,
+                "ffmpeg could not read a picture at this time.",
+            )
+        }),
+        Ok(Streamed::Finished { success: false, .. }) => {
+            log::warn!("editor thumbnail: ffmpeg exited with an error on {src:?}");
             Err(err(
                 EditorErrorCode::UnsupportedMedia,
                 "ffmpeg could not read a picture at this time.",
             ))
         }
+        Ok(Streamed::Cancelled) => Err(err(
+            EditorErrorCode::Cancelled,
+            "The thumbnail was cancelled.",
+        )),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             forget_editor_ffmpeg();
             Err(no_ffmpeg(NO_FFMPEG_THUMBNAIL))
@@ -439,6 +653,34 @@ fn render_thumbnail(program: &str, src: &Path, at_ms: u64, dest: &Path) -> Resul
     };
     remove_quietly(&tmp);
     result
+}
+
+/// Store a rendered frame as `cache\<name>` — owned temp then rename, so a
+/// reader never sees half a JPEG — and hold the cache to `MAX_THUMBNAILS`,
+/// all under `with_live_project`.
+fn commit_thumbnail(
+    state: &EditorState,
+    root: &Path,
+    session_id: &str,
+    project_id: &str,
+    name: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, EditorError> {
+    with_live_project(state, session_id, || {
+        let dir = ensure_cache_dir(root, project_id)?;
+        let dest = dir.join(name);
+        let tmp = dir.join(format!(".{name}.{}.tmp", new_entity_id("t")));
+        let stored = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, &dest));
+        if let Err(e) = stored {
+            remove_quietly(&tmp);
+            return Err(err(
+                EditorErrorCode::Internal,
+                format!("The thumbnail could not be stored: {e}"),
+            ));
+        }
+        prune_thumbnails(&dir, MAX_THUMBNAILS);
+        Ok(dest)
+    })
 }
 
 /// Mark a thumbnail as just used (the LRU key is its mtime).
@@ -506,19 +748,22 @@ pub(crate) fn thumbnail_in(
     }
     let still = asset.record.media_kind == SourceMediaKind::Image;
     let ms = thumbnail_ms(at_ms, asset.record.duration_ms, still);
-    let dir = ensure_cache_dir(root, &project_id)?;
-    let dest = dir.join(thumbnail_name(&asset.record_id, ms));
+    let name = thumbnail_name(&asset.record_id, ms);
+    let dest = cache_path(root, &project_id)?.join(&name);
     if is_plain_file(&dest) {
         touch(&dest);
         return Ok(dest);
     }
     let program = ffmpeg().ok_or_else(|| no_ffmpeg(NO_FFMPEG_THUMBNAIL))?;
-    {
+    // Held until the commit below has finished, so a discard's
+    // `stop_session_derivations` waits for the whole thing.
+    let in_flight = InFlight::register(&state.thumbnails, request.session_id);
+    let bytes = {
         let _one_at_a_time = lock_ignoring_poison(&THUMBNAIL_GATE);
-        render_thumbnail(&program, &asset.path, ms, &dest)?;
-    }
-    prune_thumbnails(&dir, MAX_THUMBNAILS);
-    Ok(dest)
+        render_thumbnail(&program, &asset.path, ms, &in_flight.cancel)?
+    };
+    let session = request.session_id;
+    commit_thumbnail(state, root, session, &project_id, &name, &bytes)
 }
 
 #[cfg(test)]

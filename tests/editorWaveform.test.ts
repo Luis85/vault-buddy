@@ -11,10 +11,11 @@ import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import ClipThumbnail from "../src/components/editor/timeline/ClipThumbnail.vue";
 import ClipWaveform from "../src/components/editor/timeline/ClipWaveform.vue";
 import TimelineView from "../src/components/editor/timeline/TimelineView.vue";
 import { decodeMediaPeaks } from "../src/editor/decode";
-import { clearMediaDerivedForTest, loadPeaks } from "../src/editor/mediaDerived";
+import { clearMediaDerivedForTest, loadPeaks, loadThumbnail } from "../src/editor/mediaDerived";
 import type { EditorPort } from "../src/editor/port";
 import { createTauriEditorPort, EditorPortError } from "../src/editor/port";
 import { peakBucketsFor, waveformPoints } from "../src/editor/waveform";
@@ -329,6 +330,58 @@ describe("the timeline's poster frames", () => {
     expect(w.find('[data-testid="clip-wide-waveform"]').exists()).toBe(false);
   });
 
+  // Review Minor 7: a synthesized audio builtin (no file) gets no waveform
+  // lane, so it never asks Rust for peaks it must refuse on every mount.
+  it("a file-less audio builtin asks for no waveform", async () => {
+    const mediaPeaks = vi.fn(() => Promise.resolve([1]));
+    const w = await mountTimeline(
+      { mediaPeaks },
+      {
+        assets: [{ ...asset("amb", "audio", 4_000), builtin: "ambient" }],
+        clips: [clip("ambience", "amb", "a1", { start_ms: 0, in_ms: 0, out_ms: 4_000 })],
+      },
+    );
+    expect(w.find('[data-testid="clip-ambience"]').exists()).toBe(true);
+    expect(w.find('[data-testid="clip-ambience-waveform"]').exists()).toBe(false);
+    expect(mediaPeaks).not.toHaveBeenCalled();
+  });
+
+  // Fix round 1: a clip scrolled out of the virtualization window and back
+  // asks Rust again (a hit there refreshes the LRU; an evicted file is
+  // re-rendered) instead of reusing a path that may no longer exist.
+  it("a remounted clip asks for its frame again", async () => {
+    mockConvertFileSrc("windows");
+    const mediaThumbnail = vi.fn(() => Promise.resolve(PATH));
+    const first = await mountTimeline({ mediaThumbnail }, withVideo);
+    first.unmount();
+    const second = mount(TimelineView, { props: { viewportWidth: 400 } });
+    await flushPromises();
+    expect(second.find('[data-testid="clip-wide-thumbnail"] img').exists()).toBe(true);
+    expect(mediaThumbnail).toHaveBeenCalledTimes(2);
+  });
+
+  // Review Minor 8: a late REJECTION for the frame the clip used to show
+  // must not blank the newer frame.
+  it("a stale refusal does not blank a newer frame", async () => {
+    mockConvertFileSrc("windows");
+    let rejectOld!: (e: unknown) => void;
+    const mediaThumbnail = vi.fn((_s: string, _a: string, atMs: number) =>
+      atMs === 1_000
+        ? new Promise<string>((_res, rej) => {
+          rejectOld = rej;
+        })
+        : Promise.resolve(PATH),
+    );
+    await openWith({ mediaThumbnail }, withVideo);
+    const w = mount(ClipThumbnail, { props: { assetId: "vid", atMs: 1_000 } });
+    await w.setProps({ atMs: 2_000 });
+    await flushPromises();
+    expect(w.find("img").exists()).toBe(true);
+    rejectOld(new EditorPortError({ code: "sourceMissing", message: "x", retryable: false, operationId: "o" }));
+    await flushPromises();
+    expect(w.find("img").exists()).toBe(true);
+  });
+
   it("draws no frame when Rust cannot make one", async () => {
     for (const code of ["encoderUnavailable", "unsupportedMedia"] as const) {
       clearMediaDerivedForTest();
@@ -346,6 +399,22 @@ describe("the timeline's poster frames", () => {
 // ---- the webview's memo ------------------------------------------------------
 
 describe("mediaDerived's memo", () => {
+  // Task 28 fix round 1 (review Important 1): a thumbnail PATH must not be
+  // memoized once settled. Rust refreshes a hit's mtime (its LRU key) only
+  // when asked, and past 200 thumbnails it evicts the least recently used
+  // — so a memoized path goes stale into a deleted file, and a remounted
+  // clip would show nothing with no retry. In-flight requests still share.
+  it("asks for a settled thumbnail again, sharing only an in-flight request", async () => {
+    let n = 0;
+    const mediaThumbnail = vi.fn(() => Promise.resolve(`C:/cache/t-${(n += 1)}.jpg`));
+    const port = fakeEditorPort({ mediaThumbnail });
+    const [a, b] = await Promise.all([loadThumbnail(port, "ses-a", "v", 0), loadThumbnail(port, "ses-a", "v", 0)]);
+    expect(b).toBe(a);
+    expect(mediaThumbnail).toHaveBeenCalledTimes(1);
+    await loadThumbnail(port, "ses-a", "v", 0);
+    expect(mediaThumbnail).toHaveBeenCalledTimes(2);
+  });
+
   it("shares one request, forgets a refusal, and stays bounded", async () => {
     let fail = true;
     const mediaPeaks = vi.fn((_s: string, _a: string, buckets: number) =>

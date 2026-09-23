@@ -225,8 +225,13 @@ const shownInMs = computed(() => drag.trimPreview.value?.inMs ?? props.clip.in_m
 const shownOutMs = computed(() => drag.trimPreview.value?.outMs ?? props.clip.out_ms);
 /** Narrower than this, a poster frame is noise over the clip's name. */
 const THUMBNAIL_MIN_WIDTH_PX = 48;
-/** An audio clip's asset, for its waveform lane (`null`: no lane). */
-const waveformAsset = computed(() => (props.assetKind === "audio" ? asset.value : null));
+/** An audio clip's asset, for its waveform lane (`null`: no lane) — only
+ * when it has a real file to decode: a synthesized builtin would be refused
+ * by Rust on every mount (fix round 1, review Minor 7). */
+const waveformAsset = computed(() => {
+  const a = asset.value;
+  return a && props.assetKind === "audio" && hasPreviewSource(a) ? a : null;
+});
 /** A video clip's asset when it has a real file to cut a poster frame
  * from and the clip is wide enough to show one (`null`: no poster). */
 const posterAsset = computed(() => {

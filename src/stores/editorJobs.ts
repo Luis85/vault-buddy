@@ -61,6 +61,23 @@ function importedSomething(terminal: JobTerminal | null): boolean {
   return (terminal?.assetIds?.length ?? 0) > 0;
 }
 
+/** `jobs` without the session's RUNNING rows that the store already held
+ * before the registry was read (`heldBefore`) and that the registry no
+ * longer lists (`listed`). Rust forgets a job only once its result has
+ * reached its own caller — a peaks decode answers in its command's reply
+ * (Task 28) — so such a row would otherwise sit "running" forever. A row
+ * installed AFTER the read began is kept: the reply may simply predate it. */
+function withoutForgotten(
+  jobs: Record<string, JobView>,
+  sessionId: string,
+  heldBefore: ReadonlySet<string>,
+  listed: ReadonlySet<string>,
+): Record<string, JobView> {
+  const forgotten = (j: JobView) =>
+    j.sessionId === sessionId && j.terminal === null && heldBefore.has(j.jobId) && !listed.has(j.jobId);
+  return Object.fromEntries(Object.entries(jobs).filter(([, j]) => !forgotten(j)));
+}
+
 export const useEditorJobsStore = defineStore("editorJobs", {
   state: () => ({
     /** Keyed by job id; replaced per job, never deep-mutated. */
@@ -158,6 +175,7 @@ export const useEditorJobsStore = defineStore("editorJobs", {
       const project = useEditorProjectStore();
       const sessionId = project.sessionId;
       if (!sessionId) return;
+      const heldBefore = new Set(Object.keys(this.jobs));
       let rows: JobRecordDto[];
       try {
         rows = await project.port.getJobs(sessionId);
@@ -166,6 +184,7 @@ export const useEditorJobsStore = defineStore("editorJobs", {
         return;
       }
       if (project.sessionId !== sessionId) return;
+      this.jobs = withoutForgotten(this.jobs, sessionId, heldBefore, new Set(rows.map((r) => r.jobId)));
       for (const row of rows) {
         const held = this.jobs[row.jobId];
         // A job the store already holds as terminal keeps its outcome: the

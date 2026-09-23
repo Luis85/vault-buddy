@@ -33,6 +33,7 @@ async function load(): Promise<void> {
     if (key !== `${props.assetId}|${props.atMs}`) return;
     src.value = convertFileSrc(path, "asset");
   } catch (e) {
+    if (key !== `${props.assetId}|${props.atMs}`) return; // a newer frame owns the poster now
     src.value = null;
     if (e instanceof EditorPortError && e.error.code === "encoderUnavailable") return;
     const reason = e instanceof EditorPortError ? e.error.code : String(e);

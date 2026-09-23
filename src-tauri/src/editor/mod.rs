@@ -82,6 +82,10 @@ use vault_buddy_core::editor::EditorSession;
 /// later shutdown gate asks `has_running`. A LEAF lock like `save_locks`'
 /// map: never held across I/O, a channel send, or while taking another
 /// lock (`media_jobs.rs`' own doc).
+///
+/// `thumbnails` (Task 28 fix round 1) is every thumbnail render in flight,
+/// by session, with its cancel flag — `media_derive::ThumbnailRenders`. A
+/// leaf lock too, for the same reasons.
 #[derive(Default)]
 pub struct EditorState {
     pub open: Mutex<()>,
@@ -89,4 +93,5 @@ pub struct EditorState {
     pub by_project: Mutex<HashMap<String, String>>,
     pub save_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     pub jobs: Mutex<media_jobs::JobRegistry>,
+    pub thumbnails: media_derive::ThumbnailRenders,
 }
