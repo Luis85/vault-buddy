@@ -73,7 +73,8 @@ export const ACTION_IDS: readonly ActionId[] = [
 export const NO_CLIP = "Select a clip first";
 export const CLIP_BOUNDARY = "The playhead is at a clip boundary";
 export const NO_PROJECT = "No project is open.";
-export const RENDER_REASON = "Rendering a video arrives in a later update.";
+/** Review (Task 47) renders part of the output; an empty timeline has none. */
+export const NOTHING_TO_REVIEW = "Place a clip on the timeline to review a render.";
 
 export function lockedReason(trackName: string): string {
   return `Track ${trackName} is locked`;
@@ -229,7 +230,7 @@ export const UNIMPLEMENTED_KINDS: ReadonlySet<string> = new Set<string>([]);
  * onto a control whose label is a completely different word the user
  * never typed or clicked). Built from the action's own `ACTION_LABELS`
  * entry so every gated action reads a consistent, honest sentence in the
- * same register as `RENDER_REASON` above, with no per-action hand-written
+ * same register as `NOTHING_TO_REVIEW` above, with no per-action hand-written
  * string to keep in sync as `UNIMPLEMENTED_KINDS` shrinks. The wire kind
  * itself stays available to whoever is debugging via `ACTION_KIND`/
  * `resolveActions`'s own gating code, which keeps a local `kind` binding

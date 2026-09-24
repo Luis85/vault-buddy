@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **27 rows** today (T1–T27), of which **0** carry a result. An
+This file carries **28 rows** today (T1–T28), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -299,3 +299,17 @@ onward)**; until then leave the Result empty.
 | # | Check | Steps | Result |
 | --- | --- | --- | --- |
 | T27 | **Quit, Alt+F4, Install & restart and Discard while a render runs** | Open a project with at least 60 s of edited footage (a dissolve or a zoom, so it re-encodes) and start a render. (a) While it is rendering, choose **Quit** from the tray. **Record**: how long the app took to exit (the render's cancel is bounded at 5 s); that no `ffmpeg.exe` is left in Task Manager; and that `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\jobs\` holds no `<jobId>` folder and `products\` no new file. (b) Relaunch, start a render again and press **Alt+F4** on the buddy: **Record** the same three things, and that the app exited once (it did not keep re-opening a close). (c) Start a render and use Settings → Updates → **Install & restart** (with an update available, or record that none was): **Record** the refusal text ("A video is being rendered in the editor…") and that the render kept running. (d) Start a render and choose **Discard** for the project in the editor's close dialog: **Record** that `ffmpeg.exe` ended, that the project folder is gone, and that the staged capture is still listed in Record Screen. (e) Let one render finish, close the editor WITHOUT saving, reopen the project from the project list: **Record** that the product is listed and plays. | |
+
+## The Render dialog, the product library and Review (Task 47)
+
+`editorRenderDialog.test.ts` and `editorProductLibrary.test.ts` drive the
+dialog, the library and the toolbar's Review over a fake port in happy-dom,
+and `render_review_tests.rs` drives a Review job over a fake runner. What no
+automated test reaches: a real product and a real review PLAYING in WebView2
+through the asset protocol (`products\` and `cache\` in the R7 scope), a
+review file actually removed on a real session close, and the real render's
+phases and Cancel as a user sees them.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T28 | **Render, watch, restore, and Review for real** | Open a project with at least 30 s of edited footage. (a) **Render video** in the header: note the default name (`<title> v<n>`), choose **A range of the output** and render 5–15 s at **Low**. **Record**: that the phase text moves through preparing, rendering and saving; that the bar never shows 100 % until "Render complete" appears; then **Watch rendered file**: that the video plays WITH sound in the dialog. (b) Start a second whole render and press **Cancel render**. **Record**: that the dialog says "Render cancelled" (not failed), that no new product appears in the library, and that no `ffmpeg.exe` is left in Task Manager. (c) Library → **Products**: **Record** each card's name, `r<revision>`, range and created time, and that **Watch** plays the product (not the editable preview). Make an edit, then **Restore this edit** → **Restore** on the first product: **Record** that the edit is back to the rendered one and that Undo returns your edit; the product still plays. (d) Rename `products\<productId>.mp4` in `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\` and reopen the Products tab: **Record** that the card reads "Unavailable" with Watch disabled, and Restore still works. Rename it back. (e) Select a clip and press **Review** in the preview toolbar: **Record** that a review renders just that clip's span and plays; that `cache\review-<jobId>.mp4` exists while it plays, that `products\` and `products.json` did not change, and that after closing the editor (Keep) the review file is gone. | |

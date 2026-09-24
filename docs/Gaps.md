@@ -2908,6 +2908,23 @@ does NOT have this problem: `render_jobs::cancel_all_bounded` latches
 the same latch for the export (or have the worker exit through `finish_quit`
 rather than re-triggering the close).
 
+### GAP-191 · Low · A Review render survives a quit or a crash in the project's cache until that project's next review or close
+`src-tauri/src/editor/render_review.rs`, Task 47. A Review render (the
+preview toolbar's Review, pre-flight F18) is kept as the project's
+`cache\review-<jobId>.mp4` so `editor_media_url({reviewJobId})` can serve it
+(R7 excludes `jobs\`). It is disposable: landing a newer review removes it,
+and closing the session (`keep`/`discardRecovery`, under the save lock)
+removes it; a discard removes the whole project. What does NOT remove it is
+a process that ends without closing the session — the tray's Quit, Alt+F4 on
+the buddy, the updater's restart, a crash — because none of those runs
+`close_locked`. The file stays in `cache\` (one per project, at most: each
+new review sweeps the old ones) until the next review or close of THAT
+project; a project never reopened keeps it forever. It is never listed as a
+product and never counted against the 40-product cap (GAP-187) — wasted disk
+only. **Fix:** sweep `review-<valid id>.mp4` files from every project's
+`cache\` on the Task 37 startup sweep thread (`recovery::run_startup_repin`),
+owned names only, no-follow — the `sweep_stale_imports` posture.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md

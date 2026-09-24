@@ -286,9 +286,13 @@ describe("EditorPort", () => {
     const port = createTauriEditorPort();
     await expect(port.mediaUrl("ses-1", { assetId: "a1" })).resolves.toBe(PATH);
     await port.mediaUrl("ses-1", { productId: "prod-1" });
+    // Task 47: a Review render is named by its job (Rust's `reviewJobId`
+    // key, `media_commands::parse_media_ref`).
+    await port.mediaUrl("ses-1", { reviewJobId: "job-1" });
     expect(calls).toEqual([
       { cmd: "editor_media_url", args: { sessionId: "ses-1", ref: { assetId: "a1" } } },
       { cmd: "editor_media_url", args: { sessionId: "ses-1", ref: { productId: "prod-1" } } },
+      { cmd: "editor_media_url", args: { sessionId: "ses-1", ref: { reviewJobId: "job-1" } } },
     ]);
 
     for (const bad of ["", "   ", 42, null]) {

@@ -139,6 +139,11 @@ pub struct RenderRequest {
     pub name: String,
     pub range: Option<RangeDto>,
     pub quality: String,
+    /// Task 47 (F18): a disposable Review render -- no product, no ledger
+    /// entry; its file is `cache\review-<jobId>.mp4` (`render_review`).
+    /// Absent on the wire means a product render.
+    #[serde(default)]
+    pub review: bool,
 }
 
 /// `editor_start_render`'s immediate reply (ADR §3.3).
@@ -212,6 +217,8 @@ pub(crate) struct RenderJob {
     pub project: Project,
     pub revision: u64,
     pub range: Option<RangeDto>,
+    /// A Review (Task 47): kept in `cache\`, never recorded as a product.
+    pub review: bool,
     pub plan: RenderPlan,
     pub inputs: Vec<PathBuf>,
     pub settings: EncodeSettings,
@@ -519,7 +526,10 @@ pub(crate) fn begin_render<R: RenderRunner>(
     if let Some(message) = runner.refusal(&plan, &settings) {
         return Err(err(EditorErrorCode::EncoderUnavailable, message));
     }
-    check_capacity(root, &project_id)?;
+    // A review is not a product, so the cap never refuses one (F18).
+    if !request.review {
+        check_capacity(root, &project_id)?;
+    }
     let dir = project_dir(root, &project_id).ok_or_else(|| internal("Not a valid project id."))?;
     check_space(&runner, &dir, &plan, &settings)?;
     let (job_id, cancel) = start_job_in(state, &request.session_id, JobKind::Render)?;
@@ -534,6 +544,7 @@ pub(crate) fn begin_render<R: RenderRunner>(
         project,
         revision,
         range: request.range,
+        review: request.review,
         plan,
         inputs,
         settings,
@@ -558,19 +569,30 @@ fn render_error(e: ScreenError) -> EditorError {
     }
 }
 
-/// Move the verified part into `products\` and record it -- in THAT order
-/// (module doc) -- under the session's save lock.
+/// Under the session's save lock, keep the verified part: a review in the
+/// project's cache (`render_review`, no product), a product in `products\`
+/// and the ledger. `Some(productId)` only for a product.
 fn publish(
     job: &RenderJob,
     part: &Path,
     duration_ms: u64,
     state: &EditorState,
-) -> Result<String, EditorError> {
+) -> Result<Option<String>, EditorError> {
     let lock = session_save_lock(state, &job.session_id).map_err(|_| cancelled())?;
     let _guard = lock_ignoring_poison(&lock);
     if job.cancel.load(Ordering::SeqCst) {
         return Err(cancelled());
     }
+    if job.review {
+        super::render_review::keep_review(&job.root, &job.project_id, &job.job_id, part)?;
+        return Ok(None);
+    }
+    record_product(job, part, duration_ms).map(Some)
+}
+
+/// Move the part into `products\` and record it -- in THAT order (module
+/// doc). The caller holds the save lock.
+fn record_product(job: &RenderJob, part: &Path, duration_ms: u64) -> Result<String, EditorError> {
     let mut ledger = read_ledger(&job.root, &job.project_id)?;
     if ledger.len() >= limits::MAX_PRODUCTS {
         return Err(too_many_products());
@@ -614,7 +636,7 @@ fn render_and_publish(
     job: &RenderJob,
     runner: &dyn RenderRunner,
     reporter: &mut JobReporter<'_>,
-) -> Result<String, EditorError> {
+) -> Result<Option<String>, EditorError> {
     if job.cancel.load(Ordering::SeqCst) {
         return Err(cancelled());
     }
@@ -683,7 +705,7 @@ pub(crate) fn run_render_job(
         Ok(product_id) => reporter.finish(
             JobPhase::Complete,
             JobTerminal {
-                product_id: Some(product_id),
+                product_id,
                 ..JobTerminal::default()
             },
         ),
@@ -758,3 +780,7 @@ mod tests;
 #[cfg(test)]
 #[path = "render_ledger_tests.rs"]
 mod ledger_tests;
+
+#[cfg(test)]
+#[path = "render_review_tests.rs"]
+mod review_tests;

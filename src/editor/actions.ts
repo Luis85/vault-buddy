@@ -33,9 +33,10 @@
  * **Actions with no wire command.** `copy`/`save`/`render`/`checks`/`help`/
  * `importMedia`/`webcam`/`toggleLibrary`/`toggleInspector`/`focusPreview`/
  * `ratio` never appear in `ACTION_KIND` — `save` goes through
- * `editorProject.save()` (a distinct IPC call, not `editor_execute`), the
- * `render`/`checks`/`help`/`importMedia`/`webcam` surfaces and the panel/
- * focus toggles are a later task's job or local view state, and `ratio`
+ * `editorProject.save()` (a distinct IPC call, not `editor_execute`),
+ * `render` (the toolbar's Review, Task 47) opens `ReviewDialog` — a render
+ * job, not an edit — the `checks`/`help`/`importMedia`/`webcam` surfaces and
+ * the panel/focus toggles are a later task's job or local view state, and `ratio`
  * needs an extra user choice (which of the four canvas presets) this
  * table cannot pre-build — `resolveActions` still gates it (its own
  * `RESOLVERS` entry, `resolveProjectGated`: enabled whenever a project is
@@ -75,7 +76,7 @@ import {
   lockedReason,
   NO_CLIP,
   NO_PROJECT,
-  RENDER_REASON,
+  NOTHING_TO_REVIEW,
   SHORTCUT_DISPLAY,
   unavailableReason,
   UNIMPLEMENTED_KINDS,
@@ -219,8 +220,11 @@ function resolveProjectGated(ctx: ActionContext): Verdict {
 function resolveAlways(): Verdict {
   return OK;
 }
-function resolveRender(): Verdict {
-  return { enabled: false, reason: RENDER_REASON };
+/** Review (Task 47): a real render of part of the output, so it needs a
+ * project with something on its timeline. */
+function resolveRender(ctx: ActionContext): Verdict {
+  if (!ctx.snapshot) return { enabled: false, reason: NO_PROJECT };
+  return ctx.snapshot.durationMs > 0 ? OK : { enabled: false, reason: NOTHING_TO_REVIEW };
 }
 
 /**

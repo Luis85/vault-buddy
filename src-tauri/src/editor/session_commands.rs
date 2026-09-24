@@ -491,6 +491,13 @@ pub(crate) fn close_locked(
             remove_project(root, project_id)?;
         }
     }
+    // Task 47: a Review render is disposable -- the session's last one goes
+    // with the session (a discard already removed the whole directory).
+    // Under the save lock, so a review landing concurrently either lands
+    // before this sweep or finds its job cancelled by `drop_session`.
+    if disposition != CloseDisposition::DiscardProject {
+        super::render_review::sweep_reviews(root, project_id, None);
+    }
     drop_session(state, session_id);
     Ok(())
 }

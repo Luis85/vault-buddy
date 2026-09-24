@@ -57,15 +57,15 @@ describe("LibraryPanel", () => {
     expect(w.get('[data-testid="library-tab-media"]').attributes("aria-selected")).toBe("true");
 
     // Wraps: ArrowLeft from the first tab goes to the last (Task 36 added
-    // Captions and Chapters after Titles).
+    // Captions and Chapters after Titles, and Task 47 Products last).
     await tablist.trigger("keydown", { key: "ArrowLeft" });
-    expect(w.get('[data-testid="library-tab-chapters"]').attributes("aria-selected")).toBe("true");
+    expect(w.get('[data-testid="library-tab-products"]').attributes("aria-selected")).toBe("true");
 
     await tablist.trigger("keydown", { key: "Home" });
     expect(w.get('[data-testid="library-tab-media"]').attributes("aria-selected")).toBe("true");
 
     await tablist.trigger("keydown", { key: "End" });
-    expect(w.get('[data-testid="library-tab-chapters"]').attributes("aria-selected")).toBe("true");
+    expect(w.get('[data-testid="library-tab-products"]').attributes("aria-selected")).toBe("true");
 
     w.unmount();
   });

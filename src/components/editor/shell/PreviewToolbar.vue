@@ -61,6 +61,13 @@
  * exact meaning: a repeat of the SAME message text restarts that toast's
  * TTL instead of stacking a second one, which is why the message below is
  * one constant string regardless of which ratio was picked.
+ *
+ * **Review (Task 47; F-42, F18)** is the registry's `render` action: it
+ * opens `ReviewDialog` over the selection's output span, or 5 s either side
+ * of the playhead (`renderRanges.reviewRange`), which renders that range
+ * for real and plays the encoded file. The dialog is this component's
+ * SECOND root, a sibling of the toolbar row — inside the row, a key pressed
+ * in the dialog would bubble into the row's roving-tabindex handler.
  */
 import type { ComponentPublicInstance } from "vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -70,9 +77,12 @@ import type { ActionContext, ActionId } from "../../../editor/actions";
 import { commandFor, resolveActions } from "../../../editor/actions";
 import { addedEffectId } from "../../../editor/cueActions";
 import type { AddEffectCommand } from "../../../editor/editorCommandTypes";
+import { reviewRange } from "../../../editor/renderRanges";
+import type { RenderRange } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import { useNotificationsStore } from "../../../stores/notifications";
+import ReviewDialog from "../dialogs/ReviewDialog.vue";
 import RatioSelect from "./RatioSelect.vue";
 import ToolbarOverflowMenu from "./ToolbarOverflowMenu.vue";
 
@@ -218,10 +228,36 @@ function onActivate(id: ActionId) {
     return;
   }
   if (!resolved.value[id].enabled) return;
+  runAction(id);
+  closeMore();
+}
+
+/** An enabled action's effect: Review opens its dialog; every other one
+ * sends the command the registry builds. */
+function runAction(id: ActionId) {
+  if (id === "render") {
+    openReview();
+    return;
+  }
   const command = commandFor(id, context.value);
   if (command?.kind === "addEffect") void addCue(command);
   else if (command) void editorProject.execute(command);
-  closeMore();
+}
+
+// ---- Review (Task 47; F18) ---------------------------------------------------
+
+const reviewOpen = ref(false);
+/** Frozen when Review is pressed: moving the playhead afterwards does not
+ * change what is being rendered. */
+const reviewTarget = ref<RenderRange | null>(null);
+function openReview() {
+  reviewTarget.value = reviewRange(
+    editorProject.project,
+    editorWorkspace.selectionClipIds,
+    editorWorkspace.playheadMs,
+    editorProject.durationMs,
+  );
+  reviewOpen.value = true;
 }
 
 /** A teaching tool (Task 35): add the cue, then select it so its handles
@@ -362,4 +398,9 @@ function itemClass(id: ActionId): string {
       />
     </div>
   </div>
+  <ReviewDialog
+    :open="reviewOpen"
+    :range="reviewTarget"
+    @close="reviewOpen = false"
+  />
 </template>

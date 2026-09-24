@@ -32,6 +32,13 @@
  * was sent, so the refetch sees the new assets as one committed revision.
  * The port and the session are `editorProject`'s own — one session, one
  * port, never a second copy that could drift.
+ *
+ * **Renders (Task 47)** ride the same Channel discipline (`track`). A
+ * terminal naming a `productId` asks `editorProducts` to re-read the
+ * ledger; a Review's terminal names none (F18), so a review never touches
+ * the product library. A render's refusal lands in `renderError`, never in
+ * `lastError` (the media library's import line) and never in
+ * `editorProject.saveError` (the header's "Save failed") — Task 46's carry.
  */
 import { defineStore } from "pinia";
 
@@ -42,7 +49,11 @@ import type {
   JobProgressDto,
   JobRecordDto,
   JobTerminal,
+  RenderQuality,
+  RenderRange,
+  RenderRequest,
 } from "../editorTypes";
+import { useEditorProductsStore } from "./editorProducts";
 import { toEditorError, useEditorProjectStore } from "./editorProject";
 
 /** One job as this store holds it. `sequence` is the last Channel message
@@ -60,6 +71,17 @@ interface JobView {
 function importedSomething(terminal: JobTerminal | null): boolean {
   return (terminal?.assetIds?.length ?? 0) > 0;
 }
+
+/** What a caller chooses for a render; the session and the revision to
+ * freeze are this store's to fill in. */
+interface RenderOptions {
+  name: string;
+  range: RenderRange | null;
+  quality: RenderQuality;
+  review?: boolean;
+}
+
+type StartJob = (onProgress: (m: JobProgressDto) => void) => Promise<{ jobId: string }>;
 
 /** `jobs` without the session's RUNNING rows that the store already held
  * before the registry was read (`heldBefore`) and that the registry no
@@ -83,6 +105,9 @@ export const useEditorJobsStore = defineStore("editorJobs", {
     /** Keyed by job id; replaced per job, never deep-mutated. */
     jobs: {} as Record<string, JobView>,
     lastError: null as EditorError | null,
+    /** The last refused render or review start (or a refused cancel of
+     * one) — the Render/Review dialogs' own, never `lastError`. */
+    renderError: null as EditorError | null,
   }),
   getters: {
     /** The current session's jobs, in the order they were first seen. */
@@ -132,6 +157,26 @@ export const useEditorJobsStore = defineStore("editorJobs", {
       if (!wasTerminal && importedSomething(next.terminal)) {
         void useEditorProjectStore().refresh();
       }
+      if (!wasTerminal && next.terminal?.productId) {
+        void useEditorProductsStore().refresh();
+      }
+    },
+    /** Open one job's Channel through `start` and resolve its id. Messages
+     * that beat the `{ jobId }` reply are held and replayed through the
+     * same guards; a refused start rejects (the caller files the error). */
+    async track(kind: JobKind, sessionId: string, start: StartJob): Promise<string> {
+      let jobId: string | null = null;
+      const early: JobProgressDto[] = [];
+      const onProgress = (m: JobProgressDto) => {
+        if (jobId === null) early.push(m);
+        else this.applyProgress(sessionId, jobId, m);
+      };
+      jobId = (await start(onProgress)).jobId;
+      if (!this.jobs[jobId]) {
+        this.install({ jobId, sessionId, kind, phase: "queued", fraction: 0, terminal: null }, 0);
+      }
+      for (const m of early) this.applyProgress(sessionId, jobId, m);
+      return jobId;
     },
     /** Start an import. Rust opens its own native file dialog; this only
      * wires the Channel. Resolves the job id, or `null` when there was no
@@ -140,34 +185,50 @@ export const useEditorJobsStore = defineStore("editorJobs", {
       const project = useEditorProjectStore();
       const sessionId = project.sessionId;
       if (!sessionId) return null;
-      let jobId: string | null = null;
-      const early: JobProgressDto[] = [];
-      const onProgress = (m: JobProgressDto) => {
-        if (jobId === null) early.push(m);
-        else this.applyProgress(sessionId, jobId, m);
-      };
       try {
-        jobId = (await project.port.importMedia(sessionId, onProgress)).jobId;
+        const jobId = await this.track("import", sessionId, (cb) => project.port.importMedia(sessionId, cb));
+        this.lastError = null;
+        return jobId;
       } catch (e) {
         this.lastError = toEditorError(e);
         return null;
       }
-      this.lastError = null;
-      if (!this.jobs[jobId]) {
-        const queued = { jobId, sessionId, kind: "import" as const, phase: "queued" as const };
-        this.install({ ...queued, fraction: 0, terminal: null }, 0);
-      }
-      for (const m of early) this.applyProgress(sessionId, jobId, m);
-      return jobId;
     },
-    /** Ask Rust to stop a job's FUTURE work (what it finished stays). */
+    /** Start a render (or, with `review`, a Review render) of the revision
+     * on screen — Rust refuses a pending edit (`revisionConflict`).
+     * Resolves the job id, or `null` when there was no session or it was
+     * refused (`renderError`). */
+    async startRender(options: RenderOptions): Promise<string | null> {
+      const project = useEditorProjectStore();
+      const sessionId = project.sessionId;
+      const revision = project.snapshot?.revision;
+      if (!sessionId || revision === undefined) return null;
+      const { review, ...chosen } = options;
+      const request: RenderRequest = {
+        sessionId,
+        expectedRevision: revision,
+        ...chosen,
+        ...(review ? { review: true } : {}),
+      };
+      try {
+        const jobId = await this.track("render", sessionId, (cb) => project.port.startRender(request, cb));
+        this.renderError = null;
+        return jobId;
+      } catch (e) {
+        this.renderError = toEditorError(e);
+        return null;
+      }
+    },
+    /** Ask Rust to stop a job's FUTURE work (what it finished stays). A
+     * refused cancel of a render is the render's error, not the library's. */
     async cancel(jobId: string): Promise<void> {
       const project = useEditorProjectStore();
       if (!project.sessionId) return;
       try {
         await project.port.cancelJob(project.sessionId, jobId);
       } catch (e) {
-        this.lastError = toEditorError(e);
+        if (this.jobs[jobId]?.kind === "render") this.renderError = toEditorError(e);
+        else this.lastError = toEditorError(e);
       }
     },
     /** Install Rust's registry over the Channel's story (module doc). */

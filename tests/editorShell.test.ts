@@ -91,8 +91,9 @@ describe("EditorShell — header buttons", () => {
     expect(save.element).not.toBe(render.element);
     expect(save.text()).toBe("Save project");
     expect(render.text()).toBe("Render video");
-    // Render arrives in Task 47 — disabled with a visible reason (R20: "a
-    // disabled control carries a reason string"), not just a hover title.
+    // No project is open here, so Render (Task 47) is disabled with a
+    // visible reason (R20: "a disabled control carries a reason string"),
+    // not just a hover title.
     expect(render.attributes("disabled")).toBeDefined();
     expect(w.get('[data-testid="editor-header-render-reason"]').text().length).toBeGreaterThan(0);
   });

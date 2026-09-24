@@ -23,6 +23,9 @@ export interface RenderRequest {
   name: string;
   range: RenderRange | null;
   quality: RenderQuality;
+  /** Task 47 (F18): a disposable Review render -- kept in the project's
+   * cache, never a product. Omitted for a product render. */
+  review?: boolean;
 }
 
 /** `editor_start_render`'s immediate reply: the job, and the revision it

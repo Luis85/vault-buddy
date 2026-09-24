@@ -13,7 +13,9 @@
 //!   escape its directory resolves to nothing);
 //! - a product must be in the project's product LEDGER (`products.json`,
 //!   Task 46), whose every record is named exactly `<productId>.mp4` under
-//!   `products\` (`render_jobs::read_ledger` refuses any other).
+//!   `products\` (`render_jobs::read_ledger` refuses any other);
+//! - a Review render (Task 47) is only ever the project's own
+//!   `cache\review-<jobId>.mp4`, named by `render_review` from a valid id.
 //!
 //! Anything else — an unknown id, a builtin asset with no file, an escaping
 //! name, a symlink wearing one of our names — is `unauthorizedSource`; a
@@ -52,11 +54,13 @@ use super::media_jobs::{
 use super::prefs_commands::{blocking, local_data, project_id_for};
 use super::project_store::{join_contained, project_dir, resolve_source, SourceRecord};
 use super::render_jobs::read_ledger;
+use super::render_review::review_path;
 use super::store_io::load_sources;
 use super::EditorState;
 
 /// Which registered entity the caller wants a path for. The wire shape is
-/// exactly one of `{"assetId": "<id>"}` or `{"productId": "<id>"}` — parsed
+/// exactly one of `{"assetId": "<id>"}`, `{"productId": "<id>"}` or (Task
+/// 47) `{"reviewJobId": "<id>"}` — parsed
 /// by hand (`parse_media_ref`) rather than through an untagged serde enum,
 /// so a malformed reference is an `invalidRequest` `EditorError` the
 /// frontend can branch on, not Tauri's own opaque argument-decode string.
@@ -64,6 +68,7 @@ use super::EditorState;
 pub enum MediaRef {
     Asset(String),
     Product(String),
+    Review(String),
 }
 
 fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
@@ -83,7 +88,9 @@ pub(crate) fn parse_media_ref(value: &Value) -> Result<MediaRef, EditorError> {
     let invalid = |why: &str| {
         err(
             EditorErrorCode::InvalidRequest,
-            format!("A media reference must be {{assetId}} or {{productId}}: {why}"),
+            format!(
+                "A media reference must be {{assetId}}, {{productId}} or {{reviewJobId}}: {why}"
+            ),
         )
     };
     let obj = value.as_object().ok_or_else(|| invalid("not an object"))?;
@@ -99,6 +106,7 @@ pub(crate) fn parse_media_ref(value: &Value) -> Result<MediaRef, EditorError> {
     match key.as_str() {
         "assetId" => Ok(MediaRef::Asset(id)),
         "productId" => Ok(MediaRef::Product(id)),
+        "reviewJobId" => Ok(MediaRef::Review(id)),
         other => Err(invalid(&format!("unknown key {other:?}"))),
     }
 }
@@ -207,6 +215,7 @@ pub(crate) fn media_path_in(
             resolve_asset(state, root, session_id, &project_id, id).map(|asset| asset.path)
         }
         MediaRef::Product(id) => product_path(root, &project_id, id),
+        MediaRef::Review(id) => require_plain_file(review_path(root, &project_id, id)?, id),
     }
 }
 

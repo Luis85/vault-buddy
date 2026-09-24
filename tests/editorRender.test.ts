@@ -111,6 +111,27 @@ describe("render port methods", () => {
     expect(received).toEqual([rendering]);
   });
 
+  // Task 47 (F18): a Review is the same command with `review: true`
+  // (Rust's `#[serde(default)] review`); a product render omits the key.
+  it("startRender passes a review request's flag through unchanged", async () => {
+    const seen: unknown[] = [];
+    mockIPC((cmd, args) => {
+      if (cmd !== "editor_start_render") throw new Error(`unexpected command ${cmd}`);
+      seen.push((args as { request: unknown }).request);
+      return { jobId: "job-v", revision: 2 };
+    });
+    const review: RenderRequest = {
+      sessionId: "ses-1",
+      expectedRevision: 2,
+      name: "Review",
+      range: { startMs: 0, endMs: 5_000 },
+      quality: "balanced",
+      review: true,
+    };
+    await createTauriEditorPort().startRender(review, () => {});
+    expect(seen).toEqual([review]);
+  });
+
   it("getProducts and restoreProduct send camelCased arguments and decode the replies", async () => {
     const calls: { cmd: string; args: unknown }[] = [];
     mockIPC((cmd, args) => {

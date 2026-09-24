@@ -32,6 +32,7 @@ pub mod relink_commands;
 pub mod relink_media;
 pub mod render_commands;
 pub mod render_jobs;
+pub mod render_review;
 pub mod save_commands;
 pub mod session_commands;
 pub mod store_io;

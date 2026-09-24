@@ -309,12 +309,14 @@ export const useEditorProjectStore = defineStore("editorProject", {
      * Route a rejected `execute()` call: a `revisionConflict` parks
      * `command` in `conflictIntent` (never re-sent automatically, R20) and
      * refetches; every other error just surfaces as `lastError`, leaving
-     * the current project/snapshot untouched.
+     * the current project/snapshot untouched. A native edit (`command`
+     * null — a product restore) has nothing to park: its conflict surfaces
+     * as `lastError` after the same refetch.
      */
     async handleExecuteError(
       generation: number,
       sessionId: string,
-      command: EditorCommand,
+      command: EditorCommand | null,
       e: unknown,
     ): Promise<void> {
       if (generation !== this.generation) return;
@@ -323,8 +325,30 @@ export const useEditorProjectStore = defineStore("editorProject", {
         this.lastError = error;
         return;
       }
-      this.conflictIntent = command;
+      if (command) this.conflictIntent = command;
+      else this.lastError = error;
       await this.refetchAfterConflict(generation, sessionId);
+    },
+    /** The round trip every acknowledged edit shares (`execute`,
+     * `restoreProduct`): see `execute`'s own doc. */
+    async acknowledged(
+      command: EditorCommand | null,
+      send: (sessionId: string, expectedRevision: number, commandId: string) => Promise<EditorProjection>,
+    ): Promise<boolean> {
+      if (!this.snapshot || !this.sessionId) return false;
+      const generation = this.generation;
+      const sessionId = this.sessionId;
+      const commandId = nextCommandId();
+      this.pending.add(commandId);
+      try {
+        this.applyExecuteResult(generation, await send(sessionId, this.snapshot.revision, commandId));
+        return true;
+      } catch (e) {
+        await this.handleExecuteError(generation, sessionId, command, e);
+        return false;
+      } finally {
+        this.pending.delete(commandId);
+      }
     },
     /**
      * Send one edit. `applyExecuteResult`/`handleExecuteError` carry the
@@ -337,23 +361,18 @@ export const useEditorProjectStore = defineStore("editorProject", {
      * holding a provisional value (an inspector draft) drop it (Task 21 fix
      * round 1).
      */
-    async execute(command: EditorCommand): Promise<boolean> {
-      if (!this.snapshot || !this.sessionId) return false;
-      const generation = this.generation;
-      const sessionId = this.sessionId;
-      const expectedRevision = this.snapshot.revision;
-      const commandId = nextCommandId();
-      this.pending.add(commandId);
-      try {
-        const result = await this.port.execute({ sessionId, expectedRevision, commandId, command });
-        this.applyExecuteResult(generation, result);
-        return true;
-      } catch (e) {
-        await this.handleExecuteError(generation, sessionId, command, e);
-        return false;
-      } finally {
-        this.pending.delete(commandId);
-      }
+    execute(command: EditorCommand): Promise<boolean> {
+      return this.acknowledged(command, (sessionId, expectedRevision, commandId) =>
+        this.port.execute({ sessionId, expectedRevision, commandId, command }),
+      );
+    },
+    /** Restore a Rendered Product's frozen edit (Task 47; F-42): Rust
+     * applies it as ONE native edit — a new revision, one undo step — and
+     * leaves the product untouched; installed like any `execute` reply. */
+    restoreProduct(productId: string): Promise<boolean> {
+      return this.acknowledged(null, (sessionId, expectedRevision, commandId) =>
+        this.port.restoreProduct(sessionId, expectedRevision, productId, commandId),
+      );
     },
     /**
      * Import a subtitle file onto `clipId` (Task 36): Rust opens its own

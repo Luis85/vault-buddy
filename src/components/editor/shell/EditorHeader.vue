@@ -33,6 +33,7 @@ import AppButton from "../../ui/AppButton.vue";
 import IconButton from "../../ui/IconButton.vue";
 import SaveProjectDialog from "../dialogs/SaveProjectDialog.vue";
 import SaveProjectMenu from "../menus/SaveProjectMenu.vue";
+import RenderVideoButton from "./RenderVideoButton.vue";
 
 const props = defineProps<{
   isCompact: boolean;
@@ -64,12 +65,9 @@ const saveDisabledReason = computed<string | null>(() => {
   if (editorProject.saving) return "Saving…";
   return null;
 });
-/** Render video is a real, permanently-present button (SCREENS-AND-
- * INTERACTIONS.md §02) that is simply not wired to anything yet — Task 47
- * builds the render job. Disabling it with this reason, rather than hiding
- * it, is what keeps the header's own command layout stable across that
- * later task landing (nothing moves; the button just becomes clickable). */
-const RENDER_DISABLED_REASON = "Rendering a video arrives in a later update.";
+/** Render video (Task 47) is `RenderVideoButton` — its own component, with
+ * its own disabled reason and the Render dialog; a render's errors never
+ * reach `saveError` below (Task 46's carry). */
 
 /**
  * Status text (Task 16's own brief: "Saved, Unsaved changes, Saving…, Save
@@ -224,19 +222,7 @@ function onSaveMenu(item: "save" | "portable" | "lightweight" | "open") {
         data-testid="editor-header-save-reason"
         class="text-micro text-fg-subtle"
       >{{ saveDisabledReason }}</span>
-      <AppButton
-        variant="primary"
-        size="sm"
-        data-testid="editor-header-render"
-        :disabled="true"
-        :title="RENDER_DISABLED_REASON"
-      >
-        Render video
-      </AppButton>
-      <span
-        data-testid="editor-header-render-reason"
-        class="text-micro text-fg-subtle"
-      >{{ RENDER_DISABLED_REASON }}</span>
+      <RenderVideoButton />
     </div>
 
     <IconButton

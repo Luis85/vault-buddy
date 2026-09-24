@@ -283,9 +283,8 @@ describe("PreviewToolbar — overflow moves into More, never a second toolbar", 
     // Task 35: the teaching tools are real now, so the reason is their own
     // resolver's ("arrives in a later update" was Task 34's placeholder).
     expect(addText.attributes("title")).toBe("No project is open.");
-    expect(w.get('[data-testid="preview-toolbar-render"]').attributes("title")).toBe(
-      "Rendering a video arrives in a later update.",
-    );
+    // Task 47: Review is real now, so with no project it says why.
+    expect(w.get('[data-testid="preview-toolbar-render"]').attributes("title")).toBe("No project is open.");
   });
 
   it("reflects libraryOpen/inspectorOpen as aria-pressed on their own toggle buttons only", () => {

@@ -456,8 +456,9 @@ export interface ProjectSummaryDto {
 }
 
 /** `editor_media_url`'s `ref` argument (`media_commands::MediaRef`): exactly
- * one registered entity, by id — the frontend never names a path. */
-export type MediaRef = { assetId: string } | { productId: string };
+ * one registered entity, by id — the frontend never names a path. A Review
+ * render (Task 47) is named by its job. */
+export type MediaRef = { assetId: string } | { productId: string } | { reviewJobId: string };
 
 /** `editor_close_session`'s disposition (`session_commands::CloseDisposition`). */
 export type CloseDisposition = "keep" | "discardRecovery" | "discardProject";
@@ -545,4 +546,4 @@ export interface JobStarted {
 // caller still imports it from here.
 export type { EditorCommand } from "./editor/editorCommandTypes";
 // The render/product wire types (Task 46), split out for the same cap.
-export type { ProductDto, RenderRange, RenderRequest, RenderStarted } from "./editor/editorRenderTypes";
+export type { ProductDto, RenderQuality, RenderRange, RenderRequest, RenderStarted } from "./editor/editorRenderTypes";

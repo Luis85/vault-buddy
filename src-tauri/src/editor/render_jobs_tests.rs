@@ -64,7 +64,7 @@ impl FakeRunner {
         }
     }
 
-    fn signalling(behaviour: Behaviour) -> (Self, mpsc::Receiver<()>) {
+    pub(super) fn signalling(behaviour: Behaviour) -> (Self, mpsc::Receiver<()>) {
         let (tx, rx) = mpsc::channel();
         let runner = Self::new(behaviour);
         *runner.started.lock().unwrap() = Some(tx);
@@ -126,7 +126,7 @@ impl RenderRunner for FakeRunner {
 /// Cancels a render when dropped -- including when an assertion inside a
 /// `thread::scope` panics, which would otherwise wait forever on a fake
 /// that only ends when cancelled.
-pub(super) struct CancelOnDrop(std::sync::Arc<AtomicBool>);
+pub(super) struct CancelOnDrop(pub(super) std::sync::Arc<AtomicBool>);
 
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
@@ -242,7 +242,7 @@ pub(super) fn begin(
     })
 }
 
-fn terminal(sink: &CollectingSink) -> JobProgressDto {
+pub(super) fn terminal(sink: &CollectingSink) -> JobProgressDto {
     let messages = sink.messages();
     let last = messages.last().expect("a terminal message").clone();
     assert!(last.phase.is_terminal(), "{last:?}");

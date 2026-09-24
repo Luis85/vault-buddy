@@ -21,6 +21,11 @@
  * `workspace.json`), nothing else in the app reads or needs to restore
  * which library tab was last open, so there is no store field to add for
  * it.
+ *
+ * **Products (Task 47)** is the fifth tab: `ProductLibrary`, the project's
+ * Rendered Products (the guide's `library.products` target) — mounted here
+ * so a render's output is reachable from the running editor, not only from
+ * the Render dialog that made it.
  */
 import { ref } from "vue";
 
@@ -28,15 +33,17 @@ import { useRovingTablist } from "../../../composables/useRovingTablist";
 import CaptionsLibrary from "./CaptionsLibrary.vue";
 import ChaptersLibrary from "./ChaptersLibrary.vue";
 import MediaLibrary from "./MediaLibrary.vue";
+import ProductLibrary from "./ProductLibrary.vue";
 import TitlesLibrary from "./TitlesLibrary.vue";
 
-type LibraryTab = "media" | "titles" | "captions" | "chapters";
+type LibraryTab = "media" | "titles" | "captions" | "chapters" | "products";
 
 const TABS: { id: LibraryTab; label: string }[] = [
   { id: "media", label: "Media" },
   { id: "titles", label: "Titles" },
   { id: "captions", label: "Captions" },
   { id: "chapters", label: "Chapters" },
+  { id: "products", label: "Products" },
 ];
 
 const activeTab = ref<LibraryTab>("media");
@@ -91,7 +98,8 @@ const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
       <MediaLibrary v-if="activeTab === 'media'" />
       <TitlesLibrary v-else-if="activeTab === 'titles'" />
       <CaptionsLibrary v-else-if="activeTab === 'captions'" />
-      <ChaptersLibrary v-else />
+      <ChaptersLibrary v-else-if="activeTab === 'chapters'" />
+      <ProductLibrary v-else />
     </div>
   </div>
 </template>
