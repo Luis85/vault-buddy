@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use super::render_args;
 use super::test_support::{input, layer, plan, FULL, PIP};
+use super::AssHooks;
 use crate::ffmpeg_args::{remux_args, EncodeSettings};
 use vault_buddy_core::screen_capture_config::ScreenQuality;
 
@@ -36,7 +37,13 @@ fn identity_plan_remuxes() {
     assert!(p.is_identity(), "fixture must be R1's identity");
     let src = PathBuf::from("staged capture.mp4");
     let dest = Path::new("out.mp4.part");
-    let args = render_args(&p, std::slice::from_ref(&src), dest, None, &settings());
+    let args = render_args(
+        &p,
+        std::slice::from_ref(&src),
+        dest,
+        AssHooks::default(),
+        &settings(),
+    );
     assert_eq!(args, remux_args(&src, dest));
 
     // One edit (2x) and it is a graph render, never a copy.
@@ -45,7 +52,7 @@ fn identity_plan_remuxes() {
     edited.video_layers[0].output_end = 30_000;
     edited.duration_ms = 30_000;
     assert!(!edited.is_identity());
-    let args = render_args(&edited, &[src], dest, None, &settings());
+    let args = render_args(&edited, &[src], dest, AssHooks::default(), &settings());
     assert!(args.iter().any(|a| a == "-filter_complex"), "{args:?}");
     assert!(!args.iter().any(|a| a == "copy"), "{args:?}");
 }
@@ -57,7 +64,13 @@ fn a_render_maps_the_final_label_and_encodes_video() {
         vec![layer(0, 1, 0, 5_000, FULL), layer(1, 0, 1_000, 4_000, PIP)],
     );
     let inputs = [PathBuf::from("a.mp4"), PathBuf::from("b cam.mp4")];
-    let args = render_args(&p, &inputs, Path::new("out.part"), None, &settings());
+    let args = render_args(
+        &p,
+        &inputs,
+        Path::new("out.part"),
+        AssHooks::default(),
+        &settings(),
+    );
     let at = |needle: &str| {
         args.iter()
             .position(|a| a == needle)
@@ -105,7 +118,7 @@ fn an_image_input_loops_for_its_longest_use() {
         &p,
         &[PathBuf::from("slide.png")],
         Path::new("o"),
-        None,
+        AssHooks::default(),
         &settings(),
     );
     let i = args
@@ -128,19 +141,22 @@ fn an_image_input_loops_for_its_longest_use() {
     );
 }
 
-// The ASS document (Task 43) is burned at the PRE-zoom hook, and its path
-// crosses two escaping levels on the way into the filtergraph: a Windows
-// drive colon and backslashes that reached ffmpeg raw would split the
-// option or eat the separators.
+// The cue ASS document (Task 43) is burned at the PRE-zoom hook, and its
+// path crosses two escaping levels on the way into the filtergraph: a
+// Windows drive colon and backslashes that reached ffmpeg raw would split
+// the option or eat the separators.
 #[test]
-fn an_ass_document_is_burned_at_the_pre_zoom_hook() {
+fn a_cue_ass_document_is_burned_at_the_pre_zoom_hook() {
     let p = plan(5_000, vec![layer(0, 0, 0, 5_000, FULL)]);
     let ass = Path::new(r"C:\x\cues.ass");
     let args = render_args(
         &p,
         &[PathBuf::from("a.mp4")],
         Path::new("o"),
-        Some(ass),
+        AssHooks {
+            cues: Some(ass),
+            ..AssHooks::default()
+        },
         &settings(),
     );
     let graph = &args[args
@@ -150,6 +166,71 @@ fn an_ass_document_is_burned_at_the_pre_zoom_hook() {
         + 1];
     assert!(
         graph.contains(r"[vcomp]ass=filename=C\\:\\\\x\\\\cues.ass[vcued]"),
+        "{graph}"
+    );
+}
+
+// Burned captions (Task 43, GAP-173's controller ruling) land at the
+// POST-zoom hook -- the preview keeps them unzoomed on the frame, so the
+// render must burn them AFTER the zoom, never sharing the cue document's
+// pre-zoom hook.
+#[test]
+fn a_caption_ass_document_is_burned_at_the_post_zoom_hook() {
+    let p = plan(5_000, vec![layer(0, 0, 0, 5_000, FULL)]);
+    let ass = Path::new("captions.ass");
+    let args = render_args(
+        &p,
+        &[PathBuf::from("a.mp4")],
+        Path::new("o"),
+        AssHooks {
+            captions: Some(ass),
+            ..AssHooks::default()
+        },
+        &settings(),
+    );
+    let graph = &args[args
+        .iter()
+        .position(|a| a == "-filter_complex")
+        .expect("graph")
+        + 1];
+    assert!(
+        graph.contains("[vzoomed]ass=filename=captions.ass[vout]"),
+        "{graph}"
+    );
+    // No cue document was given: the pre-zoom hook stays a `null`.
+    assert!(graph.contains("[vcomp]null[vzoomed]"), "{graph}");
+}
+
+// `fontsdir` rides the SAME `ass=` option, on BOTH documents when both are
+// given -- never a separate filter, and never applied to only one.
+#[test]
+fn fontsdir_is_appended_to_every_ass_hook_given() {
+    let p = plan(5_000, vec![layer(0, 0, 0, 5_000, FULL)]);
+    let cues = Path::new("cues.ass");
+    let captions = Path::new("captions.ass");
+    let fonts = Path::new(r"C:\Windows\Fonts");
+    let args = render_args(
+        &p,
+        &[PathBuf::from("a.mp4")],
+        Path::new("o"),
+        AssHooks {
+            cues: Some(cues),
+            captions: Some(captions),
+            fontsdir: Some(fonts),
+        },
+        &settings(),
+    );
+    let graph = &args[args
+        .iter()
+        .position(|a| a == "-filter_complex")
+        .expect("graph")
+        + 1];
+    assert!(
+        graph.contains(r"ass=filename=cues.ass:fontsdir=C\\:\\\\Windows\\\\Fonts"),
+        "{graph}"
+    );
+    assert!(
+        graph.contains(r"ass=filename=captions.ass:fontsdir=C\\:\\\\Windows\\\\Fonts"),
         "{graph}"
     );
 }

@@ -6,13 +6,15 @@
 //!
 //! - `expr` -- filtergraph escaping and number formatting;
 //! - `video_layers` -- one visual item's chain;
-//! - `video_graph` -- the composed stage, the zoom and the two hooks.
+//! - `video_graph` -- the composed stage, the zoom and the two hooks;
+//! - `ass` -- the two ASS documents (Task 43) `render_args` burns at those
+//!   hooks.
 //!
 //! **Video only, for now.** Task 44 adds the audio graph; until then a
-//! render maps the video label alone. Task 43 fills the two hooks with the
-//! ASS documents. No production caller exists yet (the render job is a
-//! later task), so no user can reach a silent render.
+//! render maps the video label alone. No production caller exists yet
+//! (the render job is a later task), so no user can reach a silent render.
 
+pub mod ass;
 pub mod expr;
 pub mod video_graph;
 pub mod video_layers;
@@ -25,17 +27,56 @@ use crate::ffmpeg_args::{output_args, remux_args, runner_flags, video_codec_args
 use expr::{escape_filter_value, seconds};
 use video_graph::{build_video_graph_with_hooks, file_input_count};
 
+/// The ASS documents (`render::ass`, Task 43) to burn into a render, and
+/// where libass should look for the font they name. `cues` (teaching cues
+/// and card title/subtitle text, `ass::build_cue_ass`) burns at the
+/// PRE-zoom hook (`[vcomp]`) so the preview's zoom scales it with the
+/// media; `captions` (`ass::build_caption_ass`) burns at the POST-zoom
+/// hook (`[vzoomed]`) so the preview keeps it unzoomed on the frame --
+/// GAP-173's controller ruling, `video_graph`'s module doc. `fontsdir`
+/// tells libass where to find the `Segoe UI`/`Arial` every ASS style
+/// names (`ass`'s module doc); it is NEVER a bundled font (AGENTS.md:
+/// ffmpeg stays user-installed) -- omitting it lets libass fall back to
+/// its own font discovery.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AssHooks<'a> {
+    pub cues: Option<&'a Path>,
+    pub captions: Option<&'a Path>,
+    pub fontsdir: Option<&'a Path>,
+}
+
+/// One `ass=filename=<escaped path>[:fontsdir=<escaped path>]` hook value
+/// (`AssHooks`'s doc): both levels of filtergraph escaping applied to
+/// EACH path separately, since `fontsdir` is a second `key=value` pair in
+/// the SAME filter option string, not a second filter.
+fn ass_hook(path: &Path, fontsdir: Option<&Path>) -> String {
+    let mut opt = format!(
+        "ass=filename={}",
+        escape_filter_value(&path.to_string_lossy())
+    );
+    if let Some(dir) = fontsdir {
+        opt.push_str(&format!(
+            ":fontsdir={}",
+            escape_filter_value(&dir.to_string_lossy())
+        ));
+    }
+    opt
+}
+
 /// The ffmpeg argv that renders `plan` to `dest`.
 ///
 /// `inputs[i]` is the file behind the plan's input index `i`. `settings`
 /// carries the encoder (probed, never hardcoded -- `ffmpeg_args`' rule) and
 /// the dimensions/rate the bitrate is sized for, which the caller sets to
-/// the canvas. `ass_path` is burned at the PRE-zoom hook (`[vcomp]`), the
-/// hook the brief names; Task 43 adds the post-zoom document for burned
-/// captions (controller ruling, GAP-173).
+/// the canvas. `ass` burns Task 43's two documents at the video graph's two
+/// hooks (`AssHooks`'s own doc).
 ///
 /// R1: an identity plan is `ffmpeg_args::remux_args` of its one source --
-/// no graph, no re-encode, and the output at SOURCE resolution (F5).
+/// no graph, no re-encode, and the output at SOURCE resolution (F5). An
+/// identity plan never reaches the graph at all, so a given `ass` hook is
+/// silently unused in that case -- `RenderPlan::is_identity` already
+/// requires `nothing_drawn_over` (no cues, no captions, no cards), so a
+/// caller that built an `AssHooks` from a real plan can never observe this.
 ///
 /// # Panics
 /// When `inputs` does not hold exactly one path per planned file input: a
@@ -45,7 +86,7 @@ pub fn render_args(
     plan: &RenderPlan,
     inputs: &[PathBuf],
     dest: &Path,
-    ass_path: Option<&Path>,
+    ass: AssHooks<'_>,
     settings: &EncodeSettings,
 ) -> Vec<String> {
     assert_eq!(
@@ -56,9 +97,10 @@ pub fn render_args(
     if plan.is_identity() {
         return remux_args(&inputs[plan.inputs[0].input_index], dest);
     }
-    let pre_zoom =
-        ass_path.map(|p| format!("ass=filename={}", escape_filter_value(&p.to_string_lossy())));
-    let (extra, graph, out) = build_video_graph_with_hooks(plan, pre_zoom.as_deref(), None);
+    let pre_zoom = ass.cues.map(|p| ass_hook(p, ass.fontsdir));
+    let post_zoom = ass.captions.map(|p| ass_hook(p, ass.fontsdir));
+    let (extra, graph, out) =
+        build_video_graph_with_hooks(plan, pre_zoom.as_deref(), post_zoom.as_deref());
     let mut args = runner_flags();
     for (index, path) in inputs.iter().enumerate() {
         if let Some(loop_ms) = image_loop_ms(plan, index) {

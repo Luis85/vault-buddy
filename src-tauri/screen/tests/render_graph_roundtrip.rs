@@ -29,7 +29,8 @@ use vault_buddy_core::editor::render_plan::{
 use vault_buddy_core::screen_capture_config::ScreenQuality;
 use vault_buddy_screen::ffmpeg_args::EncodeSettings;
 use vault_buddy_screen::ffmpeg_run::run;
-use vault_buddy_screen::render::render_args;
+use vault_buddy_screen::render::ass::build_cue_ass;
+use vault_buddy_screen::render::{render_args, AssHooks};
 
 const W: u32 = 1280;
 const H: u32 = 720;
@@ -199,8 +200,18 @@ fn plan(layers: Vec<VideoLayer>) -> RenderPlan {
 }
 
 fn render(ffmpeg: &Path, dir: &Path, plan: &RenderPlan, inputs: &[PathBuf]) -> PathBuf {
+    render_with_ass(ffmpeg, dir, plan, inputs, AssHooks::default())
+}
+
+fn render_with_ass(
+    ffmpeg: &Path,
+    dir: &Path,
+    plan: &RenderPlan,
+    inputs: &[PathBuf],
+    ass: AssHooks<'_>,
+) -> PathBuf {
     let dest = dir.join("render.mp4.part");
-    let args = render_args(plan, inputs, &dest, None, &settings());
+    let args = render_args(plan, inputs, &dest, ass, &settings());
     run(
         ffmpeg,
         &args,
@@ -392,5 +403,74 @@ fn a_dissolve_blends_the_pair_across_their_overlap() {
         100,
         GREEN,
         "after the overlap",
+    );
+}
+
+const MAGENTA: (i32, i32, i32) = (255, 0, 255);
+
+// A REAL burn: `render::ass::build_cue_ass`'s output, written to disk and
+// handed to a real ffmpeg through the `ass=` hook (Task 43). The golden
+// string tests in `src/render/ass_tests.rs` pin what the document SAYS;
+// only real libass can say whether ffmpeg 9.0.1 actually parses it -- the
+// two escaping levels, the style block, the `\p1` drawing syntax. A mask
+// cue is the cheapest possible probe: its drawn colour is deterministic
+// (no font/glyph rendering to tolerate), so a wrong escape, a malformed
+// `\p1` path or a swapped coordinate all fail as a WRONG PIXEL rather than
+// a silent parse warning ffmpeg would otherwise swallow with `-loglevel
+// error`.
+#[test]
+fn a_burned_mask_cue_is_a_real_opaque_rectangle() {
+    let ffmpeg = ffmpeg_or_skip!();
+    let dir = tempfile::tempdir().expect("tempdir");
+    // `plan()` always reserves two file inputs (its own fixture shape); the
+    // second is unused by this test's one layer.
+    let inputs = [halves(&ffmpeg, dir.path()), green(&ffmpeg, dir.path())];
+
+    let base = layer(0, 0, 0, 3_000, FULL);
+    let mut p = plan(vec![base]);
+    let effect: Effect = serde_json::from_value(json!({
+        "id": "m", "clip_id": "c0-0", "kind": "mask", "start_ms": 0, "end_ms": 3_000,
+        "x": 0.5, "y": 0.0, "w": 0.5, "h": 1.0, "color": "#ff00ff",
+    }))
+    .expect("mask effect");
+    p.cues = vec![PlannedCue {
+        effect_id: "m".into(),
+        clip_id: "c0-0".into(),
+        kind: EffectKind::Mask,
+        output_start: 0,
+        output_end: 3_000,
+        effect,
+        cut: Cut::default(),
+    }];
+
+    let ass_text = build_cue_ass(&p).expect("the mask cue produces a document");
+    let ass_path = dir.path().join("cues.ass");
+    std::fs::write(&ass_path, ass_text).expect("write the ass document");
+
+    let out = render_with_ass(
+        &ffmpeg,
+        dir.path(),
+        &p,
+        &inputs,
+        AssHooks {
+            cues: Some(&ass_path),
+            ..AssHooks::default()
+        },
+    );
+
+    let frame = frame_at(&ffmpeg, &out, 1_500);
+    assert_pixel(
+        &frame,
+        100,
+        100,
+        RED,
+        "the base's left half, outside the mask",
+    );
+    assert_pixel(
+        &frame,
+        1_200,
+        600,
+        MAGENTA,
+        "the mask covers the right half where the base was blue",
     );
 }

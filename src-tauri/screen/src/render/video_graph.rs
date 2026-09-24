@@ -12,11 +12,14 @@
 //!
 //! **The two hooks and the zoom (controller ruling, GAP-173).** The render
 //! zooms the WHOLE composed picture, like the preview. So: `[vcomp]` ->
-//! the pre-zoom hook (Task 43's teaching cues and card text, which the
-//! preview zooms with the media) -> the zoom -> `[vzoomed]` -> the
-//! post-zoom hook (Task 43's burned captions, which the preview keeps
-//! unzoomed on the frame) -> `[vout]`. An absent hook or zoom is a `null`,
-//! so the labels always exist.
+//! the pre-zoom hook (`render::ass::build_cue_ass`'s teaching cues and
+//! card text, which the preview zooms with the media) -> the zoom ->
+//! `[vzoomed]` -> the post-zoom hook (`render::ass::build_caption_ass`'s
+//! burned captions, which the preview keeps unzoomed on the frame) ->
+//! `[vout]`. An absent hook or zoom is a `null`, so the labels always
+//! exist. `render::mod`'s `render_args`/`AssHooks` is what fills both
+//! hooks in practice (Task 43); this module only knows them as opaque
+//! filter-chain strings.
 //!
 //! **Dissolves.** Task 41 plans both halves of a transition (the `from`
 //! clip's `transition_out`, the `to` clip's `transition_in`), and a track
