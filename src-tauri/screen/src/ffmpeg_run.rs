@@ -66,7 +66,7 @@ const STDERR_CAP: usize = 8 * 1024;
 /// Takes the platform as a parameter so BOTH arms are asserted on Linux --
 /// the shell's own version of this was once hard-wired to `0` with the whole
 /// suite green.
-const fn creation_flags_for(windows: bool) -> u32 {
+pub(crate) const fn creation_flags_for(windows: bool) -> u32 {
     if windows {
         0x0800_0000 // CREATE_NO_WINDOW
     } else {

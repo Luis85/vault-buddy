@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **22 rows** today (T1–T22), of which **0** carry a result. An
+This file carries **25 rows** today (T1–T25), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -261,3 +261,24 @@ installed ffprobe, or plays the reconnected file in WebView2.
 | # | Check | Steps | Result |
 | --- | --- | --- | --- |
 | T22 | **Reconnect after a lightweight import, including an ambiguous pick** | Do T21 (d) so the imported copy lists both originals as missing. Make a byte-identical copy of the imported video beside the original (e.g. `clip.mp4` and `clip (copy).mp4`). (a) In the media library press **… originals are missing — Reconnect…**. **Record**: each missing original is listed with its size and length, and no file path appears anywhere. (b) Press **Find all…**; in the NATIVE dialog (it should allow several files) pick the screen capture's `.mp4`, BOTH copies of the video, and one unrelated video. **Record**: the capture's row reads "Reconnected to …" and the preview now PLAYS it (no reload); the video's row reads "2 chosen files match equally well: … Choose the right one." and the video is still shown as unavailable in the preview. (c) On the video's row press **Choose file…** — the dialog should allow only ONE file — and pick `clip.mp4`. **Record** "Reconnected to “clip.mp4”", that the preview plays it, and that `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\media\` now holds both files under their asset ids. (d) Repeat on a fresh lightweight import, but pick a SHORTER video for the video's row: **Record** the reason ("different duration: … vs …"); press **Replace…** and pick the same file: **Record** the refusal naming it as shorter. Pick a LONGER video instead via **Replace…**: **Record** "Replaced with …", that its `sources.json` entry carries `replacedFrom`, and that every clip, cue and caption on the timeline is exactly where it was. | |
+
+## Task 45's rows
+
+Task 45 adds the render runner (`screen::render::run::render`: the capability
+refusal, the two ASS documents in the job dir, the ffmpeg run and the ffprobe
+verification) and the shell's capability probe (`ffmpeg::probe_capabilities`).
+`screen/tests/render_roundtrip.rs` renders real projects through a real
+ffmpeg and decodes the pixels and audio back — on synthesized lavfi inputs,
+with the fonts libass happens to find, and with libx264. What no automated
+test can reach: a real fragmented-MP4 screen capture from the capture sink,
+the fonts libass resolves on a real Windows install, and a hardware or
+Media Foundation H.264 encoder. The brief called these rows "T8–T10"; those
+numbers were taken, so they are the next free ones. **They are runnable once
+the render job and its Render control exist (Task 46 onward)**; until then
+leave the Result empty.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T23 | **Render a real staged screen capture with cues** | Record a 20–30 s screen capture of a window with visible motion, stop it, open it in the editor. Add a text cue (a few words), an arrow and a 2× zoom somewhere in the middle, plus one burned-in caption. Render the whole project. **Record**: whether the render finishes and the product plays in the Windows player AND in Obsidian's preview; the product's duration (file properties) against the editor header's; whether the first second is picture (not black or frozen — the capture is a fragmented MP4, which no automated test renders); and, at each cue's time, whether the cue is drawn where the preview drew it and the zoom scales the cue with the picture while the caption stays unzoomed. | |
+| T24 | **libass finds a font on a real Windows install** | With the product from T23 open, look at the text cue, the caption and (if one exists) a title card's text. **Record**: whether every text appears at all, and whether it is Segoe UI (compare the lowercase `g`/`y` with the editor preview, which uses Segoe UI) or a fallback face; and whether `vault-buddy.log` or the render's failure text mentions `fontselect` or a missing font. The render passes no `fontsdir` yet, so this is libass's own font discovery on Windows. | |
+| T25 | **A non-libx264 encoder and a build missing a filter** | In Buddy settings → Integrations → ffmpeg, note the reported H.264 encoder. Point the ffmpeg path at a build whose encoder is `h264_mf`, `h264_nvenc`, `h264_qsv` or `h264_amf` (e.g. an LGPL "essentials"/"shared" build without libx264) and Recheck. (a) Render a project with a dissolve and a zoom. **Record**: the encoder the settings card shows; whether the render is refused BEFORE it starts with a message naming the missing filter(s) and "4.3" (an LGPL build lacks `perspective`), or runs; if it runs, whether the product plays and its duration matches. (b) Render a plain trimmed clip (no zoom, no colour grade, no rounded/circle frame, no cue) with the same build. **Record**: whether it renders with the hardware/MF encoder and plays. | |

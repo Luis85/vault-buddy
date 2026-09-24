@@ -81,7 +81,14 @@ jobs:
       # synthesize a clip, apply a real Timeline, and read the OUTPUT back,
       # checking both the length AND that each block still carries its own
       # colour and its own tone. Everything before phase 5 rested on a manual
-      # Windows checklist nobody has run (GAP-117).
+      # Windows checklist nobody has run (GAP-117). The tutorial editor's
+      # render rides the same install: `screen/tests/render_graph_roundtrip.rs`
+      # and `screen/tests/render_roundtrip.rs` (real projects rendered end to
+      # end and decoded back -- layering, mixing, fades, a dissolve, a burned
+      # cue, a range, speed, the remux) run under the `cargo test -p
+      # vault_buddy_screen` step below, and skip the same visible way. Ubuntu's
+      # packaged ffmpeg is a GPL build with libass, so the render's GPL-only
+      # filters (`perspective`, `eq`, `geq`) and `ass` are present.
       #
       # Installed EXPLICITLY rather than relying on the runner image happening
       # to carry it: those tests skip when ffmpeg is absent, so an image that
@@ -95,7 +102,7 @@ jobs:
       # silent skip this step exists to prevent. The version is echoed
       # unpiped -- piping it through `head` would report the PIPE's exit code
       # instead of ffmpeg's.
-      - name: Install ffmpeg (the export's end-to-end round-trip tests)
+      - name: Install ffmpeg (the export's and the render's round-trip tests)
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
           ffmpeg -version

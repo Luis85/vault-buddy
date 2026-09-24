@@ -20,6 +20,7 @@
 
 use std::path::Path;
 use vault_buddy_core::capture_config;
+use vault_buddy_screen::render::{parse_filters_output, FfmpegCapabilities};
 
 use crate::external_tool::{candidates_for, run_capturing, tool_command, Capture, PROBE_TIMEOUT};
 
@@ -327,6 +328,39 @@ pub(crate) fn resolve_working_ffmpeg() -> Option<FfmpegTools> {
     None
 }
 
+/// What the resolved ffmpeg can do, for the editor render's refusal
+/// (tutorial-editor Task 45, F21): its `-filters` and `-encoders` listings,
+/// parsed by `screen::render::parse_filters_output` into the `screen`-owned
+/// `FfmpegCapabilities` -- this shell owns only the two spawns, since
+/// `screen::render::run::render_refusal` consumes the type and `screen`
+/// cannot depend on this crate.
+///
+/// A listing that fails or times out is logged and read as EMPTY, which
+/// refuses a graph render naming the first filter it lacks: reported, never
+/// guessed. Both listings sit inside `run_capturing`'s 64 KiB capture cap
+/// (measured on 9.0.1: `-filters` 41,986 bytes, `-encoders` 14,713); a
+/// build whose `-filters` outgrew it would lose its alphabetical TAIL --
+/// `xfade` among it -- and be refused for a dissolve it could render.
+#[allow(dead_code)] // First production reader: the render job (Task 46).
+pub(crate) fn probe_capabilities(tools: &FfmpegTools) -> FfmpegCapabilities {
+    let listing = |flag: &str| {
+        let mut cmd = tool_command(&tools.ffmpeg);
+        cmd.args(["-hide_banner", flag]);
+        match run_capturing(cmd, PROBE_TIMEOUT, Capture::Stdout) {
+            Ok((true, out)) => out,
+            Ok((false, _)) => {
+                log::warn!("ffmpeg {flag} exited unsuccessfully; reading no capabilities");
+                String::new()
+            }
+            Err(e) => {
+                log::warn!("ffmpeg {flag} could not be run: {e}");
+                String::new()
+            }
+        }
+    };
+    parse_filters_output(&listing("-filters")).with_encoders_output(&listing("-encoders"))
+}
+
 /// Ask ffprobe for the facts an export needs about `path`.
 ///
 /// NOTE: this invocation has NOT been executed against a real ffprobe in this
@@ -444,6 +478,28 @@ pub async fn set_ffmpeg_path(ffmpeg_path: Option<String>) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // F21: the shell's half of the capability probe really spawns the two
+    // listings and hands them to `screen`'s parser -- on a host with ffmpeg
+    // the render's own filters and encoders come back. SKIPS VISIBLY
+    // without ffmpeg (a skip is not a pass).
+    #[test]
+    fn probe_capabilities_reads_the_installed_ffmpeg() {
+        let Some(tools) = resolve_working_ffmpeg() else {
+            eprintln!(
+                "SKIP probe_capabilities_reads_the_installed_ffmpeg: no ffmpeg resolved,                  so the capability probe is UNPROVEN in this run"
+            );
+            return;
+        };
+        let caps = probe_capabilities(&tools);
+        for filter in ["overlay", "amix", "anullsrc", "color"] {
+            assert!(caps.has_filter(filter), "{filter} missing from {tools:?}");
+        }
+        assert!(caps.has_encoder("aac"), "aac missing from {tools:?}");
+        if let Some(h264) = &tools.h264_encoder {
+            assert!(caps.has_encoder(h264), "the picked {h264} is not listed");
+        }
+    }
 
     #[test]
     fn parses_the_version_from_a_real_banner_line() {

@@ -2401,8 +2401,29 @@ render produces, and it says so nowhere on screen yet. What it does NOT show:
      (`previewCardDom.ts`'s `borderColor`/`borderWidth`) is not drawn by
      the render at all -- `screen::render::video_layers::card_source`
      (Task 42) fills only the background colour, and no task has added a
-     border. A render maps VIDEO only until Task 44 adds the audio graph
-     -- neither has a production caller yet.
+     border.
+   - **The render's ffmpeg floor is 4.3, enforced by the filter probe**
+     (Task 45, `screen::render::run`). `xfade` (every dissolve) exists only
+     from ffmpeg 4.3, and `perspective` (the zoom), `eq` (a colour grade)
+     and `geq` (a circle/rounded frame) are GPL-only in ffmpeg's configure
+     (read from its `*_filter_deps="gpl"`, not measured: every build on hand
+     is GPL) while `ass` (cues, card text, captions) needs libass -- so an old or
+     LGPL build renders SOME projects and not others. The gate is NOT a
+     version-banner parse: `run::required_filters` derives the filters a
+     plan's features use and `run::render_refusal` refuses, before any
+     child exists, naming each missing one and the 4.3 floor (the shell
+     maps it to `encoderUnavailable`); a plan that uses none of them is not
+     refused on an old build. The list is feature-derived, and
+     `run_tests::required_filters_cover_every_filter_the_graph_uses` parses
+     the real argv of a plan using every feature to keep it complete -- a
+     combination that test does not reach could still emit a filter the
+     list omits, which would fail inside ffmpeg rather than be refused.
+     Real renders (layering, hidden tracks, mixing, fades, a dissolve, a
+     split-and-reorder, a burned text cue, a range, 2x speed and the R1
+     remux) are decoded back in `screen/tests/render_roundtrip.rs`; libass
+     font resolution, a real staged fMP4 and hardware encoders are Windows
+     checklist rows T23-T25. The render has no production caller until the
+     render job (Task 46).
 
 **Why accepted now:** the plan's P04 lands the preview surface before the
 effect/caption/transition/cards tasks that give those features a preview at

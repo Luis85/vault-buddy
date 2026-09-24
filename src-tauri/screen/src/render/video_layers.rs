@@ -217,7 +217,7 @@ fn value(n: &Num, default: f64) -> f64 {
 ///
 /// `eq`'s brightness is ADDITIVE where CSS `brightness()` multiplies, so
 /// `b - 1` is an approximation of the preview, not an equivalence (GAP-173).
-fn adjustments(adjustments: Option<&Adjustments>) -> Vec<String> {
+pub(super) fn adjustments(adjustments: Option<&Adjustments>) -> Vec<String> {
     let Some(a) = adjustments else {
         return Vec::new();
     };
