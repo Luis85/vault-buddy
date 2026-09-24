@@ -41,6 +41,9 @@ mod audio;
 #[cfg(windows)]
 mod mux;
 pub mod pacing;
+pub mod webcam;
+#[cfg(windows)]
+mod webcam_windows;
 #[cfg(windows)]
 mod windows_session;
 
@@ -158,6 +161,10 @@ pub struct ScreenSessionParams {
     pub audio: Vec<SourceInput>,
     pub warn_tx: Option<Sender<String>>,
     pub stats_tx: Option<Sender<FrameStats>>,
+    /// A webcam recorded beside the screen on the same clock (F-22), or
+    /// `None`: today's capture, which opens no device and spawns no webcam
+    /// thread (`webcam::tests::start_without_a_webcam_is_byte_identical_to_today`).
+    pub webcam: Option<webcam::WebcamParams>,
 }
 
 pub struct ScreenOutcome {
@@ -168,6 +175,9 @@ pub struct ScreenOutcome {
     pub height: u32,
     pub dropped: u64,
     pub warning: Option<String>,
+    /// The published webcam track, when one was requested AND finished. A
+    /// webcam that failed to finish is a warning, never a failed capture.
+    pub webcam: Option<webcam::WebcamOutcome>,
 }
 
 /// Everything is resampled to this: the rate every Windows AAC encoder MFT

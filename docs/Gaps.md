@@ -3080,7 +3080,7 @@ lines — promote a webcam part to the SAME ` (N)` its main part landed on
 `StagedCaptureList` (or as a recovered capture of its own) rather than
 deleting footage.
 
-### GAP-199 · Medium (unverified until Task 52) · A synchronized webcam track's length is derived, not measured
+### GAP-199 · ~~Medium~~ FIXED in code 2026-09-24 (Task 52), hardware-unverified · A synchronized webcam track's length is derived, not measured
 `src-tauri/src/editor/session_commands.rs` (`staged_webcam`), Task 51
 (F-22, F26). The sidecar's `webcam` block carries `file`, `width`,
 `height`, `deviceLabel` and `offsetMs` — no length, and migration needs one
@@ -3097,6 +3097,46 @@ the clip at `offsetMs` counts the offset twice. **Fix (Task 52):** rebase
 the webcam file's timestamps to its first frame, and write the webcam's
 measured length into the sidecar block (an additive field, read with
 `#[serde(default)]` and falling back to today's derivation).
+
+**Fixed (Task 52).** `session/webcam.rs`'s `WebcamPacer` rebases every
+webcam frame to the file's FIRST frame (pinned by
+`the_webcam_file_starts_at_its_own_first_frame`; mutating the rebase away
+turns it red), and that frame's clock time is written as `offsetMs`. The
+webcam mux measures the end of the last sample it wrote, and the sidecar
+block gained `durationMs` (`#[serde(default, skip_serializing_if =
+"Option::is_none")]`, so an older block reads as `None` and is written back
+unchanged). `staged_webcam` prefers it and falls back to the derivation only
+for a block written before it existed
+(`open_staged_places_the_webcam_for_its_measured_length`). What stays
+unverified is the hardware half: whether a real device's early finalize
+produces the length measured here — checklist rows T37/T38.
+
+### GAP-200 · Medium (hardware-unverified) · The synchronized webcam's residuals: colour matrix, long-run drift, a stalled reader
+`src-tauri/screen/src/session/webcam_windows.rs`, Task 52 (F-22). Four
+things the producer does not settle, each recorded rather than guessed at:
+(1) **Colour matrix.** The webcam's sink reuses `sink.rs`'s NV12 input type,
+which declares BT.709 limited range because `convert.rs` produces that for
+the SCREEN. A webcam's NV12/YUY2 is usually BT.601 (an SD-class sensor
+path), so the H.264 stream may be tagged 709 over 601 samples — a slight
+hue shift in the presenter, no error. Fix: read `MF_MT_YUV_MATRIX` off the
+reader's current type and declare it on the webcam sink. (2) **Long-run
+drift.** `WebcamClockMap` anchors the reader's timeline to the shared clock
+once per run (at the first frame and after each resume) and then trusts the
+device's own sample spacing; a device clock that runs fast or slow against
+QPC drifts from the screen over a long capture, unmeasured. Row T37
+measures a clap across ten minutes; if it drifts, re-anchor periodically
+against the arrival clock. (3) **A stalled device.** `ReadSample` is
+synchronous; a device that stops delivering WITHOUT an error leaves the
+`screen-webcam` thread inside it, so a stop waits `READER_GRACE` (2 s) and
+then leaves that thread to finish on its own (logged) while the webcam's
+mux finalizes on `STOP_GRACE` regardless — the file is kept, the thread and
+the device handle linger until the call returns. (4) **A failed screen
+stop.** The webcam is finished and published before the screen's own
+finalize; if the SCREEN then fails (`Retained`), the webcam file sits in
+staging beside a `.part` the recovery sweep promotes with a minimal sidecar
+that carries no `webcam` block — the footage is kept but not linked, the
+GAP-198 class. The Windows producer executes in no automated test on any
+platform (GAP-117's class); rows T37–T41 are its gate.
 
 ## 9. Documentation & repo hygiene
 

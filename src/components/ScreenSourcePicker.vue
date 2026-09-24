@@ -10,6 +10,7 @@ import { useVaultsStore } from "../stores/vaults";
 import type { CaptureSourceInfo, RegionSelection, StagedCaptureSummary } from "../types";
 import ScreenAudioPicker from "./ScreenAudioPicker.vue";
 import ScreenRegionPicker from "./ScreenRegionPicker.vue";
+import ScreenWebcamPicker from "./ScreenWebcamPicker.vue";
 import ScreenWindowPicker from "./ScreenWindowPicker.vue";
 import StagedCaptureList from "./StagedCaptureList.vue";
 import TabGroup from "./TabGroup.vue";
@@ -59,6 +60,8 @@ const selectedId = ref<string | null>(null);
 
 const inputs = ref<string[]>([]);
 const outputs = ref<string[]>([]);
+/** F-22: the webcam recorded beside the screen, or null for none. */
+const webcamId = ref<string | null>(null);
 const error = ref<string | null>(null);
 const starting = ref(false);
 
@@ -282,7 +285,13 @@ async function onStart() {
   starting.value = true;
   error.value = null;
   try {
-    await screenCapture.start(props.vaultId, selectedId.value, inputs.value, outputs.value);
+    await screenCapture.start(
+      props.vaultId,
+      selectedId.value,
+      inputs.value,
+      outputs.value,
+      webcamId.value,
+    );
     // The capture bar lives on the list view beside RecordingBar, the same
     // place the audio domain's start lands (RecordMode.start).
     store.showList();
@@ -380,6 +389,7 @@ async function onStart() {
         v-model:outputs="outputs"
       />
     </div>
+    <ScreenWebcamPicker v-model:webcam-id="webcamId" />
     <!-- Sits directly above Start because it qualifies exactly that button:
          pressing it works, and the Save that follows will not. NOT above the
          staged list, which spec 10 requires to come first. -->

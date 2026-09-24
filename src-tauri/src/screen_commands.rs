@@ -313,13 +313,15 @@ pub async fn start_screen_capture(
     app: AppHandle,
     id: String,
     source_id: String,
+    // F-22: additive and optional; absent is today's capture.
+    webcam_id: Option<String>,
     inputs: Vec<String>,
     outputs: Vec<String>,
 ) -> Result<ScreenStatusPayload, String> {
     let worker = app.clone();
     let payload = tauri::async_runtime::spawn_blocking(move || {
         crate::screen_capture_worker::start_screen_capture_blocking(
-            &worker, id, source_id, inputs, outputs,
+            &worker, id, source_id, webcam_id, inputs, outputs,
         )
     })
     .await

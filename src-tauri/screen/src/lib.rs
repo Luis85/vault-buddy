@@ -69,6 +69,9 @@ pub mod source;
 // capture size, crop, label. PURE, split from `source.rs` at 783 of the
 // 800-line Rust cap; `source` re-exports it, so no caller's path changed.
 pub mod source_derive;
+// Webcam enumeration and the id a webcam crosses IPC as (F-22). Split from
+// `source.rs` at 644 of the 800-line cap; `source` re-exports it.
+pub mod source_webcam;
 pub mod staging;
 
 // A window title becomes a file-name FRAGMENT here; it becomes a NAME in

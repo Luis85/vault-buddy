@@ -185,9 +185,12 @@ pub(crate) fn open_staged_in(
 /// capture's own `<base>.webcam.mp4` (the sidecar is hand-editable, and a
 /// record that could never resolve is worse than no webcam), or no length.
 ///
-/// Its length is the capture's from `offset_ms` on: both streams stamp from
-/// the one `CaptureClock` and stop on the one Stop (ADR §4), and nothing on
-/// disk records the webcam's own length without a probe.
+/// Its length is the block's MEASURED `duration_ms` (GAP-199: a webcam that
+/// vanished mid-capture finalized early, and deriving its length from the
+/// capture would run the clip past the media's end). A block written before
+/// that field existed falls back to the capture's length from `offset_ms`
+/// on: both streams stamp from the one `CaptureClock` and stop on the one
+/// Stop (ADR §4).
 fn staged_webcam(
     staging_dir: &Path,
     sidecar: &staging::StagedSidecar,
@@ -201,7 +204,10 @@ fn staged_webcam(
         );
         return None;
     }
-    let length = i128::from(sidecar.duration_ms) - i128::from(webcam.offset_ms);
+    let length = match webcam.duration_ms {
+        Some(measured) => i128::from(measured),
+        None => i128::from(sidecar.duration_ms) - i128::from(webcam.offset_ms),
+    };
     let Some(duration_ms) = u64::try_from(length).ok().filter(|ms| *ms > 0) else {
         log::warn!(
             "editor_open_staged: {:?}'s webcam starts at {} ms, not before the capture ends at {} ms; ignored",

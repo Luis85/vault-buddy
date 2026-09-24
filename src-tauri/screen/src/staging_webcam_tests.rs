@@ -90,6 +90,7 @@ fn webcam_block() -> WebcamSidecar {
         height: 720,
         device_label: "Integrated Camera".into(),
         offset_ms: -45,
+        duration_ms: None,
         extra: Default::default(),
     }
 }
@@ -181,4 +182,63 @@ fn a_malformed_webcam_block_degrades_to_none_and_survives_a_rewrite() {
     good.webcam = Some(webcam_block());
     write_sidecar(dir.path(), BASE, &good).unwrap();
     assert_eq!(read_sidecar(&path).unwrap().webcam, Some(webcam_block()));
+}
+
+// GAP-199: the webcam's MEASURED length rides in the block. Additive both
+// ways: a block written before it existed reads as `None` (migration then
+// derives), and `None` is not written back, so such a sidecar stays
+// byte-identical on a rewrite.
+#[test]
+fn a_measured_webcam_length_is_optional_and_round_trips() {
+    let measured = WebcamSidecar {
+        duration_ms: Some(8_400),
+        ..webcam_block()
+    };
+    let json = serde_json::to_value(&measured).unwrap();
+    assert_eq!(json["durationMs"], 8_400);
+    assert_eq!(
+        serde_json::from_value::<WebcamSidecar>(json).unwrap(),
+        measured
+    );
+    let older = serde_json::json!({
+        "file": webcam_file_name(BASE), "width": 1280, "height": 720,
+        "deviceLabel": "Integrated Camera", "offsetMs": -45
+    });
+    let read: WebcamSidecar = serde_json::from_value(older).unwrap();
+    assert_eq!(read, webcam_block());
+    assert!(!serde_json::to_string(&read).unwrap().contains("durationMs"));
+}
+
+// Carried from Task 51's review: the lenient read parks an unreadable raw
+// `webcam` value in `extra`, which writes it back under the SAME key. Setting
+// the typed block without clearing it wrote a JSON object with `webcam` twice
+// -- which copy wins depends on the reader. Both the setter and the writer
+// must leave exactly one.
+#[test]
+fn writing_a_webcam_block_clears_the_unreadable_raw_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let raw = serde_json::json!({ "file": 5 });
+    let mut sidecar: StagedSidecar = serde_json::from_value(serde_json::json!({
+        "base": BASE, "vaultId": "v", "sourceTitle": "t", "sourceKind": "screen",
+        "inputs": [], "durationMs": 9_000, "pausedMs": 0, "width": 1920,
+        "height": 1080, "recordedAt": "r"
+    }))
+    .unwrap();
+    sidecar.extra.insert("webcam".into(), raw.clone());
+    let mut via_setter = sidecar.clone();
+    via_setter.set_webcam(webcam_block());
+    assert!(
+        !via_setter.extra.contains_key("webcam"),
+        "the setter left the raw block"
+    );
+
+    // The writer is the backstop for a caller that set the field directly.
+    let mut direct = sidecar;
+    direct.webcam = Some(webcam_block());
+    for written in [via_setter, direct] {
+        let path = write_sidecar(dir.path(), BASE, &written).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches("\"webcam\"").count(), 1, "{text}");
+        assert_eq!(read_sidecar(&path).unwrap().webcam, Some(webcam_block()));
+    }
 }

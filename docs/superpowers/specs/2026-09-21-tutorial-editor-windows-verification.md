@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **36 rows** today (T1–T36), of which **0** carry a result. An
+This file carries **41 rows** today (T1–T41), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -349,3 +349,22 @@ these rows "T13–T17"; those numbers were taken, so they are T32–T36.
 | T34 | **Record, review and retake a real take** | Enable the camera with the microphone, press **Record**, watch the 3-2-1 countdown, speak for 30–60 s, press **Stop**. **Record**: the countdown's three numbers; that "Finishing the take…" gives way to a player that plays the take WITH sound; its length against how long you recorded; and the files in `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\takes\` (a `<takeId>.webm`, no `.part` left). Press **Retake**, record a second take and stop. **Record**: that the first take is still in the Media library and still plays there, and that the second is a separate asset. Start a third take and press **Discard recording**: **Record** that no `.<takeId>.webm.part` is left in `takes\`. | |
 | T35 | **Add to timeline places the presenter** | With a take in review, park the playhead a few seconds into a screen capture and press **Add to timeline**. **Record**: that the dialog closes; that a new track named "Presenter" is the TOP video track; that the take starts at the playhead as its own clip (the screen clip is unchanged); that the preview shows it as a circle in the top-right corner; and that Undo removes the placement, the clip and the track in three steps. Select the clip and read Inspector → Layout: **Record** x, y, w, h (expect 0.775, 0.06, 0.19, 0.3378 on a 16:9 canvas), Circle, Cover. Drag it to another corner in the preview, then render a 5 s range: **Record** that the rendered file shows the circle where the preview does and that it is a circle, not an oval. | |
 | T36 | **Every way out turns the camera off** | For each of these, **Record** whether the camera's light goes off and what `takes\` holds afterwards: (a) **Close** with the camera enabled and nothing recorded (closes at once); (b) **Close** while recording — the dialog must ask; choose **Discard recording and close** (no `.part` left); (c) **Close** with a finished take not yet added — the dialog must ask; record the wording (it must say the take stays in the media library), choose **Keep in library and close**, and confirm the take is in the library; (d) reload the editor window (Ctrl+R in a dev build) while the camera is live; (e) close the editor window with its titlebar X while recording — the close guard must say "You have an unsaved webcam take". | |
+
+## Synchronized webcam beside a screen capture (Task 52)
+
+`session/webcam.rs`'s pure rules are unit-tested (the clock mapping, the
+pause discard and re-anchor, the file's rebase to its own first frame, each
+frame's duration, the mode choice, the NV12/YUY2 conversion), and the picker
+and the start's `webcamId` are covered in `screenSourcePicker.test.ts`. The
+producer itself — `session/webcam_windows.rs`, an `IMFSourceReader` feeding
+its own fragmented-MP4 sink — **executes in no automated test on any
+platform**. These rows are its gate (and GAP-199's and GAP-200's). The brief
+called them "T18–T22"; those numbers were taken, so they are T37–T41.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T37 | **Ten minutes of screen + webcam stay in sync** | Record Screen → pick a screen, pick a webcam in **Webcam**, start, and clap once in view of the webcam at the start, once at ~5 min and once at ~10 min, with the screen showing a stopwatch (e.g. a browser stopwatch page) and a microphone selected. Stop. **Record**: the files in `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures\` (`<base>.mp4`, `<base>.webcam.mp4`, `<base>.json`, no `.part` left); the sidecar's `webcam` block (`offsetMs`, `durationMs`, `width`, `height`, `deviceLabel`); `ffprobe -show_entries format=duration` of both files. Open it in the editor: **Record**, for each clap, the offset between the clap's sound on the screen track and the hands meeting on the presenter clip (frame-step in the preview), and whether it grows from the first clap to the last (GAP-200 item 2). | |
+| T38 | **Unplug the webcam mid-capture** | Start a screen + webcam capture, unplug the USB webcam after ~30 s, keep recording ~30 s, stop. **Record**: the warning the panel showed (it must say the webcam stopped and the screen capture continues); that the screen capture ran to the end; the sidecar's `webcam.durationMs` against when you unplugged; and in the editor, that the presenter clip ENDS where the webcam ended rather than running on frozen or black (GAP-199). | |
+| T39 | **A webcam another app is using** | Open the Windows Camera app (or a Teams call) holding the webcam, then start a screen capture with that webcam chosen. **Record**: whether the start is refused with "The webcam could not be opened. It may be in use by another app…", that no capture started (no bar, no `.part` in `screen-captures\`), and that picking **No webcam** then starts normally. If instead it starts: **Record** what the webcam file holds. | |
+| T40 | **Pause and resume keep both tracks aligned** | Start screen + webcam with a stopwatch on screen, clap, pause for ~20 s (keep moving in front of the camera), resume, clap, stop. **Record**: the capture's reported length against wall time minus the pause; the webcam file's length (`ffprobe`); and in the editor, the offset between each clap on the screen track and on the presenter clip — the paused stretch must be in NEITHER, and the second clap's offset must match the first's. | |
+| T41 | **No webcam selected = unchanged capture** | Record a screen capture with **No webcam** (the default). **Record**: that no `<base>.webcam.mp4` or `.webcam.mp4.part` appears; that the sidecar has no `webcam` key; that the camera's light never came on; and that the capture plays and edits exactly as before. Also with NO webcam connected at all: **Record** that the picker says "No webcam found." and Start still works. | |

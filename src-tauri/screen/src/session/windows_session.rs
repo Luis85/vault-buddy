@@ -29,6 +29,7 @@ use crate::ScreenError;
 
 use super::audio::run_audio;
 use super::mux::{run_mux, SinkPlan};
+use super::webcam_windows::WebcamProducer;
 use super::{
     apply_control, pacing, Control, Counters, MuxMsg, ScreenOutcome, ScreenSessionParams,
     SharedClock, Warnings, AUDIO_BITRATE_BPS, AUDIO_CHANNELS, AUDIO_RATE, CHANNEL_DEPTH,
@@ -51,6 +52,9 @@ pub struct ScreenSession {
     height: u32,
     crop_x: u32,
     crop_y: u32,
+    /// The optional fourth producer (F-22). `None` for every capture made
+    /// without a webcam.
+    webcam: Option<WebcamProducer>,
 }
 
 impl ScreenSession {
@@ -64,6 +68,7 @@ impl ScreenSession {
             audio,
             warn_tx,
             stats_tx,
+            webcam,
         } = params;
 
         let fps = normalize_fps(fps);
@@ -112,6 +117,16 @@ impl ScreenSession {
             video,
             audio: audio_format,
         };
+        let warnings = Arc::new(Warnings::new(warn_tx));
+        // The webcam opens FIRST, before the clock starts and before any
+        // screen file exists: a camera another app holds refuses the whole
+        // start while the user is still looking at the picker, and leaves
+        // nothing on disk. Every return below drops it, which finalizes it.
+        let webcam = match webcam {
+            // F-22: only a REQUESTED webcam constructs the producer.
+            Some(params) => Some(WebcamProducer::open(params, Arc::clone(&warnings))?),
+            None => None,
+        };
 
         // ONE instant for the clock and for the outcome's paused
         // accounting: paused_ms is wall time minus the clock's elapsed,
@@ -121,7 +136,6 @@ impl ScreenSession {
         let clock: SharedClock = Arc::new(Mutex::new(CaptureClock::new(started)));
         let stopping = Arc::new(AtomicBool::new(false));
         let counters = Arc::new(Counters::default());
-        let warnings = Arc::new(Warnings::new(warn_tx));
         let (tx, rx) = mpsc::sync_channel::<MuxMsg>(CHANNEL_DEPTH);
 
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), ScreenError>>();
@@ -166,7 +180,7 @@ impl ScreenSession {
 
         // From here on a failure must tear the mux down rather than leak
         // it, or the .part file stays open for the life of the process.
-        let session = ScreenSession {
+        let mut session = ScreenSession {
             clock,
             stopping,
             counters,
@@ -181,7 +195,12 @@ impl ScreenSession {
             height,
             crop_x,
             crop_y,
+            webcam: None,
         };
+        if let Some(mut producer) = webcam {
+            producer.go(Arc::clone(&session.clock));
+            session.webcam = Some(producer);
+        }
         session.spawn_producers(source.handle, audio, tx, fps, width, height)
     }
 
@@ -280,6 +299,8 @@ impl ScreenSession {
     /// playable prefix rather than an unopenable file.
     fn abandon(&mut self) {
         self.stopping.store(true, Ordering::Relaxed);
+        // Dropping the producer stops and finalizes it, leaving its part.
+        drop(self.webcam.take());
         if let Some(h) = self.audio.take() {
             let _ = h.join();
         }
@@ -330,6 +351,16 @@ impl ScreenSession {
                 log::error!("screen capture: the audio thread panicked");
             }
         }
+        // The webcam finishes on its own: a failure there is a WARNING on a
+        // screen capture that is otherwise fine (spec 14's posture).
+        let webcam = self.webcam.take().and_then(|w| match w.stop() {
+            Ok(outcome) => Some(outcome),
+            Err(e) => {
+                self.warnings
+                    .raise(format!("the webcam track could not be finished: {e}"));
+                None
+            }
+        });
 
         let now = Instant::now();
         let elapsed = self
@@ -412,6 +443,7 @@ impl ScreenSession {
             height: self.height,
             dropped: self.counters.dropped.load(Ordering::Relaxed),
             warning: self.warnings.take(),
+            webcam,
         })
     }
 }

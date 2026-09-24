@@ -132,6 +132,7 @@ impl std::fmt::Display for WebcamDeviceId {
 pub use crate::source_derive::{
     capture_size_from_bounds, display_label, region_dims, uncropped_dims,
 };
+pub use crate::source_webcam::{list_webcams, CaptureWebcamInfo};
 
 /// A source re-checked at START time and ready to capture.
 pub struct ResolvedSource {

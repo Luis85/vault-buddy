@@ -282,6 +282,17 @@ pub struct StagedSidecar {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
+impl StagedSidecar {
+    /// Set the typed `webcam` block, dropping any raw `webcam` value the
+    /// lenient read parked in `extra` — both would serialize under the same
+    /// key, and a JSON object with a duplicate key is read differently by
+    /// different parsers.
+    pub fn set_webcam(&mut self, webcam: WebcamSidecar) {
+        self.extra.remove("webcam");
+        self.webcam = Some(webcam);
+    }
+}
+
 /// A staged capture's synchronized webcam track (F-22): which staging file
 /// holds it, its pixel size, the device it came from, and where its first
 /// frame sits on the capture's shared clock.
@@ -297,6 +308,11 @@ pub struct WebcamSidecar {
     /// first frame arrived — where migration starts its clip. Signed: a
     /// device that delivered before the screen's first frame is negative.
     pub offset_ms: i64,
+    /// The webcam file's MEASURED length (GAP-199): the end of its last
+    /// sample, in the file's own time. Absent on a block written before it
+    /// existed, where migration falls back to deriving it from the capture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
     /// Keys a newer build adds to this block, carried through verbatim for
     /// the same reason `StagedSidecar::extra` exists.
     #[serde(flatten, default)]
@@ -363,6 +379,17 @@ pub fn write_sidecar(dir: &Path, base: &str, sidecar: &StagedSidecar) -> std::io
             format!("sidecar base {base:?} does not name a file inside the staging directory"),
         ));
     }
+    // The backstop for a caller that set the typed block without
+    // `set_webcam`: never write `webcam` twice.
+    let deduped;
+    let sidecar = if sidecar.webcam.is_some() && sidecar.extra.contains_key("webcam") {
+        let mut copy = sidecar.clone();
+        copy.extra.remove("webcam");
+        deduped = copy;
+        &deduped
+    } else {
+        sidecar
+    };
     let json = serde_json::to_string_pretty(sidecar)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     vault_buddy_core::capture_note::write_atomic_replacing(&path, &json)?;

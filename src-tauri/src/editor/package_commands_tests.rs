@@ -390,6 +390,7 @@ fn a_staged_webcam_track_is_packaged_or_reported_missing() {
         height: 480,
         device_label: "Integrated Camera".into(),
         offset_ms: 250,
+        duration_ms: None,
         extra: serde_json::Map::new(),
     });
     staging::write_sidecar(&a.staging(), BASE, &sidecar).unwrap();

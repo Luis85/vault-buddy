@@ -265,6 +265,7 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
       sourceId: string,
       inputs: string[],
       outputs: string[],
+      webcamId: string | null = null,
     ) {
       this.error = null;
       this.warning = null;
@@ -273,11 +274,14 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
       this.retainedPath = null;
       const seq = this.seq;
       try {
+        // `webcamId` only when one was chosen (F-22): a start without a webcam
+        // sends exactly the arguments it sent before the feature existed.
         const s = await invoke<ScreenCaptureStatus>("start_screen_capture", {
           id: vaultId,
           sourceId,
           inputs,
           outputs,
+          ...(webcamId === null ? {} : { webcamId }),
         });
         // The third route into the started-after-stopped race, and the only
         // one that writes state without consulting the generation: the

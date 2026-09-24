@@ -1132,3 +1132,80 @@ describe("ScreenSourcePicker — the ffmpeg pre-flight", () => {
     expect(store.settingsTab).toBe("integrations");
   });
 });
+
+// ---------------------------------------------------------------------------
+// F-22 (Task 52): a webcam recorded beside the screen on the same clock.
+// Optional and additive: with none chosen, the start sends exactly what it
+// sent before this feature existed.
+// ---------------------------------------------------------------------------
+describe("ScreenSourcePicker — the synchronized webcam", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+  afterEach(() => clearMocks());
+
+  const WEBCAMS = [
+    { id: "webcam:0f3a9c", label: "Integrated Camera" },
+    { id: "webcam:77aa01", label: "Logitech BRIO" },
+  ];
+
+  function mockWithWebcams(webcams: unknown, calls: Record<string, unknown>[] = []) {
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, ...(args as object) });
+      if (cmd === "list_capture_sources") return SOURCES;
+      if (cmd === "list_audio_devices") return NO_DEVICES;
+      if (cmd === "list_capture_webcams") return webcams;
+      if (cmd === "start_screen_capture") return STARTED;
+      return undefined;
+    });
+    return calls;
+  }
+
+  it("picker offers no webcam option when none are listed", async () => {
+    mockWithWebcams([]);
+    const w = await mountPicker();
+    expect(w.get('[data-testid="webcam-none-found"]').text()).toBe("No webcam found.");
+    expect(w.find('[data-testid="webcam-select"]').exists()).toBe(false);
+    expect(w.findAll("option").some((o) => o.text().includes("Camera"))).toBe(false);
+  });
+
+  it("lists every webcam after a No webcam default", async () => {
+    mockWithWebcams(WEBCAMS);
+    const w = await mountPicker();
+    const options = w.get('[data-testid="webcam-select"]').findAll("option");
+    expect(options.map((o) => o.text())).toEqual([
+      "No webcam",
+      "Integrated Camera",
+      "Logitech BRIO",
+    ]);
+    expect((w.get('[data-testid="webcam-select"]').element as HTMLSelectElement).value).toBe("");
+  });
+
+  it("start sends webcamId only when chosen", async () => {
+    const calls = mockWithWebcams(WEBCAMS);
+    const w = await mountPicker();
+    await w.get('[data-testid="source-screen:1"]').trigger("click");
+    await w.get('[data-testid="screen-start"]').trigger("click");
+    await flushPromises();
+    const plain = calls.filter((c) => c.cmd === "start_screen_capture");
+    expect(plain).toHaveLength(1);
+    // Absent, not null: the start without a webcam is the pre-F-22 call.
+    expect("webcamId" in plain[0]).toBe(false);
+
+    const again = await mountPicker();
+    await again.get('[data-testid="source-screen:1"]').trigger("click");
+    await again.get('[data-testid="webcam-select"]').setValue("webcam:77aa01");
+    await again.get('[data-testid="screen-start"]').trigger("click");
+    await flushPromises();
+    const starts = calls.filter((c) => c.cmd === "start_screen_capture");
+    expect(starts).toHaveLength(2);
+    expect(starts[1]).toMatchObject({ sourceId: "screen:1", webcamId: "webcam:77aa01" });
+  });
+
+  it("drops back to No webcam when the listing cannot be read", async () => {
+    // A failed or malformed listing is "no webcam", never a banner: the
+    // capture itself works without one.
+    mockWithWebcams({ not: "a list" });
+    const w = await mountPicker();
+    expect(w.find('[data-testid="webcam-none-found"]').exists()).toBe(true);
+    expect(w.find('[data-testid="screen-error"]').exists()).toBe(false);
+  });
+});

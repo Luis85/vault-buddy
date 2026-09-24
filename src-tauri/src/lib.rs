@@ -35,6 +35,7 @@ mod screen_commands;
 mod screen_config_commands;
 mod screen_dto;
 mod screen_recovery;
+mod screen_webcam_commands;
 mod search_commands;
 mod shutdown_gate;
 // Test-only: the shared file-set + scan machinery every structural pin in
@@ -486,6 +487,7 @@ pub fn run() {
             model_commands::list_transcription_models,
             model_commands::delete_transcription_model,
             screen_commands::list_capture_sources,
+            screen_webcam_commands::list_capture_webcams,
             screen_commands::start_screen_capture,
             screen_commands::stop_screen_capture,
             screen_commands::pause_screen_capture,

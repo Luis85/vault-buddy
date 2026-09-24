@@ -87,6 +87,7 @@ const ALL_COMMANDS: &[&str] = &[
     "get_transcription_config",
     "list_audio_devices",
     "list_capture_sources",
+    "list_capture_webcams",
     "list_recordings",
     "list_staged_captures",
     "list_task_lists",

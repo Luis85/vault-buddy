@@ -104,6 +104,7 @@ fn open_staged_registers_a_resolvable_webcam_source() {
         height: 480,
         device_label: "Integrated Camera".into(),
         offset_ms: 120,
+        duration_ms: None,
         extra: serde_json::Map::new(),
     });
     f.stage(&s);
@@ -150,6 +151,39 @@ fn open_staged_registers_a_resolvable_webcam_source() {
     );
 }
 
+// GAP-199: a webcam that vanished mid-capture finalized EARLY, and its clip
+// used to run to the capture's end anyway -- a frozen presenter for the rest
+// of the recording, with no error. The MEASURED length in the block wins;
+// the capture-derived one (61_500 - 120 above) is only the fallback for a
+// block written before the field existed.
+#[test]
+fn open_staged_places_the_webcam_for_its_measured_length() {
+    let f = Fixture::new();
+    let mut s = sidecar(BASE, "vaultA");
+    s.webcam = Some(staging::WebcamSidecar {
+        file: staging::webcam_file_name(BASE),
+        width: 640,
+        height: 480,
+        device_label: "Integrated Camera".into(),
+        offset_ms: 120,
+        duration_ms: Some(20_250),
+        extra: serde_json::Map::new(),
+    });
+    f.stage(&s);
+    std::fs::write(f.staging().join(staging::webcam_file_name(BASE)), b"w").unwrap();
+
+    let opened = open_staged_in(f.root(), &f.staging(), BASE).expect("opens");
+    let clip = opened
+        .envelope
+        .project
+        .clips
+        .iter()
+        .find(|c| c.asset_id == migrate::WEBCAM_ASSET_ID)
+        .expect("the webcam was placed");
+    assert_eq!((clip.start_ms, clip.out_ms), (120, 20_250));
+    assert_eq!(opened.sources[migrate::WEBCAM_ASSET_ID].duration_ms, 20_250);
+}
+
 // A hand-edited sidecar naming a file the capture does not own is not a
 // webcam track: it migrates as a plain capture rather than registering a
 // source that would never resolve.
@@ -163,6 +197,7 @@ fn open_staged_ignores_a_webcam_block_naming_a_file_the_capture_does_not_own() {
         height: 480,
         device_label: String::new(),
         offset_ms: 0,
+        duration_ms: None,
         extra: serde_json::Map::new(),
     });
     f.stage(&s);

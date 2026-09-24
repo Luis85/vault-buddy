@@ -30,6 +30,15 @@ export interface CaptureSourceInfo {
   isPrimary: boolean;
 }
 
+/** One webcam the Record Screen picker offers
+ * (`vault_buddy_screen::source::CaptureWebcamInfo`, camelCase on the wire).
+ * `id` is `webcam:<hash>` — what `start_screen_capture`'s `webcamId`
+ * carries back. */
+export interface CaptureWebcamInfo {
+  id: string;
+  label: string;
+}
+
 /** What `RegionRoot` hands back for one drag. All four geometry values are
  * LOGICAL (CSS) pixels relative to the overlay's own viewport, which is the
  * target monitor's origin — Rust converts to physical with that monitor's

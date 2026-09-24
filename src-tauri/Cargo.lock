@@ -5875,6 +5875,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "vault_buddy_capture",
  "vault_buddy_core",
