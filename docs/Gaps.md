@@ -2951,6 +2951,60 @@ or a notice on the Products tab), offer "Write the missing note" for a
 `video`-step journal (the product and the landed name are both known), and
 let the user dismiss a report, which then removes its journal.
 
+### GAP-193 · Low (by design, R10) · A webcam take does not claim `CaptureGuard`, so a screen or audio recording can start while a take is recording
+`src-tauri/src/editor/webcam_commands.rs`, `src-tauri/src/capture_guard.rs`,
+Task 49 (ADR R10, pre-flight F35). A webcam take is recorded by the editor
+WEBVIEW (`getUserMedia` + `MediaRecorder`); the shell only receives its
+chunks, so the take holds no native device the guard could arbitrate. The
+exclusion therefore runs one way only: `editor_webcam_begin` refuses while
+`CaptureGuard::active()` is `Some` ("Stop the screen recording first." —
+F35 made this native, stronger than R10's UI-only rule), but nothing refuses
+a screen capture or an audio recording started from the panel or the tray
+WHILE a take is recording. Both then contend for the same microphone
+(WASAPI shared mode usually copes; an exclusive-mode driver may fail one
+side) and the camera light stays on for the take. Nothing is lost — each
+side writes its own file — but the user can end up with two recordings of
+one moment. **Fix:** give the guard a third, webview-owned claim
+(`CaptureKind::Webcam`) taken by `editor_webcam_begin` and released by
+finish/discard/session close — which needs its own keyed release site
+(`clear_active_screen`'s single-release pin is per kind) and a rule for a
+webview that dies mid-take without releasing.
+
+### GAP-194 · Low · No native WebView2 permission handler restricts the camera and microphone to the editor window
+`src-tauri/src/lib.rs` (window setup), Task 49 (ADR R10, R8). The webcam
+take asks WebView2 for the camera through `getUserMedia`, and WebView2
+shows its OWN permission prompt; nothing in the shell registers a
+`PermissionRequested` handler (`ICoreWebView2::add_PermissionRequested`),
+so the decision is WebView2's default for every one of the app's six
+webviews. Today only the editor window's code calls `getUserMedia`, and all
+six load the same bundle from the app's own origin, so this is not an
+exploitable path — but it means R8's "editor window only" rule for editor
+capabilities has no counterpart for the camera: a future panel feature (or
+a regression) could request the camera from the panel, the bubble or the
+region overlay and get the same prompt. **Fix:** on window creation, hook
+each webview's `PermissionRequested` (via `with_webview` and the
+`webview2-com` bindings wry already builds on) and deny `Camera`/`Microphone`
+for every label but `editor`; answer the editor's with the default prompt.
+Windows-only, so it lands with a checklist row (R-H1), not a CI test.
+
+### GAP-195 · Low · A discarded FINISHED webcam take leaves its asset in the library, reading as missing media
+`src-tauri/src/editor/webcam_commands.rs` (`discard_in`), Task 49.
+`editor_webcam_finish` registers a take as its own asset through ONE
+`AddAssets` (an undo step) so the review player can play it through
+`editor_media_url`. `editor_webcam_discard` on that take — Task 50's
+**Retake**, say — removes the take's `.webm` (refused while a clip plays
+it), but no command removes an ASSET: the contract's `InternalCommand` set
+is `AddAssets`/`ImportCaptions`/`RestoreSnapshot`/`RelinkAssets`, and there
+is no user-facing "remove from library" yet. So the asset and its
+`sources.json` record stay, and the project reports it as missing media
+(`missing_media` finds the record's file gone) on the next open, offering to
+reconnect a take the user threw away. Undo of the finish step removes the
+asset cleanly while it is still the last edit. **Fix:** a native
+`RemoveAssets{assetIds}` internal command (refusing an asset any clip,
+effect or caption still references) run by the discard of a finished take,
+removing the `sources.json` record in the same save-locked step — a
+contract addition, so an ADR amendment first.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md

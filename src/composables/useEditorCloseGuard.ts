@@ -8,6 +8,10 @@
  * - a render or publish job still running → the render copy ("keep it
  *   running in the background, or cancel it"); nothing is cancelled unless
  *   the user asks — never on a close, never on unmount;
+ * - a webcam take still recording (Task 49: begun, never finished — it
+ *   exists only as a `.part` the closing session would remove) → "You have
+ *   an unsaved webcam take": Cancel, or Discard the take (discarded
+ *   natively, then the dirty/clean rule below);
  * - unsaved edits → Save project / Keep for later (the session and its
  *   recovery journal stay, the window hides) / Discard changes (the journal
  *   goes, then the window hides) / Cancel;
@@ -20,11 +24,12 @@
  */
 import { ref } from "vue";
 
+import { openWebcamTakes } from "../editor/webcamTakes";
 import type { JobPhase, JobRecordDto } from "../editorTypes";
 import { logWarning } from "../logging";
 import { toEditorError, useEditorProjectStore } from "../stores/editorProject";
 
-type CloseGuardMode = "dirty" | "render";
+type CloseGuardMode = "dirty" | "render" | "take";
 
 const TERMINAL: ReadonlySet<JobPhase> = new Set<JobPhase>(["complete", "cancelled", "failed"]);
 
@@ -63,8 +68,14 @@ export function useEditorCloseGuard() {
     }
   }
 
-  /** The dirty/clean half, shared by a close and by a cancelled render. */
+  /** The open-take and dirty/clean half, shared by a close, a cancelled
+   * render and a discarded take. */
   async function settle(): Promise<void> {
+    const sessionId = project.sessionId;
+    if (sessionId && openWebcamTakes(sessionId).length > 0) {
+      mode.value = "take";
+      return;
+    }
     if (project.dirty) {
       mode.value = "dirty";
       return;
@@ -143,11 +154,31 @@ export function useEditorCloseGuard() {
     }
   }
 
+  /** Discard every open take of this session natively; a refusal keeps the
+   * dialog open and says why. */
+  async function discardTakes(): Promise<void> {
+    const sessionId = project.sessionId;
+    busy.value = true;
+    error.value = null;
+    try {
+      for (const takeId of sessionId ? openWebcamTakes(sessionId) : []) {
+        await project.port.webcamDiscard(sessionId as string, takeId);
+      }
+    } catch (e) {
+      error.value = toEditorError(e).message;
+      return;
+    } finally {
+      busy.value = false;
+    }
+    mode.value = null;
+    await settle();
+  }
+
   function dismiss(): void {
     if (busy.value) return;
     mode.value = null;
     error.value = null;
   }
 
-  return { mode, busy, error, request, save, keep, discard, cancelRender, dismiss };
+  return { mode, busy, error, request, save, keep, discard, cancelRender, discardTakes, dismiss };
 }

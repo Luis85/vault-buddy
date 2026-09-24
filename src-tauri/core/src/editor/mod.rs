@@ -35,6 +35,7 @@ pub mod relink;
 pub mod render_plan;
 mod render_plan_audio;
 pub mod session;
+pub mod take;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod time;

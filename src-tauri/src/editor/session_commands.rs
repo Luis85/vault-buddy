@@ -410,6 +410,9 @@ fn drop_session(state: &EditorState, session_id: &str) {
     jobs.forget_terminal(session_id);
     drop(jobs);
     super::media_derive::cancel_session_thumbnails(state, session_id);
+    // Its unfinished webcam takes can never be finished now (Task 49): their
+    // `.part` files go; a finished take's `.webm` stays with its asset.
+    state.takes.forget_session(session_id);
 }
 
 /// Close a session. `discardProject` UNPINS the staged capture first and

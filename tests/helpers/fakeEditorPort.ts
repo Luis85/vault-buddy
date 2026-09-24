@@ -38,6 +38,10 @@ export function fakeEditorPort(overrides: Partial<EditorPort> = {}): EditorPort 
     exportSubtitles: unimplemented("exportSubtitles"),
     listVaults: unimplemented("listVaults"),
     openScreenCapture: unimplemented("openScreenCapture"),
+    webcamBegin: unimplemented("webcamBegin"),
+    webcamAppend: unimplemented("webcamAppend"),
+    webcamFinish: unimplemented("webcamFinish"),
+    webcamDiscard: unimplemented("webcamDiscard"),
     ...overrides,
   };
 }

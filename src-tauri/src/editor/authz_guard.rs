@@ -54,6 +54,10 @@ const EXPECTED: &[&str] = &[
     "editor_save_project",
     "editor_save_workspace",
     "editor_start_render",
+    "editor_webcam_append",
+    "editor_webcam_begin",
+    "editor_webcam_discard",
+    "editor_webcam_finish",
 ];
 
 /// One `#[tauri::command]` found in `src`: its name, and what is wrong with

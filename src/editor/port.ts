@@ -42,6 +42,8 @@ import type {
   RenderStarted,
   SaveReceipt,
   SubtitleFormat,
+  TakeDto,
+  TakeStarted,
   VaultChoice,
   Workspace,
 } from "../editorTypes";
@@ -71,6 +73,8 @@ import {
   decodeRenderStarted,
   decodeVaultChoices,
 } from "./decodeRender";
+import { decodeTakeDto, decodeTakeStarted } from "./decodeWebcam";
+import { noteTakeOpen, noteTakeSettled } from "./webcamTakes";
 
 /** Thrown by every `EditorPort` method on a rejected invoke — `error` is
  * the decoded `EditorError`, so a caller reads `err.error.code` rather
@@ -214,6 +218,29 @@ export interface EditorPort {
   /** `open_screen_capture` — open a PUBLISHED file in Obsidian (Rust
    * requires it to be inside the named vault). */
   openScreenCapture(vaultId: string, path: string): Promise<void>;
+  /** `editor_webcam_begin` (Task 49) — starts a take in the project's own
+   * `takes\`; refused (`deviceUnavailable`) while a screen or audio
+   * recording runs. The take is recorded as OPEN (`webcamTakes.ts`). */
+  webcamBegin(sessionId: string, mimeType: string): Promise<TakeStarted>;
+  /** `editor_webcam_append` — one `MediaRecorder` chunk (≤ 1 MiB), sent as
+   * a RAW invoke body, never JSON, numbered from 0. Callers send them one
+   * at a time, in order: a gap fails the take. */
+  webcamAppend(sessionId: string, takeId: string, seq: number, bytes: Uint8Array): Promise<void>;
+  /** `editor_webcam_finish` — `lastSeq` is the last chunk sent. The take
+   * becomes its own asset; `encoderUnavailable` (no ffmpeg) still KEPT and
+   * registered it, naming it in `retainedAssetIds`. */
+  webcamFinish(sessionId: string, takeId: string, lastSeq: number): Promise<TakeDto>;
+  /** `editor_webcam_discard` — removes the take's own files; refused while
+   * a clip plays it. */
+  webcamDiscard(sessionId: string, takeId: string): Promise<void>;
+}
+
+/** A finish refusal after which the take is no longer open: kept raw and
+ * registered (`encoderUnavailable`, A09), or its session is gone (and the
+ * session's close removed the take's `.part`). Any other refusal leaves
+ * the `.part` to finish again or discard. */
+function takeIsGone(error: EditorError): boolean {
+  return error.code === "encoderUnavailable" || error.code === "sessionGone";
 }
 
 /** The per-job Channel (Tauri's ordered, subscriber-scoped delivery) —
@@ -333,6 +360,41 @@ export function createTauriEditorPort(): EditorPort {
     },
     async openScreenCapture(vaultId, path) {
       await call("open_screen_capture", { id: vaultId, path }, () => undefined);
+    },
+    async webcamBegin(sessionId, mimeType) {
+      const started = await call("editor_webcam_begin", { sessionId, mimeType }, decodeTakeStarted);
+      noteTakeOpen(sessionId, started.takeId);
+      return started;
+    },
+    async webcamAppend(sessionId, takeId, seq, bytes) {
+      // The chunk IS the body (a raw invoke, R10) — never wrapped in an
+      // object, which would put every byte through the JSON codec.
+      const headers = { "x-editor-session": sessionId, "x-editor-take": takeId, "x-editor-seq": String(seq) };
+      try {
+        await invoke("editor_webcam_append", bytes, { headers });
+      } catch (e) {
+        throw toPortError(e);
+      }
+    },
+    async webcamFinish(sessionId, takeId, lastSeq) {
+      try {
+        const take = await call("editor_webcam_finish", { sessionId, takeId, lastSeq }, decodeTakeDto);
+        noteTakeSettled(takeId);
+        return take;
+      } catch (e) {
+        // `call` already threw an `EditorPortError`.
+        if (e instanceof EditorPortError && takeIsGone(e.error)) noteTakeSettled(takeId);
+        throw e;
+      }
+    },
+    async webcamDiscard(sessionId, takeId) {
+      try {
+        await call("editor_webcam_discard", { sessionId, takeId }, () => undefined);
+        noteTakeSettled(takeId);
+      } catch (e) {
+        if (e instanceof EditorPortError && e.error.code === "sessionGone") noteTakeSettled(takeId);
+        throw e;
+      }
     },
   };
 }

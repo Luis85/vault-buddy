@@ -31,6 +31,7 @@ import CloseGuardDialog from "../src/components/editor/dialogs/CloseGuardDialog.
 import { decodeJobRecords } from "../src/editor/decode";
 import type { EditorPort } from "../src/editor/port";
 import { EditorPortError } from "../src/editor/port";
+import { noteTakeOpen, noteTakeSettled, openWebcamTakes } from "../src/editor/webcamTakes";
 import type { EditorOpenResult, EditorSnapshot, JobRecordDto } from "../src/editorTypes";
 import EditorRoot from "../src/roots/EditorRoot.vue";
 import { useEditorProjectStore } from "../src/stores/editorProject";
@@ -175,6 +176,35 @@ describe("CloseGuardDialog", () => {
     // Still dirty, so the unsaved-changes choice follows.
     expect(hideWindow).not.toHaveBeenCalled();
     expect(w.findAll("button").map((b) => b.text())).toContain("Keep for later");
+  });
+
+  // Task 49: a take still recording (begun, never finished) exists only as
+  // a `.part` the closing session would lose — the guard says so first,
+  // and "Discard the take" discards it natively before the usual rule.
+  it("an unsaved webcam take asks before closing", async () => {
+    noteTakeOpen("ses-7", "take-1");
+    const webcamDiscard = vi.fn(async (_sessionId: string, takeId: string) => {
+      noteTakeSettled(takeId);
+    });
+    const { w, hideWindow } = await setup({ revision: 4, persisted: 4, overrides: { webcamDiscard } });
+    expect(w.get('[data-testid="close-guard"]').text()).toContain("You have an unsaved webcam take");
+    expect(hideWindow).not.toHaveBeenCalled();
+    await button(w, "Discard the take").trigger("click");
+    await flushPromises();
+    expect(webcamDiscard).toHaveBeenCalledWith("ses-7", "take-1");
+    expect(hideWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it("Cancel on an unsaved take keeps the take and the editor", async () => {
+    noteTakeOpen("ses-7", "take-2");
+    const webcamDiscard = vi.fn(async () => {});
+    const { w, hideWindow } = await setup({ revision: 4, persisted: 4, overrides: { webcamDiscard } });
+    await button(w, "Cancel").trigger("click");
+    await flushPromises();
+    expect(webcamDiscard).not.toHaveBeenCalled();
+    expect(hideWindow).not.toHaveBeenCalled();
+    expect(openWebcamTakes("ses-7")).toEqual(["take-2"]);
+    noteTakeSettled("take-2");
   });
 
   it("Keep for later hides without closing the session", async () => {

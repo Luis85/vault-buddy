@@ -38,6 +38,7 @@ pub mod save_commands;
 pub mod session_commands;
 pub mod store_io;
 pub mod subtitle_commands;
+pub mod webcam_commands;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -115,6 +116,10 @@ use vault_buddy_core::editor::EditorSession;
 /// state (`recovery::JournalQueue`) — a leaf lock, taken only to schedule,
 /// take or forget one entry. Every journal WRITE runs under the session's
 /// save lock instead (`recovery.rs`' module doc).
+///
+/// `takes` (Task 49) is every webcam take begun and not yet discarded
+/// (`webcam_commands::TakeRegistry`) — a leaf lock around per-take slots
+/// whose own lock order is in `webcam_commands.rs`' module doc.
 #[derive(Default)]
 pub struct EditorState {
     pub open: Mutex<()>,
@@ -126,4 +131,5 @@ pub struct EditorState {
     pub caption_imports: Mutex<HashSet<String>>,
     pub relinks: Mutex<HashSet<String>>,
     pub journal: recovery::JournalQueue,
+    pub takes: webcam_commands::TakeRegistry,
 }

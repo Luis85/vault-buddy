@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createListenerScope } from "../src/editor/listenerScope";
 import { createTauriEditorPort, EditorPortError } from "../src/editor/port";
+import { openWebcamTakes } from "../src/editor/webcamTakes";
 import type { EditorCommand, ExecuteRequest } from "../src/editorTypes";
 
 const SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src");
@@ -397,6 +398,104 @@ describe("EditorPort", () => {
       { cmd: "editor_cancel_job", args: { sessionId: "ses-1", jobId: "job-1" } },
       { cmd: "editor_get_jobs", args: { sessionId: "ses-1" } },
     ]);
+  });
+
+  // Task 49 (R10): a webcam chunk is a RAW invoke body — never a JSON array
+  // of byte values — addressed by three headers (`webcam_commands.rs`'
+  // `HEADER_SESSION`/`HEADER_TAKE`/`HEADER_SEQ`); the other three calls are
+  // ordinary camelCased invokes, their replies held to the literals
+  // `webcam_commands_tests.rs` pins.
+  it("webcam takes: append sends the bytes RAW with the three headers; the rest decode Rust's literals", async () => {
+    const calls: { cmd: string; args: unknown }[] = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "editor_webcam_begin") return { takeId: "take-abc" };
+      if (cmd === "editor_webcam_finish") {
+        return { takeId: "take-abc", assetId: "take-abc", durationMs: 4200, width: 640, height: 360, hasAudio: true };
+      }
+      if (cmd === "editor_webcam_append" || cmd === "editor_webcam_discard") return null;
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (...a: unknown[]) => unknown } })
+      .__TAURI_INTERNALS__;
+    const spy = vi.spyOn(internals, "invoke");
+    const port = createTauriEditorPort();
+
+    await expect(port.webcamBegin("ses-1", "video/webm;codecs=vp9,opus")).resolves.toEqual({ takeId: "take-abc" });
+    const bytes = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]);
+    await port.webcamAppend("ses-1", "take-abc", 7, bytes);
+    await expect(port.webcamFinish("ses-1", "take-abc", 7)).resolves.toEqual({
+      takeId: "take-abc",
+      assetId: "take-abc",
+      durationMs: 4200,
+      width: 640,
+      height: 360,
+      hasAudio: true,
+    });
+    await port.webcamDiscard("ses-1", "take-abc");
+
+    const append = spy.mock.calls.find((c) => c[0] === "editor_webcam_append");
+    expect(append?.[1]).toBe(bytes);
+    expect(append?.[2]).toEqual({
+      headers: { "x-editor-session": "ses-1", "x-editor-take": "take-abc", "x-editor-seq": "7" },
+    });
+    expect(calls.filter((c) => c.cmd !== "editor_webcam_append")).toEqual([
+      { cmd: "editor_webcam_begin", args: { sessionId: "ses-1", mimeType: "video/webm;codecs=vp9,opus" } },
+      { cmd: "editor_webcam_finish", args: { sessionId: "ses-1", takeId: "take-abc", lastSeq: 7 } },
+      { cmd: "editor_webcam_discard", args: { sessionId: "ses-1", takeId: "take-abc" } },
+    ]);
+  });
+
+  it("a take without a picture or a length is not a TakeDto", async () => {
+    const reply = { takeId: "take-abc", assetId: "take-abc", durationMs: 4200, width: 640, height: 360, hasAudio: true };
+    for (const bad of [{ ...reply, width: 0 }, { ...reply, height: undefined }, { ...reply, durationMs: -1 }]) {
+      mockIPC(() => bad);
+      await expect(createTauriEditorPort().webcamFinish("ses-1", "take-abc", 0)).rejects.toMatchObject({
+        error: { code: "internal" },
+      });
+    }
+  });
+
+  // The close guard reads which takes are still open from the port's own
+  // record: begun, not yet finished or discarded. A finish that kept the
+  // raw take (`encoderUnavailable`) landed it too; any other refusal keeps
+  // the take open (its `.part` is still there to finish or discard).
+  it("tracks the takes still open, by session", async () => {
+    let finish: () => unknown = () => ({});
+    let nextTake = 1;
+    mockIPC((cmd) => {
+      if (cmd === "editor_webcam_begin") return { takeId: `take-${nextTake++}` };
+      if (cmd === "editor_webcam_finish") return finish();
+      return null;
+    });
+    const port = createTauriEditorPort();
+    await port.webcamBegin("ses-1", "video/webm");
+    await port.webcamBegin("ses-1", "video/webm");
+    await port.webcamBegin("ses-2", "video/webm");
+    expect(openWebcamTakes("ses-1")).toEqual(["take-1", "take-2"]);
+
+    finish = () => {
+      throw { code: "invalidRequest", message: "wrong last chunk", retryable: false, operationId: "op-1" };
+    };
+    await expect(port.webcamFinish("ses-1", "take-1", 3)).rejects.toBeInstanceOf(EditorPortError);
+    expect(openWebcamTakes("ses-1")).toEqual(["take-1", "take-2"]);
+
+    finish = () => {
+      throw {
+        code: "encoderUnavailable",
+        message: "kept as recorded",
+        retryable: false,
+        operationId: "op-2",
+        retainedAssetIds: ["take-1"],
+      };
+    };
+    await expect(port.webcamFinish("ses-1", "take-1", 2)).rejects.toMatchObject({
+      error: { code: "encoderUnavailable", retainedAssetIds: ["take-1"] },
+    });
+    await port.webcamDiscard("ses-1", "take-2");
+    expect(openWebcamTakes("ses-1")).toEqual([]);
+    expect(openWebcamTakes("ses-2")).toEqual(["take-3"]);
+    await port.webcamDiscard("ses-2", "take-3");
   });
 
   it("converts a rejected invoke into EditorPortError", async () => {

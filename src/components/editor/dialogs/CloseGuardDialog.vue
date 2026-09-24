@@ -58,6 +58,31 @@ defineExpose({ request: guard.request });
           </AppButton>
         </div>
       </template>
+      <template v-else-if="mode === 'take'">
+        <h2 class="text-sm font-semibold text-fg">
+          Unsaved webcam take
+        </h2>
+        <p class="text-sm text-fg-secondary">
+          You have an unsaved webcam take. Closing now loses it — go back to finish
+          it, or discard it and close.
+        </p>
+        <div class="flex flex-wrap justify-end gap-2">
+          <AppButton
+            variant="ghost"
+            :disabled="busy"
+            @click="guard.dismiss"
+          >
+            Cancel
+          </AppButton>
+          <AppButton
+            variant="danger"
+            :disabled="busy"
+            @click="guard.discardTakes"
+          >
+            Discard the take
+          </AppButton>
+        </div>
+      </template>
       <template v-else>
         <h2 class="text-sm font-semibold text-fg">
           Unsaved changes

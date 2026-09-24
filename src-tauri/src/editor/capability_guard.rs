@@ -59,8 +59,8 @@ use std::path::{Path, PathBuf};
 use crate::structural_scan::code_only;
 
 /// The `editor_*` session, save/list/reopen, workspace, media and job commands —
-/// twenty-five as of Task 48 (`editor_publish_product`,
-/// `editor_export_subtitles`). Add a new one here in the same commit that adds it to
+/// twenty-nine as of Task 49 (`editor_webcam_begin`/`_append`/`_finish`/
+/// `_discard`). Add a new one here in the same commit that adds it to
 /// `generate_handler!` (`lib.rs`), `build.rs`'s `ALL_COMMANDS`, and
 /// `capabilities/editor.json`'s `permissions` — never to
 /// `capabilities/default.json`.
@@ -90,6 +90,10 @@ const EXPECTED_EDITOR: &[&str] = &[
     "editor_save_project",
     "editor_save_workspace",
     "editor_start_render",
+    "editor_webcam_append",
+    "editor_webcam_begin",
+    "editor_webcam_discard",
+    "editor_webcam_finish",
 ];
 
 fn manifest_dir() -> PathBuf {

@@ -548,3 +548,4 @@ export type { EditorCommand } from "./editor/editorCommandTypes";
 // The render/product wire types (Task 46), split out for the same cap.
 export type { ProductDto, PublishDestination, PublishReceipt, RenderQuality } from "./editor/editorRenderTypes";
 export type { RenderRange, RenderRequest, RenderStarted, SubtitleFormat, VaultChoice } from "./editor/editorRenderTypes";
+export type { TakeDto, TakeStarted } from "./editor/editorTakeTypes";
