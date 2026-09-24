@@ -53,14 +53,29 @@ use video_graph::{build_video_graph_with_hooks, file_input_count};
 /// the shell. The shell's `ffmpeg::probe_capabilities` owns the process
 /// I/O and only calls `parse_filters_output` / `with_encoders_output`.
 /// A failed probe is an EMPTY set, which refuses a graph render naming the
-/// first filter it lacks -- reported, never guessed.
+/// first filter it lacks -- reported, never guessed. A listing the shell
+/// knows was cut short (it filled the capture cap) is marked INCOMPLETE:
+/// a filter it does not show is then unknown, never missing (fix round 1).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FfmpegCapabilities {
     filters: BTreeSet<String>,
     encoders: BTreeSet<String>,
+    filters_incomplete: bool,
 }
 
 impl FfmpegCapabilities {
+    /// The filter listing was cut short: `lacks_filter` stops answering yes.
+    pub fn with_filters_incomplete(mut self) -> Self {
+        self.filters_incomplete = true;
+        self
+    }
+
+    /// True only when a COMPLETE listing does not show `name` -- what the
+    /// render's refusal keys on. `has_filter` is the plain membership.
+    pub fn lacks_filter(&self, name: &str) -> bool {
+        !self.filters_incomplete && !self.filters.contains(name)
+    }
+
     /// These capabilities plus the encoders `ffmpeg -hide_banner -encoders`
     /// printed (`text`), read by the same line rule as the filters.
     pub fn with_encoders_output(mut self, text: &str) -> Self {
@@ -82,6 +97,7 @@ pub fn parse_filters_output(text: &str) -> FfmpegCapabilities {
     FfmpegCapabilities {
         filters: listed_names(text).collect(),
         encoders: BTreeSet::new(),
+        filters_incomplete: false,
     }
 }
 

@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **25 rows** today (T1–T25), of which **0** carry a result. An
+This file carries **26 rows** today (T1–T26), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -273,7 +273,8 @@ with the fonts libass happens to find, and with libx264. What no automated
 test can reach: a real fragmented-MP4 screen capture from the capture sink,
 the fonts libass resolves on a real Windows install, and a hardware or
 Media Foundation H.264 encoder. The brief called these rows "T8–T10"; those
-numbers were taken, so they are the next free ones. **They are runnable once
+numbers were taken, so they are the next free ones (T26 was added by the
+fix round, for the untouched-capture remux). **They are runnable once
 the render job and its Render control exist (Task 46 onward)**; until then
 leave the Result empty.
 
@@ -281,4 +282,5 @@ leave the Result empty.
 | --- | --- | --- | --- |
 | T23 | **Render a real staged screen capture with cues** | Record a 20–30 s screen capture of a window with visible motion, stop it, open it in the editor. Add a text cue (a few words), an arrow and a 2× zoom somewhere in the middle, plus one burned-in caption. Render the whole project. **Record**: whether the render finishes and the product plays in the Windows player AND in Obsidian's preview; the product's duration (file properties) against the editor header's; whether the first second is picture (not black or frozen — the capture is a fragmented MP4, which no automated test renders); and, at each cue's time, whether the cue is drawn where the preview drew it and the zoom scales the cue with the picture while the caption stays unzoomed. | |
 | T24 | **libass finds a font on a real Windows install** | With the product from T23 open, look at the text cue, the caption and (if one exists) a title card's text. **Record**: whether every text appears at all, and whether it is Segoe UI (compare the lowercase `g`/`y` with the editor preview, which uses Segoe UI) or a fallback face; and whether `vault-buddy.log` or the render's failure text mentions `fontselect` or a missing font. The render passes no `fontsdir` yet, so this is libass's own font discovery on Windows. | |
-| T25 | **A non-libx264 encoder and a build missing a filter** | In Buddy settings → Integrations → ffmpeg, note the reported H.264 encoder. Point the ffmpeg path at a build whose encoder is `h264_mf`, `h264_nvenc`, `h264_qsv` or `h264_amf` (e.g. an LGPL "essentials"/"shared" build without libx264) and Recheck. (a) Render a project with a dissolve and a zoom. **Record**: the encoder the settings card shows; whether the render is refused BEFORE it starts with a message naming the missing filter(s) and "4.3" (an LGPL build lacks `perspective`), or runs; if it runs, whether the product plays and its duration matches. (b) Render a plain trimmed clip (no zoom, no colour grade, no rounded/circle frame, no cue) with the same build. **Record**: whether it renders with the hardware/MF encoder and plays. | |
+| T25 | **A non-libx264 encoder and a build missing a filter** | In Buddy settings → Integrations → ffmpeg, note the reported H.264 encoder. Point the ffmpeg path at a build whose encoder is `h264_mf`, `h264_nvenc`, `h264_qsv` or `h264_amf` (e.g. an LGPL "essentials"/"shared" build without libx264) and Recheck. (a) Render a project with a dissolve and a zoom. **Record**: the encoder the settings card shows; whether the render is refused BEFORE it starts with a message naming each missing filter and the feature that needs it (the zoom, a dissolve, ...), with "4.3" only for `xfade`, or runs; write down WHICH filters the build lacked (this is the only place that gets measured); if it runs, whether the product plays and its duration matches. (b) Render a plain trimmed clip (no zoom, no colour grade, no rounded/circle frame, no cue) with the same build. **Record**: whether it renders with the hardware/MF encoder and plays. | |
+| T26 | **Render an UNTOUCHED real staged capture (the R1 remux)** | Record a 20–60 s screen capture WITH audio (a microphone or system sound) and include a few seconds of a completely still screen near the end (the still-screen heartbeat, GAP-112, and the unclocked audio, GAP-113, are what move the container's length away from the sidecar's). Open it in the editor and render it WITHOUT any edit. **Record**: the sidecar's `durationMs` (`%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures\<base>.json`) and the staged `.mp4`'s own length (file properties, or `ffprobe -v error -show_entries format=duration -of csv=p=0 <file>`); whether the render finishes and is kept (not refused as "the render is X ms long where Y ms were planned"); that it was fast (a stream copy, seconds not minutes); and the product's length against the staged `.mp4`'s. | |

@@ -252,7 +252,7 @@ pub(crate) const DRAIN_GRACE: Duration = Duration::from_secs(2);
 /// the first version line or a 500-char stderr slice, so 64 KiB is ample;
 /// it exists to bound memory against a child that floods the pipe for the whole
 /// timeout window. Excess is drained but discarded.
-const CAPTURE_CAP: usize = 64 * 1024;
+pub(crate) const CAPTURE_CAP: usize = 64 * 1024;
 
 /// Spawn `cmd`, wait with a wall-clock kill at `timeout`, and return
 /// `(success, captured)`: `success` is true on a zero-exit, false on

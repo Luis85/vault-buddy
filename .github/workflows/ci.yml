@@ -87,8 +87,9 @@ jobs:
       # end and decoded back -- layering, mixing, fades, a dissolve, a burned
       # cue, a range, speed, the remux) run under the `cargo test -p
       # vault_buddy_screen` step below, and skip the same visible way. Ubuntu's
-      # packaged ffmpeg is a GPL build with libass, so the render's GPL-only
-      # filters (`perspective`, `eq`, `geq`) and `ass` are present.
+      # packaged ffmpeg is a full (GPL, libass) build, so every filter the
+      # render uses -- `perspective`, `eq`, `geq` and `ass` among them -- is
+      # present and nothing is refused.
       #
       # Installed EXPLICITLY rather than relying on the runner image happening
       # to carry it: those tests skip when ffmpeg is absent, so an image that

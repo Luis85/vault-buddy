@@ -21,192 +21,23 @@
 //!
 //! Skips VISIBLY without ffmpeg/ffprobe (the `export_roundtrip.rs` rule):
 //! a silent skip is indistinguishable from a pass. CI's `rust-core` job
-//! installs ffmpeg so these run there.
+//! installs ffmpeg so these run there. The tools, the synthesized inputs
+//! and the decoders live in `render_support/` (the 800-line cap).
+
+mod render_support;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::atomic::AtomicBool;
 
+use render_support::*;
 use serde_json::{json, Value};
-use tempfile::TempDir;
 use vault_buddy_core::editor::model::Project;
 use vault_buddy_core::editor::render_plan::{plan, PlanSource, RenderPlan};
 use vault_buddy_core::screen_capture_config::ScreenQuality;
 use vault_buddy_screen::ffmpeg_args::EncodeSettings;
 use vault_buddy_screen::render::run::{render, RenderOutcome, RenderRequestNative};
-use vault_buddy_screen::render::{parse_filters_output, FfmpegCapabilities};
 use vault_buddy_screen::ScreenError;
-
-const W: u32 = 1280;
-const H: u32 = 720;
-const FPS: u32 = 30;
-/// Every synthesized input is this long.
-const INPUT_MS: u64 = 4_000;
-/// The brief's duration tolerance for a range render.
-const DURATION_TOLERANCE_MS: i64 = 40;
-/// A band whose RMS is above this carries its tone; the other band of a
-/// single-tone fixture measures about -60 dB (checked in test 3's control).
-const BAND_PRESENT_DB: f64 = -40.0;
-
-fn announce(message: &str) {
-    use std::io::Write as _;
-    let _ = writeln!(std::io::stderr(), "{message}");
-}
-
-fn tool_on_path(name: &str) -> Option<PathBuf> {
-    let exe = if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    };
-    std::env::split_paths(&std::env::var_os("PATH")?)
-        .map(|dir| dir.join(&exe))
-        .find(|candidate| candidate.is_file())
-}
-
-/// Everything one round trip needs: the tools, what the installed ffmpeg
-/// can do, and a scratch directory that doubles as the render's job dir.
-struct Fixture {
-    ffmpeg: PathBuf,
-    ffprobe: PathBuf,
-    caps: FfmpegCapabilities,
-    dir: TempDir,
-}
-
-macro_rules! fixture_or_skip {
-    () => {
-        match fixture() {
-            Some(fx) => fx,
-            None => {
-                let thread = std::thread::current();
-                let who = thread.name().unwrap_or(module_path!()).to_string();
-                announce(&format!(
-                    "SKIPPED {who}: no ffmpeg/ffprobe on PATH, so this render round trip \
-                     is UNPROVEN in this run. Install ffmpeg (CI does) to execute it."
-                ));
-                return;
-            }
-        }
-    };
-}
-
-fn fixture() -> Option<Fixture> {
-    let ffmpeg = tool_on_path("ffmpeg")?;
-    let ffprobe = tool_on_path("ffprobe")?;
-    let filters =
-        String::from_utf8_lossy(&tool_stdout(&ffmpeg, &["-hide_banner", "-filters"])).into_owned();
-    let encoders =
-        String::from_utf8_lossy(&tool_stdout(&ffmpeg, &["-hide_banner", "-encoders"])).into_owned();
-    let caps = parse_filters_output(&filters).with_encoders_output(&encoders);
-    let dir = tempfile::tempdir().expect("tempdir");
-    Some(Fixture {
-        ffmpeg,
-        ffprobe,
-        caps,
-        dir,
-    })
-}
-
-fn tool_stdout<S: AsRef<std::ffi::OsStr>>(tool: &Path, args: &[S]) -> Vec<u8> {
-    let out = Command::new(tool)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .expect("the tool ran");
-    assert!(
-        out.status.success(),
-        "{} failed: {}",
-        tool.display(),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    out.stdout
-}
-
-/// ffmpeg's stderr at `-v info` (where `astats` reports).
-fn ffmpeg_stderr(ffmpeg: &Path, args: &[String]) -> String {
-    let out = Command::new(ffmpeg)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .expect("ffmpeg ran");
-    assert!(
-        out.status.success(),
-        "ffmpeg {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-fn strings(parts: &[&str]) -> Vec<String> {
-    parts.iter().map(|p| (*p).to_string()).collect()
-}
-
-// ---------------------------------------------------------------- inputs
-
-/// Encodes the lavfi `sources` (each `-f lavfi -i <spec>`) to `name`.
-fn synthesize(fx: &Fixture, name: &str, sources: &[&str], codecs: &[&str]) -> PathBuf {
-    let path = fx.dir.path().join(name);
-    let mut args = strings(&["-v", "error"]);
-    for spec in sources {
-        args.extend(strings(&["-f", "lavfi", "-i", spec]));
-    }
-    args.extend(strings(codecs));
-    args.push("-y".into());
-    args.push(path.to_string_lossy().into_owned());
-    tool_stdout(&fx.ffmpeg, &args);
-    path
-}
-
-const VIDEO: [&str; 4] = ["-c:v", "libx264", "-pix_fmt", "yuv420p"];
-
-/// A: `testsrc2` 1280x720 with a 440 Hz tone.
-fn input_a(fx: &Fixture) -> PathBuf {
-    let mut codecs = VIDEO.to_vec();
-    codecs.extend(["-c:a", "aac"]);
-    synthesize(
-        fx,
-        "a.mp4",
-        &[
-            "testsrc2=s=1280x720:r=30:d=4",
-            "sine=frequency=440:sample_rate=48000:duration=4",
-        ],
-        &codecs,
-    )
-}
-
-/// B: solid red 640x360, no audio.
-fn input_b(fx: &Fixture) -> PathBuf {
-    synthesize(fx, "b.mp4", &["color=c=red:s=640x360:r=30:d=4"], &VIDEO)
-}
-
-/// C: a 1000 Hz tone, no picture.
-fn input_c(fx: &Fixture) -> PathBuf {
-    synthesize(
-        fx,
-        "c.m4a",
-        &["sine=frequency=1000:sample_rate=48000:duration=4"],
-        &["-c:a", "aac"],
-    )
-}
-
-/// D: 2 s of blue, then 2 s of green (lavfi `concat`).
-fn input_d(fx: &Fixture) -> PathBuf {
-    synthesize(
-        fx,
-        "d.mp4",
-        &[
-            "color=c=blue:s=1280x720:r=30:d=2[x];color=c=green:s=1280x720:r=30:d=2[y];\
-           [x][y]concat=n=2:v=1:a=0",
-        ],
-        &VIDEO,
-    )
-}
-
-/// E: plain black, for the text cue.
-fn input_e(fx: &Fixture) -> PathBuf {
-    synthesize(fx, "e.mp4", &["color=c=black:s=1280x720:r=30:d=4"], &VIDEO)
-}
 
 // ---------------------------------------------------------------- projects
 
@@ -340,141 +171,6 @@ fn try_render(
     (plan, result, dest)
 }
 
-// ---------------------------------------------------------------- reading
-
-type Rgb = (i32, i32, i32);
-
-/// The whole RGB frame of `path` (at `w`x`h`) at `at_ms`.
-fn frame_at(fx: &Fixture, path: &Path, at_ms: u64, (w, h): (u32, u32)) -> Vec<u8> {
-    let mut args = strings(&["-v", "error", "-ss"]);
-    args.push(format!("{}.{:03}", at_ms / 1000, at_ms % 1000));
-    args.push("-i".into());
-    args.push(path.to_string_lossy().into_owned());
-    args.extend(strings(&[
-        "-frames:v",
-        "1",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgb24",
-        "-",
-    ]));
-    let frame = tool_stdout(&fx.ffmpeg, &args);
-    assert_eq!(
-        frame.len(),
-        (w * h * 3) as usize,
-        "{} is not {w}x{h} at {at_ms} ms",
-        path.display()
-    );
-    frame
-}
-
-fn canvas_frame(fx: &Fixture, path: &Path, at_ms: u64) -> Vec<u8> {
-    frame_at(fx, path, at_ms, (W, H))
-}
-
-fn pixel(frame: &[u8], x: u32, y: u32) -> Rgb {
-    let i = ((y * W + x) * 3) as usize;
-    (frame[i] as i32, frame[i + 1] as i32, frame[i + 2] as i32)
-}
-
-fn is_red(p: Rgb) -> bool {
-    p.0 > 200 && p.1 < 60 && p.2 < 60
-}
-
-fn is_green(p: Rgb) -> bool {
-    p.0 < 60 && p.1 > 100 && p.2 < 60
-}
-
-fn is_blue(p: Rgb) -> bool {
-    p.0 < 60 && p.1 < 60 && p.2 > 200
-}
-
-/// Mean of each channel over the rectangle `[x0,x1) x [y0,y1)`.
-fn region_mean(frame: &[u8], (x0, y0, x1, y1): (u32, u32, u32, u32)) -> (f64, f64, f64) {
-    let (mut r, mut g, mut b, mut n) = (0.0, 0.0, 0.0, 0.0);
-    for y in y0..y1 {
-        for x in x0..x1 {
-            let p = pixel(frame, x, y);
-            r += f64::from(p.0);
-            g += f64::from(p.1);
-            b += f64::from(p.2);
-            n += 1.0;
-        }
-    }
-    (r / n, g / n, b / n)
-}
-
-/// Mean absolute per-byte difference of two equal-sized frames.
-fn frame_distance(a: &[u8], b: &[u8]) -> f64 {
-    assert_eq!(a.len(), b.len());
-    let total: u64 = a
-        .iter()
-        .zip(b)
-        .map(|(x, y)| u64::from(x.abs_diff(*y)))
-        .sum();
-    total as f64 / a.len() as f64
-}
-
-/// `astats`' overall RMS level (dB) of `path`'s audio over `[start, start +
-/// len)` ms, through `bandpass` at `band` Hz (50 Hz wide) when given.
-fn rms_db(fx: &Fixture, path: &Path, start_ms: u64, len_ms: u64, band: Option<u32>) -> f64 {
-    let mut args = strings(&["-hide_banner", "-v", "info", "-ss"]);
-    args.push(format!("{:.3}", start_ms as f64 / 1_000.0));
-    args.push("-t".into());
-    args.push(format!("{:.3}", len_ms as f64 / 1_000.0));
-    args.push("-i".into());
-    args.push(path.to_string_lossy().into_owned());
-    args.push("-af".into());
-    args.push(match band {
-        Some(f) => format!("bandpass=f={f}:w=50,astats"),
-        None => "astats".into(),
-    });
-    args.extend(strings(&["-f", "null", "-"]));
-    let stderr = ffmpeg_stderr(&fx.ffmpeg, &args);
-    // The LAST "RMS level dB" line is astats' "Overall" section.
-    stderr
-        .lines()
-        .rev()
-        .find_map(|l| l.split_once("RMS level dB: ").map(|(_, v)| v.trim()))
-        .map(|v| {
-            if v == "-inf" {
-                f64::NEG_INFINITY
-            } else {
-                v.parse().expect("an RMS level")
-            }
-        })
-        .unwrap_or_else(|| panic!("astats reported no RMS level: {stderr}"))
-}
-
-fn db_to_linear(db: f64) -> f64 {
-    10f64.powf(db / 20.0)
-}
-
-/// The container duration of `path` in ms, read independently of the
-/// render's own verification.
-fn probe_duration_ms(fx: &Fixture, path: &Path) -> i64 {
-    let mut args = strings(&[
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "csv=p=0",
-    ]);
-    args.push(path.to_string_lossy().into_owned());
-    let text = String::from_utf8_lossy(&tool_stdout(&fx.ffprobe, &args)).into_owned();
-    let seconds: f64 = text.trim().parse().expect("a duration");
-    (seconds * 1_000.0).round() as i64
-}
-
-fn assert_duration_near(got_ms: i64, want_ms: i64, what: &str) {
-    assert!(
-        (got_ms - want_ms).abs() <= DURATION_TOLERANCE_MS,
-        "{what}: the output is {got_ms} ms, want {want_ms} +/- {DURATION_TOLERANCE_MS} ms"
-    );
-}
-
 // ---------------------------------------------------------------- tests
 
 /// A over its whole length on the LOWER track, B as a 0.25 x 0.25 box at
@@ -551,10 +247,17 @@ fn hidden_track_is_absent() {
         None,
     );
     assert_eq!(out.plan.inputs.len(), 1, "the hidden track reads no input");
+    // A's own pixel, not merely "not red": an all-black render (A lost
+    // along with B) is not red either (fix round 1).
     let boxed = pixel(&canvas_frame(&fx, &out.path, 1_000), 1_100, 90);
+    let base = pixel(&frame_at(&fx, &a, 1_000, (W, H)), 1_100, 90);
     assert!(
-        !is_red(boxed),
-        "the hidden layer's box still renders: {boxed:?}"
+        !is_red(base),
+        "the fixture flaw: A itself is red at (1100,90)"
+    );
+    assert!(
+        near(boxed, base),
+        "the hidden layer's box: (1100,90) is {boxed:?}, want A's own {base:?}"
     );
 }
 
@@ -822,6 +525,38 @@ fn identity_render_is_a_remux() {
     let source = probe_duration_ms(&fx, &a);
     assert_duration_near(out.outcome.duration_ms as i64, source, "the remux");
     assert_duration_near(probe_duration_ms(&fx, &out.path), source, "the remux file");
+}
+
+// Fix round 1 (review, Important): a staged capture's asset duration is
+// the SIDECAR's capture-clock figure, and the fMP4 container can be longer
+// or shorter than it by more than a frame + 40 ms (GAP-112's heartbeat,
+// GAP-113's unclocked audio). A stream copy cannot change a file's length,
+// so an untouched remux is checked against the SOURCE container, never the
+// recorded duration -- or the commonest render of all would be refused and
+// its output deleted. Here the project records 3.8 s for a 4 s file.
+#[test]
+fn identity_remux_is_verified_against_the_source_container() {
+    let fx = fixture_or_skip!();
+    let a = input_a(&fx);
+    let recorded = 3_800;
+    let mut short = asset("a", "video");
+    short["duration_ms"] = json!(recorded);
+    let doc = project(
+        vec![short],
+        vec![track("v", "video")],
+        vec![clip("ca", "a", "v", 0, 0, recorded)],
+    );
+    let out = render_project(&fx, doc, &[("a", video_source(0, W, H, true), &a)], None);
+    assert!(out.plan.is_identity(), "the fixture must be R1's identity");
+    assert_eq!(out.plan.duration_ms, recorded);
+    let source = probe_duration_ms(&fx, &a);
+    assert!(
+        (source - recorded as i64).abs() > 74,
+        "the fixture flaw: the container ({source} ms) must differ from the recorded \
+         duration by more than the tolerance"
+    );
+    assert!(out.outcome.remuxed);
+    assert_duration_near(out.outcome.duration_ms as i64, source, "the remux");
 }
 
 // A render ffmpeg finished but nobody could VERIFY is not a product: the

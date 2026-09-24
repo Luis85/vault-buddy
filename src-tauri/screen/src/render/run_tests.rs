@@ -16,8 +16,8 @@ use vault_buddy_core::editor::render_plan::{
 use vault_buddy_core::screen_capture_config::ScreenQuality;
 
 use super::run::{
-    parse_output_probe, render, render_refusal, required_filters, verify_output,
-    write_ass_documents, OutputProbe, RenderRequestNative,
+    expected_duration_ms, parse_output_probe, render, render_refusal, required_filters,
+    verify_output, write_ass_documents, OutputProbe, RenderRequestNative,
 };
 use super::test_support::{audio, card, layer, plan, zoom, FULL, PIP};
 use super::{parse_filters_output, render_args, AssHooks, FfmpegCapabilities};
@@ -286,10 +286,10 @@ fn settings() -> EncodeSettings {
 // Controller ruling (Task 45): the refusal is only as good as the list it
 // checks, and the list is derived from the plan's features -- so every
 // filter the REAL argv of a plan using every feature names must be on it.
-// A graph filter missing from `required_filters` is one an LGPL or old
-// build lacks without the render being refused: it dies inside ffmpeg
-// with text that names none of this (`perspective`, `eq` and `geq` are
-// GPL-only; `xfade` needs 4.3).
+// A graph filter missing from `required_filters` is one a minimal or old
+// build can lack without the render being refused: it dies inside ffmpeg
+// with text that names none of this (`xfade` needs 4.3; `ass` needs
+// libass; builds differ in the rest).
 #[test]
 fn required_filters_cover_every_filter_the_graph_uses() {
     let p = feature_rich_plan();
@@ -395,6 +395,48 @@ fn refusal_names_the_missing_filter() {
     assert!(message.contains("H.264"), "{message}");
     let message = render_refusal(&p, &caps_for(&p), "h264_nvenc").expect("an absent encoder");
     assert!(message.contains("h264_nvenc"), "{message}");
+}
+
+// Fix round 1 (review): the refusal says WHICH feature needs the missing
+// filter, and names the 4.3 floor only for a version-gated filter. A 7.x
+// build missing `perspective` told "install 4.3 or newer" reads it as a
+// version problem it does not have.
+#[test]
+fn refusal_names_the_feature_and_versions_only_a_version_gated_filter() {
+    let p = feature_rich_plan();
+    let message = render_refusal(&p, &without_filter(&p, "perspective"), "libx264")
+        .expect("a missing perspective is refused");
+    assert!(
+        message.contains("zoom") && message.contains("perspective"),
+        "{message}"
+    );
+    assert!(!message.contains("4.3"), "not a version problem: {message}");
+
+    let message = render_refusal(&p, &without_filter(&p, "xfade"), "libx264").expect("xfade");
+    assert!(
+        message.contains("dissolve") && message.contains("4.3"),
+        "{message}"
+    );
+
+    let message = render_refusal(&p, &without_filter(&p, "ass"), "libx264").expect("ass");
+    assert!(message.contains("libass"), "{message}");
+    assert!(!message.contains("4.3"), "{message}");
+}
+
+// Fix round 1: a filter listing the probe knows is INCOMPLETE (it hit the
+// shell's capture cap) never refuses for a filter it could not see; the
+// encoder checks still apply.
+#[test]
+fn an_incomplete_filter_listing_never_reads_as_missing() {
+    let p = feature_rich_plan();
+    let partial = parse_filters_output(" .. overlay  VV->V  x\n")
+        .with_filters_incomplete()
+        .with_encoders_output(" V....D libx264  x\n A....D aac  x\n");
+    assert!(partial.has_filter("overlay"));
+    assert!(!partial.lacks_filter("xfade"));
+    assert_eq!(render_refusal(&p, &partial, "libx264"), None);
+    let message = render_refusal(&p, &partial, "").expect("still no H.264 encoder");
+    assert!(message.contains("H.264"), "{message}");
 }
 
 fn request<'a>(
@@ -534,4 +576,25 @@ fn the_output_is_verified_against_the_plan() {
         ..ok
     };
     assert!(verify_output(&unknown, 2_000, 30, true).is_err());
+}
+
+// Fix round 1 (review, Important): a stream copy cannot change a file's
+// length, so the remux is held to its SOURCE container's duration -- the
+// plan's is a staged capture's sidecar clock and may differ by far more
+// than the tolerance. A graph render is still held to the plan.
+#[test]
+fn a_remux_is_checked_against_its_source_container() {
+    let source = OutputProbe {
+        duration_ms: Some(4_011),
+        video_streams: 1,
+        audio_streams: 1,
+    };
+    assert_eq!(expected_duration_ms(true, 3_800, Some(&source)), 4_011);
+    assert_eq!(expected_duration_ms(false, 3_800, Some(&source)), 3_800);
+    let unknown = OutputProbe {
+        duration_ms: None,
+        ..source
+    };
+    assert_eq!(expected_duration_ms(true, 3_800, Some(&unknown)), 3_800);
+    assert_eq!(expected_duration_ms(true, 3_800, None), 3_800);
 }

@@ -10,15 +10,24 @@
 //! a byte is written, naming the missing filter or encoder -- the
 //! `export_refusal` posture, and what the shell maps to `encoderUnavailable`.
 //! It matters more here than for the export: several filters the graph
-//! uses are build-dependent. `perspective`, `eq` and `geq` are GPL-only in
-//! ffmpeg's own configure (its `*_filter_deps="gpl"` -- read, not measured:
-//! every build on hand is GPL), so an LGPL build lacks them; `ass` needs
-//! libass;
-//! and `xfade` exists only from **ffmpeg 4.3**, which is therefore the
+//! uses are build-dependent. Which filters a minimal or LGPL build leaves
+//! out depends on how it was configured, and that is NOT asserted here:
+//! every build on hand is a full GPL one, and no per-filter licence list
+//! was available locally to check (fix round 1 withdrew an unverified
+//! claim about `geq`, `eq` and `perspective`). `ass` needs libass, and
+//! `xfade` exists only from **ffmpeg 4.3**, which is therefore the
 //! render's version floor. The floor is enforced by this FILTER probe, not
 //! by parsing a version banner: a dissolve on an older build is refused
 //! naming `xfade` and the floor, and a plan without one is not refused for
-//! a filter it never uses.
+//! a filter it never uses. The message names the FEATURE that needs each
+//! missing filter and mentions the floor only for a version-gated one (fix
+//! round 1). A listing the shell knows was cut short is incomplete: a filter
+//! it does not show is unknown, never missing.
+//!
+//! **A remux is verified against its SOURCE** (fix round 1): a stream copy
+//! cannot change a file's length, and the plan's duration for an untouched
+//! staged capture is the sidecar's capture clock, which the fMP4 container
+//! can miss by more than the tolerance -- `expected_duration_ms`.
 //!
 //! **`required_filters` is derived from the plan's FEATURES**, not read
 //! back out of the generated graph: the always-present core filters every
@@ -151,8 +160,8 @@ pub fn required_filters(plan: &RenderPlan) -> BTreeSet<&'static str> {
         if matches!(layer.rotation, Rotation::Deg90 | Rotation::Deg270) {
             needs.insert("transpose");
         }
-        // The exact filters `video_layers` emits for these adjustments --
-        // `eq` is GPL-only, so a sepia-only grade must not demand it.
+        // The exact filters `video_layers` emits for these adjustments, so
+        // a sepia-only grade does not demand `eq`, which it never uses.
         for filter in adjustments(layer.adjustments.as_ref()) {
             needs.extend(filter_name(&filter));
         }
@@ -207,16 +216,68 @@ fn surface_filters(needs: &mut BTreeSet<&'static str>, opacity: f64, fades_ms: u
 }
 
 /// `"eq=brightness=..."` -> `"eq"`, as the static name this module lists.
+/// `video_layers::adjustments` emits only these two today; a new filter
+/// there trips the debug assertion (and the coverage test, which uses every
+/// adjustment) instead of silently vanishing from the list (fix round 1).
 fn filter_name(filter: &str) -> Option<&'static str> {
     let name = filter.split('=').next()?;
-    ["eq", "colorchannelmixer"]
+    let known = ["eq", "colorchannelmixer"]
         .into_iter()
-        .find(|known| *known == name)
+        .find(|known| *known == name);
+    debug_assert!(
+        known.is_some(),
+        "video_layers::adjustments emitted {name}, which required_filters does not know"
+    );
+    known
+}
+
+/// What the user is told to install for a missing filter.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Remedy {
+    /// The filter exists only from `MIN_FFMPEG_VERSION`.
+    Version,
+    /// The filter needs libass.
+    Libass,
+    /// Version-independent: some builds leave it out.
+    Build,
+}
+
+/// Which project feature needs `filter`, and what provides it (fix round
+/// 1: a 7.x build missing `perspective` must not be told to upgrade).
+fn feature_needing(filter: &str) -> (&'static str, Remedy) {
+    match filter {
+        "xfade" => ("a dissolve", Remedy::Version),
+        "ass" => (
+            "burned-in text (cues, card text or captions)",
+            Remedy::Libass,
+        ),
+        "perspective" => ("the zoom", Remedy::Build),
+        "eq" | "colorchannelmixer" => ("a colour grade or opacity", Remedy::Build),
+        "geq" => ("a circle or rounded frame", Remedy::Build),
+        "fade" => ("a video fade", Remedy::Build),
+        "transpose" | "hflip" | "vflip" => ("a rotation or flip", Remedy::Build),
+        "atempo" | "asetrate" => ("a speed change", Remedy::Build),
+        "acrossfade" => ("an audio crossfade", Remedy::Build),
+        "afade" => ("an audio fade", Remedy::Build),
+        _ => ("every render", Remedy::Build),
+    }
+}
+
+fn missing_filter_line(filter: &str) -> String {
+    let (feature, remedy) = feature_needing(filter);
+    let provided_by = match remedy {
+        Remedy::Version => format!("ffmpeg {MIN_FFMPEG_VERSION} or newer"),
+        Remedy::Libass => "an ffmpeg build with libass".to_string(),
+        Remedy::Build => "an ffmpeg build that includes it".to_string(),
+    };
+    format!("{feature} needs the \"{filter}\" filter ({provided_by})")
 }
 
 /// Why the installed ffmpeg cannot render `plan`, or `None`. `h264_encoder`
 /// is the probed encoder the render would pass to `-c:v` (empty: none).
-/// An identity plan is a stream copy and is never refused.
+/// An identity plan is a stream copy and is never refused. A filter an
+/// INCOMPLETE listing does not show is unknown and never refused
+/// (`FfmpegCapabilities::lacks_filter`).
 pub fn render_refusal(
     plan: &RenderPlan,
     caps: &FfmpegCapabilities,
@@ -227,16 +288,20 @@ pub fn render_refusal(
     }
     let missing: Vec<String> = required_filters(plan)
         .into_iter()
-        .filter(|f| !caps.has_filter(f))
-        .map(|f| format!("\"{f}\""))
+        .filter(|f| caps.lacks_filter(f))
+        .map(missing_filter_line)
         .collect();
     if !missing.is_empty() {
         return Some(format!(
-            "The installed ffmpeg is missing the {} filter{} this render needs. Install a \
-             full ffmpeg build ({MIN_FFMPEG_VERSION} or newer, with libass for burned-in \
-             text) and render again.",
-            missing.join(", "),
-            if missing.len() == 1 { "" } else { "s" }
+            "The installed ffmpeg cannot render this project: {}. Install an ffmpeg build \
+             that has {}, or remove {}, and render again.",
+            missing.join("; "),
+            if missing.len() == 1 { "it" } else { "them" },
+            if missing.len() == 1 {
+                "that feature"
+            } else {
+                "those features"
+            }
         ));
     }
     if h264_encoder.is_empty() {
@@ -335,6 +400,19 @@ pub fn verify_output(
     Ok(got)
 }
 
+/// The duration an output is held to. A graph render: the plan's. A remux
+/// (a stream copy, which cannot change a file's length): its SOURCE
+/// container's, because the plan's is the asset's RECORDED duration -- for
+/// a staged capture the sidecar's capture clock, which the fMP4 container
+/// can miss by more than a frame + 40 ms (GAP-112's heartbeat, GAP-113's
+/// unclocked audio). Falls back to the plan when the source reports none.
+pub fn expected_duration_ms(remuxed: bool, plan_ms: u64, source: Option<&OutputProbe>) -> u64 {
+    match source.and_then(|s| s.duration_ms) {
+        Some(ms) if remuxed => ms,
+        _ => plan_ms,
+    }
+}
+
 /// Runs ffprobe over the finished render.
 fn probe_output(ffprobe: &Path, path: &Path) -> Result<OutputProbe, ScreenError> {
     let mut command = Command::new(ffprobe);
@@ -416,8 +494,13 @@ pub fn render(
     )?;
     let needs_audio = !remuxed || plan.inputs.iter().any(|i| i.has_audio);
     let verified = probe_output(req.ffprobe, req.dest).and_then(|probe| {
-        verify_output(&probe, plan.duration_ms, plan.canvas.fps, needs_audio)
-            .map_err(ScreenError::Sink)
+        // A stream copy is held to its SOURCE container (fix round 1).
+        let source = match plan.inputs.first().and_then(|i| inputs.get(i.input_index)) {
+            Some(path) if remuxed => Some(probe_output(req.ffprobe, path)?),
+            _ => None,
+        };
+        let expected = expected_duration_ms(remuxed, plan.duration_ms, source.as_ref());
+        verify_output(&probe, expected, plan.canvas.fps, needs_audio).map_err(ScreenError::Sink)
     });
     match verified {
         Ok(duration_ms) => Ok(RenderOutcome {

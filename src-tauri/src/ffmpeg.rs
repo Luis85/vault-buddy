@@ -22,7 +22,9 @@ use std::path::Path;
 use vault_buddy_core::capture_config;
 use vault_buddy_screen::render::{parse_filters_output, FfmpegCapabilities};
 
-use crate::external_tool::{candidates_for, run_capturing, tool_command, Capture, PROBE_TIMEOUT};
+use crate::external_tool::{
+    candidates_for, run_capturing, tool_command, Capture, CAPTURE_CAP, PROBE_TIMEOUT,
+};
 
 /// A resolved ffmpeg toolchain.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -337,10 +339,12 @@ pub(crate) fn resolve_working_ffmpeg() -> Option<FfmpegTools> {
 ///
 /// A listing that fails or times out is logged and read as EMPTY, which
 /// refuses a graph render naming the first filter it lacks: reported, never
-/// guessed. Both listings sit inside `run_capturing`'s 64 KiB capture cap
-/// (measured on 9.0.1: `-filters` 41,986 bytes, `-encoders` 14,713); a
-/// build whose `-filters` outgrew it would lose its alphabetical TAIL --
-/// `xfade` among it -- and be refused for a dissolve it could render.
+/// guessed. `run_capturing` stores at most `CAPTURE_CAP` (64 KiB) and
+/// silently drains the rest; `-filters` measured 41,986 bytes on 9.0.1
+/// (`-encoders` 14,713). A `-filters` listing that FILLS the cap has lost its
+/// alphabetical tail -- `xfade` among it -- so it is logged and marked
+/// incomplete (`capabilities_from_listings`), and a filter it does not show
+/// is then unknown, never missing (fix round 1).
 #[allow(dead_code)] // First production reader: the render job (Task 46).
 pub(crate) fn probe_capabilities(tools: &FfmpegTools) -> FfmpegCapabilities {
     let listing = |flag: &str| {
@@ -358,7 +362,24 @@ pub(crate) fn probe_capabilities(tools: &FfmpegTools) -> FfmpegCapabilities {
             }
         }
     };
-    parse_filters_output(&listing("-filters")).with_encoders_output(&listing("-encoders"))
+    capabilities_from_listings(&listing("-filters"), &listing("-encoders"))
+}
+
+/// The two listings as `FfmpegCapabilities`; a `-filters` text that filled
+/// the capture cap is marked incomplete (see `probe_capabilities`).
+pub(crate) fn capabilities_from_listings(filters: &str, encoders: &str) -> FfmpegCapabilities {
+    let mut caps = parse_filters_output(filters);
+    if filters.len() >= CAPTURE_CAP {
+        log::warn!(
+            "ffmpeg -filters filled the {CAPTURE_CAP}-byte capture cap; filters past it are \
+             treated as unknown, not missing"
+        );
+        caps = caps.with_filters_incomplete();
+    }
+    if encoders.len() >= CAPTURE_CAP {
+        log::warn!("ffmpeg -encoders filled the {CAPTURE_CAP}-byte capture cap");
+    }
+    caps.with_encoders_output(encoders)
 }
 
 /// Ask ffprobe for the facts an export needs about `path`.
@@ -487,7 +508,8 @@ mod tests {
     fn probe_capabilities_reads_the_installed_ffmpeg() {
         let Some(tools) = resolve_working_ffmpeg() else {
             eprintln!(
-                "SKIP probe_capabilities_reads_the_installed_ffmpeg: no ffmpeg resolved,                  so the capability probe is UNPROVEN in this run"
+                "SKIP probe_capabilities_reads_the_installed_ffmpeg: no ffmpeg resolved, \
+                 so the capability probe is UNPROVEN in this run"
             );
             return;
         };
@@ -499,6 +521,29 @@ mod tests {
         if let Some(h264) = &tools.h264_encoder {
             assert!(caps.has_encoder(h264), "the picked {h264} is not listed");
         }
+    }
+
+    // Fix round 1: `run_capturing` stores at most CAPTURE_CAP bytes and
+    // silently drains the rest, so a `-filters` listing that fills the cap
+    // has lost its alphabetical TAIL (`xfade` among it). A filter absent
+    // from such a listing is UNKNOWN, never missing -- read as missing, a
+    // dissolve would be refused on a build that can render it.
+    #[test]
+    fn a_filters_listing_that_fills_the_capture_cap_is_incomplete_not_missing() {
+        let row = " .. overlay            VV->V      Overlay a video source.\n";
+        let full = row.repeat(CAPTURE_CAP / row.len() + 1);
+        let truncated = &full[..CAPTURE_CAP];
+        let caps = capabilities_from_listings(truncated, "");
+        assert!(caps.has_filter("overlay"), "what WAS read is still read");
+        assert!(
+            !caps.lacks_filter("xfade"),
+            "a filter past the cap is unknown, not missing"
+        );
+        let short = capabilities_from_listings(row, "");
+        assert!(
+            short.lacks_filter("xfade"),
+            "a listing under the cap is complete: an absent filter IS missing"
+        );
     }
 
     #[test]

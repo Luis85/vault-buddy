@@ -2404,16 +2404,24 @@ render produces, and it says so nowhere on screen yet. What it does NOT show:
      border.
    - **The render's ffmpeg floor is 4.3, enforced by the filter probe**
      (Task 45, `screen::render::run`). `xfade` (every dissolve) exists only
-     from ffmpeg 4.3, and `perspective` (the zoom), `eq` (a colour grade)
-     and `geq` (a circle/rounded frame) are GPL-only in ffmpeg's configure
-     (read from its `*_filter_deps="gpl"`, not measured: every build on hand
-     is GPL) while `ass` (cues, card text, captions) needs libass -- so an old or
-     LGPL build renders SOME projects and not others. The gate is NOT a
+     from ffmpeg 4.3 and `ass` (cues, card text, captions) needs libass;
+     which of the other filters a minimal or LGPL build leaves out
+     (`perspective` for the zoom, `eq` for a colour grade and `geq` for a
+     circle/rounded frame are the likely ones) depends on its configure and
+     is NOT asserted -- every build on hand is a full GPL one and no
+     per-filter licence list was available to check (fix round 1 withdrew
+     an unverified GPL-only claim). So an old or minimal build renders SOME
+     projects and not others. The gate is NOT a
      version-banner parse: `run::required_filters` derives the filters a
      plan's features use and `run::render_refusal` refuses, before any
-     child exists, naming each missing one and the 4.3 floor (the shell
-     maps it to `encoderUnavailable`); a plan that uses none of them is not
-     refused on an old build. The list is feature-derived, and
+     child exists, naming each missing one with the feature that needs it,
+     and the 4.3 floor only for `xfade` (the shell maps it to
+     `encoderUnavailable`); a plan that uses none of them is not refused on
+     an old build. A `-filters` listing that fills the shell's 64 KiB
+     capture cap is logged and treated as INCOMPLETE -- a filter past the
+     cap is unknown, never refused. An untouched render (the R1 remux) is
+     verified against its SOURCE container's duration, not the recorded
+     one. The list is feature-derived, and
      `run_tests::required_filters_cover_every_filter_the_graph_uses` parses
      the real argv of a plan using every feature to keep it complete -- a
      combination that test does not reach could still emit a filter the
@@ -2422,8 +2430,8 @@ render produces, and it says so nowhere on screen yet. What it does NOT show:
      split-and-reorder, a burned text cue, a range, 2x speed and the R1
      remux) are decoded back in `screen/tests/render_roundtrip.rs`; libass
      font resolution, a real staged fMP4 and hardware encoders are Windows
-     checklist rows T23-T25. The render has no production caller until the
-     render job (Task 46).
+     checklist rows T23-T25, and an untouched real capture's remux is T26.
+     The render has no production caller until the render job (Task 46).
 
 **Why accepted now:** the plan's P04 lands the preview surface before the
 effect/caption/transition/cards tasks that give those features a preview at
