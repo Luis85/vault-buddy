@@ -2373,9 +2373,30 @@ render produces, and it says so nowhere on screen yet. What it does NOT show:
      `enable` skips; a build that numbered from 0 would shift every ramp by
      one frame (33 ms). The warp samples bilinearly between pixels, close to
      the preview's CSS transform but not identical.
-   - **Cards are colour only** until Task 43 draws their text into the
-     pre-zoom ASS hook, and a render maps VIDEO only until Task 44 adds the
-     audio graph -- neither has a production caller yet.
+   - **Cards now draw their text into the pre-zoom ASS hook** (Task 43,
+     `screen::render::ass::build_cue_ass`'s `card_dialogues`), matching the
+     ALREADY-SHIPPED preview's own layout (`src/editor/previewCardDom.ts`,
+     Task 33) after a fix-round-1 review finding that the first draft had
+     NOT checked against it and diverged on two points: title and
+     subtitle are now centred as a two-line stack within the card's box
+     when both are present, or centred alone with no space reserved for
+     an absent title when only one is (`previewCardDom.ts`'s flex column,
+     `align-items`/`justify-content`/`text-align: center`); the title is
+     coloured `foreground` and the SUBTITLE is coloured `accent`
+     (`previewCardDom.ts:89,92`) -- the first draft used `foreground` for
+     both. What remains APPROXIMATE, because this module reads no font
+     file (PURE, no I/O, per its own module doc): the per-line height
+     used to stack the two lines (`font_size * 1.25`, `ass.rs`'s
+     `CARD_LINE_HEIGHT`) is an estimate, not measured against Segoe UI's
+     real metrics the way the preview's flex layout measures real DOM
+     boxes, so the gap between title and subtitle can drift from the
+     preview's by a few pixels, especially at an unusual font size; and
+     the preview's 2px `accent`-coloured card border
+     (`previewCardDom.ts`'s `borderColor`/`borderWidth`) is not drawn by
+     the render at all -- `screen::render::video_layers::card_source`
+     (Task 42) fills only the background colour, and no task has added a
+     border. A render maps VIDEO only until Task 44 adds the audio graph
+     -- neither has a production caller yet.
 
 **Why accepted now:** the plan's P04 lands the preview surface before the
 effect/caption/transition/cards tasks that give those features a preview at

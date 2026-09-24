@@ -89,6 +89,15 @@ fn text_is_escaped() {
     assert_eq!(escape_ass_text("line one\nline two"), r"line one\Nline two");
 }
 
+// Fix round 1 (review Minor #2): a lone `\r` (old Mac line ending) is a
+// line break too, not something to drop silently; a CRLF pair must still
+// collapse to ONE break, not two.
+#[test]
+fn a_lone_cr_is_a_line_break_and_crlf_is_not_doubled() {
+    assert_eq!(escape_ass_text("a\rb"), r"a\Nb");
+    assert_eq!(escape_ass_text("a\r\nb"), r"a\Nb");
+}
+
 // ---------------------------------------------------------------------
 // The shared arrow fixture (Task 35's geometry, read by both languages).
 // ---------------------------------------------------------------------
@@ -182,6 +191,161 @@ fn mask_has_no_fade() {
         !doc.contains(r"\fad(150"),
         "a privacy cover must never fade in: {doc}"
     );
+}
+
+// Fix round 1 (review Important #2): highlight had zero coverage. The box
+// and stroke are asymmetric on purpose so a swapped axis or an uninset
+// inner rect fails.
+//
+// Mutation check: collapse the inner rect onto the outer one (drop the
+// stroke inset) and this goes red.
+#[test]
+fn highlight_ring_is_two_nested_rects_at_the_stroke_inset() {
+    let c = canvas(CANVAS_W, CANVAS_H);
+    let e = effect(
+        EffectKind::Highlight,
+        serde_json::json!({"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.25, "stroke": 6, "color": "#ff00ff"}),
+    );
+    let mut p = plan(1_000, vec![]);
+    p.canvas = c;
+    p.cues = vec![cue(EffectKind::Highlight, 0, 1_000, e)];
+    let doc = build_cue_ass(&p).expect("a highlight cue produces a document");
+    // Outer: x=128 y=144 w=384 h=180 (0.1*1280, 0.2*720, 0.3*1280, 0.25*720).
+    // Inner: the same box inset by the 6 px stroke on every edge.
+    assert!(
+        doc.contains(
+            "m 128 144 l 512 144 l 512 324 l 128 324 m 134 150 l 506 150 l 506 318 l 134 318"
+        ),
+        "{doc}"
+    );
+    assert!(doc.contains("&H00FF00FF"), "highlight colour: {doc}");
+}
+
+// Fix round 1 (review Important #2 + Strengths note): the spotlight
+// `dim` -> `\1a` alpha inversion was correct but UNTESTED. Two values,
+// each pinning one end of the inversion.
+//
+// Mutation check: invert the formula (`dim * 255` instead of
+// `(1 - dim) * 255`) and this goes red.
+#[test]
+fn spotlight_dim_converts_to_ass_alpha_at_two_values() {
+    let c = canvas(CANVAS_W, CANVAS_H);
+    let box_json = serde_json::json!({"x": 0.2, "y": 0.2, "w": 0.3, "h": 0.3});
+
+    let mut opaque = box_json.clone();
+    opaque["dim"] = serde_json::json!(1.0);
+    let mut p = plan(1_000, vec![]);
+    p.canvas = c.clone();
+    p.cues = vec![cue(
+        EffectKind::Spotlight,
+        0,
+        1_000,
+        effect(EffectKind::Spotlight, opaque),
+    )];
+    let doc = build_cue_ass(&p).expect("a spotlight cue produces a document");
+    assert!(
+        doc.contains(r"\1a&H00&"),
+        "dim=1.0 must be fully opaque: {doc}"
+    );
+
+    let mut transparent = box_json;
+    transparent["dim"] = serde_json::json!(0.0);
+    let mut p = plan(1_000, vec![]);
+    p.canvas = c;
+    p.cues = vec![cue(
+        EffectKind::Spotlight,
+        0,
+        1_000,
+        effect(EffectKind::Spotlight, transparent),
+    )];
+    let doc = build_cue_ass(&p).expect("a spotlight cue produces a document");
+    assert!(
+        doc.contains(r"\1a&HFF&"),
+        "dim=0.0 must be fully transparent: {doc}"
+    );
+}
+
+// Fix round 1 (review Important #2): the step circle (a Bezier
+// approximation, independently re-derived here from the documented
+// formula rather than by calling `circle_cmd`) and its SEPARATE number
+// `Dialogue` had zero coverage.
+//
+// Mutation check: change `circle_cmd`'s kappa constant and this goes red.
+#[test]
+fn step_draws_a_circle_and_a_separate_number_dialogue() {
+    let c = canvas(CANVAS_W, CANVAS_H);
+    let e = effect(
+        EffectKind::Step,
+        serde_json::json!({"x": 0.5, "y": 0.5, "number": 7, "color": "#112233"}),
+    );
+    let mut p = plan(1_000, vec![]);
+    p.canvas = c;
+    p.cues = vec![cue(EffectKind::Step, 0, 1_000, e)];
+    let doc = build_cue_ass(&p).expect("a step cue produces a document");
+
+    let (cx, cy, r) = (640.0_f64, 360.0_f64, STEP_RADIUS);
+    // The kappa is a LITERAL here, not `super::BEZIER_KAPPA`: reading the
+    // production constant back would make this test blind to a mutation
+    // of that very constant (measured -- an earlier draft that did
+    // reference it stayed green against a deliberately wrong kappa).
+    let k = r * 0.552_284_75;
+    let pt = |x: f64, y: f64| format!("{} {}", fmt_num(x), fmt_num(y));
+    let expected_circle = format!(
+        "m {} b {} {} {} b {} {} {} b {} {} {} b {} {} {}",
+        pt(cx + r, cy),
+        pt(cx + r, cy + k),
+        pt(cx + k, cy + r),
+        pt(cx, cy + r),
+        pt(cx - k, cy + r),
+        pt(cx - r, cy + k),
+        pt(cx - r, cy),
+        pt(cx - r, cy - k),
+        pt(cx - k, cy - r),
+        pt(cx, cy - r),
+        pt(cx + k, cy - r),
+        pt(cx + r, cy - k),
+        pt(cx + r, cy),
+    );
+    assert!(doc.contains(&expected_circle), "{doc}");
+    assert!(
+        doc.contains("&H00332211"),
+        "the circle uses the effect's own colour: {doc}"
+    );
+    // The number is a SEPARATE Dialogue, Step style, at the same point.
+    assert!(
+        doc.contains(&format!(
+            "Step,,0,0,0,,{{\\an7\\pos({},{})",
+            fmt_num(cx),
+            fmt_num(cy)
+        )),
+        "{doc}"
+    );
+    assert!(doc.contains("}7"), "the escaped number text: {doc}");
+}
+
+// Fix round 1 (review Minor #4): white is a deliberate choice (contrast
+// against a circle whose OWN colour can be anything), not an oversight --
+// pinned so a future "derive from the effect like every other kind" edit
+// is a conscious change, not an accidental regression.
+#[test]
+fn step_number_colour_is_white_regardless_of_the_circles_own_colour() {
+    let c = canvas(CANVAS_W, CANVAS_H);
+    let e = effect(
+        EffectKind::Step,
+        serde_json::json!({"x": 0.5, "y": 0.5, "number": 3, "color": "#112233"}),
+    );
+    let mut p = plan(1_000, vec![]);
+    p.canvas = c;
+    p.cues = vec![cue(EffectKind::Step, 0, 1_000, e)];
+    let doc = build_cue_ass(&p).expect("a step cue produces a document");
+    // The number dialogue (the one carrying `\fs`) is white...
+    let number_line = doc
+        .lines()
+        .find(|l| l.contains("\\fs"))
+        .unwrap_or_else(|| panic!("no number dialogue: {doc}"));
+    assert!(number_line.contains("&H00FFFFFF"), "{number_line}");
+    // ...even though the circle itself carries the effect's own colour.
+    assert!(doc.contains("&H00332211"), "{doc}");
 }
 
 #[test]
@@ -303,10 +467,8 @@ fn range_plan_emits_rebased_times() {
 // in scope (F-37), so it gets a regression test too.
 // ---------------------------------------------------------------------
 
-#[test]
-fn card_title_and_subtitle_are_rendered() {
-    let mut p = plan(1_000, vec![]);
-    p.cards = vec![vault_buddy_core::editor::render_plan::PlannedCard {
+fn card(title: &str, subtitle: &str) -> vault_buddy_core::editor::render_plan::PlannedCard {
+    vault_buddy_core::editor::render_plan::PlannedCard {
         clip_id: "card".into(),
         track_index: 0,
         output_start: 0,
@@ -320,20 +482,66 @@ fn card_title_and_subtitle_are_rendered() {
         transition_out: None,
         card: Some(Card {
             preset: CardPreset::Chapter,
-            title: "A Title".into(),
-            subtitle: "A Subtitle".into(),
+            title: title.into(),
+            subtitle: subtitle.into(),
             background: "#000000".into(),
-            foreground: "#ffffff".into(),
-            accent: "#ff0000".into(),
+            foreground: "#112233".into(),
+            accent: "#445566".into(),
             extra: Map::new(),
         }),
         cut: Cut::default(),
-    }];
+    }
+}
+
+// Fix round 1 (review Important #1): the render used to top-left-anchor
+// both lines with a flat padding and colour the subtitle with
+// `foreground`, diverging from the ALREADY-SHIPPED preview
+// (`src/editor/previewCardDom.ts`: a centered flex column, title in
+// `foreground`, subtitle in `accent`). `PIP` (992,44,244,242) is
+// asymmetric on purpose, so a swapped axis or an unswapped colour fails.
+// Box centre: (1114, 165). title_h = 44*1.25 = 55, subtitle_h =
+// 24*1.25 = 30, gap = 16 -> stack_h = 101 -> stack top = 165 - 50.5 =
+// 114.5; subtitle_y = 114.5 + 55 + 16 = 185.5 -- both hand-computed from
+// the module's own documented constants, not captured from its output.
+//
+// Mutation check: revert to the flat top-left `\an7`/padding anchor and
+// this goes red.
+#[test]
+fn card_layout_matches_the_preview_centered_stack() {
+    let mut p = plan(1_000, vec![]);
+    p.cards = vec![card("A Title", "A Subtitle")];
     let doc = build_cue_ass(&p).expect("a card produces a document");
-    assert!(doc.contains("CardTitle"), "{doc}");
+    assert!(
+        doc.contains("CardTitle,,0,0,0,,{\\an8\\pos(1114,114.5)\\1c&H00332211"),
+        "title: centered stack, top-anchored, foreground-coloured: {doc}"
+    );
     assert!(doc.contains("A Title"), "{doc}");
-    assert!(doc.contains("CardSubtitle"), "{doc}");
+    assert!(
+        doc.contains("CardSubtitle,,0,0,0,,{\\an8\\pos(1114,185.5)\\1c&H00665544"),
+        "subtitle: below the title, accent-coloured (not foreground): {doc}"
+    );
     assert!(doc.contains("A Subtitle"), "{doc}");
+}
+
+// Fix round 1 (review Important #1's "subtitle-only card" case): no space
+// is reserved for an absent title -- the lone subtitle centres on the
+// BOX's own centre, `\an5`, not at the top-anchored position a title
+// would have pushed it down from.
+#[test]
+fn card_with_only_a_subtitle_centres_it_alone() {
+    let mut p = plan(1_000, vec![]);
+    p.cards = vec![card("", "Only Sub")];
+    let doc = build_cue_ass(&p).expect("a card produces a document");
+    // "CardTitle" itself still names a STYLE (every style is always
+    // declared); what must be absent is a CardTitle *event*.
+    assert!(
+        !doc.contains("CardTitle,,0,0,0,,"),
+        "no title dialogue at all: {doc}"
+    );
+    assert!(
+        doc.contains("CardSubtitle,,0,0,0,,{\\an5\\pos(1114,165)\\1c&H00665544"),
+        "the subtitle alone centres on the box centre: {doc}"
+    );
 }
 
 // A zoom cue is a camera move (`video_graph::zoom_filter`'s job), never a

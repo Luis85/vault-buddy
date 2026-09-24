@@ -104,8 +104,16 @@ const HIGHLIGHT_DEFAULT_H: f64 = 0.1;
 const SPOTLIGHT_DEFAULT_DIM: f64 = 0.65;
 const CARD_TITLE_FONT: f64 = 44.0;
 const CARD_SUBTITLE_FONT: f64 = 24.0;
-const CARD_PADDING: f64 = 24.0;
 const CARD_LINE_GAP: f64 = 16.0;
+/// The estimated line height as a multiple of font size -- an
+/// approximation (this module reads no font file), unlike the preview's
+/// own flex layout, which measures real glyph boxes (GAP-173).
+const CARD_LINE_HEIGHT: f64 = 1.25;
+/// ASS numpad alignment: horizontally centred, vertically centred on the
+/// given point.
+const ALIGN_MID_CENTER: u8 = 5;
+/// ASS numpad alignment: horizontally centred, the point is the TOP edge.
+const ALIGN_TOP_CENTER: u8 = 8;
 const CAPTION_DEFAULT_FONT_SIZE: f64 = 32.0;
 
 // ---------------------------------------------------------------------
@@ -154,13 +162,23 @@ pub(super) fn ass_time(ms: u64, round_up: bool) -> String {
 /// which a `Dialogue` line's single text field cannot otherwise carry.
 pub(super) fn escape_ass_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
         match ch {
             '\\' => out.push_str(r"\\"),
             '{' => out.push_str(r"\{"),
             '}' => out.push_str(r"\}"),
             '\n' => out.push_str(r"\N"),
-            '\r' => {}
+            // A lone `\r` (old Mac line ending) is a line break too; a
+            // CRLF pair must collapse to the SAME one break, not two, so
+            // the trailing `\n` of a pair is consumed here rather than
+            // matched again on the next iteration.
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                out.push_str(r"\N");
+            }
             _ => out.push(ch),
         }
     }
@@ -457,6 +475,13 @@ fn step_dialogues(cue: &PlannedCue, canvas: &Canvas) -> Vec<String> {
     let circle = circle_cmd(cx, cy, STEP_RADIUS);
     let number = num_or(e.number.as_ref(), 0.0).round() as i64;
     let size = num_or(e.font_size.as_ref(), STEP_DEFAULT_FONT_SIZE);
+    // The number is DELIBERATELY white, not `colour`: unlike every other
+    // kind's text (which is the one thing drawn, so it takes the
+    // author's chosen colour), this number sits ON TOP of a circle
+    // that already carries `colour` -- same colour on same colour would
+    // make the number unreadable regardless of what the author picked
+    // (fix round 1, review Minor #4; pinned by
+    // `step_number_colour_is_white_regardless_of_the_circles_own_colour`).
     let number_tags = format!(
         "\\an7\\pos({},{})\\1c&H00FFFFFF&\\fs{}{}",
         fmt_num(cx),
@@ -519,47 +544,115 @@ fn cue_dialogues(cue: &PlannedCue, canvas: &Canvas) -> Vec<String> {
 // Card title/subtitle text (F-37).
 // ---------------------------------------------------------------------
 
+/// One card text line: `\pos` at `(x, y)`, `align` (`ALIGN_MID_CENTER` for
+/// a line centred alone, `ALIGN_TOP_CENTER` for a line stacked with the
+/// other), the given colour and font size.
+#[allow(clippy::too_many_arguments)]
+fn card_line(
+    style: &str,
+    card: &PlannedCard,
+    x: f64,
+    y: f64,
+    align: u8,
+    colour: &str,
+    size: f64,
+    text: &str,
+) -> String {
+    let tags = format!(
+        "\\an{align}\\pos({},{})\\1c{colour}\\fs{}{}",
+        fmt_num(x),
+        fmt_num(y),
+        fmt_num(size),
+        fade_tag()
+    );
+    dialogue(
+        style,
+        card.output_start,
+        card.output_end,
+        &tags,
+        &escape_ass_text(text),
+    )
+}
+
+/// Title/subtitle text, matching the ALREADY-SHIPPED preview's own layout
+/// (`src/editor/previewCardDom.ts`, Task 33): a flex column, both lines
+/// centred horizontally AND, as a whole stack, vertically within the
+/// card's box -- never top-left-anchored, and no space is reserved for a
+/// title that is not there. Colours mirror the preview exactly: the
+/// title in `foreground`, the subtitle in `accent` (`previewCardDom.ts`'s
+/// `title.style.color`/`subtitle.style.color`) -- NOT the same colour for
+/// both. The per-line height used to stack the two lines is estimated
+/// (`CARD_LINE_HEIGHT`), since this module reads no font file the way the
+/// preview's real DOM layout does; recorded as a remaining approximation
+/// in `docs/Gaps.md` GAP-173.
 fn card_dialogues(card: &PlannedCard, _canvas: &Canvas) -> Vec<String> {
     let Some(c) = card.card.as_ref() else {
         return Vec::new();
     };
-    let (bx, by) = (f64::from(card.bounds.x), f64::from(card.bounds.y));
+    let has_title = !c.title.is_empty();
+    let has_subtitle = !c.subtitle.is_empty();
+    if !has_title && !has_subtitle {
+        return Vec::new();
+    }
+    let (bx, by, bw, bh) = (
+        f64::from(card.bounds.x),
+        f64::from(card.bounds.y),
+        f64::from(card.bounds.w),
+        f64::from(card.bounds.h),
+    );
+    let (cx, cy) = (bx + bw / 2.0, by + bh / 2.0);
     let fg = ass_colour(&c.foreground);
-    let mut out = Vec::new();
-    if !c.title.is_empty() {
-        let tags = format!(
-            "\\an7\\pos({},{})\\1c{fg}\\fs{}{}",
-            fmt_num(bx + CARD_PADDING),
-            fmt_num(by + CARD_PADDING),
-            fmt_num(CARD_TITLE_FONT),
-            fade_tag()
-        );
-        out.push(dialogue(
+    let accent = ass_colour(&c.accent);
+    let title_h = CARD_TITLE_FONT * CARD_LINE_HEIGHT;
+    let subtitle_h = CARD_SUBTITLE_FONT * CARD_LINE_HEIGHT;
+
+    if has_title && has_subtitle {
+        let top = cy - (title_h + CARD_LINE_GAP + subtitle_h) / 2.0;
+        vec![
+            card_line(
+                "CardTitle",
+                card,
+                cx,
+                top,
+                ALIGN_TOP_CENTER,
+                &fg,
+                CARD_TITLE_FONT,
+                &c.title,
+            ),
+            card_line(
+                "CardSubtitle",
+                card,
+                cx,
+                top + title_h + CARD_LINE_GAP,
+                ALIGN_TOP_CENTER,
+                &accent,
+                CARD_SUBTITLE_FONT,
+                &c.subtitle,
+            ),
+        ]
+    } else if has_title {
+        vec![card_line(
             "CardTitle",
-            card.output_start,
-            card.output_end,
-            &tags,
-            &escape_ass_text(&c.title),
-        ));
-    }
-    if !c.subtitle.is_empty() {
-        let y = by + CARD_PADDING + CARD_TITLE_FONT * 1.25 + CARD_LINE_GAP;
-        let tags = format!(
-            "\\an7\\pos({},{})\\1c{fg}\\fs{}{}",
-            fmt_num(bx + CARD_PADDING),
-            fmt_num(y),
-            fmt_num(CARD_SUBTITLE_FONT),
-            fade_tag()
-        );
-        out.push(dialogue(
+            card,
+            cx,
+            cy,
+            ALIGN_MID_CENTER,
+            &fg,
+            CARD_TITLE_FONT,
+            &c.title,
+        )]
+    } else {
+        vec![card_line(
             "CardSubtitle",
-            card.output_start,
-            card.output_end,
-            &tags,
-            &escape_ass_text(&c.subtitle),
-        ));
+            card,
+            cx,
+            cy,
+            ALIGN_MID_CENTER,
+            &accent,
+            CARD_SUBTITLE_FONT,
+            &c.subtitle,
+        )]
     }
-    out
 }
 
 // ---------------------------------------------------------------------
