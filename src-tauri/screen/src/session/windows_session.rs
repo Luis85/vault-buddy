@@ -352,12 +352,17 @@ impl ScreenSession {
             }
         }
         // The webcam finishes on its own: a failure there is a WARNING on a
-        // screen capture that is otherwise fine (spec 14's posture).
+        // screen capture that is otherwise fine (spec 14's posture). It kept
+        // delivering between the screen's Stop and here, so its file runs a
+        // little past the screen's end; migration clips it to the capture's
+        // segments, so the tail is never placed.
         let webcam = self.webcam.take().and_then(|w| match w.stop() {
             Ok(outcome) => Some(outcome),
             Err(e) => {
-                self.warnings
-                    .raise(format!("the webcam track could not be finished: {e}"));
+                // The detail (and any retained path) goes to the log; the
+                // user-facing line must not read as a failed SCREEN capture.
+                log::warn!("screen capture: the webcam track could not be finished: {e}");
+                self.warnings.raise(super::webcam::webcam_stop_warning(&e));
                 None
             }
         });

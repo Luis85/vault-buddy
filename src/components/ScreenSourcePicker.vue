@@ -62,6 +62,8 @@ const inputs = ref<string[]>([]);
 const outputs = ref<string[]>([]);
 /** F-22: the webcam recorded beside the screen, or null for none. */
 const webcamId = ref<string | null>(null);
+/** Bumped after a refused start so the webcam list is read again. */
+const webcamRefresh = ref(0);
 const error = ref<string | null>(null);
 const starting = ref(false);
 
@@ -300,6 +302,7 @@ async function onStart() {
     // list is true, then write the refusal — the refusal is what the user
     // has to read, so it must win over any error the refresh raised.
     await loadSources();
+    webcamRefresh.value += 1;
     error.value = String(e);
   } finally {
     starting.value = false;
@@ -389,7 +392,10 @@ async function onStart() {
         v-model:outputs="outputs"
       />
     </div>
-    <ScreenWebcamPicker v-model:webcam-id="webcamId" />
+    <ScreenWebcamPicker
+      v-model:webcam-id="webcamId"
+      :refresh-key="webcamRefresh"
+    />
     <!-- Sits directly above Start because it qualifies exactly that button:
          pressing it works, and the Save that follows will not. NOT above the
          staged list, which spec 10 requires to come first. -->

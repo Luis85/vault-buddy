@@ -1274,10 +1274,14 @@ write here, it belongs in `export_worker/` or it is a design change.
   the pause), and its file is REBASED to its own first frame, whose clock
   time is the sidecar's `offsetMs` (GAP-199). The device opens — and reads
   its first frame — BEFORE the screen's clock starts, so a camera another
-  app holds refuses the start while nothing is on disk; a webcam that
+  app holds refuses the start before any file exists (a start that fails
+  LATER, at the screen sink or WGC, leaves a header-only
+  `.<base>.webcam.mp4.part` for the recovery sweep, GAP-200); a webcam that
   vanishes mid-capture raises `screen:warning`, finalizes what it holds, and
   the screen capture continues; a failed webcam finalize retains its part
-  for the recovery sweep. `webcam: None` constructs none of it (structural
+  for the recovery sweep and warns with `webcam::webcam_stop_warning` — never
+  the `Retained` error's own "screen capture could not finish" text, since
+  the screen capture succeeded. `webcam: None` constructs none of it (structural
   test `start_without_a_webcam_is_byte_identical_to_today`). No automated
   test executes the Windows producer; checklist rows T37–T41 are its gate.
 - **One clock (§6.2).** Both producers stamp from the same `CaptureClock`,

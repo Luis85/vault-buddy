@@ -512,8 +512,22 @@ fn open_device(
     }
 }
 
-/// Build the reader and ask for NV12, then YUY2, at the chosen native mode.
-/// Video processing lets the reader decode an MJPG camera into either.
+/// Build the reader and ask for NV12, then YUY2, at the chosen native mode
+/// — the documented TWO-STEP selection (review fix round 1): the chosen
+/// NATIVE type is set as the stream's current type, which picks the device's
+/// mode (size and rate), and then a PARTIAL output type naming only the major
+/// type and the subtype is requested, for which the reader loads a decoder
+/// when the mode is compressed (an MJPG-only 720p camera is the common case).
+/// Copying every attribute of an MJPG native type into the request instead
+/// carried its stride, sample size and bitrate into an uncompressed request,
+/// which a decoder may refuse — refusing the camera outright.
+///
+/// `MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING` does NOT convert between YUV
+/// layouts: it enables YUV→RGB-32 conversion and deinterlacing, neither of
+/// which is requested here. It is harmless for an NV12/YUY2 request and kept
+/// only so a device whose one progressive output needs deinterlacing still
+/// opens. A camera that answers YUY2 but not NV12 is converted by this
+/// crate's own `webcam_frame_to_nv12`.
 unsafe fn configure(
     source: &IMFMediaSource,
 ) -> Result<(IMFSourceReader, WebcamMode, WebcamPixels), ScreenError> {
@@ -586,16 +600,23 @@ unsafe fn mode_of(t: &IMFMediaType) -> WebcamMode {
     }
 }
 
+/// Step one selects the device mode (re-selected before every attempt, so a
+/// refused request cannot leave the stream on a mode it half-negotiated);
+/// step two asks for `subtype` with ONLY the major type and subtype set, the
+/// size and rate following the selected mode. A device whose native type
+/// cannot be selected is still asked, at whatever mode it is on.
 unsafe fn request(
     reader: &IMFSourceReader,
     native: Option<&IMFMediaType>,
     subtype: &GUID,
 ) -> windows::core::Result<()> {
-    let wanted = MFCreateMediaType()?;
-    match native {
-        Some(native) => native.CopyAllItems(&wanted)?,
-        None => wanted.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?,
+    if let Some(native) = native {
+        if let Err(e) = reader.SetCurrentMediaType(FIRST_VIDEO, None, native) {
+            log::debug!("screen webcam: selecting the device mode failed: {e}");
+        }
     }
+    let wanted = MFCreateMediaType()?;
+    wanted.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
     wanted.SetGUID(&MF_MT_SUBTYPE, subtype)?;
     reader.SetCurrentMediaType(FIRST_VIDEO, None, &wanted)
 }

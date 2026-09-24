@@ -290,6 +290,32 @@ pub fn webcam_video_format(mode: WebcamMode, quality: ScreenQuality) -> Option<V
     })
 }
 
+/// The warning a screen capture carries when its WEBCAM track could not be
+/// finished (review fix round 1).
+///
+/// The screen capture itself succeeded, so the message must never read as a
+/// failed capture — which `ScreenError::Retained`'s own Display does ("screen
+/// capture could not finish…"), because that wording is the SCREEN's. It is
+/// built from the cause instead, and names no path: where the part lives is
+/// the log's business, and the recovery sweep promotes a part that holds
+/// footage on the next start.
+pub fn webcam_stop_warning(err: &crate::ScreenError) -> String {
+    const SAVED: &str = "The screen capture was saved";
+    match err {
+        crate::ScreenError::Retained {
+            holds_footage: true,
+            ..
+        } => format!(
+            "{SAVED}, but its webcam track could not be finished. The webcam              footage was kept and will be recovered the next time Vault Buddy starts."
+        ),
+        crate::ScreenError::Retained {
+            holds_footage: false,
+            ..
+        } => format!("{SAVED}, but no webcam video was recorded."),
+        _ => format!("{SAVED}, but its webcam track could not be finished."),
+    }
+}
+
 #[cfg(test)]
 #[path = "webcam_tests.rs"]
 mod tests;

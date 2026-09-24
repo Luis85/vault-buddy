@@ -259,6 +259,11 @@ fn windows_session_production() -> &'static str {
 // opens no device, spawns no webcam thread and writes no webcam file. The
 // shell half — `webcamId` absent means `None` — is pinned in
 // `screen_webcam_commands.rs`.
+//
+// It pins the construction site's SHAPE, not its meaning: a behaviour-
+// preserving rewrite (`webcam.map(..).transpose()?`) goes red too (Task 52's
+// mutation M6). That is accepted — the arm it guards runs in no automated
+// test, so a textual pin is the strongest check available.
 #[test]
 fn start_without_a_webcam_is_byte_identical_to_today() {
     let code = windows_session_production();
@@ -280,5 +285,57 @@ fn start_without_a_webcam_is_byte_identical_to_today() {
     assert!(
         after.contains("None => None,"),
         "the None arm must construct nothing: {after:?}"
+    );
+}
+
+// --- the stop warning (review fix round 1) --------------------------------
+
+// A webcam that could not be finished rides on a screen capture that DID
+// finish. Reusing `Retained`'s Display ("screen capture could not finish…")
+// told the user their irreplaceable screen recording had failed -- most
+// likely on the zero-frame case a camera format problem produces.
+#[test]
+fn a_webcam_that_could_not_finish_never_reads_as_a_failed_screen_capture() {
+    use crate::ScreenError;
+    use std::path::PathBuf;
+    let part = PathBuf::from(r"C:\staging\.2026-09-24 1015 Demo.webcam.mp4.part");
+    let kept = ScreenError::Retained {
+        path: part.clone(),
+        holds_footage: true,
+        cause: Box::new(ScreenError::Io(
+            "could not finish the webcam file: denied".into(),
+        )),
+    };
+    let empty = ScreenError::Retained {
+        path: part,
+        holds_footage: false,
+        cause: Box::new(ScreenError::Sink("the webcam delivered no video".into())),
+    };
+    let other = ScreenError::Sink("the webcam writer stopped unexpectedly".into());
+    for err in [&kept, &empty, &other] {
+        let msg = webcam_stop_warning(err);
+        assert!(msg.starts_with("The screen capture was saved"), "{msg}");
+        assert!(!msg.contains("screen capture could not finish"), "{msg}");
+        assert!(
+            !msg.contains(".part"),
+            "no path in a user-facing line: {msg}"
+        );
+    }
+    assert!(webcam_stop_warning(&kept).contains("kept and will be recovered"));
+    assert!(webcam_stop_warning(&empty).contains("no webcam video was recorded"));
+}
+
+// The pure message above is only half the fix: the `cfg(windows)` stop arm
+// that raises it runs in no automated test, so it is pinned by source.
+#[test]
+fn the_session_raises_the_webcam_specific_stop_warning() {
+    let code = windows_session_production();
+    assert!(
+        code.contains("self.warnings.raise(super::webcam::webcam_stop_warning(&e))"),
+        "the webcam stop arm must raise webcam_stop_warning, not the error's own text"
+    );
+    assert!(
+        !code.contains(".raise(format!(\"the webcam track could not be finished: {e}\"))"),
+        "the Retained text must not reach the user again"
     );
 }

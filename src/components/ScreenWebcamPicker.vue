@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 
 import { logWarning } from "../logging";
 import type { CaptureWebcamInfo } from "../types";
@@ -10,7 +10,12 @@ import SectionHeader from "./ui/SectionHeader.vue";
 // F-22: a webcam recorded BESIDE the screen, on the same clock, into its own
 // file the editor places as the presenter. Optional: "No webcam" is the
 // default and sends exactly the start every capture sent before this.
-const props = defineProps<{ webcamId: string | null }>();
+/** `refreshKey`: bumped by the picker after a refused start, so a "Pick it
+ * again" refusal (an unplugged camera) is answered by a FRESH list — and the
+ * stale choice is dropped with it rather than re-sent. */
+const props = withDefaults(defineProps<{ webcamId: string | null; refreshKey?: number }>(), {
+  refreshKey: 0,
+});
 const emit = defineEmits<{ (e: "update:webcamId", value: string | null): void }>();
 
 const webcams = ref<CaptureWebcamInfo[]>([]);
@@ -20,7 +25,7 @@ function onChange(event: Event) {
   emit("update:webcamId", value === "" ? null : value);
 }
 
-onMounted(async () => {
+async function load() {
   try {
     webcams.value = webcamsFrom(await invoke("list_capture_webcams"));
   } catch (e) {
@@ -32,7 +37,10 @@ onMounted(async () => {
   if (props.webcamId !== null && !webcams.value.some((w) => w.id === props.webcamId)) {
     emit("update:webcamId", null);
   }
-});
+}
+
+onMounted(load);
+watch(() => props.refreshKey, load);
 </script>
 
 <template>

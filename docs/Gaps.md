@@ -3111,7 +3111,7 @@ for a block written before it existed
 unverified is the hardware half: whether a real device's early finalize
 produces the length measured here — checklist rows T37/T38.
 
-### GAP-200 · Medium (hardware-unverified) · The synchronized webcam's residuals: colour matrix, long-run drift, a stalled reader
+### GAP-200 · Medium (hardware-unverified) · The synchronized webcam's residuals: colour matrix, latency and drift, a stalled reader, orphaned webcam files
 `src-tauri/screen/src/session/webcam_windows.rs`, Task 52 (F-22). Four
 things the producer does not settle, each recorded rather than guessed at:
 (1) **Colour matrix.** The webcam's sink reuses `sink.rs`'s NV12 input type,
@@ -3135,7 +3135,26 @@ stop.** The webcam is finished and published before the screen's own
 finalize; if the SCREEN then fails (`Retained`), the webcam file sits in
 staging beside a `.part` the recovery sweep promotes with a minimal sidecar
 that carries no `webcam` block — the footage is kept but not linked, the
-GAP-198 class. The Windows producer executes in no automated test on any
+GAP-198 class. (5) **The opposite orphan** (review of Task 52): the WEBCAM
+fails to finish (its finalize or its publish rename) while the SCREEN stop
+succeeds. The capture is staged with a sidecar that has NO `webcam` block and
+the user is warned ("…its webcam track could not be finished. The webcam
+footage was kept…"); the recovery sweep later promotes the retained
+`.<base>.webcam.mp4.part` to `<base>.webcam.mp4` beside it, but nothing ever
+writes the block, so migration never places that footage — it is kept, counted
+and discarded with the capture, and never shown. Fix: have the sweep add a
+`webcam` block (offset unknown, so it cannot be placed truthfully either — the
+honest fix records the offset in the part itself). (6) **A start that fails
+AFTER the camera opened** (the screen sink or WGC refusing) drops the producer,
+which finalizes a header-only `.<base>.webcam.mp4.part`; the recovery sweep
+removes it once stale (it holds no footage). Only a camera REFUSAL leaves
+nothing on disk. (7) **Arrival-time anchoring puts a constant lag in the
+presenter.** `WebcamClockMap` anchors the reader's first frame to the clock at
+its ARRIVAL, so the device's own capture latency (USB transfer, an MJPG
+decode — often 50–150 ms) becomes a constant offset between the presenter and
+the screen, separate from (2)'s drift. Row T37 records the FIRST clap's offset
+for exactly this; a fix subtracts a measured or device-reported latency from
+the anchor. The Windows producer executes in no automated test on any
 platform (GAP-117's class); rows T37–T41 are its gate.
 
 ## 9. Documentation & repo hygiene

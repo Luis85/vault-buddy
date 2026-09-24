@@ -1200,6 +1200,51 @@ describe("ScreenSourcePicker — the synchronized webcam", () => {
     expect(starts[1]).toMatchObject({ sourceId: "screen:1", webcamId: "webcam:77aa01" });
   });
 
+  // Review fix round 1: Rust's refusal for an unplugged camera says "Pick it
+  // again", which is only possible if the list is read again. The stale
+  // choice is dropped with it, so the next Start cannot re-send a device
+  // that is gone.
+  it("re-lists webcams after a refused start and drops a choice that vanished", async () => {
+    const calls: Record<string, unknown>[] = [];
+    let listings = 0;
+    let starts = 0;
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, ...(args as object) });
+      if (cmd === "list_capture_sources") return SOURCES;
+      if (cmd === "list_audio_devices") return NO_DEVICES;
+      if (cmd === "list_capture_webcams") {
+        listings += 1;
+        return listings === 1 ? WEBCAMS : [WEBCAMS[0]];
+      }
+      if (cmd === "start_screen_capture") {
+        starts += 1;
+        if (starts === 1) {
+          throw new Error("The chosen webcam is no longer connected. Pick it again, or choose No webcam.");
+        }
+        return STARTED;
+      }
+      return undefined;
+    });
+    const w = await mountPicker();
+    await w.get('[data-testid="source-screen:1"]').trigger("click");
+    await w.get('[data-testid="webcam-select"]').setValue("webcam:77aa01");
+    await w.get('[data-testid="screen-start"]').trigger("click");
+    await flushPromises();
+
+    expect(listings).toBe(2);
+    const select = w.get('[data-testid="webcam-select"]');
+    expect(select.findAll("option").map((o) => o.text())).toEqual([
+      "No webcam",
+      "Integrated Camera",
+    ]);
+    expect((select.element as HTMLSelectElement).value).toBe("");
+    await w.get('[data-testid="screen-start"]').trigger("click");
+    await flushPromises();
+    const retried = calls.filter((c) => c.cmd === "start_screen_capture");
+    expect(retried).toHaveLength(2);
+    expect("webcamId" in retried[1]).toBe(false);
+  });
+
   it("drops back to No webcam when the listing cannot be read", async () => {
     // A failed or malformed listing is "no webcam", never a banner: the
     // capture itself works without one.

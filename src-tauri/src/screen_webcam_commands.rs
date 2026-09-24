@@ -11,7 +11,6 @@
 
 use std::path::Path;
 
-use tauri::AppHandle;
 use vault_buddy_core::screen_capture_config::ScreenQuality;
 use vault_buddy_screen::session::webcam::{WebcamOutcome, WebcamParams};
 use vault_buddy_screen::source::{self, WebcamDeviceId};
@@ -22,7 +21,7 @@ use vault_buddy_screen::staging;
 /// It degrades to an empty list — the picker's "No webcam" is an ordinary
 /// state, and a failed task is not something the user can act on.
 #[tauri::command]
-pub async fn list_capture_webcams(_app: AppHandle) -> Vec<source::CaptureWebcamInfo> {
+pub async fn list_capture_webcams() -> Vec<source::CaptureWebcamInfo> {
     tauri::async_runtime::spawn_blocking(source::list_webcams)
         .await
         .unwrap_or_else(|e| {
