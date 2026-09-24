@@ -43,8 +43,19 @@ pub fn capture_file_names(base: &str, stems: &[String]) -> Vec<String> {
         staging::mp4_file_name(base),
         staging::sidecar_file_name(base),
         staging::export_part_file_name(base),
-        staging::webcam_file_name(base),
     ];
+    names.extend(companion_file_names(base, stems));
+    names
+}
+
+/// The capture's COMPANION media only — its webcam file and its stems —
+/// never its own video, sidecar or export temp. What a project's
+/// `StagingFile` source may name (`project_store::resolve_source`): a
+/// `StagingFile` naming `<base>.mp4` would be a second locator for the
+/// capture that every `Staging`-only matcher misses, and one naming the
+/// sidecar or a live export temp would be packaged as "media".
+pub fn companion_file_names(base: &str, stems: &[String]) -> Vec<String> {
+    let mut names = vec![staging::webcam_file_name(base)];
     names.extend(stems.iter().filter(|s| is_stem_of(base, s)).cloned());
     names
 }

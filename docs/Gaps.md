@@ -3060,11 +3060,25 @@ this cleanup); (2) the recovery sweep classifies a published webcam file as
 its capture's companion and never acts on it — correct while the capture
 exists, but one whose `.mp4` and sidecar are gone (the legacy cleanup above,
 or a crash whose main `.part` held no footage while the webcam part did) is
-then listed nowhere, counted nowhere and swept never. Nothing is lost —
-that is the point of leaving it — but it costs disk the user cannot see.
-**Fix:** route `remove_staged_capture` through `capture_file_names`, and
-surface a companion with no capture in `StagedCaptureList` (or as a
-recovered capture of its own) rather than deleting footage.
+then listed nowhere, counted nowhere and swept never. Two more ways in,
+both from the sweep (review of Task 51): (3) NOT RETROACTIVE, like the
+`.export` rule — a capture staged before F25 under a base ending in
+`.webcam` (a window titled e.g. "Cam.webcam") whose `.part` a crash
+orphaned is now promoted as a sidecar-less companion
+`<…Cam>.webcam.mp4` of a capture `<…Cam>` that does not exist, so that
+footage is kept but invisible; (4) when a crashed capture's main `.part`
+is promoted to `<base> (2)` because `<base>.mp4` is taken (a rare
+same-minute collision), its webcam part still promotes to
+`<base>.webcam.mp4` — beside the OTHER capture, which then appears to own
+it. Nothing is lost in any of the four — that is the point of leaving it —
+but it costs disk the user cannot see, and in (4) a discard of the other
+capture deletes this one's webcam track. **Fix:** route
+`remove_staged_capture` through `capture_file_names` — which first needs
+`export_worker/mod.rs` split, since it sits at exactly 800/800 nonblank
+lines — promote a webcam part to the SAME ` (N)` its main part landed on
+(one pass that pairs them), and surface a companion with no capture in
+`StagedCaptureList` (or as a recovered capture of its own) rather than
+deleting footage.
 
 ### GAP-199 · Medium (unverified until Task 52) · A synchronized webcam track's length is derived, not measured
 `src-tauri/src/editor/session_commands.rs` (`staged_webcam`), Task 51

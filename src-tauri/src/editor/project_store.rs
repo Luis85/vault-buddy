@@ -58,7 +58,7 @@ pub enum SourceLocator {
     /// A COMPANION file of a staged capture (F-22, F26) — its synchronized
     /// webcam track `<base>.webcam.mp4` today, a stem after Task 53 — also
     /// adopted by reference. `Staging { base }` can only ever name
-    /// `<base>.mp4`; this names one more of the files the capture owns, and
+    /// `<base>.mp4`; this names one of the capture's COMPANION files, and
     /// nothing else (see `resolve_source`).
     #[serde(rename = "stagingFile")]
     StagingFile { base: String, file: String },
@@ -174,11 +174,13 @@ pub fn resolve_source(
             let dir = staging::staging_dir(root_local_app_data);
             join_contained(&dir, &staging::mp4_file_name(base))
         }
-        // Membership first (F26): `file` must be literally one of the names
-        // `capture_file_names` says `base` owns. Stems are `&[]` until Task
-        // 53 threads the sidecar's list through; the webcam name needs none.
+        // Membership first (F26): `file` must be literally one of `base`'s
+        // COMPANION files (`companion_file_names`) — never the capture's own
+        // video, sidecar or export temp. Stems are `&[]` until Task 53
+        // threads the sidecar's list through (which needs a sidecar read
+        // here); the webcam name needs none.
         SourceLocator::StagingFile { base, file } => {
-            if !staging_files::capture_file_names(base, &[]).contains(file) {
+            if !staging_files::companion_file_names(base, &[]).contains(file) {
                 return None;
             }
             join_contained(&staging::staging_dir(root_local_app_data), file)
@@ -485,6 +487,22 @@ mod tests {
                 resolve_source(root.path(), "proj1", &record(not_owned)),
                 None,
                 "{not_owned:?} is not a file {base:?} owns"
+            );
+        }
+        // Review fix round 1: a StagingFile names a COMPANION only. The
+        // capture's own video, sidecar and export temp are owned too, but a
+        // StagingFile naming them would be a second locator for the capture
+        // (invisible to every `Staging`-only matcher) or would let a package
+        // copy a sidecar or a live ffmpeg temp as "media".
+        for capture_own in [
+            staging::mp4_file_name(base),
+            staging::sidecar_file_name(base),
+            staging::export_part_file_name(base),
+        ] {
+            assert_eq!(
+                resolve_source(root.path(), "proj1", &record(&capture_own)),
+                None,
+                "{capture_own:?} is the capture's own file, not a companion"
             );
         }
         // An escaping BASE is refused even when the file is "its own".

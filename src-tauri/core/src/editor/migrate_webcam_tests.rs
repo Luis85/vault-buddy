@@ -21,6 +21,10 @@ fn webcam(offset_ms: i64) -> WebcamInput {
 }
 
 fn migrate(webcam: Option<WebcamInput>) -> Project {
+    migrate_cut(webcam, None)
+}
+
+fn migrate_cut(webcam: Option<WebcamInput>, legacy: Option<&serde_json::Value>) -> Project {
     let input = StagedInput {
         base: BASE,
         vault_id: "vault-1",
@@ -30,11 +34,86 @@ fn migrate(webcam: Option<WebcamInput>) -> Project {
         width: 1600,
         height: 900,
         has_audio: true,
-        legacy_timeline: None,
+        legacy_timeline: legacy,
         stems: &[],
         webcam,
     };
     from_staged(&input, "proj-1").project
+}
+
+/// `(start, in, out)` of every clip of `asset_id`, in output order.
+fn spans(project: &Project, asset_id: &str) -> Vec<(u64, u64, u64)> {
+    let mut out: Vec<(u64, u64, u64)> = project
+        .clips
+        .iter()
+        .filter(|c| c.asset_id == asset_id)
+        .map(|c| (c.start_ms, c.in_ms, c.out_ms))
+        .collect();
+    out.sort();
+    out
+}
+
+// Review fix round 1 (Important): the screen clips follow the legacy
+// timeline -- trimmed AND reordered -- so a webcam placed as one uncut clip
+// from `offset_ms` sat every presenter frame over a different screen moment
+// than the one it was recorded with, ran past the project's end, and still
+// claimed `shared-clock`. Each surviving segment gets its OWN webcam clip,
+// mapped through the same source -> output mapping as the screen clip, and
+// clipped to the span the webcam file actually covers (capture ms
+// `offset .. offset + duration`, here 120 .. 58_490).
+#[test]
+fn a_cut_and_reordered_capture_keeps_the_presenter_on_its_screen_moments() {
+    // Asymmetric on purpose: a reorder (the late block first), a segment
+    // straddling the webcam's START and one straddling its END, and a
+    // segment the webcam never covered at all.
+    let legacy = serde_json::json!({ "segments": [
+        { "sourceStartMs": 30_000, "sourceEndMs": 40_000 },
+        { "sourceStartMs": 0, "sourceEndMs": 3_000 },
+        { "sourceStartMs": 58_000, "sourceEndMs": 61_500 },
+        { "sourceStartMs": 5_000, "sourceEndMs": 12_000 }
+    ]});
+    let project = migrate_cut(Some(webcam(120)), Some(&legacy));
+    validate_project(&project).expect("validates");
+    assert_eq!(
+        spans(&project, "src"),
+        [
+            (0, 30_000, 40_000),
+            (10_000, 0, 3_000),
+            (13_000, 58_000, 61_500),
+            (16_500, 5_000, 12_000)
+        ]
+    );
+    assert_eq!(
+        spans(&project, WEBCAM_ASSET_ID),
+        [
+            // Same output start, source shifted by the offset.
+            (0, 29_880, 39_880),
+            // The webcam's first frame is 120 ms into this segment.
+            (10_120, 0, 2_880),
+            // The webcam file ends at capture ms 58_490.
+            (13_000, 57_880, 58_370),
+            (16_500, 4_880, 11_880)
+        ],
+        "every presenter frame must sit over the screen moment it was recorded with"
+    );
+    // A segment entirely before the webcam started places nothing.
+    let early = serde_json::json!({ "segments": [
+        { "sourceStartMs": 0, "sourceEndMs": 100 },
+        { "sourceStartMs": 200, "sourceEndMs": 1_200 }
+    ]});
+    let project = migrate_cut(Some(webcam(120)), Some(&early));
+    validate_project(&project).unwrap();
+    assert_eq!(spans(&project, WEBCAM_ASSET_ID), [(100, 80, 1_080)]);
+    let last_end = project
+        .clips
+        .iter()
+        .map(|c| c.start_ms + (c.out_ms - c.in_ms))
+        .max();
+    assert_eq!(
+        last_end,
+        Some(1_100),
+        "the presenter never outruns the screen"
+    );
 }
 
 fn num(v: f64) -> Num {

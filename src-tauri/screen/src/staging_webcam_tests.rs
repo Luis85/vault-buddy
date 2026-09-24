@@ -144,3 +144,41 @@ fn reserve_base_suffixes_past_a_leftover_webcam_file() {
     std::fs::write(dir.path().join(webcam_part_file_name("cap (2)")), b"x").unwrap();
     assert_eq!(reserve_base(dir.path(), "cap"), "cap (3)");
 }
+
+// Review fix round 1: `WebcamSidecar` is strictly typed, so a malformed or
+// future-shaped block (a missing `deviceLabel`, a numeric `file`) failed the
+// WHOLE sidecar -- the recording vanished from the staged list and could
+// not be opened. The block now degrades to `None`, and its raw JSON is kept
+// so the next rewrite (a pin, a timeline save) does not erase it.
+#[test]
+fn a_malformed_webcam_block_degrades_to_none_and_survives_a_rewrite() {
+    let dir = tempfile::tempdir().unwrap();
+    for block in [
+        serde_json::json!({ "file": 5, "width": 1, "height": 1, "deviceLabel": "x", "offsetMs": 0 }),
+        serde_json::json!({ "file": "a.webcam.mp4", "width": 640, "height": 480, "offsetMs": 7 }),
+    ] {
+        let raw = serde_json::json!({
+            "base": BASE, "vaultId": "v", "sourceTitle": "t", "sourceKind": "screen",
+            "inputs": [], "durationMs": 9_000, "pausedMs": 0, "width": 1920,
+            "height": 1080, "recordedAt": "r", "webcam": block
+        });
+        let path = dir.path().join(sidecar_file_name(BASE));
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+
+        let read = read_sidecar(&path).expect("the capture itself must stay readable");
+        assert_eq!(read.webcam, None, "{block}");
+        assert_eq!(read.duration_ms, 9_000);
+
+        write_sidecar(dir.path(), BASE, &read).unwrap();
+        let rewritten: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(rewritten["webcam"], block, "the rewrite erased the block");
+    }
+    // A well-formed block still parses as the field.
+    let path = dir.path().join(sidecar_file_name(BASE));
+    let mut good: StagedSidecar = read_sidecar(&path).unwrap();
+    good.extra.remove("webcam");
+    good.webcam = Some(webcam_block());
+    write_sidecar(dir.path(), BASE, &good).unwrap();
+    assert_eq!(read_sidecar(&path).unwrap().webcam, Some(webcam_block()));
+}

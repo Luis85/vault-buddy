@@ -112,8 +112,9 @@ pub fn sanitize_title(raw: &str) -> String {
 /// The webcam and stem cases are the export case again: a base ending in
 /// `.webcam` mints a VIDEO named exactly like the webcam file of the base
 /// without it, and its `.part` exactly like that capture's webcam part (the
-/// sweep would attribute it to the wrong capture); a base ending in
-/// `.stem-3` is another capture's stem 3 plus `.m4a`.
+/// sweep would attribute it to the wrong capture). A base ending in
+/// `.stem-3` collides with no file today (a stem is `.m4a`), but it would
+/// END in an owned-file marker, which the rule exists to make unmintable.
 ///
 /// A capture's base is `capture_paths::base_name(..., sanitize_title(title))`,
 /// so the title's tail is the base's tail — and a base ending in `.export`
@@ -284,15 +285,28 @@ mod tests {
     // F25: the webcam and stem suffixes are owned-file markers exactly as
     // `.export` is. Capture B's webcam file is `<B>.webcam.mp4` -- byte-
     // identical to the VIDEO of a capture recorded a minute-mate later from
-    // a window titled "Demo.webcam", and B's stem 3 is that capture's base +
-    // `.m4a` for a window titled "Demo.stem-3". The same rule as `.export`
-    // keeps either from ever being minted.
+    // a window titled "Demo.webcam" (and its part to B's webcam part). The
+    // stem marker has no such byte collision today (a stem is `.m4a`, a
+    // capture's video `.mp4`); it is disambiguated by the same rule so no
+    // base ever ENDS in an owned-file marker -- the `sanitize_title` lines
+    // below are what pin that arm.
     #[test]
     fn staging_title_disambiguates_webcam_and_stem_suffixed_titles() {
         use crate::staging::{
-            mp4_file_name, reserve_base, stem_file_name, webcam_file_name, webcam_part_file_name,
+            reserve_base, stem_file_name, stem_part_file_name, webcam_part_file_name,
+        };
+        use crate::staging_files::capture_file_names;
+        // Every REAL file name a capture can own: its capture files, its
+        // webcam file, a stem, and each of their in-progress parts.
+        let every_name = |base: &str, stem: u32| -> Vec<String> {
+            let mut names = capture_file_names(base, &[stem_file_name(base, stem)]);
+            names.push(part_file_name(base));
+            names.push(webcam_part_file_name(base));
+            names.push(stem_part_file_name(base, stem));
+            names
         };
         let owner = "2026-09-21 1430 Demo";
+        let owned = every_name(owner, 3);
         let dir = tempfile::tempdir().unwrap();
         for title in [
             "Demo.webcam",
@@ -304,21 +318,12 @@ mod tests {
                 dir.path(),
                 &format!("2026-09-21 1430 {}", sanitize_title(title)),
             );
-            assert_ne!(
-                mp4_file_name(&base),
-                webcam_file_name(owner),
-                "{title:?}: the new capture's video IS the other capture's webcam file"
-            );
-            assert_ne!(
-                part_file_name(&base),
-                webcam_part_file_name(owner),
-                "{title:?}: the new capture's part IS the other capture's webcam part"
-            );
-            assert_ne!(
-                format!("{base}.m4a"),
-                stem_file_name(owner, 3),
-                "{title:?}: the new capture's name IS the other capture's stem"
-            );
+            for name in every_name(&base, 1) {
+                assert!(
+                    !owned.contains(&name),
+                    "{title:?}: the new capture's {name:?} IS one of {owner:?}'s files"
+                );
+            }
         }
         assert_eq!(sanitize_title("Demo.webcam"), "Demo.webcam_");
         assert_eq!(sanitize_title("Demo.stem-3"), "Demo.stem-3_");

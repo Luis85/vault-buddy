@@ -202,10 +202,29 @@ fn staged_webcam(
         return None;
     }
     let length = i128::from(sidecar.duration_ms) - i128::from(webcam.offset_ms);
-    let duration_ms = u64::try_from(length).ok().filter(|ms| *ms > 0)?;
-    let size = std::fs::metadata(staging_dir.join(&webcam.file))
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let Some(duration_ms) = u64::try_from(length).ok().filter(|ms| *ms > 0) else {
+        log::warn!(
+            "editor_open_staged: {:?}'s webcam starts at {} ms, not before the capture ends at {} ms; ignored",
+            sidecar.base,
+            webcam.offset_ms,
+            sidecar.duration_ms
+        );
+        return None;
+    };
+    // An unreadable size is recorded as 0 ("unknown", GAP-182's posture) —
+    // the record still resolves, and `missing_media` reports a file that is
+    // really gone — but never silently.
+    let size = match std::fs::metadata(staging_dir.join(&webcam.file)) {
+        Ok(meta) => meta.len(),
+        Err(e) => {
+            log::warn!(
+                "editor_open_staged: cannot read {:?}'s webcam file {:?}: {e}",
+                sidecar.base,
+                webcam.file
+            );
+            0
+        }
+    };
     let input = migrate::WebcamInput {
         duration_ms,
         width: webcam.width,

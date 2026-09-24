@@ -50,8 +50,10 @@ pub const CAPTURE_SYNC_KEY: &str = "capture_sync";
 pub const SHARED_CLOCK: &str = "shared-clock";
 
 /// The presenter placement (ADR §4; F-21; pre-flight F35) — the SAME
-/// constant as `src/editor/layoutGeometry.ts`'s `PRESENTER_CORNER`, which
-/// `tests/editorWebcamDialog.test.ts` pins to these lines by reading them.
+/// constant as `src/editor/layoutGeometry.ts`'s `PRESENTER_CORNER`. Both
+/// languages are pinned to ONE table,
+/// `tests/fixtures/editor-presenter-placement.json`, read by
+/// `migrate_webcam_tests.rs` and `tests/editorWebcamDialog.test.ts`.
 /// `cornerPreset`'s generic margin is a different place.
 pub const PRESENTER_X: f64 = 0.775;
 pub const PRESENTER_Y: f64 = 0.06;
@@ -199,6 +201,9 @@ pub fn from_staged(input: &StagedInput<'_>, project_id: &str) -> MigrationResult
     };
 
     let mut clips = Vec::new();
+    // Every placed segment as `(output start, source start, source end)` —
+    // the one mapping the webcam's clips must follow too.
+    let mut placed = Vec::new();
     let mut cursor_ms = 0u64;
     let mut dropped_segments = 0u32;
     let mut surviving = 0u32;
@@ -217,15 +222,17 @@ pub fn from_staged(input: &StagedInput<'_>, project_id: &str) -> MigrationResult
             cursor_ms,
             (segment.source_start_ms, segment.source_end_ms),
         ));
+        placed.push((cursor_ms, segment.source_start_ms, segment.source_end_ms));
         cursor_ms += duration_ms;
     }
 
     if let Some(webcam) = &input.webcam {
-        let (asset, track, clip) = webcam_parts(webcam, canvas_width, canvas_height);
+        let (asset, track, webcam_clips) =
+            webcam_parts(webcam, &placed, canvas_width, canvas_height);
         assets.push(asset);
         // Index 0 is the TOP layer: the presenter sits over the screen.
         tracks.insert(0, track);
-        clips.extend(clip);
+        clips.extend(webcam_clips);
     }
 
     let title: String = input
@@ -346,19 +353,23 @@ fn fraction(v: f64) -> Num {
 
 /// The synchronized webcam track (F-22, F26): its asset (marked
 /// `SHARED_CLOCK`, the only place that claim is ever made), its own track
-/// `v2`, and one clip placed as the presenter.
+/// `v2`, and its clips placed as the presenter.
 ///
-/// The clip starts at `offset_ms` (pre-flight F35: the plan's real offset
-/// where ADR §4's example shows `0`). A NEGATIVE offset — the device
-/// delivered before the screen's first frame — cannot start before output
-/// 0, so the early head is trimmed off instead (`in_ms = -offset`), keeping
-/// every remaining webcam frame over the screen frame it was recorded with;
-/// a webcam that ENDED before the screen began places no clip at all.
+/// "Synchronized" has to survive the legacy timeline the screen clips
+/// follow (review fix round 1): one webcam clip per placed screen segment,
+/// at the SAME output start and mapped through the same source -> output
+/// mapping, so a cut or a reorder moves the presenter with its screen. Each
+/// is clipped to what the webcam file covers — capture ms `offset_ms ..
+/// offset_ms + duration_ms` (pre-flight F35: the plan's real offset where ADR
+/// §4's example shows `0`; a NEGATIVE offset is a device that delivered
+/// before the screen's first frame, whose early head is simply never
+/// placed). A segment the webcam never covered places nothing.
 fn webcam_parts(
     webcam: &WebcamInput,
+    placed: &[(u64, u64, u64)],
     canvas_width: u32,
     canvas_height: u32,
-) -> (Asset, Track, Option<Clip>) {
+) -> (Asset, Track, Vec<Clip>) {
     let mut extra = Map::new();
     extra.insert(
         CAPTURE_SYNC_KEY.to_string(),
@@ -378,29 +389,45 @@ fn webcam_parts(
         original_name: Some(webcam.file.clone()),
         extra,
     };
-    let start_ms = u64::try_from(webcam.offset_ms).unwrap_or(0);
-    let in_ms = if webcam.offset_ms < 0 {
-        webcam.offset_ms.unsigned_abs()
-    } else {
-        0
-    };
-    let clip = (in_ms < webcam.duration_ms).then(|| Clip {
-        x: fraction(PRESENTER_X),
-        y: fraction(PRESENTER_Y),
-        w: fraction(PRESENTER_W),
-        h: fraction(presenter_height(canvas_width, canvas_height)),
-        frame_shape: Some(PRESENTER_FRAME_SHAPE),
-        fit: Some(PRESENTER_FIT),
-        ..plain_clip(
-            "w1".to_string(),
-            WEBCAM_ASSET_ID,
-            "v2",
-            "Webcam".to_string(),
-            start_ms,
-            (in_ms, webcam.duration_ms),
-        )
-    });
-    (asset, track("v2", TrackKind::Video, "Presenter"), clip)
+    let offset = i128::from(webcam.offset_ms);
+    let covered = (offset, offset + i128::from(webcam.duration_ms));
+    let clips = placed
+        .iter()
+        .filter_map(|&(start, source_start, source_end)| {
+            let lo = i128::from(source_start).max(covered.0);
+            let hi = i128::from(source_end).min(covered.1);
+            // Every value below is non-negative and within u64 whenever the
+            // intersection is non-empty: `lo >= source_start >= 0`,
+            // `lo >= offset`, `hi <= offset + duration`.
+            if lo >= hi {
+                return None;
+            }
+            let as_u64 = |v: i128| u64::try_from(v).ok();
+            Some((
+                as_u64(i128::from(start) + (lo - i128::from(source_start)))?,
+                as_u64(lo - offset)?,
+                as_u64(hi - offset)?,
+            ))
+        })
+        .enumerate()
+        .map(|(i, (start_ms, in_ms, out_ms))| Clip {
+            x: fraction(PRESENTER_X),
+            y: fraction(PRESENTER_Y),
+            w: fraction(PRESENTER_W),
+            h: fraction(presenter_height(canvas_width, canvas_height)),
+            frame_shape: Some(PRESENTER_FRAME_SHAPE),
+            fit: Some(PRESENTER_FIT),
+            ..plain_clip(
+                format!("w{}", i + 1),
+                WEBCAM_ASSET_ID,
+                "v2",
+                format!("Webcam {}", i + 1),
+                start_ms,
+                (in_ms, out_ms),
+            )
+        })
+        .collect();
+    (asset, track("v2", TrackKind::Video, "Presenter"), clips)
 }
 
 #[cfg(test)]

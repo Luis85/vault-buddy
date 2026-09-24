@@ -205,21 +205,19 @@ fn disambiguate_reserved_device(base: &str) -> String {
 
 /// Find a free base in `dir`, suffixing ` (N)` on collision.
 ///
-/// A base is free only when ALL THREE names it owns are free — the staged
-/// `.mp4`, the `.json` sidecar and the hidden `.mp4.part`. This is the
-/// pairwise reservation the audio domain uses, widened to three: checking
-/// only the `.mp4` would let a second capture adopt a base whose
-/// in-progress `.part` still exists, and the two captures would then write
-/// the same file.
-///
-/// The capture's WEBCAM file and part (F-22) are two more names it owns:
-/// a leftover `<base>.webcam.mp4` would otherwise be adopted as the new
-/// capture's own webcam track.
+/// A base is free only when EVERY name it mints a file under is free — the
+/// staged `.mp4`, the `.json` sidecar, the hidden `.mp4.part`, and (F-22)
+/// the webcam file and its part. This is the pairwise reservation the
+/// audio domain uses, widened to five: checking only the `.mp4` would let a
+/// second capture adopt a base whose in-progress `.part` still exists, and
+/// the two captures would then write the same file; a leftover
+/// `<base>.webcam.mp4` would be adopted as the new capture's own webcam
+/// track.
 ///
 /// It also refuses to hand back a base whose stem is a Windows reserved
 /// device name (GAP-108), because this is where a base becomes the name
-/// THREE files are created under — putting the check at any one of those
-/// writes would leave the other two.
+/// every one of those files is created under — putting the check at any one
+/// of those writes would leave the others.
 pub fn reserve_base(dir: &Path, base: &str) -> String {
     let base = &disambiguate_reserved_device(base);
     let free = |candidate: &str| {
@@ -385,9 +383,36 @@ pub fn read_sidecar(path: &Path) -> Option<StagedSidecar> {
             )
         })
         .ok()?;
-    serde_json::from_slice(&bytes)
-        .map_err(|e| log::warn!("screen staging: malformed sidecar {}: {e}", path.display()))
-        .ok()
+    match serde_json::from_slice(&bytes) {
+        Ok(sidecar) => Some(sidecar),
+        Err(e) => without_unreadable_webcam(&bytes, path).or_else(|| {
+            log::warn!("screen staging: malformed sidecar {}: {e}", path.display());
+            None
+        }),
+    }
+}
+
+/// The per-field defensive read, for the one nested block (review fix
+/// round 1): a malformed or future-shaped `webcam` block must cost the
+/// capture its webcam track, never the whole capture — a strict read made
+/// the recording vanish from the staged list and refuse to open. The block
+/// degrades to `None`, and its raw JSON moves into `extra`, which writes it
+/// back under the same key, so the next rewrite (a pin, a timeline save)
+/// does not erase what a newer build wrote. `None` when the sidecar is
+/// unreadable for any other reason.
+fn without_unreadable_webcam(bytes: &[u8], path: &Path) -> Option<StagedSidecar> {
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let raw = value.as_object_mut()?.remove("webcam")?;
+    if serde_json::from_value::<WebcamSidecar>(raw.clone()).is_ok() {
+        return None; // the block was fine; something else is malformed
+    }
+    let mut sidecar: StagedSidecar = serde_json::from_value(value).ok()?;
+    log::warn!(
+        "screen staging: {} has a webcam block this build cannot read; its webcam track is ignored",
+        path.display()
+    );
+    sidecar.extra.insert("webcam".to_string(), raw);
+    Some(sidecar)
 }
 
 #[cfg(test)]
