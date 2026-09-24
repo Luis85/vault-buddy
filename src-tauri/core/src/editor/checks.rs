@@ -8,8 +8,10 @@
 //!
 //! **Only `blocking` stops a render**, and only two things block: a file
 //! the render needs is missing (the render's own refusal, `render_plan::
-//! plan`, names exactly the files of clips on VISIBLE tracks, so a missing
-//! file only hidden tracks use is a warning), and an empty timeline.
+//! plan`, names exactly the files of clips on VISIBLE tracks that it reads
+//! -- every video-track clip, and an audio-track clip only when it can be
+//! heard (`render_reads`) -- so a missing file only hidden or silenced
+//! clips use is a warning), and an empty timeline.
 //! Everything else is a warning or a note the user may knowingly ship.
 //!
 //! **The rules read the SAME algebra the render and the preview read**,
@@ -278,6 +280,17 @@ fn count(n: usize, one: &str, many: &str) -> String {
 
 // ---- missingMedia, emptyProject, noDestination --------------------------
 
+/// Does the render read `clip`'s source? `render_plan::plan`'s own rule:
+/// a clip on a hidden track is skipped, and a clip on an AUDIO track that
+/// cannot be heard (`is_audible`: its mute, its track's, the solo rule) is
+/// skipped before its source is looked up -- so only these clips' missing
+/// files make the render refuse.
+fn render_reads(project: &Project, clip: &Clip) -> bool {
+    track_of(project, clip).is_some_and(|t| {
+        t.visible && (t.kind == TrackKind::Video || is_audible(&project.tracks, clip, t))
+    })
+}
+
 fn missing_media(ctx: &Ctx) -> Vec<CheckFinding> {
     let p = ctx.project;
     ctx.missing
@@ -287,9 +300,7 @@ fn missing_media(ctx: &Ctx) -> Vec<CheckFinding> {
             if users.is_empty() {
                 return None;
             }
-            let needed = users
-                .iter()
-                .any(|c| track_of(p, c).is_some_and(|t| t.visible));
+            let needed = users.iter().any(|c| render_reads(p, c));
             let name = asset_of(p, id).map_or(id.as_str(), |a| a.name.as_str());
             let (severity, message) = if needed {
                 (
@@ -299,7 +310,7 @@ fn missing_media(ctx: &Ctx) -> Vec<CheckFinding> {
             } else {
                 (
                     Severity::Warning,
-                    format!("\"{name}\" is missing. Only hidden tracks use it, so the render skips it."),
+                    format!("\"{name}\" is missing. Only hidden or silenced clips use it, so the render skips it."),
                 )
             };
             Some(finding(

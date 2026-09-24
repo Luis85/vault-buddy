@@ -37,6 +37,7 @@ onMounted(async () => {
 async function save(): Promise<void> {
   if (!vaultId.value || saving.value) return;
   saving.value = true;
+  error.value = null;
   const ok = await editorProject.execute({
     kind: "setDestination",
     vaultId: vaultId.value,
@@ -68,6 +69,7 @@ async function save(): Promise<void> {
     />
     <p
       v-if="error"
+      data-testid="checks-destination-error"
       role="alert"
       class="text-danger-fg"
     >

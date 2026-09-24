@@ -176,8 +176,42 @@ fn missing_media_on_hidden_tracks_only_warns() {
     assert_eq!(f.severity, Severity::Warning);
     assert_eq!(
         f.message,
-        "\"Asset cap\" is missing. Only hidden tracks use it, so the render skips it."
+        "\"Asset cap\" is missing. Only hidden or silenced clips use it, so the render skips it."
     );
+}
+
+#[test]
+fn missing_media_used_only_by_a_silenced_audio_clip_only_warns() {
+    // Fix round 1 (review Important 1): the render skips an audio-track clip
+    // it cannot hear (render_plan::Accumulator::add, `!is_video &&
+    // !audible`) before it ever looks the source up, so its missing file
+    // must not block -- a muted voice-over used to disable Render.
+    let mut p = base();
+    let mut voice = clip("s1", "a1", "voice", 0, 0, 12_000);
+    voice.muted = true;
+    p.clips.push(voice);
+    let findings = run_checks(&p, &set(&["voice"]), 0, &none());
+    let f = only(findings, CheckCode::MissingMedia);
+    assert_eq!(f.severity, Severity::Warning);
+    assert_eq!(
+        f.message,
+        "\"Asset voice\" is missing. Only hidden or silenced clips use it, so the render skips it."
+    );
+    // A soloed other track silences it the same way.
+    p.clips[1].muted = false;
+    p.tracks[3].solo = true;
+    let f = only(
+        run_checks(&p, &set(&["voice"]), 0, &none()),
+        CheckCode::MissingMedia,
+    );
+    assert_eq!(f.severity, Severity::Warning);
+    // Control: audible, the render needs it -- blocking.
+    p.tracks[3].solo = false;
+    let f = only(
+        run_checks(&p, &set(&["voice"]), 0, &none()),
+        CheckCode::MissingMedia,
+    );
+    assert_eq!(f.severity, Severity::Blocking);
 }
 
 // ---- emptyProject --------------------------------------------------------

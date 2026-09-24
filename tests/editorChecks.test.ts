@@ -355,6 +355,44 @@ describe("ChecksDialog", () => {
     expect(w.emitted("close")).toBeUndefined();
   });
 
+  it("a retried destination clears the last refusal while it is in flight", async () => {
+    // Fix round 1 (review Minor 3): the stale "could not be set" line used
+    // to stay on screen through the retry.
+    findings = [finding({ code: "noDestination", action: "setDestination" })];
+    const store = await openSession();
+    let release: (() => void) | null = null;
+    let calls = 0;
+    store.setPort({
+      ...store.port,
+      execute: (req) => {
+        calls += 1;
+        if (calls === 1) {
+          return Promise.reject(
+            new EditorPortError({ code: "invalidRequest", message: "That vault is gone.", retryable: false, operationId: "op" }),
+          );
+        }
+        return new Promise((resolve) => {
+          release = () =>
+            resolve({ snapshot: { ...openResult().snapshot, revision: req.expectedRevision + 1 }, project: project() });
+        });
+      },
+    });
+    await useEditorChecksStore().refresh();
+    const w = mount(ChecksDialog, { props: { open: true } });
+    await flushPromises();
+    await w.get('[data-testid="check-action-chk-noDestination-project"]').trigger("click");
+    await flushPromises();
+    await w.get('[data-testid="checks-destination-vault"]').setValue("vault-1");
+    await w.get('[data-testid="checks-destination-save"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="checks-destination-error"]').text()).toBe("That vault is gone.");
+    await w.get('[data-testid="checks-destination-save"]').trigger("click");
+    await flushPromises();
+    expect(w.find('[data-testid="checks-destination-error"]').exists()).toBe(false);
+    (release as unknown as () => void)();
+    await flushPromises();
+  });
+
   it("says so when the checks could not be read, rather than reading as a pass", async () => {
     const store = useEditorProjectStore();
     store.setPort(

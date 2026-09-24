@@ -3238,6 +3238,13 @@ its surface is not mounted is answered the next time that surface mounts
 (the design that lets the media library open Reconnect just after its tab
 is chosen); every surface a reveal targets today is mounted whenever the
 editor shell is, except the media library, whose tab the same reveal opens.
+(7) **The checks read the WHOLE timeline, whatever is being rendered.** A
+range render (the Render dialog's "A range of the output") whose window
+excludes every clip that uses a missing file would be accepted by
+`render_plan::plan`, yet the blocking `missingMedia` finding still disables
+Render video. By design for now: "before you share" gates the edit as a
+whole, and scoping the gate to a range would need the range passed into
+`editor_get_checks`.
 
 ## 9. Documentation & repo hygiene
 
