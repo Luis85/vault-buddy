@@ -14,13 +14,19 @@ use super::model::{
 use super::{limits, Map, Num};
 use crate::timeline::Timeline;
 
-/// One extracted audio stem accompanying a staged capture. Always empty
-/// today — audio-stem extraction is Task 51 — kept on the input shape now so
-/// that task does not have to change this one's signature.
+#[path = "migrate_stems.rs"]
+mod stems;
+pub use stems::stem_asset_id;
+
+/// One per-input audio stem recorded beside a staged capture (Task 53,
+/// F-05, F26): input `index` (1-based) named `input`, in the staging file
+/// `file` (`<base>.stem-<index>.m4a`) — the shell registers it as a
+/// `StagingFile { base, file }` source for `stem_asset_id(index)`.
 #[derive(Debug, Clone)]
 pub struct StemInput {
     pub index: u32,
     pub input: String,
+    pub file: String,
 }
 
 /// A staged capture's own SYNCHRONIZED webcam track (F-22, F26): recorded
@@ -224,6 +230,18 @@ pub fn from_staged(input: &StagedInput<'_>, project_id: &str) -> MigrationResult
         ));
         placed.push((cursor_ms, segment.source_start_ms, segment.source_end_ms));
         cursor_ms += duration_ms;
+    }
+
+    if !input.stems.is_empty() {
+        let (stem_assets, stem_tracks, stem_clips) =
+            stems::stem_parts(input.stems, &placed, input.duration_ms, tracks.len() + 1);
+        // The capture's MIX is muted once its inputs are laid out as stems.
+        for clip in &mut clips {
+            clip.muted = true;
+        }
+        assets.extend(stem_assets);
+        tracks.extend(stem_tracks);
+        clips.extend(stem_clips);
     }
 
     if let Some(webcam) = &input.webcam {
@@ -433,6 +451,10 @@ fn webcam_parts(
 #[cfg(test)]
 #[path = "migrate_webcam_tests.rs"]
 mod webcam_tests;
+
+#[cfg(test)]
+#[path = "migrate_stem_tests.rs"]
+mod stem_tests;
 
 #[cfg(test)]
 mod tests {

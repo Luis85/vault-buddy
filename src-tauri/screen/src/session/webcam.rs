@@ -306,7 +306,8 @@ pub fn webcam_stop_warning(err: &crate::ScreenError) -> String {
             holds_footage: true,
             ..
         } => format!(
-            "{SAVED}, but its webcam track could not be finished. The webcam              footage was kept and will be recovered the next time Vault Buddy starts."
+            "{SAVED}, but its webcam track could not be finished. The webcam \
+             footage was kept and will be recovered the next time Vault Buddy starts."
         ),
         crate::ScreenError::Retained {
             holds_footage: false,

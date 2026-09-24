@@ -63,8 +63,7 @@ fn sidecar(base: &str, vault_id: &str) -> StagedSidecar {
         height: 900,
         recorded_at: "2026-09-20T14:32:00Z".into(),
         timeline: None,
-        webcam: None,
-        extra: serde_json::Map::new(),
+        ..Default::default()
     }
 }
 
@@ -149,6 +148,82 @@ fn open_staged_registers_a_resolvable_webcam_source() {
         pinned_project(&f.sidecar(BASE)).as_deref(),
         Some(project.id.as_str())
     );
+}
+
+// F26 (Task 53): every stem the sidecar lists becomes its own
+// `StagingFile` source, so the preview, a render and a portable package can
+// all reach its file. The list is hand-editable, so each entry is validated
+// against what the capture OWNS (`capture_file_names`) before it is
+// registered: an escaping name and another capture's stem are never
+// registered — a record that could never resolve, or that resolves to
+// someone else's recording, is worse than no stem.
+#[test]
+fn open_staged_registers_a_resolvable_stem_source_per_stem() {
+    const OTHER: &str = "2026-09-20 1500 Other";
+    let f = Fixture::new();
+    let mut s = sidecar(BASE, "vaultA");
+    s.inputs = vec!["USB Mic".into(), "Speakers".into()];
+    let stem = |index: u32, input: &str, file: String| staging::StemSidecar {
+        index,
+        input: input.into(),
+        file,
+        extra: serde_json::Map::new(),
+    };
+    s.stems = vec![
+        stem(1, "USB Mic", staging::stem_file_name(BASE, 1)),
+        stem(2, "Speakers", staging::stem_file_name(BASE, 2)),
+        stem(3, "Escape", "../escape.m4a".into()),
+        stem(4, "Other", staging::stem_file_name(OTHER, 4)),
+    ];
+    f.stage(&s);
+    for (name, len) in [
+        (staging::stem_file_name(BASE, 1), 11),
+        (staging::stem_file_name(BASE, 2), 29),
+        (staging::stem_file_name(OTHER, 4), 5),
+    ] {
+        std::fs::write(f.staging().join(name), vec![b's'; len]).unwrap();
+    }
+
+    let opened = open_staged_in(f.root(), &f.staging(), BASE).expect("opens");
+    let project = &opened.envelope.project;
+    let mut keys: Vec<&str> = opened.sources.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [STAGED_ASSET_ID, "stem-1", "stem-2"],
+        "only the stems this capture owns are registered"
+    );
+    for (index, input, len) in [(1, "USB Mic", 11), (2, "Speakers", 29)] {
+        let id = migrate::stem_asset_id(index);
+        let file = staging::stem_file_name(BASE, index);
+        let record = &opened.sources[&id];
+        assert_eq!(
+            record.locator,
+            SourceLocator::StagingFile {
+                base: BASE.to_string(),
+                file: file.clone(),
+            }
+        );
+        assert_eq!(
+            resolve_source(f.root(), &project.id, record),
+            Some(f.staging().join(&file)),
+            "{id} resolves to its real stem file"
+        );
+        assert_eq!(record.size, len);
+        assert_eq!(record.media_kind, SourceMediaKind::Audio);
+        assert!(
+            record.has_audio && !record.has_video,
+            "a stem is sound only"
+        );
+        let asset = project.assets.iter().find(|a| a.id == id).expect("placed");
+        assert_eq!(asset.name, input);
+        assert!(project.clips.iter().any(|c| c.asset_id == id));
+    }
+    assert!(project
+        .assets
+        .iter()
+        .all(|a| a.id != "stem-3" && a.id != "stem-4"));
+    assert!(missing_media(f.root(), project, &opened.sources).is_empty());
 }
 
 // GAP-199: a webcam that vanished mid-capture finalized EARLY, and its clip

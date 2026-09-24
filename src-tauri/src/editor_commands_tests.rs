@@ -20,8 +20,7 @@ fn sidecar(base: &str) -> StagedSidecar {
         height: 1080,
         recorded_at: "2026-09-20T10:00:00Z".into(),
         timeline: None,
-        webcam: None,
-        extra: Default::default(),
+        ..Default::default()
     }
 }
 

@@ -1,7 +1,7 @@
 /**
  * The Screen tab of Vault settings (spec §12, docs/Gaps.md GAP-103).
  *
- * Until it landed, all seven `screen_*` fields were `config.json` hand-edits:
+ * Until it landed, all seven (now eight) `screen_*` fields were `config.json` hand-edits:
  * READ in production -- quality and fps by the capture worker, the other five
  * by the exporter -- and settable nowhere, so a user could record and export
  * but never choose a folder, a frame rate, or whether a note was written.
@@ -36,6 +36,7 @@ type Cfg = {
   screenCreateNote?: boolean;
   screenExtraFrontmatter?: string | null;
   screenBodyTemplate?: string | null;
+  screenAudioStems?: boolean;
 };
 
 function mountTab(
@@ -51,6 +52,7 @@ function mountTab(
     screenCreateNote: true,
     screenExtraFrontmatter: null,
     screenBodyTemplate: null,
+    screenAudioStems: false,
   };
   const calls: Array<{ cmd: string; args: unknown }> = [];
   mockIPC((cmd, args) => {
@@ -92,6 +94,25 @@ function lastSaved(calls: Array<{ cmd: string; args: unknown }>) {
 }
 
 describe("ScreenCaptureConfigTab", () => {
+  // Task 53: stems are a property of HOW a capture is recorded, so the toggle
+  // must say it changes nothing already staged -- a user flipping it and
+  // reopening yesterday's capture would otherwise look for tracks that were
+  // never recorded. It loads what is on disk and saves on the click.
+  it("the stems toggle states it applies to new recordings", async () => {
+    const { wrapper, calls } = mountTab({ screenAudioStems: true });
+    await flushPromises();
+    const toggle = wrapper.get("[data-testid='screen-audio-stems-toggle']");
+    expect((toggle.element as HTMLInputElement).checked).toBe(true);
+    const label = wrapper.get("label[for='screen-audio-stems']").text();
+    expect(label).toContain("Keep each audio input as a separate track (new recordings only)");
+
+    (toggle.element as HTMLInputElement).checked = false;
+    await toggle.trigger("change");
+    await flushPromises();
+    expect(lastSaved(calls)?.screenAudioStems).toBe(false);
+  });
+
+
   it("loads all seven fields from disk", async () => {
     const { wrapper } = mountTab({
       screenCaptureFolder: "Recordings/Screen",
@@ -142,7 +163,7 @@ describe("ScreenCaptureConfigTab", () => {
 
     // Every field travels on every save: the command is a whole-DTO
     // read-modify-write, so a partial payload would write serde's defaults
-    // over the six fields the user did not touch.
+    // over the seven fields the user did not touch.
     expect(lastSaved(calls)).toEqual({
       screenCaptureFolder: null,
       screenCaptureDateFolders: false,
@@ -151,6 +172,7 @@ describe("ScreenCaptureConfigTab", () => {
       screenCreateNote: true,
       screenExtraFrontmatter: null,
       screenBodyTemplate: null,
+      screenAudioStems: false,
     });
   });
 

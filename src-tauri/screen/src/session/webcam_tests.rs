@@ -321,8 +321,18 @@ fn a_webcam_that_could_not_finish_never_reads_as_a_failed_screen_capture() {
             "no path in a user-facing line: {msg}"
         );
     }
-    assert!(webcam_stop_warning(&kept).contains("kept and will be recovered"));
-    assert!(webcam_stop_warning(&empty).contains("no webcam video was recorded"));
+    // The WHOLE string, not a fragment (Task 53 carry): a `\` line
+    // continuation lost in an earlier edit put a 14-space run inside the
+    // sentence, and a `contains` on either half stayed green over it.
+    assert_eq!(
+        webcam_stop_warning(&kept),
+        "The screen capture was saved, but its webcam track could not be finished. The \
+         webcam footage was kept and will be recovered the next time Vault Buddy starts."
+    );
+    assert_eq!(
+        webcam_stop_warning(&empty),
+        "The screen capture was saved, but no webcam video was recorded."
+    );
 }
 
 // The pure message above is only half the fix: the `cfg(windows)` stop arm

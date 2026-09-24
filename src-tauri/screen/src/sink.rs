@@ -55,6 +55,13 @@ mod imp {
             Err(ScreenError::Unsupported)
         }
 
+        pub fn create_audio_only(
+            _path: &Path,
+            _audio: AudioFormat,
+        ) -> Result<FragmentedSink, ScreenError> {
+            Err(ScreenError::Unsupported)
+        }
+
         pub fn write_video(
             &mut self,
             _nv12: &[u8],
@@ -235,7 +242,12 @@ mod imp {
     /// Windows-verification item, not a proven property of this code.
     pub struct FragmentedSink {
         writer: IMFSinkWriter,
+        has_video: bool,
         has_audio: bool,
+        /// The writer's index for the audio stream: 1 beside a video stream,
+        /// 0 in an audio-only file (a stem) — the sink numbers its streams in
+        /// the order they were declared, and there is no stream 1 there.
+        audio_stream: u32,
         /// Dropped last, after the writer: MFShutdown must not run while a
         /// Media Foundation object is still alive.
         _mf: MfRuntime,
@@ -336,7 +348,66 @@ mod imp {
 
                 Ok(FragmentedSink {
                     writer,
+                    has_video: true,
                     has_audio: audio.is_some(),
+                    audio_stream: AUDIO_STREAM,
+                    _mf: mf,
+                })
+            }
+        }
+
+        /// An AUDIO-ONLY fragmented MP4 (`.m4a`) — a capture's per-input
+        /// stem (Task 53). `MFCreateFMPEG4MediaSink` accepts a null video
+        /// type, and the one stream it then declares is the writer's stream
+        /// 0; that is CHECKED (`GetStreamSinkCount`) rather than assumed,
+        /// because writing to a stream index the sink does not have is an
+        /// HRESULT on every sample instead of one refusal here. The same
+        /// never-`Flush` rule holds: `finalize` is the only drain.
+        pub fn create_audio_only(
+            path: &Path,
+            audio: AudioFormat,
+        ) -> Result<FragmentedSink, ScreenError> {
+            audio.validate()?;
+            unsafe {
+                let mf = MfRuntime::start().map_err(|e| sink_err("MFStartup", e))?;
+                let byte_stream = MFCreateFile(
+                    MF_ACCESSMODE_WRITE,
+                    MF_OPENMODE_DELETE_IF_EXIST,
+                    MF_FILEFLAGS_NONE,
+                    &HSTRING::from(path.to_string_lossy().as_ref()),
+                )
+                .map_err(|e| sink_err("create the stem file", e))?;
+                let audio_out =
+                    audio_output_type(audio).map_err(|e| sink_err("build the AAC type", e))?;
+                let sink: IMFMediaSink =
+                    MFCreateFMPEG4MediaSink(&byte_stream, None::<&IMFMediaType>, &audio_out)
+                        .map_err(|e| sink_err("create the fragmented audio sink", e))?;
+                let streams = sink
+                    .GetStreamSinkCount()
+                    .map_err(|e| sink_err("count the stem's streams", e))?;
+                if streams != 1 {
+                    log::error!("screen sink: an audio-only sink declared {streams} streams");
+                    return Err(ScreenError::Sink(format!(
+                        "an audio-only sink declared {streams} streams, not 1"
+                    )));
+                }
+                let writer = MFCreateSinkWriterFromMediaSink(&sink, None)
+                    .map_err(|e| sink_err("create the stem writer", e))?;
+                writer
+                    .SetInputMediaType(
+                        0,
+                        &audio_input_type(audio).map_err(|e| sink_err("build the PCM type", e))?,
+                        None,
+                    )
+                    .map_err(|e| sink_err("configure the stem stream", e))?;
+                writer
+                    .BeginWriting()
+                    .map_err(|e| sink_err("begin writing the stem", e))?;
+                Ok(FragmentedSink {
+                    writer,
+                    has_video: false,
+                    has_audio: true,
+                    audio_stream: 0,
                     _mf: mf,
                 })
             }
@@ -348,6 +419,9 @@ mod imp {
             ts: Duration,
             duration: Duration,
         ) -> Result<(), ScreenError> {
+            if !self.has_video {
+                return Err(ScreenError::Sink("this file has no video stream".into()));
+            }
             self.write(VIDEO_STREAM, nv12, ts, duration)
         }
 
@@ -366,7 +440,7 @@ mod imp {
             let bytes: &[u8] = unsafe {
                 std::slice::from_raw_parts(pcm.as_ptr() as *const u8, std::mem::size_of_val(pcm))
             };
-            self.write(AUDIO_STREAM, bytes, ts, duration)
+            self.write(self.audio_stream, bytes, ts, duration)
         }
 
         fn write(

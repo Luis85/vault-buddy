@@ -276,6 +276,9 @@ pub(crate) fn start_screen_capture_blocking(
 
     let fps = cfg.screen_fps;
     let quality = cfg.screen_quality;
+    // Task 53: read once with the rest of the vault's settings, so a toggle
+    // flipped mid-capture applies to the NEXT recording, never this one.
+    let keep_stems = cfg.screen_audio_stems;
     let device_thread = std::thread::Builder::new()
         .name("screen-capture-device".into())
         .spawn(move || {
@@ -325,6 +328,12 @@ pub(crate) fn start_screen_capture_blocking(
                 warn_tx: Some(warn_tx),
                 stats_tx: Some(stats_tx),
                 webcam: crate::screen_webcam_commands::webcam_params(webcam, &dir, &base, quality),
+                stems: vault_buddy_screen::session::stems::stem_params(
+                    keep_stems,
+                    &dir,
+                    &base,
+                    &input_names,
+                ),
             };
             let session = match ScreenSession::start(params) {
                 Ok(s) => s,
@@ -520,13 +529,18 @@ fn finalize_stopped(
         height: outcome.height,
         recorded_at,
         timeline: None,
-        webcam: None,
-        extra: Default::default(),
+        ..Default::default()
     };
     // The measured webcam track (F-22, GAP-199), when one finished.
     if let Some(webcam) = &outcome.webcam {
         sidecar.set_webcam(crate::screen_webcam_commands::webcam_block(&base, webcam));
     }
+    // The stems that finished complete (Task 53); an incomplete one was a
+    // warning and is not listed, so discard and Clear own exactly these.
+    sidecar.set_stems(vault_buddy_screen::session::stems::stem_sidecar_entries(
+        &base,
+        &outcome.stems,
+    ));
     if let Err(e) = staging::write_sidecar(dir, &base, &sidecar) {
         log::warn!("screen capture: writing the sidecar failed: {e}");
     }

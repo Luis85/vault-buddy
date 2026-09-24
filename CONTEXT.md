@@ -24,6 +24,10 @@ _Avoid_: Recording — a Capture is not necessarily audio
 A screen recording that has been made but not yet saved into a Vault: an `.mp4` plus a `.json` sidecar (source, duration, and the editor's in-progress timeline) living in the app's own staging directory, deliberately **outside every Vault**. An unedited, unapproved capture is not knowledge, so Discarding one must leave no litter in the user's notes. It stays staged until it is Exported or Discarded, and a crash leaves it recoverable rather than lost.
 _Avoid_: Draft, temp file — a Staged Capture is the user's footage, not scratch
 
+**Stem**:
+One audio input of a Staged Capture kept as its own mono file (`<base>.stem-<n>.m4a`) beside the capture's MIXED track, when the vault keeps them (off by default; new recordings only). A Stem is cut from the very samples the mix is made of, so the two cannot drift; it belongs to its capture only when the capture's sidecar lists it, and it is discarded with the capture. In the editor each Stem is its own audio track and the mix is muted.
+_Avoid_: Track (the editor's timeline word), channel (a stem is a whole device's input, downmixed), separate recording — nothing is recorded twice
+
 **Export**:
 Turning a Staged Capture into a playable `.mp4` plus a companion note inside a Vault — the act that ends a Staged Capture's life. An untouched timeline is remuxed losslessly; an edited one is re-encoded to exactly the spans the editor shows. The Staged Capture is removed only after the Vault write has landed.
 _Avoid_: Render, publish, upload — nothing leaves the machine; Save is the UI's word for it

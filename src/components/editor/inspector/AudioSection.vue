@@ -15,6 +15,9 @@
  * **Detach audio** (`AudioDetachControl`) reads the SAME `actions.ts`
  * verdict the context menu does, so the two can never disagree.
  *
+ * **Stems** (`AudioStemsNote`, Task 53): a capture recorded without per-input
+ * stems says so, and names the setting that records them.
+ *
  * Nothing here is monitoring: the preview's mute and volume live in the
  * transport and the mixer, and never reach a command.
  */
@@ -23,6 +26,7 @@ import { computed } from "vue";
 import { useSelectedClips } from "../../../composables/useSelectedClips";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import AudioDetachControl from "./AudioDetachControl.vue";
+import AudioStemsNote from "./AudioStemsNote.vue";
 import AudioVolumeField from "./AudioVolumeField.vue";
 
 const props = defineProps<{ clipIds: string[] }>();
@@ -83,6 +87,7 @@ function onToggleMute(): void {
         v-if="clip"
         :asset="asset"
       />
+      <AudioStemsNote :asset="asset" />
     </template>
   </div>
 </template>

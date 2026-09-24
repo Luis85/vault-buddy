@@ -28,8 +28,8 @@ use crate::staging;
 /// captures themselves.
 ///
 /// Plus the synchronized webcam file (F-22) — ALWAYS, since its name
-/// derives from `base` alone — and each of the sidecar's `stems` (F24; Task
-/// 53 supplies the list, every caller passes `&[]` until then). A stem name
+/// derives from `base` alone — and each of the sidecar's `stems` (F24; every
+/// caller passes `StagedSidecar::stem_files`, Task 53). A stem name
 /// is owned only when it is literally `staging::stem_file_name(base, n)`:
 /// the list comes from a hand-editable sidecar, and whatever this returns a
 /// discard deletes and `resolve_source` serves.
@@ -83,8 +83,15 @@ pub struct StagingUsage {
 /// capture that never had an export temp is the ordinary case, and a size
 /// readout that errors because a file it did not need is absent would be
 /// worse than useless.
+///
+/// The stems are the ones the capture's OWN sidecar lists (F24, Task 53):
+/// an unreadable or absent sidecar lists none, which under-reports rather
+/// than guessing at stem-shaped files it cannot vouch for.
 pub fn capture_bytes(dir: &Path, base: &str) -> u64 {
-    capture_file_names(base, &[])
+    let stems = staging::read_sidecar(&dir.join(staging::sidecar_file_name(base)))
+        .map(|s| s.stem_files())
+        .unwrap_or_default();
+    capture_file_names(base, &stems)
         .iter()
         .filter_map(|name| std::fs::symlink_metadata(dir.join(name)).ok())
         .filter(|meta| meta.file_type().is_file())
@@ -129,7 +136,7 @@ mod tests {
     }
 
     // F24: the webcam file is derivable from the base and so ALWAYS owned;
-    // stems come from the sidecar's list (empty until Task 53), and only a
+    // stems come from the sidecar's list (`StagedSidecar::stem_files`), and only a
     // name in this capture's own stem shape may join the set -- the list is
     // hand-editable, and whatever this returns, a discard deletes.
     #[test]
@@ -183,6 +190,37 @@ mod tests {
         write(d.path(), &staging::export_part_file_name(BASE), 300);
         write(d.path(), &staging::webcam_file_name(BASE), 4_000);
         assert_eq!(capture_bytes(d.path(), BASE), 4_420);
+    }
+
+    // F24: the size readout measures what Clear will actually free, which
+    // now includes the stems the capture's sidecar lists (Task 53) — and not
+    // a stem-shaped file it does not list.
+    #[test]
+    fn bytes_count_the_stems_the_sidecar_lists() {
+        let d = tempfile::tempdir().unwrap();
+        let stem = |index: u32| staging::StemSidecar {
+            index,
+            input: format!("input {index}"),
+            file: staging::stem_file_name(BASE, index),
+            extra: serde_json::Map::new(),
+        };
+        let sidecar = staging::StagedSidecar {
+            base: BASE.into(),
+            stems: vec![stem(1), stem(2)],
+            ..Default::default()
+        };
+        staging::write_sidecar(d.path(), BASE, &sidecar).unwrap();
+        let sidecar_len = std::fs::metadata(d.path().join(staging::sidecar_file_name(BASE)))
+            .unwrap()
+            .len();
+        write(d.path(), &staging::mp4_file_name(BASE), 100);
+        write(d.path(), &staging::stem_file_name(BASE, 1), 7_000);
+        write(d.path(), &staging::stem_file_name(BASE, 2), 50_000);
+        write(d.path(), &staging::stem_file_name(BASE, 3), 900_000); // unlisted
+        assert_eq!(
+            capture_bytes(d.path(), BASE),
+            100 + 7_000 + 50_000 + sidecar_len
+        );
     }
 
     #[test]

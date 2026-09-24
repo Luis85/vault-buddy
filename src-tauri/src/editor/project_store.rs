@@ -56,7 +56,7 @@ pub enum SourceLocator {
     /// into the project directory.
     Staging { base: String },
     /// A COMPANION file of a staged capture (F-22, F26) — its synchronized
-    /// webcam track `<base>.webcam.mp4` today, a stem after Task 53 — also
+    /// webcam track `<base>.webcam.mp4` or a listed stem `<base>.stem-<n>.m4a` — also
     /// adopted by reference. `Staging { base }` can only ever name
     /// `<base>.mp4`; this names one of the capture's COMPANION files, and
     /// nothing else (see `resolve_source`).
@@ -176,14 +176,17 @@ pub fn resolve_source(
         }
         // Membership first (F26): `file` must be literally one of `base`'s
         // COMPANION files (`companion_file_names`) — never the capture's own
-        // video, sidecar or export temp. Stems are `&[]` until Task 53
-        // threads the sidecar's list through (which needs a sidecar read
-        // here); the webcam name needs none.
+        // video, sidecar or export temp. The webcam name needs no read; a
+        // stem is owned only when the capture's OWN sidecar lists it (F24,
+        // Task 53), so only a non-webcam name costs a sidecar read.
         SourceLocator::StagingFile { base, file } => {
-            if !staging_files::companion_file_names(base, &[]).contains(file) {
+            let dir = staging::staging_dir(root_local_app_data);
+            let owned =
+                |stems: &[String]| staging_files::companion_file_names(base, stems).contains(file);
+            if !owned(&[]) && !owned(&listed_stems(&dir, base)) {
                 return None;
             }
-            join_contained(&staging::staging_dir(root_local_app_data), file)
+            join_contained(&dir, file)
         }
         SourceLocator::Media { file } => {
             let dir = project_dir(root_local_app_data, project_id)?.join("media");
@@ -195,6 +198,15 @@ pub fn resolve_source(
         }
         SourceLocator::Builtin => None,
     }
+}
+
+/// The stem files `base`'s own sidecar lists — none when it has no readable
+/// sidecar, or a `base` that would escape staging.
+pub(crate) fn listed_stems(staging_dir: &Path, base: &str) -> Vec<String> {
+    join_contained(staging_dir, &staging::sidecar_file_name(base))
+        .and_then(|path| staging::read_sidecar(&path))
+        .map(|sidecar| sidecar.stem_files())
+        .unwrap_or_default()
 }
 
 /// The sidecar key a tutorial project writes to ADOPT a staged capture by
@@ -306,8 +318,7 @@ mod tests {
             height: 1080,
             recorded_at: "2026-09-20T14:32:00Z".into(),
             timeline: None,
-            webcam: None,
-            extra: serde_json::Map::new(),
+            ..Default::default()
         }
     }
 
@@ -514,6 +525,60 @@ mod tests {
             ..record("")
         };
         assert_eq!(resolve_source(root.path(), "proj1", &escaping), None);
+    }
+
+    // F24 (Task 53, closing Task 51's `&[]` placeholder): a stem resolves
+    // exactly when its capture's OWN sidecar lists it. A stem-shaped name the
+    // sidecar does not list (or a capture with no readable sidecar) resolves
+    // to nothing — shape alone is not ownership.
+    #[test]
+    fn staging_file_locator_resolves_a_stem_only_when_its_sidecar_lists_it() {
+        let root = tempfile::tempdir().unwrap();
+        let base = "2026-09-20 1432 Demo";
+        let dir = staging::staging_dir(root.path());
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = |file: String| SourceRecord {
+            locator: SourceLocator::StagingFile {
+                base: base.to_string(),
+                file,
+            },
+            sha256: None,
+            size: 0,
+            duration_ms: 0,
+            width: None,
+            height: None,
+            has_audio: true,
+            has_video: false,
+            media_kind: SourceMediaKind::Audio,
+            replaced_from: None,
+        };
+        let listed = record(staging::stem_file_name(base, 1));
+        assert_eq!(
+            resolve_source(root.path(), "p", &listed),
+            None,
+            "no sidecar"
+        );
+
+        let sidecar = StagedSidecar {
+            base: base.into(),
+            stems: vec![staging::StemSidecar {
+                index: 1,
+                input: "USB Mic".into(),
+                file: staging::stem_file_name(base, 1),
+                extra: serde_json::Map::new(),
+            }],
+            ..Default::default()
+        };
+        staging::write_sidecar(&dir, base, &sidecar).unwrap();
+        assert_eq!(
+            resolve_source(root.path(), "p", &listed),
+            Some(dir.join(staging::stem_file_name(base, 1)))
+        );
+        assert_eq!(
+            resolve_source(root.path(), "p", &record(staging::stem_file_name(base, 2))),
+            None,
+            "an unlisted stem is not the capture's"
+        );
     }
 
     // `sources.json` is read back by every later build: pin the new tag's

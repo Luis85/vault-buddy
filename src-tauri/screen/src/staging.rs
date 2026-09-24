@@ -89,44 +89,14 @@ pub fn webcam_part_file_name(base: &str) -> String {
     part_file_name(&format!("{base}{WEBCAM_INFIX}"))
 }
 
-/// The infix an audio STEM carries between its base and its index (Task
-/// 53 mints them; `capture_file_names` and the recovery sweep must already
-/// recognise the shape).
-pub const STEM_INFIX: &str = ".stem-";
-const STEM_SUFFIX: &str = ".m4a";
-
-/// A published stem, `<base>.stem-<index>.m4a`.
-pub fn stem_file_name(base: &str, index: u32) -> String {
-    format!("{base}{STEM_INFIX}{index}{STEM_SUFFIX}")
-}
-
-/// A stem being written, `.<base>.stem-<index>.m4a.part`.
-pub fn stem_part_file_name(base: &str, index: u32) -> String {
-    format!(".{}.part", stem_file_name(base, index))
-}
-
-/// Does `text` END in `.stem-<digits>`? The pattern (`\.stem-\d+$`), not a
-/// list: a sweep has no sidecar to read the real stem count from.
-pub fn ends_with_stem_marker(text: &str) -> bool {
-    text.rsplit_once(STEM_INFIX)
-        .is_some_and(|(_, digits)| is_digit_run(digits))
-}
-
-fn is_digit_run(text: &str) -> bool {
-    !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())
-}
-
-/// `(base, index)` of a stem PART by pattern (`^\.(.+)\.stem-\d+\.m4a\.part$`),
-/// or `None`. The index stays text: `\d+` admits a run no integer holds,
-/// and a name the sweep cannot parse must still be recognised as ours.
-pub fn stem_part_base(file_name: &str) -> Option<(String, String)> {
-    let stem = file_name
-        .strip_prefix('.')?
-        .strip_suffix(".part")?
-        .strip_suffix(STEM_SUFFIX)?;
-    let (base, index) = stem.rsplit_once(STEM_INFIX)?;
-    (!base.is_empty() && is_digit_run(index)).then(|| (base.to_string(), index.to_string()))
-}
+// A stem's naming (`stem_file_name`, `stem_part_file_name`, the recovery
+// sweep's pattern) and the sidecar's `stems` block live in `staging_stems`
+// (Task 53, split at this file's 800-line cap); re-exported so every path
+// is unchanged.
+pub use crate::staging_stems::{
+    ends_with_stem_marker, stem_file_name, stem_part_base, stem_part_file_name, StemSidecar,
+    STEM_INFIX,
+};
 
 /// Is `name`'s STEM (the text before the first `.`) one of Windows' reserved
 /// device names, case-insensitively?
@@ -242,7 +212,7 @@ pub fn reserve_base(dir: &Path, base: &str) -> String {
 }
 
 /// What the editor needs to resume a staged capture (spec 10).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StagedSidecar {
     pub base: String,
@@ -268,6 +238,12 @@ pub struct StagedSidecar {
     /// byte-identical on a rewrite.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webcam: Option<WebcamSidecar>,
+    /// The capture's per-input audio stems (Task 53), in input order, or
+    /// empty — every sidecar before this build and every capture recorded
+    /// with stems off. Skipped when empty for the `webcam` reason. Read
+    /// through `stem_files`, never trusted as paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stems: Vec<StemSidecar>,
     /// Every key this build does not declare, carried through verbatim.
     ///
     /// The same forward-compatibility goal `source_kind`'s own doc states,
@@ -379,12 +355,19 @@ pub fn write_sidecar(dir: &Path, base: &str, sidecar: &StagedSidecar) -> std::io
             format!("sidecar base {base:?} does not name a file inside the staging directory"),
         ));
     }
-    // The backstop for a caller that set the typed block without
-    // `set_webcam`: never write `webcam` twice.
+    // The backstop for a caller that set a typed block without
+    // `set_webcam`/`set_stems`: never write one key twice.
     let deduped;
-    let sidecar = if sidecar.webcam.is_some() && sidecar.extra.contains_key("webcam") {
+    let webcam_twice = sidecar.webcam.is_some() && sidecar.extra.contains_key("webcam");
+    let stems_twice = !sidecar.stems.is_empty() && sidecar.extra.contains_key("stems");
+    let sidecar = if webcam_twice || stems_twice {
         let mut copy = sidecar.clone();
-        copy.extra.remove("webcam");
+        if webcam_twice {
+            copy.extra.remove("webcam");
+        }
+        if stems_twice {
+            copy.extra.remove("stems");
+        }
         deduped = copy;
         &deduped
     } else {
@@ -412,33 +395,46 @@ pub fn read_sidecar(path: &Path) -> Option<StagedSidecar> {
         .ok()?;
     match serde_json::from_slice(&bytes) {
         Ok(sidecar) => Some(sidecar),
-        Err(e) => without_unreadable_webcam(&bytes, path).or_else(|| {
+        Err(e) => without_unreadable_blocks(&bytes, path).or_else(|| {
             log::warn!("screen staging: malformed sidecar {}: {e}", path.display());
             None
         }),
     }
 }
 
-/// The per-field defensive read, for the one nested block (review fix
-/// round 1): a malformed or future-shaped `webcam` block must cost the
-/// capture its webcam track, never the whole capture — a strict read made
-/// the recording vanish from the staged list and refuse to open. The block
-/// degrades to `None`, and its raw JSON moves into `extra`, which writes it
-/// back under the same key, so the next rewrite (a pin, a timeline save)
-/// does not erase what a newer build wrote. `None` when the sidecar is
-/// unreadable for any other reason.
-fn without_unreadable_webcam(bytes: &[u8], path: &Path) -> Option<StagedSidecar> {
+/// The per-field defensive read, for the nested blocks (review fix round 1
+/// for `webcam`; Task 53 for `stems`): a malformed or future-shaped block
+/// must cost the capture that block, never the whole capture — a strict read
+/// made the recording vanish from the staged list and refuse to open. Each
+/// unreadable block degrades to its empty value and its raw JSON moves into
+/// `extra`, which writes it back under the same key, so the next rewrite (a
+/// pin, a timeline save) does not erase what a newer build wrote. `None`
+/// when the sidecar is unreadable for any other reason.
+fn without_unreadable_blocks(bytes: &[u8], path: &Path) -> Option<StagedSidecar> {
     let mut value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
-    let raw = value.as_object_mut()?.remove("webcam")?;
-    if serde_json::from_value::<WebcamSidecar>(raw.clone()).is_ok() {
-        return None; // the block was fine; something else is malformed
+    let object = value.as_object_mut()?;
+    let mut parked = Vec::new();
+    for key in ["webcam", "stems"] {
+        let reads = match (key, object.get(key)) {
+            (_, None) => true,
+            ("webcam", Some(raw)) => serde_json::from_value::<WebcamSidecar>(raw.clone()).is_ok(),
+            (_, Some(raw)) => crate::staging_stems::stems_block_reads(raw),
+        };
+        if !reads {
+            parked.extend(object.remove(key).map(|raw| (key, raw)));
+        }
+    }
+    if parked.is_empty() {
+        return None; // the blocks were fine; something else is malformed
     }
     let mut sidecar: StagedSidecar = serde_json::from_value(value).ok()?;
-    log::warn!(
-        "screen staging: {} has a webcam block this build cannot read; its webcam track is ignored",
-        path.display()
-    );
-    sidecar.extra.insert("webcam".to_string(), raw);
+    for (key, raw) in parked {
+        log::warn!(
+            "screen staging: {} has a {key} block this build cannot read; it is ignored",
+            path.display()
+        );
+        sidecar.extra.insert(key.to_string(), raw);
+    }
     Some(sidecar)
 }
 
@@ -633,8 +629,7 @@ mod tests {
             height: 1080,
             recorded_at: "2026-09-18T14:32:00+02:00".into(),
             timeline: None,
-            webcam: None,
-            extra: Default::default(),
+            ..Default::default()
         };
         let dir = tempfile::tempdir().unwrap();
         let path = write_sidecar(dir.path(), &s.base, &s).unwrap();
@@ -657,8 +652,7 @@ mod tests {
             height: 2,
             recorded_at: "r".into(),
             timeline: None,
-            webcam: None,
-            extra: Default::default(),
+            ..Default::default()
         }
     }
 
@@ -814,8 +808,7 @@ mod tests {
             height: 2,
             recorded_at: "r".into(),
             timeline: None,
-            webcam: None,
-            extra: Default::default(),
+            ..Default::default()
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("\"vaultId\""), "got {json}");

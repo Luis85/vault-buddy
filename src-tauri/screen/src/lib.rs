@@ -73,6 +73,9 @@ pub mod source_derive;
 // `source.rs` at 644 of the 800-line cap; `source` re-exports it.
 pub mod source_webcam;
 pub mod staging;
+// A stem's names and the sidecar's `stems` block (Task 53), split from
+// `staging.rs` at its 800-line cap; `staging` re-exports it.
+pub mod staging_stems;
 
 // A window title becomes a file-name FRAGMENT here; it becomes a NAME in
 // `staging::reserve_base`. Keeping the two apart is what GAP-108 turned out

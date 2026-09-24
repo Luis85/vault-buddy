@@ -109,8 +109,7 @@ impl Machine {
             height: 900,
             recorded_at: "2026-09-22T09:15:00Z".into(),
             timeline: None,
-            webcam: None,
-            extra: serde_json::Map::new(),
+            ..Default::default()
         };
         staging::write_sidecar(&self.staging(), BASE, &sidecar).unwrap();
         std::fs::write(

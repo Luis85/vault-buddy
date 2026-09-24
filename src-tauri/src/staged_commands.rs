@@ -166,7 +166,9 @@ pub(crate) fn staging_dir_for(app: &AppHandle) -> Result<PathBuf, String> {
 
 /// Forget a staged capture, on disk: every file
 /// `staging_files::capture_file_names` says it owns, the synchronized
-/// webcam file (F-22) included.
+/// webcam file (F-22) and the stems its sidecar lists (Task 53, F24)
+/// included — the list is read FIRST, since the sidecar is one of the files
+/// removed.
 ///
 /// **The export `.part` is the third file and the one a two-file discard
 /// forgets.** It is often the LARGEST of the three, and `discard_conflict`
@@ -187,7 +189,8 @@ pub(crate) fn staging_dir_for(app: &AppHandle) -> Result<PathBuf, String> {
 /// property of the function rather than of whoever wrote the directory.
 pub(crate) fn discard_staged_files(dir: &Path, base: &str) -> Result<(), String> {
     let mut targets = Vec::new();
-    for name in staging_files::capture_file_names(base, &[]) {
+    let stems = crate::editor::project_store::listed_stems(dir, base);
+    for name in staging_files::capture_file_names(base, &stems) {
         let path = dir.join(&name);
         match std::fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -447,8 +450,7 @@ mod tests {
             height: 1080,
             recorded_at: "2026-09-20T14:32:00Z".into(),
             timeline: None,
-            webcam: None,
-            extra: serde_json::Map::new(),
+            ..Default::default()
         }
     }
 
@@ -564,8 +566,7 @@ mod tests {
             height: 720,
             recorded_at: recorded_at.to_string(),
             timeline: None,
-            webcam: None,
-            extra: serde_json::Map::new(),
+            ..Default::default()
         }
     }
 

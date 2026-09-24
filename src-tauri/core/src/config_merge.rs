@@ -20,7 +20,7 @@ use crate::vault_config::VaultCaptureConfig;
 /// task_extra_frontmatter/task_body_template;
 /// and `set_screen_capture_config`: screen_capture_folder/
 /// screen_capture_date_folders/screen_quality/screen_fps/screen_create_note/
-/// screen_extra_frontmatter/screen_body_template). The preserved fields
+/// screen_extra_frontmatter/screen_body_template/screen_audio_stems). The preserved fields
 /// are listed explicitly and everything else comes from `incoming` via `..`
 /// (which is how the capture-owned note_extra_frontmatter/note_body_template
 /// pair flows through), so a capture save can never transpose an owned field
@@ -59,6 +59,7 @@ pub fn merge_capture_owned(
         screen_create_note: existing.screen_create_note,
         screen_extra_frontmatter: existing.screen_extra_frontmatter.clone(),
         screen_body_template: existing.screen_body_template.clone(),
+        screen_audio_stems: existing.screen_audio_stems,
         ..incoming
     }
 }
@@ -85,9 +86,9 @@ pub fn merge_documents_owned(
     }
 }
 
-/// The seven screen-capture-owned values, NAMED.
+/// The eight screen-capture-owned values, NAMED.
 ///
-/// A struct rather than seven positional parameters, and not only to satisfy
+/// A struct rather than eight positional parameters, and not only to satisfy
 /// `clippy::too_many_arguments`: `date_folders` and `create_note` are both
 /// `bool` with two unrelated fields between them, so a positional call that
 /// transposed them would compile, pass every type check, and quietly write
@@ -101,6 +102,8 @@ pub struct ScreenOwned {
     pub create_note: bool,
     pub extra_frontmatter: Option<String>,
     pub body_template: Option<String>,
+    /// Keep each audio input as its own stem (Task 53); new recordings only.
+    pub audio_stems: bool,
 }
 
 /// The SCREEN-CAPTURE-owned fields, preserving every other domain's.
@@ -108,8 +111,8 @@ pub struct ScreenOwned {
 /// The seventh merge helper and the same split as its siblings: a screen
 /// settings save must not reset the recording mode, the tasks folder or the
 /// documents templates, and none of theirs may reset these. The fields it
-/// writes are exactly the seven `screen_*` fields on `VaultCaptureConfig` --
-/// a test pins that count, because an eighth added to the struct and
+/// writes are exactly the eight `screen_*` fields on `VaultCaptureConfig` --
+/// a test pins that count, because a ninth added to the struct and
 /// forgotten here would be silently unwritable through the only surface that
 /// offers it, with every save restoring the old value.
 pub fn merge_screen_owned(existing: &VaultCaptureConfig, owned: ScreenOwned) -> VaultCaptureConfig {
@@ -121,6 +124,7 @@ pub fn merge_screen_owned(existing: &VaultCaptureConfig, owned: ScreenOwned) -> 
         screen_create_note: owned.create_note,
         screen_extra_frontmatter: owned.extra_frontmatter,
         screen_body_template: owned.body_template,
+        screen_audio_stems: owned.audio_stems,
         ..existing.clone()
     }
 }
@@ -155,6 +159,7 @@ mod tests {
                 create_note: false,
                 extra_frontmatter: Some("area: demo".into()),
                 body_template: Some("body".into()),
+                audio_stems: true,
             },
         );
 
@@ -175,6 +180,10 @@ mod tests {
             Some("area: demo")
         );
         assert_eq!(merged.screen_body_template.as_deref(), Some("body"));
+        assert!(
+            merged.screen_audio_stems,
+            "the stems toggle is screen-owned"
+        );
 
         // preserved -- every one of these belongs to another command
         assert_eq!(merged.tasks_folder.as_deref(), Some("Inbox/Tasks"));
@@ -339,6 +348,7 @@ mod tests {
             screen_create_note: false,
             screen_extra_frontmatter: Some("project: acme".into()),
             screen_body_template: Some("## Notes".into()),
+            screen_audio_stems: true,
             ..VaultCaptureConfig::default()
         };
         // The capture settings card knows nothing about screen capture, so it
@@ -356,6 +366,10 @@ mod tests {
             Some("project: acme")
         );
         assert_eq!(merged.screen_body_template.as_deref(), Some("## Notes"));
+        assert!(
+            merged.screen_audio_stems,
+            "a capture save must not switch the vault's audio stems back off"
+        );
     }
 
     // merge_documents_owned builds from `..existing.clone()`, so the screen

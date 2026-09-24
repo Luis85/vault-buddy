@@ -6,9 +6,9 @@ use std::sync::mpsc::{self, SyncSender};
 use std::sync::Arc;
 use std::time::Duration;
 
-use vault_buddy_capture::mixer;
 use vault_buddy_capture::session::{SourceInput, SourceMsg};
 
+use super::stems::{Mixdown, Round, StemChunk, StemTee};
 use super::{
     output_ts, pacing, MuxMsg, SharedClock, Warnings, AUDIO_CHUNK_FRAMES, AUDIO_RATE,
     AUDIO_STALL_CAP,
@@ -35,16 +35,21 @@ fn lose(alive: &mut [bool], i: usize, name: &str, warnings: &Warnings) {
 /// It runs even with ZERO sources — `take_frames` then never produces a
 /// round, so the capture is silently silent — because this thread owns
 /// the last `MuxMsg` sender and its exit is what disconnects the mux.
+///
+/// `tee` is `Some` only when the capture keeps per-input stems (Task 53):
+/// each round's stems are cut from the SAME slices the mixer sums
+/// (`Mixdown::round`) and sent with the mixed chunk's own `(ts, dur)`.
 pub(super) fn run_audio(
     sources: Vec<SourceInput>,
     clock: SharedClock,
     tx: SyncSender<MuxMsg>,
     stopping: Arc<AtomicBool>,
     warnings: Arc<Warnings>,
+    mut tee: Option<StemTee>,
 ) {
     // One growing buffer per source; they arrive at different rates and
     // must be mixed frame-aligned.
-    let mut buffers: Vec<Vec<f32>> = vec![Vec::new(); sources.len()];
+    let mut mix = Mixdown::new(sources.len(), tee.is_some());
     let mut alive: Vec<bool> = vec![true; sources.len()];
     let mut pacer = pacing::AudioPacer::new(AUDIO_RATE);
     // The pause EDGE latch. Without it every paused iteration flushed, so
@@ -59,9 +64,7 @@ pub(super) fn run_audio(
                 match src.rx.try_recv() {
                     Ok(SourceMsg::Samples(raw)) => {
                         got_anything = true;
-                        let mono = mixer::downmix_to_mono(&raw, src.channels);
-                        let at_rate = mixer::resample_linear(&mono, src.rate, AUDIO_RATE);
-                        buffers[i].extend_from_slice(&at_rate);
+                        mix.push(i, &raw, src.channels, src.rate);
                     }
                     // The audio domain's posture: one device dropping out
                     // never stops the capture (spec 14).
@@ -98,60 +101,40 @@ pub(super) fn run_audio(
         // iteration wrote the paused audio it exists to discard.
         let paused = output_ts(&clock).is_none();
         let mut idle_paused = false;
-        if paused {
-            let lens: Vec<usize> = buffers.iter().map(|b| b.len()).collect();
+        let take = if paused {
             // The EDGE only. A later paused iteration takes 0 — its buffers
             // hold audio captured DURING the pause, which is discarded.
-            let take = pacing::pause_flush_take(paused, was_paused, &lens);
+            let take = pacing::pause_flush_take(paused, was_paused, &mix.lens());
             // Nothing to write and nothing to wait for: without this the
             // drain kept reporting work, `got_anything` stayed true, and the
             // thread busy-spun for the whole pause instead of sleeping.
             idle_paused = take == 0;
-            if take > 0 {
-                let slices: Vec<&[f32]> = buffers.iter().map(|b| &b[..take.min(b.len())]).collect();
-                let stereo = mixer::mix_n_to_stereo_i16(&slices);
-                if let Some((ts, dur)) = pacer.take(take) {
-                    if tx
-                        .send(MuxMsg::Audio {
-                            pcm: stereo,
-                            ts,
-                            dur,
-                        })
-                        .is_err()
-                    {
-                        break; // the mux is gone; nothing left to write to
-                    }
-                }
-            }
-            for b in &mut buffers {
-                b.clear();
-            }
+            take
         } else {
-            let lens: Vec<usize> = buffers.iter().map(|b| b.len()).collect();
-            let take = pacing::take_frames(&lens, AUDIO_CHUNK_FRAMES, AUDIO_STALL_CAP);
-            if take > 0 {
-                let slices: Vec<&[f32]> = buffers.iter().map(|b| &b[..take.min(b.len())]).collect();
-                // No per-source gain normalisation (spec 6.5): dividing
-                // by N would change existing two-source meeting levels.
-                let stereo = mixer::mix_n_to_stereo_i16(&slices);
-                for b in &mut buffers {
-                    b.drain(..take.min(b.len()));
+            pacing::take_frames(&mix.lens(), AUDIO_CHUNK_FRAMES, AUDIO_STALL_CAP)
+        };
+        if take > 0 {
+            // take is the FRAME count; the stereo is interleaved, so the
+            // pacer is advanced by frames, never by sample count.
+            let Round { stereo, stems } = mix.round(take);
+            if let Some((ts, dur)) = pacer.take(take) {
+                if tx
+                    .send(MuxMsg::Audio {
+                        pcm: stereo,
+                        ts,
+                        dur,
+                    })
+                    .is_err()
+                {
+                    break; // the mux is gone; nothing left to write to
                 }
-                // take is the FRAME count; `stereo` is interleaved, so
-                // the pacer is advanced by frames, never by sample count.
-                if let Some((ts, dur)) = pacer.take(take) {
-                    if tx
-                        .send(MuxMsg::Audio {
-                            pcm: stereo,
-                            ts,
-                            dur,
-                        })
-                        .is_err()
-                    {
-                        break; // the mux is gone; nothing left to write to
-                    }
+                if let (Some(tee), Some(pcm)) = (tee.as_mut(), stems) {
+                    tee.send(StemChunk { pcm, ts, dur }, &warnings);
                 }
             }
+        }
+        if paused {
+            mix.clear();
         }
 
         was_paused = paused;

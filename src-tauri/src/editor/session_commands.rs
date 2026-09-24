@@ -26,7 +26,7 @@ use vault_buddy_core::editor::{
     MissingMedia, Project, WorkspaceEnvelope,
 };
 use vault_buddy_core::sync_util::lock_ignoring_poison;
-use vault_buddy_screen::staging;
+use vault_buddy_screen::{staging, staging_files};
 
 use super::authz::{require_editor_window, require_session};
 use super::prefs_commands::project_id_for;
@@ -127,6 +127,7 @@ pub(crate) fn open_staged_in(
 
     let project_id = new_project_id();
     let webcam = staged_webcam(staging_dir, &sidecar);
+    let (stems, stem_sources) = staged_stems(staging_dir, &sidecar);
     let migration = migrate::from_staged(
         &migrate::StagedInput {
             base,
@@ -137,7 +138,7 @@ pub(crate) fn open_staged_in(
             height: sidecar.height,
             has_audio: !sidecar.inputs.is_empty(),
             legacy_timeline: sidecar.timeline.as_ref(),
-            stems: &[],
+            stems: &stems,
             webcam: webcam.as_ref().map(|(input, _)| input.clone()),
         },
         &project_id,
@@ -173,6 +174,7 @@ pub(crate) fn open_staged_in(
     if let Some((_, record)) = webcam {
         sources.insert(migrate::WEBCAM_ASSET_ID.to_string(), record);
     }
+    sources.extend(stem_sources);
     create_project(root, &migration.project, &sources)
         .map_err(|e| internal(format!("Could not create the project: {e}")))?;
     pin(staging_dir, base, &project_id)?;
@@ -256,6 +258,62 @@ fn staged_webcam(
         replaced_from: None,
     };
     Some((input, record))
+}
+
+/// The capture's per-input audio stems (Task 53; F-05, F26) as migration
+/// input, each with the `StagingFile` source record that makes its file
+/// resolvable. The sidecar's list is hand-editable, so an entry is kept only
+/// when its file is one the capture OWNS (`capture_file_names` over that
+/// same list — which admits only this base's own stem shape); a repeated
+/// index is kept once. A stem spans the whole mixed track (only complete
+/// stems are published), so its length is the capture's.
+fn staged_stems(
+    staging_dir: &Path,
+    sidecar: &staging::StagedSidecar,
+) -> (Vec<migrate::StemInput>, Vec<(String, SourceRecord)>) {
+    let owned = staging_files::capture_file_names(&sidecar.base, &sidecar.stem_files());
+    let mut seen = BTreeSet::new();
+    let mut inputs = Vec::new();
+    let mut records = Vec::new();
+    for stem in &sidecar.stems {
+        if !owned.contains(&stem.file) || !seen.insert(stem.index) {
+            log::warn!(
+                "editor_open_staged: {:?}'s stem entry {} names {:?}, which it does not own; ignored",
+                sidecar.base,
+                stem.index,
+                stem.file
+            );
+            continue;
+        }
+        let size = std::fs::metadata(staging_dir.join(&stem.file))
+            .map(|m| m.len())
+            .unwrap_or_else(|e| {
+                log::warn!("editor_open_staged: cannot read stem {:?}: {e}", stem.file);
+                0
+            });
+        inputs.push(migrate::StemInput {
+            index: stem.index,
+            input: stem.input.clone(),
+            file: stem.file.clone(),
+        });
+        let record = SourceRecord {
+            locator: SourceLocator::StagingFile {
+                base: sidecar.base.clone(),
+                file: stem.file.clone(),
+            },
+            sha256: None,
+            size,
+            duration_ms: sidecar.duration_ms,
+            width: None,
+            height: None,
+            has_audio: true,
+            has_video: false,
+            media_kind: SourceMediaKind::Audio,
+            replaced_from: None,
+        };
+        records.push((migrate::stem_asset_id(stem.index), record));
+    }
+    (inputs, records)
 }
 
 /// The pin is a claim made by a hand-editable sidecar: refuse a project

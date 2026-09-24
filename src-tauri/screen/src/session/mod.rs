@@ -41,6 +41,9 @@ mod audio;
 #[cfg(windows)]
 mod mux;
 pub mod pacing;
+pub mod stems;
+#[cfg(windows)]
+mod stems_windows;
 pub mod webcam;
 #[cfg(windows)]
 mod webcam_windows;
@@ -165,6 +168,10 @@ pub struct ScreenSessionParams {
     /// `None`: today's capture, which opens no device and spawns no webcam
     /// thread (`webcam::tests::start_without_a_webcam_is_byte_identical_to_today`).
     pub webcam: Option<webcam::WebcamParams>,
+    /// One mono stem per `audio` input, teed off the mixing round (Task 53),
+    /// or `None`: today's capture — no writer, no thread
+    /// (`stems::tests::stems_default_off`).
+    pub stems: Option<stems::StemParams>,
 }
 
 pub struct ScreenOutcome {
@@ -178,6 +185,9 @@ pub struct ScreenOutcome {
     /// The published webcam track, when one was requested AND finished. A
     /// webcam that failed to finish is a warning, never a failed capture.
     pub webcam: Option<webcam::WebcamOutcome>,
+    /// The stems that finished COMPLETE and were published; a stem that did
+    /// not is a warning, never a failed capture.
+    pub stems: Vec<stems::StemOutcome>,
 }
 
 /// Everything is resampled to this: the rate every Windows AAC encoder MFT

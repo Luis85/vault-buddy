@@ -46,6 +46,10 @@ use crate::export_commands::ExportState;
 
 mod decide;
 use decide::{classify, is_stale_at, part_holds_footage, should_postpone, Entry};
+// Listing a promoted stem in its capture's sidecar (Task 53) -- its own file
+// because this one sits at the 800-line cap.
+mod stems;
+use stems::list_recovered_stem;
 
 /// How old a file must be before recovery will touch it. **The same 60 s the
 /// audio sweep gets**, deliberately: spec §10 asks for one staleness rule
@@ -106,6 +110,7 @@ fn minimal_sidecar(base: &str, modified: SystemTime) -> staging::StagedSidecar {
         height: 0,
         recorded_at: recorded_at_from(modified),
         timeline: None,
+        stems: Vec::new(),
         webcam: None,
         extra,
     }
@@ -232,6 +237,10 @@ fn sweep_staging_dir(dir: &Path, now: SystemTime, stale_after: Duration) -> Swee
         _ => None,
     });
 
+    // Stems promoted in this pass, listed in their capture's sidecar once
+    // every capture this pass promotes has one (the loop order is the
+    // directory's, not the capture's-before-its-stems).
+    let mut stems = Vec::new();
     for f in &found {
         if !is_stale_at(f.modified, now, stale_after) {
             // Not yet stale: it may be a live capture's own file, or an
@@ -272,13 +281,21 @@ fn sweep_staging_dir(dir: &Path, now: SystemTime, stale_after: Duration) -> Swee
                     &mut sweep,
                 )
             }
-            Entry::WebcamPart(_) | Entry::StemPart(..) => {
-                promote_or_delete_companion_part(f, &mut sweep)
+            Entry::WebcamPart(_) => {
+                promote_or_delete_companion_part(f, &mut sweep);
+            }
+            Entry::StemPart(base, index) => {
+                if promote_or_delete_companion_part(f, &mut sweep) {
+                    stems.push((base.as_str(), index.as_str()));
+                }
             }
             // Its capture's own file, never a capture: nothing to decide.
             Entry::Companion(_) => {}
             Entry::Foreign => unreachable!("scan_dir drops Foreign entries"),
         }
+    }
+    for (base, index) in stems {
+        list_recovered_stem(dir, base, index, &mut sweep);
     }
     sweep
 }
@@ -325,11 +342,13 @@ fn part_is_footage(f: &Found, sweep: &mut Sweep) -> bool {
 
 /// A webcam or stem part (F-22, F24) is promoted to its OWN published name —
 /// the part's name without the leading dot and `.part`, which its capture
-/// already owns (`staging_files::capture_file_names`) — never to a free
+/// owns (`staging_files::capture_file_names`; a stem once
+/// `list_recovered_stem` has added it to the sidecar) — never to a free
 /// capture name: the name IS its link to the capture, so there is no
 /// ` (N)` to fall back to. A taken name is left alone (`rename_noreplace`)
 /// and not counted pending: no later pass would answer differently.
-fn promote_or_delete_companion_part(f: &Found, sweep: &mut Sweep) {
+/// `true` when the part was promoted.
+fn promote_or_delete_companion_part(f: &Found, sweep: &mut Sweep) -> bool {
     let published = f
         .path
         .file_name()
@@ -337,20 +356,24 @@ fn promote_or_delete_companion_part(f: &Found, sweep: &mut Sweep) {
         .and_then(|n| n.strip_prefix('.'))
         .and_then(|n| n.strip_suffix(".part"))
         .map(|n| f.path.with_file_name(n));
-    let Some(to) = published else { return };
+    let Some(to) = published else { return false };
     if !part_is_footage(f, sweep) {
-        return;
+        return false;
     }
     match vault_buddy_core::capture_paths::rename_noreplace(&f.path, &to) {
         Ok(()) => {
             log::info!("screen-recovery: recovered {}", to.display());
             sweep.actions.push(RecoveryAction::Promoted(to));
+            true
         }
-        Err(e) => log::warn!(
-            "screen-recovery: could not promote {} to {}: {e}",
-            f.path.display(),
-            to.display()
-        ),
+        Err(e) => {
+            log::warn!(
+                "screen-recovery: could not promote {} to {}: {e}",
+                f.path.display(),
+                to.display()
+            );
+            false
+        }
     }
 }
 

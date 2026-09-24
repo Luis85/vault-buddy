@@ -445,3 +445,81 @@ fn a_staged_webcam_track_is_packaged_or_reported_missing() {
         .unwrap();
     assert_eq!(sorted_missing(&imported), ["src", "webcam"]);
 }
+
+// Task 53: a capture's per-input stems are `StagingFile` sources too, so the
+// collector Task 51 taught about them must carry EACH one in a portable file
+// (else the separate tracks silently vanish from the copy) and report each
+// missing from a lightweight one -- the webcam's contract, per stem.
+#[test]
+fn staged_stems_are_packaged_or_reported_missing() {
+    let a = Machine::new();
+    a.stage();
+    let mut sidecar =
+        staging::read_sidecar(&a.staging().join(staging::sidecar_file_name(BASE))).unwrap();
+    sidecar.stems = [(1, "USB Mic"), (2, "Speakers")]
+        .into_iter()
+        .map(|(index, input)| staging::StemSidecar {
+            index,
+            input: input.into(),
+            file: staging::stem_file_name(BASE, index),
+            extra: serde_json::Map::new(),
+        })
+        .collect();
+    staging::write_sidecar(&a.staging(), BASE, &sidecar).unwrap();
+    for index in 1..=2u32 {
+        let bytes = format!("stem {index} audio, {} bytes", 20 + index);
+        std::fs::write(
+            a.staging().join(staging::stem_file_name(BASE, index)),
+            bytes,
+        )
+        .unwrap();
+    }
+    let opened = crate::editor::session_commands::open_staged_session(
+        &a.state,
+        a.root(),
+        &a.staging(),
+        BASE,
+    )
+    .unwrap();
+    let session_id = opened.snapshot.session_id.clone();
+    let project_id = opened.snapshot.project_id.clone();
+    let out = tempfile::tempdir().unwrap();
+
+    export(
+        &a,
+        &session_id,
+        &FakeChooser::saving_to(out.path().join("Stems")),
+        PackageFormat::Portable,
+    )
+    .unwrap()
+    .unwrap();
+    let b = Machine::new();
+    let imported = import(&b, out.path().join("Stems.vbproject.zip"))
+        .unwrap()
+        .unwrap();
+    assert!(imported.missing.is_empty(), "{:?}", imported.missing);
+    let sources = load_sources(b.root(), &project_id).unwrap();
+    for index in 1..=2u32 {
+        let id = format!("stem-{index}");
+        let file = format!("{id}.m4a");
+        assert_eq!(
+            String::from_utf8(media_file(&b, &project_id, &file)).unwrap(),
+            format!("stem {index} audio, {} bytes", 20 + index)
+        );
+        assert_eq!(sources[&id].locator, SourceLocator::Media { file });
+    }
+
+    export(
+        &a,
+        &session_id,
+        &FakeChooser::saving_to(out.path().join("Stems")),
+        PackageFormat::Lightweight,
+    )
+    .unwrap()
+    .unwrap();
+    let c = Machine::new();
+    let imported = import(&c, out.path().join("Stems.vbproject.json"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(sorted_missing(&imported), ["src", "stem-1", "stem-2"]);
+}

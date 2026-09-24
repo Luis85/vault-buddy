@@ -15,7 +15,7 @@ import VaultFolderSetting from "./VaultFolderSetting.vue";
 // read shows an inline error and NO editable fields, so a seeded default can
 // never be auto-saved over a value we failed to read.
 //
-// Until this landed all seven fields were config.json hand-edits — READ in
+// Until this landed all seven fields (now eight) were config.json hand-edits — READ in
 // production (quality and fps by the capture worker, the rest by the
 // exporter) and settable nowhere.
 const props = defineProps<{ vaultId: string }>();
@@ -28,6 +28,7 @@ const screenFps = ref(30);
 const screenCreateNote = ref(true);
 const screenExtraFrontmatter = ref("");
 const screenBodyTemplate = ref("");
+const screenAudioStems = ref(false);
 
 // SelectMenu, not a native <select>, and that is the point rather than a
 // preference. A <select>'s option popup is drawn by the OS, and it takes its
@@ -78,6 +79,7 @@ const autosave = useAutosave(
         screenCreateNote: screenCreateNote.value,
         screenExtraFrontmatter: screenExtraFrontmatter.value.trim() || null,
         screenBodyTemplate: screenBodyTemplate.value.trim() || null,
+        screenAudioStems: screenAudioStems.value,
       },
     });
   },
@@ -96,6 +98,7 @@ onMounted(() =>
       screenCreateNote.value = cfg.screenCreateNote;
       screenExtraFrontmatter.value = cfg.screenExtraFrontmatter ?? "";
       screenBodyTemplate.value = cfg.screenBodyTemplate ?? "";
+      screenAudioStems.value = cfg.screenAudioStems ?? false;
     },
   ),
 );
@@ -112,6 +115,10 @@ function onDateFoldersToggle(event: Event) {
 }
 function onCreateNoteToggle(event: Event) {
   screenCreateNote.value = (event.target as HTMLInputElement).checked;
+  autosave.saveNow();
+}
+function onAudioStemsToggle(event: Event) {
+  screenAudioStems.value = (event.target as HTMLInputElement).checked;
   autosave.saveNow();
 }
 function onQualityChange(value: string | number) {
@@ -236,6 +243,25 @@ function onBodyTemplateInput(event: Event) {
           class="h-4 w-4 accent-violet-500"
           :checked="screenCreateNote"
           @change="onCreateNoteToggle"
+        >
+      </div>
+      <!-- Task 53: HOW a capture is recorded, so it cannot reach one already
+           staged; the label says so rather than leaving it to be discovered. -->
+      <div class="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 p-2">
+        <label
+          for="screen-audio-stems"
+          class="text-sm text-slate-200"
+        >
+          Keep each audio input as a separate track (new recordings only)
+          <span class="block text-xs text-fg-subtle">The mixed track is always recorded too</span>
+        </label>
+        <input
+          id="screen-audio-stems"
+          data-testid="screen-audio-stems-toggle"
+          type="checkbox"
+          class="h-4 w-4 accent-violet-500"
+          :checked="screenAudioStems"
+          @change="onAudioStemsToggle"
         >
       </div>
       <div class="flex flex-col gap-1 rounded-xl border border-white/10 bg-white/5 p-2">

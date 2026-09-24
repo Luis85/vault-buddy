@@ -95,6 +95,7 @@ fn a_finalize_reports_the_capture_even_when_the_sidecar_cannot_be_written() {
             dropped: 3,
             warning: Some("the capture source closed".to_string()),
             webcam: None,
+            stems: Vec::new(),
         },
         source_title: "Demo Window".to_string(),
         source_kind: "window",
@@ -211,12 +212,47 @@ fn stop_bundle(
             dropped: 0,
             warning: None,
             webcam,
+            stems: Vec::new(),
         },
         source_title: "Demo".to_string(),
         source_kind: "screen",
         recorded_at: "2026-09-24T10:15:00+02:00".to_string(),
         inputs: Vec::new(),
     }
+}
+
+// Task 53: the stems that finished are listed by NAME in the sidecar, in
+// input order — which is what makes them the capture's to discard, Clear and
+// serve (`capture_file_names` reads this list). A capture without stems
+// writes no `stems` key at all (the test below pins today's key set).
+#[test]
+fn a_capture_with_stems_lists_them_in_its_sidecar() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut bundle = stop_bundle(dir.path(), None);
+    bundle.outcome.stems = vec![
+        vault_buddy_screen::session::stems::StemOutcome {
+            index: 1,
+            input: "USB Mic".into(),
+            file: dir.path().join("2026-09-24 1015 Demo.stem-1.m4a"),
+        },
+        vault_buddy_screen::session::stems::StemOutcome {
+            index: 3,
+            input: "Line In".into(),
+            file: dir.path().join("2026-09-24 1015 Demo.stem-3.m4a"),
+        },
+    ];
+    finalize_stopped("vault-1", bundle);
+    let json: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(dir.path().join("2026-09-24 1015 Demo.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        json["stems"],
+        serde_json::json!([
+            { "index": 1, "input": "USB Mic", "file": "2026-09-24 1015 Demo.stem-1.m4a" },
+            { "index": 3, "input": "Line In", "file": "2026-09-24 1015 Demo.stem-3.m4a" }
+        ])
+    );
 }
 
 // Checklist T41, the sidecar half: a capture made WITHOUT a webcam writes

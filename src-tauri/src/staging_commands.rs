@@ -178,8 +178,7 @@ mod tests {
             height: 1080,
             recorded_at: "2026-09-20T14:32:00Z".into(),
             timeline: None,
-            webcam: None,
-            extra: serde_json::Map::new(),
+            ..Default::default()
         }
     }
 
@@ -280,6 +279,59 @@ mod tests {
             dir.path().join(staging::mp4_file_name("C")).is_file(),
             "a refused discard removed the video anyway"
         );
+    }
+
+    // Task 53 (F24): the stems a capture's sidecar lists are ITS files --
+    // discard and Clear remove them (and Clear counts them as freed), while a
+    // stem-shaped file the sidecar does not list is not the capture's and
+    // stays. Read before anything is unlinked: the sidecar is one of the
+    // files the discard removes.
+    #[test]
+    fn discard_and_clear_remove_the_stems_the_sidecar_lists() {
+        let dir = tempfile::tempdir().unwrap();
+        let with_stems = |base: &str| {
+            let mut s = sidecar(base);
+            s.stems = (1..=2)
+                .map(|index| staging::StemSidecar {
+                    index,
+                    input: format!("input {index}"),
+                    file: staging::stem_file_name(base, index),
+                    extra: serde_json::Map::new(),
+                })
+                .collect();
+            staging::write_sidecar(dir.path(), base, &s).unwrap();
+            std::fs::write(dir.path().join(staging::mp4_file_name(base)), b"footage").unwrap();
+            for index in 1..=3 {
+                let stem = dir.path().join(staging::stem_file_name(base, index));
+                std::fs::write(stem, vec![b's'; 1_000]).unwrap();
+            }
+        };
+        let stem = |base: &str, index| dir.path().join(staging::stem_file_name(base, index));
+
+        with_stems("A");
+        discard_staged_files(dir.path(), "A").expect("the discard lands");
+        assert!(
+            !stem("A", 1).exists() && !stem("A", 2).exists(),
+            "listed stems go"
+        );
+        assert!(
+            stem("A", 3).exists(),
+            "an unlisted stem-shaped file is not ours"
+        );
+        std::fs::remove_file(stem("A", 3)).unwrap();
+
+        with_stems("B");
+        let (result, _) = clear_staged(dir.path(), None);
+        assert_eq!(result.cleared, 1);
+        assert!(
+            !stem("B", 1).exists() && !stem("B", 2).exists(),
+            "Clear left a stem"
+        );
+        assert!(
+            result.bytes_freed >= 2_000,
+            "the stems are freed bytes: {result:?}"
+        );
+        assert!(stem("B", 3).exists());
     }
 
     // The frontend reads `skippedPinned` off this exact spelling

@@ -9,7 +9,7 @@
 //! none of them. It mirrors `capture_config_commands.rs` sitting beside
 //! `capture_commands.rs` for exactly the same reason.
 //!
-//! Until this landed, all seven `screen_*` fields were `config.json`
+//! Until this landed, all seven (now eight) `screen_*` fields were `config.json`
 //! hand-edits: they were READ in production (`screen_capture_worker` for
 //! quality and fps, `export_worker` for the other five) and settable
 //! nowhere, so a user could record and export but never choose a folder, a
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use vault_buddy_core::screen_capture_config::ScreenQuality;
 use vault_buddy_core::{capture_config, capture_paths, discovery};
 
-/// The seven fields, camelCase for the frontend.
+/// The eight fields, camelCase for the frontend.
 ///
 /// `screen_quality` crosses as its stable KEY (`low`/`balanced`/`high`), not
 /// as a serde-derived variant name: the key is what `config.json` already
@@ -38,6 +38,11 @@ pub struct ScreenCaptureConfigDto {
     pub screen_create_note: bool,
     pub screen_extra_frontmatter: Option<String>,
     pub screen_body_template: Option<String>,
+    /// Keep each audio input as its own stem (Task 53). NEW recordings only:
+    /// a capture already staged keeps whatever it was recorded with.
+    /// `default` so a payload from a build before this field still saves.
+    #[serde(default)]
+    pub screen_audio_stems: bool,
 }
 
 /// Read the vault's screen-capture settings.
@@ -56,6 +61,7 @@ pub fn get_screen_capture_config(id: String) -> ScreenCaptureConfigDto {
         screen_create_note: vault.screen_create_note,
         screen_extra_frontmatter: vault.screen_extra_frontmatter,
         screen_body_template: vault.screen_body_template,
+        screen_audio_stems: vault.screen_audio_stems,
     }
 }
 
@@ -123,6 +129,7 @@ pub async fn set_screen_capture_config(
             create_note: cfg.screen_create_note,
             extra_frontmatter: trimmed(cfg.screen_extra_frontmatter),
             body_template: trimmed(cfg.screen_body_template),
+            audio_stems: cfg.screen_audio_stems,
         },
     );
     capture_config::update_vault_config(&id, value)
@@ -151,6 +158,7 @@ mod tests {
             screen_create_note: true,
             screen_extra_frontmatter: None,
             screen_body_template: None,
+            screen_audio_stems: false,
         }
     }
 
@@ -191,6 +199,7 @@ mod tests {
         assert_eq!(
             keys,
             [
+                "screenAudioStems",
                 "screenBodyTemplate",
                 "screenCaptureDateFolders",
                 "screenCaptureFolder",
@@ -200,6 +209,24 @@ mod tests {
                 "screenQuality",
             ]
         );
+    }
+
+    // Task 53: a payload from a build before `screenAudioStems` existed (or a
+    // stale webview) still saves, reading the missing toggle as OFF -- the
+    // field is `#[serde(default)]`, pinned against a literal.
+    #[test]
+    fn a_payload_without_the_stems_key_reads_stems_off() {
+        let dto: ScreenCaptureConfigDto = serde_json::from_value(serde_json::json!({
+            "screenCaptureFolder": null,
+            "screenCaptureDateFolders": false,
+            "screenQuality": "balanced",
+            "screenFps": 30,
+            "screenCreateNote": true,
+            "screenExtraFrontmatter": null,
+            "screenBodyTemplate": null
+        }))
+        .expect("an older payload still decodes");
+        assert!(!dto.screen_audio_stems);
     }
 
     // The settings tab tells the user which {{placeholders}} it accepts, and

@@ -3157,6 +3157,43 @@ for exactly this; a fix subtracts a measured or device-reported latency from
 the anchor. The Windows producer executes in no automated test on any
 platform (GAP-117's class); rows T37–T41 are its gate.
 
+### GAP-201 · Medium (hardware-unverified) · Per-input audio stems: an untested writer and five recorded residuals
+`src-tauri/screen/src/session/stems_windows.rs` + `sink.rs`
+(`FragmentedSink::create_audio_only`), Task 53 (F-05). The stem PLUMBING is
+pure and tested (`session/stems.rs`: each stem is the very post-resample slice
+the mixer sums, on the mixed chunk's own timestamp), but the writer that turns
+those slices into `.m4a` files **executes in no automated test on any
+platform**: the audio-only fragmented MP4 (`MFCreateFMPEG4MediaSink` with a
+null video type, its one stream checked to be stream 0 at runtime) has never
+been produced on hardware. Checklist rows T42–T44 are its gate. Recorded
+rather than guessed at:
+(1) **An incomplete stem is deleted, not kept.** A stem whose sink could not
+be opened, written or finalized — or every stem, when the writer fell behind
+and the tee abandoned it — is removed at stop with a `screen:warning`. Its
+audio is still in the mixed track, so nothing recorded is lost, but a partial
+separate track that might have been useful is. Keeping it would need a
+MEASURED stem length in the sidecar (a stem shorter than the capture would
+otherwise be placed past its own end).
+(2) **An orphaned stem whose capture has no sidecar under its base stays
+unlisted.** The recovery sweep promotes a stale `.<base>.stem-<n>.m4a.part`
+and LISTS it in `<base>.json` — but when the capture's own part was promoted
+to a ` (N)` name, or the capture is gone, there is no sidecar to list it in,
+and a stem that is not listed is owned by nothing: discard and Clear leave it
+as litter in staging (logged, never deleted). A crash-free capture never
+reaches this path.
+(3) **Migration assumes every stem spans the capture.** A stem's asset length
+is the capture's `durationMs`; that holds because only complete stems are
+published, and the mixed track they mirror runs the capture's length — a
+capture whose audio track ends early (the mux stopped writing audio) would
+place stem clips slightly past their media's end, the GAP-199 class.
+(4) **The clip limit.** Migration places one clip per legacy segment per stem
+(plus the screen's and the webcam's), so a heavily cut legacy timeline with
+several stems can exceed `MAX_CLIPS` (600) and `editor_open_staged` refuses
+it with `invalidProject` rather than opening it without some stems.
+(5) **A stem is mono.** An input recorded in stereo (a loopback device) is
+downmixed before the mixer and so before the tee; its stem carries that mono
+downmix, exactly what the mix carries of it — never the device's own stereo.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md

@@ -34,6 +34,7 @@ pub mod transcript;
 pub mod transcription_config;
 pub mod uri;
 pub mod vault_config;
+pub mod vault_config_screen;
 pub mod vault_walk;
 pub mod yaml_scalar;
 

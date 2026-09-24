@@ -79,8 +79,7 @@ fn sidecar(base: &str, vault_id: &str) -> StagedSidecar {
         height: 900,
         recorded_at: "2026-09-20T14:32:00Z".into(),
         timeline: None,
-        webcam: None,
-        extra: serde_json::Map::new(),
+        ..Default::default()
     }
 }
 

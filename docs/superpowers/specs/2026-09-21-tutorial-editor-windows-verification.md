@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **41 rows** today (T1–T41), of which **0** carry a result. An
+This file carries **44 rows** today (T1–T44), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -368,3 +368,23 @@ called them "T18–T22"; those numbers were taken, so they are T37–T41.
 | T39 | **A webcam another app is using** | Open the Windows Camera app (or a Teams call) holding the webcam, then start a screen capture with that webcam chosen. **Record**: whether the start is refused with "The webcam could not be opened. It may be in use by another app…", that no capture started (no bar, no `.part` in `screen-captures\`), and that picking **No webcam** then starts normally. If instead it starts: **Record** what the webcam file holds. | |
 | T40 | **Pause and resume keep both tracks aligned** | Start screen + webcam with a stopwatch on screen, clap, pause for ~20 s (keep moving in front of the camera), resume, clap, stop. **Record**: the capture's reported length against wall time minus the pause; the webcam file's length (`ffprobe`); and in the editor, the offset between each clap on the screen track and on the presenter clip — the paused stretch must be in NEITHER, and the second clap's offset must match the first's. | |
 | T41 | **No webcam selected = unchanged capture** | Record a screen capture with **No webcam** (the default). **Record**: that no `<base>.webcam.mp4` or `.webcam.mp4.part` appears; that the sidecar has no `webcam` key; that the camera's light never came on; and that the capture plays and edits exactly as before. Also with NO webcam connected at all: **Record** that the picker says "No webcam found." and Start still works. | |
+
+## Separate audio stems (Task 53)
+
+`session/stems.rs`'s pure rules are unit-tested — every stem is cut from the
+exact post-resample slice the mixer sums and stamped with the mixed chunk's
+own timestamp (`stems_share_the_mixed_sample_stream`), a stalled input's stem
+is padded like the mix, a writer that falls behind is abandoned rather than
+waited for, and with stems off the mixed track is byte-identical
+(`stems_default_off`). Migration, the sidecar list, `resolve_source`,
+discard/Clear/usage and the recovery sweep are covered on disk. What NO
+automated test executes is the Windows writer — `session/stems_windows.rs`
+and `FragmentedSink::create_audio_only` (an audio-only fragmented MP4 with a
+null video type): these rows are its gate (R-H4). The brief called them
+"T23–T24"; those numbers were taken, so they are T42–T44.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T42 | **Two inputs record as two stems that match the mix** | In Vault settings → Screen, turn on **Keep each audio input as a separate track (new recordings only)**. Record Screen with TWO audio inputs selected (a microphone and the speakers/loopback), for ~2 minutes: speak into the mic and play a video with sound, and clap once near the start and once near the end. Stop. **Record**: that `screen-captures\` now holds `<base>.stem-1.m4a` and `<base>.stem-2.m4a` beside `<base>.mp4` (and no `.m4a.part` left behind); that the sidecar's `stems` block lists both with the right input names; that each `.m4a` plays in a media player and contains ONLY its own input; the length of each stem against the capture (ffprobe `-show_entries format=duration`) — they must agree within one AAC frame (~21 ms); and, laying a stem over the `.mp4`'s own audio in an editor, whether the two claps line up at BOTH ends (no drift). Then open the capture in the editor: **Record** that two audio tracks named after the inputs appear, each with one clip per screen clip, and that the screen clip plays silent while the stems play. | |
+| T43 | **Pause, and a stem that cannot be written** | (a) With stems on, record ~30 s, pause ~20 s while still speaking, resume ~30 s, stop. **Record**: that no speech from the paused stretch is in either stem or the mix, and that the stems and the mix still line up after the resume. (b) Force a stem failure: start a capture with stems on, then (e.g. with a tool that holds an exclusive lock) deny writes to `screen-captures\.<base>.stem-1.m4a.part`, or fill the disk to near-full mid-capture. **Record** the warning shown (it must name the input and say the mixed recording still contains it), that the screen capture itself stops and stages normally, and that no `stem-1` file is left or listed afterwards. | |
+| T44 | **Stems off (the default) records exactly what it did before** | With the toggle OFF, record a capture with two inputs. **Record**: that no `.stem-*.m4a` or `.m4a.part` file appears in `screen-captures\`, that the sidecar has no `stems` key, and that the editor shows only the "Audio" track with the screen clip audible — and that selecting the screen clip shows the Audio inspector's note explaining that the inputs are mixed into one track and naming the setting. | |

@@ -225,3 +225,28 @@ describe("AudioSection — mute and detach", () => {
     expect(executed).toEqual([]);
   });
 });
+
+describe("AudioSection — stems", () => {
+  // Task 53: a capture recorded WITHOUT stems has every input mixed into one
+  // track, which no editor command can split. Selecting it must say so and
+  // name the setting that records them separately -- rather than leaving the
+  // user to hunt for a per-input control that cannot exist here.
+  it("explains stems when a capture has none", async () => {
+    const w = await mountSection(["c1"], { assets: [asset("a1", { builtin: "screen" })] });
+    const note = w.get("[data-testid='audio-section-stems-absent']").text();
+    expect(note).toContain("mixed into this one track");
+    expect(note).toContain("Keep each audio input as a separate track");
+  });
+
+  it("says nothing about stems once the capture has them, or for other media", async () => {
+    const withStems = await mountSection(["c1"], {
+      assets: [
+        asset("a1", { builtin: "screen" }),
+        asset("stem-1", { kind: "audio", name: "USB Mic" }),
+      ],
+    });
+    expect(withStems.find("[data-testid='audio-section-stems-absent']").exists()).toBe(false);
+    const imported = await mountSection(["c1"]);
+    expect(imported.find("[data-testid='audio-section-stems-absent']").exists()).toBe(false);
+  });
+});

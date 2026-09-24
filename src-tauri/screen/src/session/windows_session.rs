@@ -29,6 +29,7 @@ use crate::ScreenError;
 
 use super::audio::run_audio;
 use super::mux::{run_mux, SinkPlan};
+use super::stems_windows::StemWriter;
 use super::webcam_windows::WebcamProducer;
 use super::{
     apply_control, pacing, Control, Counters, MuxMsg, ScreenOutcome, ScreenSessionParams,
@@ -55,6 +56,9 @@ pub struct ScreenSession {
     /// The optional fourth producer (F-22). `None` for every capture made
     /// without a webcam.
     webcam: Option<WebcamProducer>,
+    /// The per-input stem writer (Task 53). `None` unless the vault keeps
+    /// stems AND the capture has audio inputs.
+    stems: Option<StemWriter>,
 }
 
 impl ScreenSession {
@@ -69,6 +73,7 @@ impl ScreenSession {
             warn_tx,
             stats_tx,
             webcam,
+            stems,
         } = params;
 
         let fps = normalize_fps(fps);
@@ -196,11 +201,18 @@ impl ScreenSession {
             crop_x,
             crop_y,
             webcam: None,
+            stems: None,
         };
         if let Some(mut producer) = webcam {
             producer.go(Arc::clone(&session.clock));
             session.webcam = Some(producer);
         }
+        // Stems (Task 53) never fail the start: a writer that cannot even
+        // be spawned warns, and the capture records its mix as always.
+        session.stems = match stems {
+            Some(params) => StemWriter::start(params, Arc::clone(&session.warnings)),
+            None => None,
+        };
         session.spawn_producers(source.handle, audio, tx, fps, width, height)
     }
 
@@ -217,6 +229,7 @@ impl ScreenSession {
         height: u32,
     ) -> Result<ScreenSession, ScreenError> {
         let frame_tx = tx.clone();
+        let tee = self.stems.as_mut().and_then(StemWriter::take_tee);
         let audio_thread = std::thread::Builder::new()
             .name("screen-audio".into())
             .spawn({
@@ -227,7 +240,7 @@ impl ScreenSession {
                 );
                 // `tx` (not a clone) moves here: this thread owning the last
                 // sender is what makes its exit disconnect the mux.
-                move || run_audio(audio, clock, tx, stopping, warnings)
+                move || run_audio(audio, clock, tx, stopping, warnings, tee)
             });
         let audio_thread = match audio_thread {
             Ok(h) => h,
@@ -304,6 +317,9 @@ impl ScreenSession {
         if let Some(h) = self.audio.take() {
             let _ = h.join();
         }
+        // After the audio thread, which held the stem channel: dropping the
+        // writer finalizes every stem and leaves its part for recovery.
+        drop(self.stems.take());
         if let Some(h) = self.mux.take() {
             if let Ok(Err(e)) = h.join() {
                 log::warn!("screen capture: abandoning the capture also failed to finalize: {e}");
@@ -435,6 +451,14 @@ impl ScreenSession {
             }
         })?;
 
+        // Stems publish WITH the capture, and only once it is published: the
+        // audio thread has ended, so the writer has finalized every stem.
+        let stems = self
+            .stems
+            .take()
+            .map(|w| w.finish(&self.warnings))
+            .unwrap_or_default();
+
         Ok(ScreenOutcome {
             mp4: self.staged.clone(),
             // The last sample the mux actually wrote, not the wall clock at
@@ -449,6 +473,7 @@ impl ScreenSession {
             dropped: self.counters.dropped.load(Ordering::Relaxed),
             warning: self.warnings.take(),
             webcam,
+            stems,
         })
     }
 }

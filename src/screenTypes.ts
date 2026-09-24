@@ -233,6 +233,9 @@ export interface ScreenCaptureConfig {
    * output; managed identity keys are always emitted and never removable. */
   screenExtraFrontmatter?: string | null;
   screenBodyTemplate?: string | null;
+  /** Keep each audio input as its own stem beside the mixed track (Task
+   * 53). Applies to NEW recordings only; absent reads as off. */
+  screenAudioStems?: boolean;
 }
 
 /** What the staging directory is holding, as Buddy settings reports it
