@@ -20,6 +20,7 @@
  */
 import { computed } from "vue";
 
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { numberField, percentField, useInspectorDraft } from "../../../composables/useInspectorDraft";
 import { useSelectedClips } from "../../../composables/useSelectedClips";
 import type { EditorCommand } from "../../../editor/editorCommandTypes";
@@ -33,6 +34,8 @@ import InspectorNumberInput from "./InspectorNumberInput.vue";
 const props = defineProps<{ clipIds: string[] }>();
 
 const editorProject = useEditorProjectStore();
+/** The guide's `inspector.layout` (Task 55): the open section wins over its tab. */
+const sectionTarget = useGuideTarget("inspector.layout");
 const { clips, lockReason } = useSelectedClips(() => props.clipIds);
 
 const FULL: Pick<Clip, "x" | "y" | "w" | "h" | "opacity"> = { x: 0, y: 0, w: 1, h: 1, opacity: 1 };
@@ -125,6 +128,7 @@ function onFlip(event: Event): void {
 <template>
   <div
     v-if="ready"
+    :ref="sectionTarget"
     data-testid="layout-section"
     class="flex flex-col gap-2"
   >
@@ -264,6 +268,7 @@ function onFlip(event: Event): void {
   </div>
   <p
     v-else
+    :ref="sectionTarget"
     data-testid="layout-section-audio"
   >
     Layout applies to video and image clips. Select only those to place them.

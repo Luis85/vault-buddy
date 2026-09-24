@@ -334,6 +334,27 @@ describe("TimelineView — context menu (right-click and Shift+F10)", () => {
     expect(w.find('[data-testid="editor-context-menu-root"]').exists()).toBe(false);
     expect(executed).toEqual([]);
   });
+
+  // Task 55 (onboarding lesson 9, `timeline.more`): "Edit actions in the
+  // timeline opens the same kind of menu without a right click" — acting on
+  // the SELECTION, since no clip was right-clicked.
+  it("Edit actions opens the same menu without a right click, for the selection", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    await w.get('[data-testid="timeline-toolbar-more"]').trigger("click");
+    expect(w.find('[data-testid="editor-context-menu-root"]').exists()).toBe(true);
+    // Nothing selected: the selection-scoped Delete says why it cannot run.
+    expect(w.get('[data-testid="editor-context-menu-item-delete"]').attributes("aria-disabled")).toBe("true");
+    await w.get('[data-testid="editor-context-menu"]').trigger("keydown", { key: "Escape" });
+
+    useEditorWorkspaceStore().select(["c2"]);
+    await w.get('[data-testid="timeline-toolbar-more"]').trigger("click");
+    expect(w.get('[data-testid="editor-context-menu-item-delete"]').attributes("aria-disabled")).toBe("false");
+    expect(executed).toEqual([]);
+  });
 });
 
 describe("TimelineToolbar", () => {

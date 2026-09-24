@@ -26,8 +26,10 @@
  * Split into `MixerTrackRow`/`MixerSlider`/`MixerPeakMeter` so no one
  * template carries every branch (the fallow template-complexity ratchet).
  */
+import type { ComponentPublicInstance } from "vue";
 import { computed, ref } from "vue";
 
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { onReveal } from "../../../editor/revealBus";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -49,6 +51,12 @@ const workspace = useEditorWorkspaceStore();
 
 const open = ref(false);
 const triggerRef = ref<HTMLButtonElement | null>(null);
+/** The guide's `mixer` (Task 55) — the same button. */
+const mixerTarget = useGuideTarget("mixer");
+function bindTrigger(el: Element | ComponentPublicInstance | null): void {
+  triggerRef.value = el as HTMLButtonElement | null;
+  mixerTarget(el);
+}
 const tracks = computed(() => editorProject.project?.tracks ?? []);
 const masterGain = computed(() => editorProject.project?.master_gain ?? 1);
 
@@ -75,7 +83,7 @@ function onKeydown(event: KeyboardEvent): void {
 <template>
   <span class="relative">
     <button
-      ref="triggerRef"
+      :ref="bindTrigger"
       type="button"
       data-action="mixer"
       data-testid="mixer-toggle"

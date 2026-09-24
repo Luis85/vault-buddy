@@ -6323,3 +6323,54 @@ close-then-discard ordering fix in `useEditorExport.onDiscard`
 leftover staged copy always has a working way to remove it. The residual
 this gap tracks is purely "a Save alone does not clean it up," never "the
 user has no way to clean it up."
+
+### GAP-203 · Medium · Several guide lessons describe the browser reference, not the native editor
+`src/editor/guide/steps.json` (Task 55, F-46; ADR R18). The lessons are
+copied VERBATIM from the concept bundle's `onboarding.steps.json` (the ADR's
+and the brief's requirement, byte-compared by
+`tests/editorGuideContent.test.ts`), and that file was extracted from the
+browser reference. Read against this app, some of its copy is untrue:
+(1) **`save`**: "Saving here downloads a project file … Browser recovery is
+not a backup" — the native editor saves into its own project store and
+recovers through `recovery.json`; there is no download.
+(2) **`render`**: "Browser rendering here is a real-time review path with a
+three-minute limit. It does not write directly into a vault" — the native
+render is ffmpeg with no three-minute limit, and Publish (Task 48) DOES
+write into a vault.
+(3) **`media`/`tracks`/`audio`**: "The built-in project is ready to explore",
+"The sample already has multiple video and audio tracks", "The sample sounds
+are synthesized cues" — the native editor opens the user's own capture, with
+no sample project.
+(4) **`tracks`**: "Open Add track to see the choices" — the guide's
+`track.menu` target is the top track's own menu (Move up/down, Delete);
+`addTrackVideo`/`addTrackAudio` still have no menu surface
+(`actionMeta.ts`), so there is no "Add track" menu to open.
+(5) **`products`**: "Open Project in the app header" — there is no Project
+menu; products live in the library's **Products** tab, which is what the
+guide's `library.products` target resolves to.
+Fix: a native revision of the copy, with `CONTENT_REVISION` bumped in
+`content.ts` and any removed lesson listed in `retired-steps.json` (read by
+Rust too) so saved progress resumes at its chapter. Until then the guide (Task
+56) would show these sentences as written; the copy is data, so no code
+change is needed to correct it.
+
+### GAP-204 · Low · Guide progress: actions parked until Task 56, and a newer build's file reads as fresh
+`src/stores/editorOnboarding.ts`, `src-tauri/core/src/editor/guide.rs` (Task
+55, F-46/F-47).
+(1) **Nothing writes progress yet.** The store's `next`/`back`/`pause`/
+`collapse`/`dismissInvitation`/`markExplored`/`restart`/`suspend`/`resume`
+have no production caller until Task 56's invitation, coach and learning
+center; each carries a `fallow-ignore-next-line unused-store-member` that
+Task 56 removes (fallow reports a stale suppression). Until then the
+progress file is read on every editor mount but never written, and the
+header's **Help** button (the `header.help` target) opens nothing.
+(2) **Forward compatibility is a fresh start.** The stored document is
+parsed against a closed schema, so a file written by a NEWER build that
+added a field reads as fresh progress (logged), and the next save from this
+build replaces it. Reasonable while one build owns the file; revisit if two
+builds can share one `%LOCALAPPDATA%`.
+(3) **A registration is not a highlight.** `targets.ts` resolves a key to a
+mounted, connected element and to More when an overflow rule says so; it does
+not check that the element is VISIBLE (a closed compact drawer keeps its
+panel mounted under `v-show`). Revealing a target before pointing at it is
+Task 56's lesson preparation.

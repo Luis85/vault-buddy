@@ -469,3 +469,45 @@ describe("EditorHeader — inline rename", () => {
     expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("New title");
   });
 });
+
+describe("EditorShell — guide progress storage", () => {
+  // Task 55 (ONBOARDING.md § State and persistence): progress that cannot be
+  // stored lasts for this session only, and the header SAYS so rather than
+  // letting the next start silently forget where the user was.
+  it("says Session only beside Help when guide progress cannot be read", async () => {
+    const store = useEditorProjectStore();
+    store.setPort(fakePort({ getGuideProgress: () => Promise.reject(new Error("locked")) }));
+    const w = mount(EditorShell);
+    await flushPromises();
+
+    const note = w.get('[data-testid="editor-header-guide-session-only"]');
+    expect(note.text()).toBe("Session only");
+    expect(note.attributes("title")).toBe(
+      "Guide progress cannot be stored on this device right now. It lasts until the editor closes.",
+    );
+  });
+
+  it("shows nothing when guide progress was read", async () => {
+    const store = useEditorProjectStore();
+    store.setPort(
+      fakePort({
+        getGuideProgress: () =>
+          Promise.resolve({
+            contentRevision: 1,
+            currentStepId: null,
+            reviewed: [],
+            explored: [],
+            invitationDismissed: false,
+            active: false,
+            collapsed: false,
+            completed: false,
+            preferences: { dimming: true, motion: "system" },
+          }),
+      }),
+    );
+    const w = mount(EditorShell);
+    await flushPromises();
+
+    expect(w.find('[data-testid="editor-header-guide-session-only"]').exists()).toBe(false);
+  });
+});

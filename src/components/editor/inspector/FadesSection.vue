@@ -31,6 +31,7 @@
  */
 import { computed } from "vue";
 
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { numberField, useInspectorDraft } from "../../../composables/useInspectorDraft";
 import type { EditorCommand } from "../../../editor/editorCommandTypes";
 import { clipOutputDuration } from "../../../editor/timeMap";
@@ -41,6 +42,8 @@ import ClipTransitions from "./ClipTransitions.vue";
 const props = defineProps<{ clipIds: string[] }>();
 
 const editorProject = useEditorProjectStore();
+/** The guide's `inspector.fades` (Task 55): the open section wins over its tab. */
+const sectionTarget = useGuideTarget("inspector.fades");
 
 const clip = computed(() => (props.clipIds.length === 1 ? editorProject.clipById(props.clipIds[0]) : undefined));
 const single = clip.value !== undefined;
@@ -96,6 +99,7 @@ function onCurveChange(event: Event): void {
 <template>
   <div
     v-if="drafts && clip"
+    :ref="sectionTarget"
     data-testid="fades-section"
     class="flex flex-col gap-2"
   >
@@ -159,6 +163,7 @@ function onCurveChange(event: Event): void {
   </div>
   <p
     v-else
+    :ref="sectionTarget"
     data-testid="fades-section-multi"
     class="text-fg-subtle"
   >

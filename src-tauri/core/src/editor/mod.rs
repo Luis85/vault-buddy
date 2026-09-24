@@ -17,6 +17,7 @@ pub mod checks;
 pub mod commands;
 pub mod error;
 pub mod fingerprint;
+pub mod guide;
 pub mod history;
 pub mod ids;
 pub mod import_io;

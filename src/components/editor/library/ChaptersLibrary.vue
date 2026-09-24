@@ -15,12 +15,15 @@
  */
 import { computed } from "vue";
 
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { addMarkerAt, chapterRows, formatOutputTime } from "../../../editor/captionRules";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 
 const project = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
+/** The guide's `library.chapters` (Task 55). */
+const guideTarget = useGuideTarget("library.chapters");
 
 const rows = computed(() => chapterRows(project.project));
 const draft = computed(() => addMarkerAt(project.project, workspace.playheadMs));
@@ -44,6 +47,7 @@ function remove(markerId: string): void {
 
 <template>
   <div
+    :ref="guideTarget"
     data-testid="chapters-library"
     class="flex h-full flex-col gap-2 text-micro text-fg-secondary"
   >

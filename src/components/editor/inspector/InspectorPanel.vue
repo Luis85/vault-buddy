@@ -38,6 +38,7 @@
  */
 import { computed } from "vue";
 
+import { useGuideTabTargets, useGuideTarget } from "../../../composables/useGuideTarget";
 import { useRovingTablist } from "../../../composables/useRovingTablist";
 import { selectedEffectOf } from "../../../editor/cueActions";
 import { useEditorProjectStore } from "../../../stores/editorProject";
@@ -88,10 +89,24 @@ const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
   () => CATEGORY_IDS.indexOf(activeTab.value),
   (i) => selectTab(CATEGORIES[i].id),
 );
+
+// ---- guide targets (Task 55): the panel is `inspector`; the Layout and
+// Fades tabs are the fallback route to their sections, which bind the same
+// keys themselves and win while open.
+const panelTarget = useGuideTarget("inspector");
+const bindTabTarget = useGuideTabTargets<CategoryId>({
+  layout: ["inspector.layout"],
+  fades: ["inspector.fades"],
+});
+function setTab(i: number, el: Element | null): void {
+  setTabRef(i, el);
+  bindTabTarget(CATEGORIES[i].id, el);
+}
 </script>
 
 <template>
   <div
+    :ref="panelTarget"
     data-testid="inspector-panel"
     class="flex h-full flex-col gap-2"
   >
@@ -125,7 +140,7 @@ const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
           v-for="(cat, i) in CATEGORIES"
           :id="`inspector-tab-${cat.id}`"
           :key="cat.id"
-          :ref="(el) => setTabRef(i, el as Element | null)"
+          :ref="(el) => setTab(i, el as Element | null)"
           type="button"
           role="tab"
           :data-testid="`inspector-tab-${cat.id}`"

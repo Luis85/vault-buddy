@@ -27,9 +27,15 @@
  * Rendered Products (the guide's `library.products` target) — mounted here
  * so a render's output is reachable from the running editor, not only from
  * the Render dialog that made it.
+ *
+ * **Guide targets (Task 55):** only the open tab's panel is mounted, so each
+ * tab is the FALLBACK route to the lessons its panel owns — the guide points
+ * at Captions while the Captions library is closed, and at the library
+ * itself once it is open (the panels bind their own keys).
  */
 import { computed } from "vue";
 
+import { useGuideTabTargets } from "../../../composables/useGuideTarget";
 import { useRovingTablist } from "../../../composables/useRovingTablist";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import CaptionsLibrary from "./CaptionsLibrary.vue";
@@ -62,6 +68,17 @@ const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
   () => TABS.findIndex((t) => t.id === activeTab.value),
   (i) => choose(TABS[i].id),
 );
+
+const bindTabTarget = useGuideTabTargets<LibraryTab>({
+  media: ["library.import", "library.webcam"],
+  captions: ["library.captions"],
+  chapters: ["library.chapters"],
+  products: ["library.products"],
+});
+function setTab(i: number, el: Element | null): void {
+  setTabRef(i, el);
+  bindTabTarget(TABS[i].id, el);
+}
 </script>
 
 <template>
@@ -80,7 +97,7 @@ const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
         v-for="(tab, i) in TABS"
         :id="`library-tab-${tab.id}`"
         :key="tab.id"
-        :ref="(el) => setTabRef(i, el as Element | null)"
+        :ref="(el) => setTab(i, el as Element | null)"
         type="button"
         role="tab"
         :data-testid="`library-tab-${tab.id}`"

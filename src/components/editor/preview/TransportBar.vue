@@ -26,6 +26,7 @@
  */
 import { onBeforeUnmount, onMounted } from "vue";
 
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { shouldHandle } from "../../../editor/shortcuts";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import { formatDuration } from "../../../utils/formatDuration";
@@ -49,6 +50,8 @@ const emit = defineEmits<{
 const RATES = [0.25, 0.5, 1, 1.5, 2] as const;
 
 const workspace = useEditorWorkspaceStore();
+/** The guide's `transport` (Task 55). */
+const transportTarget = useGuideTarget("transport");
 
 /** Elements whose own Space is their activation or their text. */
 const OWNS_SPACE =
@@ -79,6 +82,7 @@ function onVolume(event: Event) {
 
 <template>
   <div
+    :ref="transportTarget"
     data-testid="transport-bar"
     class="flex flex-wrap items-center gap-2 text-micro text-fg-muted"
   >

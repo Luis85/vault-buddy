@@ -36,6 +36,7 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { lockedReason } from "../../../editor/actionMeta";
 import type { Track } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
@@ -49,6 +50,9 @@ const props = defineProps<{
 }>();
 
 const editorProject = useEditorProjectStore();
+/** The guide's `track.menu` (Task 55): the TOP track's menu, one target
+ * rather than whichever header happened to register first. */
+const menuTarget = useGuideTarget("track.menu", { active: () => props.trackIndex === 0 });
 
 const locked = computed(() => props.track.locked);
 const reason = computed(() => lockedReason(props.track.name));
@@ -314,6 +318,7 @@ function deleteTrack() {
       class="relative shrink-0"
     >
       <button
+        :ref="menuTarget"
         type="button"
         :data-testid="`track-header-${track.id}-menu`"
         aria-haspopup="menu"

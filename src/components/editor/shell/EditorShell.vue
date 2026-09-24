@@ -68,6 +68,10 @@
  * distinct store from the panel's). The root below gains `relative` so the
  * host's own `absolute inset-x-3 bottom-3` anchors to this shell rather
  * than whatever positioned ancestor happens to sit further up the tree.
+ *
+ * **Guide progress (Task 55)** is read once per window when the shell first
+ * mounts (`editorOnboarding.load()` — idempotent, and it never throws: an
+ * unreadable store only flips the header's "Session only").
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
@@ -75,6 +79,7 @@ import { baseActionContext } from "../../../editor/actionContext";
 import { activateEditorAction } from "../../../editor/clipboard";
 import { onReveal } from "../../../editor/revealBus";
 import { matchShortcut, shouldHandle } from "../../../editor/shortcuts";
+import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import NotificationHost from "../../NotificationHost.vue";
@@ -94,6 +99,9 @@ function onResize() {
 }
 onMounted(() => window.addEventListener("resize", onResize));
 onBeforeUnmount(() => window.removeEventListener("resize", onResize));
+
+const onboarding = useEditorOnboardingStore();
+onMounted(() => void onboarding.load());
 
 const isCompact = computed(() => viewportWidth.value < COMPACT_BREAKPOINT);
 

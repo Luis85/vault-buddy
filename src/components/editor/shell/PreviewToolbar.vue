@@ -73,6 +73,7 @@
 import type { ComponentPublicInstance } from "vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
+import { useGuideOverflow, useGuideTarget } from "../../../composables/useGuideTarget";
 import { baseActionContext } from "../../../editor/actionContext";
 import type { ActionContext, ActionId } from "../../../editor/actions";
 import { commandFor, resolveActions } from "../../../editor/actions";
@@ -167,6 +168,21 @@ const overflowCount = computed(() =>
 );
 const visibleItems = computed(() => TOOLBAR_ITEMS.slice(0, TOOLBAR_ITEMS.length - overflowCount.value));
 const overflowItems = computed(() => TOOLBAR_ITEMS.slice(TOOLBAR_ITEMS.length - overflowCount.value));
+
+// ---- guide targets (Task 55) -------------------------------------------------
+// This row is the guide's `preview.toolstrip`; the lesson's own control is
+// the Arrow tool, so once Arrow has moved into More the guide points at More
+// (`revealed: "overflow"`), never at a tool the user cannot see.
+const toolstripTarget = useGuideTarget("preview.toolstrip");
+const moreTarget = useGuideOverflow("preview.toolstrip", () => overflowItems.value.includes("addArrow"));
+function bindRow(el: Element | ComponentPublicInstance | null): void {
+  rowRef.value = el as HTMLElement | null;
+  toolstripTarget(el);
+}
+function bindMore(el: Element | ComponentPublicInstance | null): void {
+  setItemRef(visibleItems.value.length, el);
+  moreTarget(el);
+}
 
 // ---- the More menu ----------------------------------------------------------
 
@@ -356,7 +372,7 @@ function itemClass(id: ActionId): string {
 
 <template>
   <div
-    ref="rowRef"
+    :ref="bindRow"
     data-testid="preview-toolbar"
     role="toolbar"
     aria-label="Preview tools"
@@ -399,7 +415,7 @@ function itemClass(id: ActionId): string {
       class="relative shrink-0"
     >
       <button
-        :ref="(el) => setItemRef(visibleItems.length, el)"
+        :ref="bindMore"
         type="button"
         data-testid="preview-toolbar-more"
         aria-haspopup="menu"

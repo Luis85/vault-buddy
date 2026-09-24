@@ -14,6 +14,7 @@
  */
 import { computed, ref } from "vue";
 
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { selectionRange } from "../../../editor/renderRanges";
 import { onReveal } from "../../../editor/revealBus";
 import type { RenderRange } from "../../../editorTypes";
@@ -24,6 +25,8 @@ import RenderDialog from "../dialogs/RenderDialog.vue";
 
 const editorProject = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
+/** The guide's `header.render` (Task 55). */
+const renderTarget = useGuideTarget("header.render");
 
 const reason = computed<string | null>(() => {
   if (!editorProject.sessionId) return "No project is open.";
@@ -47,6 +50,7 @@ onReveal("render", onRender);
 
 <template>
   <AppButton
+    :ref="renderTarget"
     variant="primary"
     size="sm"
     data-testid="editor-header-render"

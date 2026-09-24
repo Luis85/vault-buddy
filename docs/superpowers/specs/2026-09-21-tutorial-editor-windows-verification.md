@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **47 rows** today (T1–T47), of which **0** carry a result. An
+This file carries **50 rows** today (T1–T50), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -407,3 +407,23 @@ that gate.
 | T45 | **Every action reveals its object in WebView2** | Build a project that raises one finding of each action: a gap over 1 s on the top video track (Show it), a clip at opacity 0.02 (Open Layout), two overlapping sound clips at full volume (Open the mixer), a caption turned off or reading too fast (Open Captions), a privacy cover (Show it), a 16:10 source full-frame on 16:9 (Review the canvas), an unfinished webcam take (Open Webcam). Open **Checks** and press each finding's button in turn, reopening Checks between them. **Record**, per button: that the dialog closed; what became selected (the clip on the timeline, the cue in the preview with the effect inspector showing, the caption row in the Captions list, scrolled into view); where the playhead landed (the cue's OUTPUT time on a sped-up clip, not its source time); that the timeline scrolled a clip that was off screen into view; that the mixer popover / Webcam dialog / Layout tab actually opened; and for Review the canvas, which element has keyboard focus afterwards (it must be the ratio control, not the Checks button). Repeat Open Layout and Open Captions at a window narrower than 1180 px: **record** whether the closed library/inspector drawer opened. | |
 | T46 | **A missing file blocks Render; warnings do not** | Save a project with an imported video, close the editor, move that video's copy out of the project's `media\` folder, reopen the project. **Record**: the header's Checks badge count; the Checks dialog's summary line and the missing file's sentence under "Fix before rendering"; that **Render video**'s dialog shows the same sentence and a disabled **Render video** with "Fix the blocking check first." beside it; and that the dialog's **Continue to render** is disabled with the same reason. Press **Reconnect media**, reconnect the file, and **record** that the finding, the badge count and the disabled state all clear without reopening the project. Then make a project with only warnings (e.g. a privacy cover): **record** that it renders. | |
 | T47 | **The canvas toast, the destination picker and the wording** | On a capture-backed project, pick **9:16 Portrait** in the preview toolbar. **Record**: that the toast reads "Canvas changed. Review crop, text and caption placement in Checks." with an **Open Checks** button that opens the dialog, and which Review-the-canvas findings the new canvas raised. On a project with no destination, press **Choose a vault** in Checks, pick a vault and a folder, **Set destination**: **record** that the finding disappears, that Undo restores it, and that the Publish dialog then defaults to that vault. Read the dialog aloud with Narrator: **record** that the summary, each group's heading and each finding's button are announced, and that nothing in the dialog is a score. | |
+
+## Guide content, targets and saved progress (Task 55)
+
+`core::editor::guide` is unit-tested on the strict save (a closed schema,
+the 22 lessons compiled in from the webview's own `steps.json`, 16 KiB, no
+refusal that echoes what it refused) and the lenient read (an unknown or
+retired lesson resumed at its chapter's first lesson, a malformed or
+oversized file read as fresh progress); `prefs_commands` round-trips the file
+through a real tempdir. The target registry is tested by mounting the whole
+shell in happy-dom and resolving all 22 keys. What no automated test can show
+is the real `%LOCALAPPDATA%` folder, a real file the app cannot write, and the
+new **Edit actions** menu opening where the button really is in WebView2.
+The coach that USES these targets is Task 56's; these rows only prove the
+storage and the one new control.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T48 | **Guide progress lands in the app-wide prefs folder and nowhere else** | Open any project in the editor, close the editor window, quit the app. **Record**: whether `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-prefs\` exists (it is created on the first SAVE, so with Task 56 not yet shipped it may legitimately be absent — say which), that no `guide-progress.json` appears inside any `editor-projects\<projectId>\` folder, and whether "Session only" appeared beside **Help** in the header (it must NOT on a healthy machine). | |
+| T49 | **A malformed file reads as fresh; an unreadable one says Session only** | With the app closed, create `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-prefs\guide-progress.json` containing `{ not json`, then open a project in the editor. **Record**: that the editor opens normally, that `vault-buddy.log` carries "editor guide progress: the saved file is oversized or malformed, starting fresh" and NOT the file's content, and that "Session only" does NOT show beside **Help** (a malformed file is replaced by the next save). Close the app, then deny your own user Read on that FILE (Properties → Security → Advanced → add a Deny: Read entry) and open the editor again. **Record**: that the editor still opens, that "Session only" now shows beside Help with the tooltip "Guide progress cannot be stored on this device right now. It lasts until the editor closes.", and the log line "editor guide progress: cannot read it (…)". Remove the Deny entry afterwards. | |
+| T50 | **Edit actions opens the timeline's menu at the button** | In a project with two clips, select one and click **Edit actions** in the timeline toolbar. **Record**: that the action menu opens directly below the button (not at the window corner), that its items act on the selected clip (Split enabled with the playhead inside it), that Escape closes it and returns focus to the button, and that with nothing selected Delete is disabled with its reason as the tooltip. | |

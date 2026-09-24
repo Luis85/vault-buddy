@@ -521,6 +521,8 @@ pub fn run() {
             save_commands::editor_open_project,
             prefs_commands::editor_get_workspace,
             prefs_commands::editor_save_workspace,
+            prefs_commands::editor_get_guide_progress,
+            prefs_commands::editor_save_guide_progress,
             media_commands::editor_media_url,
             media_commands::editor_media_peaks,
             media_commands::editor_media_thumbnail,

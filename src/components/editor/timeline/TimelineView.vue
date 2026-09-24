@@ -217,6 +217,14 @@ function onClipContextMenu(payload: { clip: Clip; clientX: number; clientY: numb
   menuOpen.value = true;
 }
 
+/** The toolbar's Edit actions (Task 55): the same menu, for the selection. */
+function onToolbarMore(at: { x: number; y: number }) {
+  menuTarget.value = null;
+  menuX.value = at.x;
+  menuY.value = at.y;
+  menuOpen.value = true;
+}
+
 function onMenuActivate(actionId: ActionId) {
   activateEditorAction(actionId, menuContext.value, (cmd) => editorProject.execute(cmd));
 }
@@ -339,7 +347,10 @@ async function onBelowLanesDrop(event: DragEvent) {
       @pointerdown="onResizePointerDown"
     />
 
-    <TimelineToolbar @fit="onFit" />
+    <TimelineToolbar
+      @fit="onFit"
+      @more="onToolbarMore"
+    />
 
     <div
       ref="scrollRef"

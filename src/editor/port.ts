@@ -28,6 +28,7 @@ import type {
   EditorOpenResult,
   EditorProjection,
   ExecuteRequest,
+  GuideProgress,
   JobProgressDto,
   JobRecordDto,
   JobStarted,
@@ -67,6 +68,7 @@ import {
   isEditorError,
 } from "./decode";
 import { decodeCheckFindings } from "./decodeChecks";
+import { decodeGuideProgress } from "./decodeGuide";
 import { decodeRelinkReport } from "./decodeRelink";
 import {
   decodeNullableFileName,
@@ -218,6 +220,12 @@ export interface EditorPort {
   /** `editor_get_checks` (Task 54) — the before-you-share findings for
    * the session as it stands; read-only. */
   getChecks(sessionId: string): Promise<CheckFinding[]>;
+  /** `editor_get_guide_progress` (Task 55) — the app-wide guide progress,
+   * already validated by Rust (fresh progress when nothing is saved). */
+  getGuideProgress(): Promise<GuideProgress>;
+  /** `editor_save_guide_progress` — refused (`invalidRequest`) unless every
+   * id is a lesson this build knows. */
+  saveGuideProgress(progress: GuideProgress): Promise<void>;
   /** `list_vaults` — the vaults a publish can go into. */
   listVaults(): Promise<VaultChoice[]>;
   /** `open_screen_capture` — open a PUBLISHED file in Obsidian (Rust
@@ -364,6 +372,12 @@ export function createTauriEditorPort(): EditorPort {
     },
     getChecks(sessionId) {
       return call("editor_get_checks", { sessionId }, decodeCheckFindings);
+    },
+    getGuideProgress() {
+      return call("editor_get_guide_progress", undefined, decodeGuideProgress);
+    },
+    async saveGuideProgress(progress) {
+      await call("editor_save_guide_progress", { progress }, () => undefined);
     },
     listVaults() {
       return call("list_vaults", undefined, decodeVaultChoices);

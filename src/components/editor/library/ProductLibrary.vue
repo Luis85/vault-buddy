@@ -21,6 +21,7 @@
  */
 import { onMounted, ref, watch } from "vue";
 
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useEditorProductsStore } from "../../../stores/editorProducts";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import PublishDialog from "../dialogs/PublishDialog.vue";
@@ -28,6 +29,8 @@ import ProductCard from "./ProductCard.vue";
 
 const editorProject = useEditorProjectStore();
 const products = useEditorProductsStore();
+/** The guide's `library.products` (Task 55). */
+const guideTarget = useGuideTarget("library.products");
 
 onMounted(() => void products.refresh());
 watch(
@@ -58,6 +61,7 @@ async function confirmRestore(id: string): Promise<void> {
 
 <template>
   <div
+    :ref="guideTarget"
     data-testid="product-library"
     class="flex h-full flex-col gap-2 overflow-y-auto"
   >

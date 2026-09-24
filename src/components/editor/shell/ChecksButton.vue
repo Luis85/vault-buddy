@@ -15,6 +15,7 @@
  */
 import { computed, watch } from "vue";
 
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { checksDialogOpen, openChecks } from "../../../editor/revealBus";
 import { openWebcamTakes } from "../../../editor/webcamTakes";
 import { useEditorChecksStore } from "../../../stores/editorChecks";
@@ -25,6 +26,8 @@ import ChecksDialog from "../dialogs/ChecksDialog.vue";
 
 const editorProject = useEditorProjectStore();
 const checks = useEditorChecksStore();
+/** The guide's `header.checks` (Task 55). */
+const checksTarget = useGuideTarget("header.checks");
 
 watch(
   () => {
@@ -42,6 +45,7 @@ const label = computed(() =>
 
 <template>
   <AppButton
+    :ref="checksTarget"
     variant="ghost"
     size="sm"
     data-testid="editor-header-checks"

@@ -28,16 +28,25 @@
  * is exactly the scope `deleteClips{closeGap:true}` ripples (Rust's own
  * `delete_close_gap_ripples_only_its_track`, `clips.rs`) — a user picking
  * this mode must not read it as "closes every track's gap".
+ *
+ * **Edit actions (Task 55)** opens the timeline's own action menu — the one
+ * a right-click on a clip opens — without a right click, for the SELECTION
+ * (onboarding lesson 9: "Edit actions in the timeline opens the same kind
+ * of menu"). `TimelineView` owns that menu, so this only reports where the
+ * button is. It, the row itself, Split and Undo are the guide's
+ * `timeline.more`/`timeline.toolbar`/`timeline.split`/`timeline.undo`.
  */
 import { computed } from "vue";
 
+import type { GuideRef } from "../../../composables/useGuideTarget";
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { baseActionContext } from "../../../editor/actionContext";
 import type { ActionId } from "../../../editor/actionMeta";
 import { commandFor, resolveActions } from "../../../editor/actions";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 
-const emit = defineEmits<{ (e: "fit"): void }>();
+const emit = defineEmits<{ (e: "fit"): void; (e: "more", at: { x: number; y: number }): void }>();
 
 const editorProject = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
@@ -74,6 +83,19 @@ function zoomOut() {
   workspace.setZoom(workspace.timelineZoom / ZOOM_STEP);
 }
 
+const toolbarTarget = useGuideTarget("timeline.toolbar");
+const moreTarget = useGuideTarget("timeline.more");
+const actionTargets: Partial<Record<ActionId, GuideRef>> = {
+  split: useGuideTarget("timeline.split"),
+  undo: useGuideTarget("timeline.undo"),
+};
+
+/** Opens the action menu just below the button. */
+function onMore(event: MouseEvent): void {
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  emit("more", { x: rect.left, y: rect.bottom });
+}
+
 function itemTitle(id: ActionId): string {
   return resolved.value[id].reason ?? resolved.value[id].label;
 }
@@ -84,6 +106,7 @@ function itemClass(id: ActionId): string {
 
 <template>
   <div
+    :ref="toolbarTarget"
     data-testid="timeline-toolbar"
     role="toolbar"
     aria-label="Timeline tools"
@@ -92,6 +115,7 @@ function itemClass(id: ActionId): string {
     <button
       v-for="id in TOOLBAR_ACTIONS"
       :key="id"
+      :ref="actionTargets[id]"
       type="button"
       :data-testid="`timeline-toolbar-${id}`"
       :aria-disabled="!resolved[id].enabled"
@@ -113,6 +137,17 @@ function itemClass(id: ActionId): string {
       @click="onDelete"
     >
       {{ resolved[deleteActionId].label }}
+    </button>
+    <button
+      :ref="moreTarget"
+      type="button"
+      data-testid="timeline-toolbar-more"
+      aria-haspopup="menu"
+      title="Actions for the selected clips (right-click a clip for its own)"
+      class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      @click="onMore"
+    >
+      Edit actions
     </button>
 
     <span class="mx-1 h-4 w-px bg-line" />

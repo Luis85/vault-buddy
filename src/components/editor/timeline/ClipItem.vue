@@ -53,8 +53,10 @@
  * for Shift+F10/Menu) — without it a keyboard user who tabs to a clip can
  * open its context menu but has no way to select it.
  */
+import type { ComponentPublicInstance } from "vue";
 import { computed, nextTick, ref } from "vue";
 
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useTimelineDrag } from "../../../composables/useTimelineDrag";
 import { hasPreviewSource } from "../../../editor/previewLayers";
 import { isContextMenuShortcut } from "../../../editor/shortcuts";
@@ -155,6 +157,12 @@ const drag = useTimelineDrag({
 });
 
 const root = ref<HTMLElement | null>(null);
+/** The guide's `clip.selected` (Task 55): this clip, while it is selected. */
+const selectedTarget = useGuideTarget("clip.selected", { active: () => props.selected });
+function bindRoot(el: Element | ComponentPublicInstance | null): void {
+  root.value = el as HTMLElement | null;
+  selectedTarget(el);
+}
 /** Pointer travel (px) below which a press-and-release is still a click. */
 const DRAG_SLOP_PX = 3;
 let press: { x: number; y: number } | null = null;
@@ -345,7 +353,7 @@ function onKeydown(event: KeyboardEvent) {
 
 <template>
   <div
-    ref="root"
+    :ref="bindRoot"
     :data-testid="`clip-${clip.id}`"
     role="option"
     tabindex="0"

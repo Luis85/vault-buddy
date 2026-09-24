@@ -23,9 +23,15 @@
  * `tests/screenCaptureEditHandoff.test.ts` assert them directly and are not
  * Task 16's files to rewrite ("keeping ... every existing editor test
  * green").
+ *
+ * **Guide targets (Task 55; ADR R18):** the header row is `projectbar`, and
+ * Save project is `header.save` (Help, Checks and Render video bind their
+ * own, in their own components — `GuideHelpButton` also says "Session only"
+ * when guide progress cannot be stored).
  */
 import { computed, nextTick, ref } from "vue";
 
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import type { EditorCommand, PackageFormat } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { formatDuration } from "../../../utils/formatDuration";
@@ -34,6 +40,7 @@ import IconButton from "../../ui/IconButton.vue";
 import SaveProjectDialog from "../dialogs/SaveProjectDialog.vue";
 import SaveProjectMenu from "../menus/SaveProjectMenu.vue";
 import ChecksButton from "./ChecksButton.vue";
+import GuideHelpButton from "./GuideHelpButton.vue";
 import RenderVideoButton from "./RenderVideoButton.vue";
 
 const props = defineProps<{
@@ -50,6 +57,8 @@ const emit = defineEmits<{
 }>();
 
 const editorProject = useEditorProjectStore();
+const projectbarTarget = useGuideTarget("projectbar");
+const saveTarget = useGuideTarget("header.save");
 
 const title = computed(() => editorProject.snapshot?.title ?? "Untitled");
 const durationLabel = computed(() => formatDuration(editorProject.durationMs));
@@ -131,6 +140,7 @@ function onSaveMenu(item: "save" | "portable" | "lightweight" | "open") {
 
 <template>
   <header
+    :ref="projectbarTarget"
     data-testid="editor-header"
     class="flex flex-wrap items-center gap-2 rounded-control border border-line bg-panel px-3 py-2"
   >
@@ -182,13 +192,7 @@ function onSaveMenu(item: "save" | "portable" | "lightweight" | "open") {
     >{{ vault }}</span>
 
     <div class="ml-auto flex items-center gap-2">
-      <AppButton
-        variant="ghost"
-        size="sm"
-        data-testid="editor-header-help"
-      >
-        Help
-      </AppButton>
+      <GuideHelpButton />
       <ChecksButton />
       <IconButton
         :label="props.theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'"
@@ -198,6 +202,7 @@ function onSaveMenu(item: "save" | "portable" | "lightweight" | "open") {
         {{ props.theme === "light" ? "🌙" : "☀️" }}
       </IconButton>
       <AppButton
+        :ref="saveTarget"
         variant="secondary"
         size="sm"
         data-testid="editor-header-save"

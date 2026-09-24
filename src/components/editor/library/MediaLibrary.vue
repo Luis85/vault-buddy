@@ -43,6 +43,7 @@
  */
 import { computed, onMounted, ref } from "vue";
 
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { onReveal } from "../../../editor/revealBus";
 import { firstAcceptingTrack } from "../../../editor/trackCompat";
 import type { Asset, Track } from "../../../editorTypes";
@@ -58,6 +59,9 @@ import LibraryAssetCard from "./LibraryAssetCard.vue";
 const project = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
 const jobs = useEditorJobsStore();
+/** The guide's `library.import`/`library.webcam` (Task 55). */
+const importTarget = useGuideTarget("library.import");
+const webcamTarget = useGuideTarget("library.webcam");
 
 const query = ref("");
 const reconnectOpen = ref(false);
@@ -163,6 +167,7 @@ onReveal("webcam", openWebcam);
         class="w-0 min-w-0 flex-1 rounded border border-line bg-stage px-1 py-0.5 text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
       >
       <button
+        :ref="importTarget"
         type="button"
         data-testid="library-import"
         :aria-disabled="importRefusal !== null"
@@ -173,6 +178,7 @@ onReveal("webcam", openWebcam);
         Import…
       </button>
       <button
+        :ref="webcamTarget"
         type="button"
         data-testid="library-webcam"
         :aria-disabled="webcamRefusal !== null"

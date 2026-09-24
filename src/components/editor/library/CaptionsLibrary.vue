@@ -21,6 +21,7 @@
  */
 import { computed, onMounted, ref } from "vue";
 
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useVirtualRows } from "../../../composables/useVirtualRows";
 import { clipSpanOf, lockedTrackName } from "../../../editor/actionTargets";
 import type { CaptionRow, Draft } from "../../../editor/captionRules";
@@ -48,6 +49,8 @@ type UpdateCaption = { captionId: string; startMs?: number; endMs?: number; text
 
 const project = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
+/** The guide's `library.captions` (Task 55). */
+const guideTarget = useGuideTarget("library.captions");
 
 const rows = computed(() => captionRows(project.project));
 const notices = computed(() => captionNotices(rows.value));
@@ -154,6 +157,7 @@ function selectCue(row: CaptionRow): void {
 
 <template>
   <div
+    :ref="guideTarget"
     data-testid="captions-library"
     class="flex h-full flex-col gap-2 text-micro text-fg-secondary"
   >
