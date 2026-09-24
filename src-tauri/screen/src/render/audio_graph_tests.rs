@@ -150,3 +150,83 @@ fn an_orphaned_crossfade_wholly_cut_away_emits_no_fade() {
     assert!(!graph.contains("afade"), "{graph}");
     assert!(!graph.contains("acrossfade"), "{graph}");
 }
+
+// A contribution can be orphaned on BOTH edges at once (each half of a
+// different transition, each with its partner cut out of the plan by a
+// range on either side) -- `orphan_fade` handles the two `if let`s
+// independently, so each edge keeps ITS OWN curve and duration rather
+// than one bleeding into the other.
+#[test]
+fn both_edges_independently_orphaned_get_their_own_curve_and_duration() {
+    let mut c = audio(0, 0, 1_000, 3_000);
+    c.crossfade_in = Some((TransitionKind::EqualPower, 400));
+    c.crossfade_out = Some((TransitionKind::Dissolve, 300));
+    let graph = build_audio_graph(&audio_plan(3_000, vec![c]));
+    assert!(!graph.contains("acrossfade"), "{graph}");
+    contains(&graph, "afade=t=in:st=0.000:d=0.400:curve=qsin");
+    contains(&graph, "afade=t=out:st=1.700:d=0.300:curve=tri");
+}
+
+// REGRESSION (Task 44 fix round 1, Critical #1): `groups()` correctly
+// merges a whole run of consecutively-crossfaded same-track clips into
+// ONE unit -- exactly like `video_graph::group` -- but the ORIGINAL
+// `emit_group` only knew how to consume 2 members (`[from, to, ..]`),
+// silently dropping the THIRD clip's audio with no error. Three clips
+// joined by two dissolves is an ordinary timeline
+// (`core::validate_media` tracks a transition's `from`/`to` sides in
+// separate sets specifically so a clip can be one transition's `to` and
+// a different transition's `from`), not a shape the model forbids. Every
+// input (0, 1, 2) must reach the graph, both pairwise crossfades must
+// carry THEIR OWN duration/curve (600 ms `tri` for A-B, 500 ms `qsin` for
+// B-C -- deliberately different so a mixed-up pairing fails), the whole
+// chain must collapse to ONE mix input (not three), and it must be
+// delayed to the FIRST clip's own start.
+#[test]
+fn a_three_clip_crossfade_chain_keeps_every_clips_audio() {
+    let mut a = audio(0, 0, 0, 2_400);
+    a.crossfade_out = Some((TransitionKind::Dissolve, 600));
+    let mut b = audio(1, 0, 1_800, 4_400);
+    b.crossfade_in = Some((TransitionKind::Dissolve, 600));
+    b.crossfade_out = Some((TransitionKind::EqualPower, 500));
+    let mut c = audio(2, 0, 3_900, 6_000);
+    c.crossfade_in = Some((TransitionKind::EqualPower, 500));
+    let graph = build_audio_graph(&audio_plan(6_000, vec![a, b, c]));
+
+    contains(&graph, "[0:a]atrim=");
+    contains(&graph, "[1:a]atrim=");
+    contains(&graph, "[2:a]atrim=");
+    contains(&graph, "acrossfade=d=0.600:c1=tri:c2=tri");
+    contains(&graph, "acrossfade=d=0.500:c1=qsin:c2=qsin");
+    contains(&graph, "amix=inputs=1:normalize=0:dropout_transition=0");
+    contains(&graph, "adelay=0|0");
+}
+
+// The same regression, one member longer, to prove the fix chains
+// PAIRWISE across an arbitrary run rather than special-casing exactly
+// three -- a fourth crossfade (400 ms, `tri` again, to prove reuse of a
+// curve name at a different position in the chain is not mistaken for
+// the first one) must also survive.
+#[test]
+fn a_four_clip_crossfade_chain_keeps_every_clips_audio() {
+    let mut a = audio(0, 0, 0, 2_400);
+    a.crossfade_out = Some((TransitionKind::Dissolve, 600));
+    let mut b = audio(1, 0, 1_800, 4_400);
+    b.crossfade_in = Some((TransitionKind::Dissolve, 600));
+    b.crossfade_out = Some((TransitionKind::EqualPower, 500));
+    let mut c = audio(2, 0, 3_900, 6_300);
+    c.crossfade_in = Some((TransitionKind::EqualPower, 500));
+    c.crossfade_out = Some((TransitionKind::Dissolve, 400));
+    let mut d = audio(3, 0, 5_900, 8_000);
+    d.crossfade_in = Some((TransitionKind::Dissolve, 400));
+    let graph = build_audio_graph(&audio_plan(8_000, vec![a, b, c, d]));
+
+    contains(&graph, "[0:a]atrim=");
+    contains(&graph, "[1:a]atrim=");
+    contains(&graph, "[2:a]atrim=");
+    contains(&graph, "[3:a]atrim=");
+    contains(&graph, "acrossfade=d=0.600:c1=tri:c2=tri");
+    contains(&graph, "acrossfade=d=0.500:c1=qsin:c2=qsin");
+    contains(&graph, "acrossfade=d=0.400:c1=tri:c2=tri");
+    contains(&graph, "amix=inputs=1:normalize=0:dropout_transition=0");
+    contains(&graph, "adelay=0|0");
+}

@@ -5,13 +5,17 @@
 //! **The shape.** Each `AudioContribution` becomes its own chain --
 //! `atrim`/`asetpts` off the plan's source range, a speed change, its own
 //! gain and edge fades (`own_chain`) -- then either goes straight to
-//! `adelay` (positioning it in the output) or, when it is one half of a
-//! planned crossfade (Task 41 plans both: `crossfade_out` on the `from`
-//! clip, `crossfade_in` on the `to` clip), is combined with its partner
-//! through ONE `acrossfade` first (`emit_group`, mirroring `video_graph::
-//! group`'s pairing rule for the picture side). Every resulting stream is
-//! summed by `amix`, then the whole mix gets the project's master gain, a
-//! sample-peak limiter, and is pinned to the capture's own rate and layout.
+//! `adelay` (positioning it in the output) or, when it is part of a RUN of
+//! one or more planned crossfades (Task 41 plans both halves per clip:
+//! `crossfade_out` on the `from` clip, `crossfade_in` on the `to` clip;
+//! `groups` merges a whole run of consecutively-crossfaded same-track
+//! clips into ONE unit, the SAME shape `video_graph::group` forms for the
+//! picture side), is chained PAIRWISE through `acrossfade` across every
+//! member of that run before delaying ONCE (`emit_group`; Task 44 fix
+//! round 1 -- the first cut only consumed a run of exactly 2). Every
+//! resulting stream is summed by `amix`, then the whole mix gets the
+//! project's master gain, a sample-peak limiter, and is pinned to the
+//! capture's own rate and layout.
 //! **No contribution at all** still produces a real stream (`anullsrc`,
 //! trimmed to the plan's duration) -- the output always carries an audio
 //! track, matching the capture format, so nothing downstream has to treat
@@ -109,10 +113,12 @@ pub fn build_audio_graph(plan: &RenderPlan) -> String {
 }
 
 /// Consecutive same-track contributions joined by a planned crossfade
-/// (mirrors `video_graph::group`'s pairing rule for the SAME "from"/"to"
-/// halves Task 41 plans) become one group; everything else stays alone.
-/// Sorted locally by `(track_index, output_start)` first so adjacency is
-/// meaningful -- `RenderPlan::audio` itself is time-then-track ordered.
+/// (the join predicate is `grouping::joins_run`, shared with
+/// `video_graph::group` so the two sides cannot again disagree about what
+/// counts as a run -- Task 44 fix round 1) become one group, of any
+/// length; everything else stays alone. Sorted locally by `(track_index,
+/// output_start)` first so adjacency is meaningful -- `RenderPlan::audio`
+/// itself is time-then-track ordered.
 fn groups(contributions: &[AudioContribution]) -> Vec<Vec<&AudioContribution>> {
     let mut sorted: Vec<&AudioContribution> = contributions.iter().collect();
     sorted.sort_by_key(|c| (c.track_index, c.output_start));
@@ -122,10 +128,14 @@ fn groups(contributions: &[AudioContribution]) -> Vec<Vec<&AudioContribution>> {
             .last()
             .and_then(|u| u.last())
             .is_some_and(|prev: &&AudioContribution| {
-                prev.track_index == c.track_index
-                    && prev.crossfade_out.is_some()
-                    && c.crossfade_in.is_some()
-                    && c.output_start < prev.output_end
+                super::grouping::joins_run(
+                    prev.track_index,
+                    prev.crossfade_out.is_some(),
+                    prev.output_end,
+                    c.track_index,
+                    c.crossfade_in.is_some(),
+                    c.output_start,
+                )
             });
         match units.last_mut() {
             Some(u) if joins => u.push(c),
@@ -137,38 +147,55 @@ fn groups(contributions: &[AudioContribution]) -> Vec<Vec<&AudioContribution>> {
 
 /// One group's chains, pushed onto `chains`; returns its label (ready for
 /// `adelay`) and the output-time ms it should be delayed to.
+///
+/// A group of 2+ is chained PAIRWISE, left to right -- `acrossfade` takes
+/// exactly two streams and produces one, so a run of N members needs N-1
+/// chained calls, each combining the accumulated stream so far with the
+/// NEXT member (mirrors `video_graph::unit_source`'s `for j in
+/// 1..unit.len()` loop for the identical shape; Task 44 fix round 1,
+/// Critical #1 -- the original two-arm match silently dropped every
+/// member past the second). Each step's overlap is read GEOMETRICALLY
+/// from the two members' own OUTPUT spans (`prev.output_end -
+/// member.output_start`), never from a stored `duration_ms`: the two
+/// already agree by construction (`validate_media::check_track_overlaps`),
+/// and reading it geometrically is also correct when a render range has
+/// shortened the visible overlap, with no second case to handle. Each
+/// step's curve comes from THAT PAIR's own transition (`member`'s
+/// `crossfade_in`, guaranteed `Some` by `groups()`'s join predicate) --
+/// never a single group-wide value, so a chain mixing `Dissolve` and
+/// `EqualPower` transitions keeps each one's own curve at its own join.
 fn emit_group(group: &[&AudioContribution], k: usize, chains: &mut Vec<String>) -> (String, u64) {
-    match group {
-        [only] => {
-            let label = format!("[o{k}]");
-            chains.push(format!("{}{label}", own_chain(only, true)));
-            (label, only.output_start)
-        }
-        [from, to, ..] => {
-            // The reference model permits one paired transition per clip
-            // (`model_cues::Transition`'s own doc); a third member here
-            // would mean two transitions claim the same clip, which is not
-            // a shape this plan produces. Folding it in as a second pair
-            // member rather than asserting keeps the "without panicking"
-            // brief even if that assumption is ever wrong.
-            let from_label = format!("[o{k}f]");
-            let to_label = format!("[o{k}t]");
-            chains.push(format!("{}{from_label}", own_chain(from, false)));
-            chains.push(format!("{}{to_label}", own_chain(to, false)));
-            let (kind, duration_ms) = to
-                .crossfade_in
-                .or(from.crossfade_out)
-                .unwrap_or((TransitionKind::Dissolve, 0));
-            let curve = transition_curve(kind);
-            let merged = format!("[x{k}]");
-            chains.push(format!(
-                "{from_label}{to_label}acrossfade=d={}:c1={curve}:c2={curve}{merged}",
-                seconds(duration_ms)
-            ));
-            (merged, from.output_start)
-        }
-        [] => unreachable!("groups() never emits an empty unit"),
+    let [first, rest @ ..] = group else {
+        unreachable!("groups() never emits an empty unit");
+    };
+    if rest.is_empty() {
+        let label = format!("[o{k}]");
+        chains.push(format!("{}{label}", own_chain(first, true)));
+        return (label, first.output_start);
     }
+    let mut acc = format!("[o{k}m0]");
+    chains.push(format!("{}{acc}", own_chain(first, false)));
+    let mut prev = *first;
+    for (j, member) in rest.iter().enumerate() {
+        let j = j + 1;
+        let member = *member;
+        let member_label = format!("[o{k}m{j}]");
+        chains.push(format!("{}{member_label}", own_chain(member, false)));
+        let overlap_ms = prev.output_end.saturating_sub(member.output_start);
+        let (kind, _) = member
+            .crossfade_in
+            .or(prev.crossfade_out)
+            .unwrap_or((TransitionKind::Dissolve, overlap_ms));
+        let curve = transition_curve(kind);
+        let merged = format!("[x{k}s{j}]");
+        chains.push(format!(
+            "{acc}{member_label}acrossfade=d={}:c1={curve}:c2={curve}{merged}",
+            seconds(overlap_ms)
+        ));
+        acc = merged;
+        prev = member;
+    }
+    (acc, first.output_start)
 }
 
 /// One contribution's trim, speed, gain and edge fades -- NOT yet delayed

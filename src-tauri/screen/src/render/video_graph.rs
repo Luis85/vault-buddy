@@ -212,15 +212,22 @@ fn items(plan: &RenderPlan, first_card_input: usize) -> Vec<Item<'_>> {
 }
 
 /// Consecutive items of one track joined by a planned transition (see the
-/// module doc) become one group; everything else stays alone.
+/// module doc) become one group; everything else stays alone. The
+/// join predicate itself lives in `grouping::joins_run`, shared with
+/// `audio_graph::groups` so the two sides cannot again disagree about
+/// what counts as a run (Task 44 fix round 1).
 fn group(items: Vec<Item<'_>>) -> Vec<Vec<Item<'_>>> {
     let mut units: Vec<Vec<Item<'_>>> = Vec::new();
     for item in items {
         let joins = units.last().and_then(|u| u.last()).is_some_and(|prev| {
-            prev.track_index() == item.track_index()
-                && prev.joins_out()
-                && item.joins_in()
-                && item.span().0 < prev.span().1
+            super::grouping::joins_run(
+                prev.track_index(),
+                prev.joins_out(),
+                prev.span().1,
+                item.track_index(),
+                item.joins_in(),
+                item.span().0,
+            )
         });
         match units.last_mut() {
             Some(unit) if joins => unit.push(item),

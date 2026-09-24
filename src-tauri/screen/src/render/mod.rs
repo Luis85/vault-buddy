@@ -23,6 +23,7 @@
 pub mod ass;
 pub mod audio_graph;
 pub mod expr;
+mod grouping;
 pub mod video_graph;
 pub mod video_layers;
 

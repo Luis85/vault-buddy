@@ -54,6 +54,23 @@ fn ffmpeg_on_path() -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// `ffprobe` beside the resolved `ffmpeg` -- a real install (winget
+/// Gyan.FFmpeg, CI's own) always ships both in the same `bin/`. Used ONLY
+/// by this TEST file to measure a stream's real duration; `screen::export`
+/// itself is structurally forbidden from ever shelling out to ffprobe
+/// (`export.rs`'s own `the_export_never_probes_the_source...` test scans
+/// `export.rs`/`ffmpeg_run.rs` alone, so a test-only probe here does not
+/// touch that rule).
+fn ffprobe_beside(ffmpeg: &Path) -> Option<PathBuf> {
+    let exe = if cfg!(windows) {
+        "ffprobe.exe"
+    } else {
+        "ffprobe"
+    };
+    let candidate = ffmpeg.parent()?.join(exe);
+    candidate.is_file().then_some(candidate)
+}
+
 macro_rules! ffmpeg_or_skip {
     () => {
         match ffmpeg_on_path() {
@@ -564,5 +581,159 @@ fn a_clips_audio_lands_at_its_planned_delay() {
     assert!(
         (silence_end - 1.0).abs() < 0.15,
         "the tone should start about 1.0 s in (adelay=1000), not {silence_end}: {stderr}"
+    );
+}
+
+/// A plain audio contribution of `input`'s own `[start,end)` output ms --
+/// this file's own terser builder (Task 44 fix round 1), mirroring
+/// `layer()` above: the integration test binary cannot reach `render/
+/// test_support.rs`'s `audio()`, which is `#[cfg(test)]`-private to the
+/// library crate.
+fn audio_contribution(
+    clip_id: &str,
+    input: usize,
+    start: u64,
+    end: u64,
+    crossfade_in: Option<(TransitionKind, u64)>,
+    crossfade_out: Option<(TransitionKind, u64)>,
+) -> AudioContribution {
+    AudioContribution {
+        clip_id: clip_id.into(),
+        track_index: 0,
+        input,
+        output_start: start,
+        output_end: end,
+        source_in: 0,
+        source_out: end - start,
+        speed: 1.0,
+        preserve_pitch: true,
+        gain: 1.0,
+        fade_in: 0,
+        fade_out: 0,
+        curve: FadeCurve::Linear,
+        crossfade_in,
+        crossfade_out,
+        cut: Cut::default(),
+    }
+}
+
+// REGRESSION (Task 44 fix round 1, Critical #1): a chain of THREE clips
+// joined by two consecutive crossfades on one track used to lose the
+// third clip's audio entirely with no error (`emit_group`'s original
+// two-arm match dropped everything past the second member). Golden
+// strings now pin the fix (`audio_graph_tests.rs`); this is the one real
+// proof that ffmpeg actually accepts the resulting chained-`acrossfade`
+// graph and that the third clip's sound genuinely reaches the output --
+// `silencedetect` reports NO gap across the whole combined span, where a
+// dropped clip would leave real silence where its own audio should have
+// carried the mix.
+#[test]
+fn a_three_clip_crossfade_chain_keeps_every_clips_audio() {
+    let ffmpeg = ffmpeg_or_skip!();
+    let dir = tempfile::tempdir().expect("tempdir");
+    // The same tone reused for all three inputs: this probe does not
+    // depend on the clips' content differing, only on every one of them
+    // surviving into the mix -- and silencedetect cannot tell two
+    // identical tones apart anyway.
+    let clip = tone(&ffmpeg, dir.path());
+    let inputs = [clip.clone(), clip.clone(), clip];
+
+    let mut p = plan(Vec::new());
+    p.duration_ms = 6_000;
+    p.inputs = vec![input(0, 640, 360), input(1, 640, 360), input(2, 640, 360)];
+    p.audio = vec![
+        audio_contribution(
+            "a",
+            0,
+            0,
+            2_400,
+            None,
+            Some((TransitionKind::Dissolve, 600)),
+        ),
+        audio_contribution(
+            "b",
+            1,
+            1_800,
+            4_400,
+            Some((TransitionKind::Dissolve, 600)),
+            Some((TransitionKind::EqualPower, 500)),
+        ),
+        audio_contribution(
+            "c",
+            2,
+            3_900,
+            6_000,
+            Some((TransitionKind::EqualPower, 500)),
+            None,
+        ),
+    ];
+
+    let out = render(&ffmpeg, dir.path(), &p, &inputs);
+
+    // The PRIMARY proof: a dropped clip does not leave an audible gap in an
+    // otherwise-full-length stream -- the ORIGINAL buggy `emit_group` simply
+    // never emitted C's own chain at all, so the merged stream (A crossfaded
+    // into B alone) was 1600 ms SHORTER than the full 6.0 s group span, and
+    // the encoder just stopped writing audio there; probed with
+    // `silencedetect` as a first attempt, that shorter-but-otherwise-silent-
+    // free stream reported NO gap, because there is no data past 4.4 s to be
+    // "silent" at -- an absent tail is not a detected silence. So the real
+    // regression proof has to be the STREAM'S OWN DURATION, read back with
+    // ffprobe (this test file's one sanctioned use of it -- see
+    // `ffprobe_beside`'s doc for why that does not touch `screen::export`'s
+    // own probe-free rule).
+    let Some(ffprobe) = ffprobe_beside(&ffmpeg) else {
+        announce(
+            "SKIPPED a_three_clip_crossfade_chain_keeps_every_clips_audio: no ffprobe beside \
+             the resolved ffmpeg, so the audio-duration half of this regression is UNPROVEN in \
+             this run.",
+        );
+        return;
+    };
+    let mut probe_args = argv(&[
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=duration",
+        "-of",
+        "csv=p=0",
+    ]);
+    probe_args.push(out.to_string_lossy().into_owned());
+    let duration_out = ffmpeg_stdout(&ffprobe, &probe_args);
+    let duration_s: f64 = String::from_utf8_lossy(&duration_out)
+        .trim()
+        .parse()
+        .unwrap_or_else(|e| panic!("ffprobe's duration did not parse: {e}"));
+    assert!(
+        (duration_s - 6.0).abs() < 0.3,
+        "the mixed audio stream should span about 6.0 s -- every clip's own span, chained end \
+         to end through two crossfades (2.4 + 2.6 + 2.1 - 0.6 - 0.5 s) -- not {duration_s} s; a \
+         shorter stream means a clip's audio was silently dropped from the mix"
+    );
+
+    // A SECONDARY check over whatever span really exists: no internal gap
+    // either, distinct from the truncation the primary check above catches.
+    let mut args = argv(&["-v", "info", "-t"]);
+    args.push(format!("{:.3}", (duration_s - 0.1).max(0.0)));
+    args.push("-i".into());
+    args.push(out.to_string_lossy().into_owned());
+    args.extend(argv(&[
+        "-af",
+        "silencedetect=noise=-30dB:d=0.1",
+        "-f",
+        "null",
+        "-",
+    ]));
+    let result = Command::new(&ffmpeg)
+        .args(&args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("ffmpeg ran");
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        !stderr.contains("silence_start"),
+        "a gap inside the mixed stream means a clip's audio was dropped: {stderr}"
     );
 }
