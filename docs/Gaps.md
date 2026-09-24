@@ -6324,7 +6324,7 @@ leftover staged copy always has a working way to remove it. The residual
 this gap tracks is purely "a Save alone does not clean it up," never "the
 user has no way to clean it up."
 
-### GAP-203 · Medium · Several guide lessons describe the browser reference, not the native editor
+### GAP-203 · ~~Medium~~ FIXED 2026-09-24 (Task 56) · Several guide lessons describe the browser reference, not the native editor
 `src/editor/guide/steps.json` (Task 55, F-46; ADR R18). The lessons are
 copied VERBATIM from the concept bundle's `onboarding.steps.json` (the ADR's
 and the brief's requirement, byte-compared by
@@ -6348,29 +6348,92 @@ no sample project.
 (5) **`products`**: "Open Project in the app header" — there is no Project
 menu; products live in the library's **Products** tab, which is what the
 guide's `library.products` target resolves to.
-Fix: a native revision of the copy, with `CONTENT_REVISION` bumped in
-`content.ts` and any removed lesson listed in `retired-steps.json` (read by
-Rust too) so saved progress resumes at its chapter. Until then the guide (Task
-56) would show these sentences as written; the copy is data, so no code
-change is needed to correct it.
+**Fixed in Task 56, without touching the verbatim file.** `steps.json`
+stays byte-identical to the concept bundle (its test still compares the
+bytes), and the coach never renders a raw step: it renders
+`lessonCopy(id)`, which applies `LESSON_COPY_OVERRIDES` in `content.ts` —
+per lesson id, per sentence, each override pinned whole by
+`tests/editorGuideContent.test.ts`, and `tests/editorGuideCoach.test.ts`
+walks all 22 lessons asserting no "download", "three-minute", "sample",
+"built-in project", "Open Add track", "Open Project" or "Browser" reaches
+the card. Beyond the five items above, reading every lesson against the app
+found seven more untrue sentences, corrected the same way: `select` (there
+is no Clear selection item and no V shortcut), `split` (the delete modes are
+"Leave gap" and "Close gap on this track", not "Ripple this track"),
+`context` (only a clip has a right-click menu), `fades` (there are no fade
+presets), `chapters` (there is no companion-note preview), `render`
+(Publish DOES copy the product, with an optional note, into a vault — the
+opposite of the reference's "does not write directly into a vault") and
+`help` (label and body: the learning center's quick answers, chapter jump
+and shortcut list are Task 57's; until it lands Help resumes the
+walkthrough — Task 57 should drop that override when it ships them). No
+lesson was removed, so `CONTENT_REVISION` stays 1. The lesson-10 target is
+still the top track's own menu; the override says so instead of promising
+an Add track menu.
 
-### GAP-204 · Low · Guide progress: actions parked until Task 56, and a newer build's file reads as fresh
+### GAP-204 · Low · Guide progress: a newer build's file reads as fresh
 `src/stores/editorOnboarding.ts`, `src-tauri/core/src/editor/guide.rs` (Task
 55, F-46/F-47).
-(1) **Nothing writes progress yet.** The store's `next`/`back`/`pause`/
-`collapse`/`dismissInvitation`/`markExplored`/`restart`/`suspend`/`resume`
-have no production caller until Task 56's invitation, coach and learning
-center; each carries a `fallow-ignore-next-line unused-store-member` that
-Task 56 removes (fallow reports a stale suppression). Until then the
-progress file is read on every editor mount but never written, and the
-header's **Help** button (the `header.help` target) opens nothing.
+(1) ~~**Nothing writes progress yet.**~~ **Closed by Task 56**: the
+invitation, the coach, Help/F1/? and `DialogHost` call every store action,
+and all nine `fallow-ignore-next-line unused-store-member` suppressions are
+gone (dead code stays 0 without them).
 (2) **Forward compatibility is a fresh start.** The stored document is
 parsed against a closed schema, so a file written by a NEWER build that
 added a field reads as fresh progress (logged), and the next save from this
 build replaces it. Reasonable while one build owns the file; revisit if two
 builds can share one `%LOCALAPPDATA%`.
-(3) **A registration is not a highlight.** `targets.ts` resolves a key to a
-mounted, connected element and to More when an overflow rule says so; it does
-not check that the element is VISIBLE (a closed compact drawer keeps its
-panel mounted under `v-show`). Revealing a target before pointing at it is
-Task 56's lesson preparation.
+(3) ~~**A registration is not a highlight.**~~ **Addressed by Task 56**:
+`targets.ts` still resolves registrations only, but the coach measures the
+resolved element and treats a box-less one (a closed compact drawer keeps
+its panel mounted under `v-show`) as "not on screen" — no ring, a note in
+the card — and each lesson's preparation (`prepare.ts`) opens the drawer,
+tab or selection first. `tests/e2e/editorGuide.spec.ts` proves every lesson
+at 960x640 ends with a visible ring (a mutation that skips the drawer reveal
+fails it at lesson 2).
+
+### GAP-205 · Low · The guided walkthrough's recorded limits
+`src/components/editor/guide/GuideCoach.vue`, `src/stores/editorOnboarding.ts`,
+`src/editor/guide/position.ts` (Task 56, F-46/F-49).
+(1) **A quit may lose the last lesson change.** Progress saves are debounced
+400 ms. A hidden window (the X, `visibilitychange`), an unmounting shell and
+the close guard's hide all flush the pending save first, but a quit from the
+tray or Alt+F4 destroys the editor window (`finish_quit`) with no flush hook
+known to run in the webview, so a lesson change made in the last 400 ms
+before a quit can be lost (the lesson before it is what resumes). Checklist
+row T52 records which happens.
+(2) **Native OS dialogs do not suspend the coach.** Only `DialogHost` modals
+suspend it; Rust's own file pickers (Import media, Save a project file,
+captions, reconnect) are OS windows the webview cannot observe, so the card
+stays drawn behind them. Harmless (it is behind the OS dialog and covers no
+target), but not the "a dialog suspends the coach" the spec describes.
+(3) **A control bigger than the window leaves the card little room.** The
+card never covers the outlined control (`position.ts`), so when the free
+strips around a very large control are all smaller than `MIN_CARD`, the card
+takes the largest strip anyway and scrolls its body in it. None of the 22
+lessons' controls does this at 960x640 (the e2e spec), but a hand-resized
+panel could.
+(4) **Preparation changes view state.** Lessons whose control exists only
+with a selected clip select the earliest clip when nothing is selected, and
+library/inspector lessons switch the open tab — both persisted like any view
+change (`workspace.json`), never an edit. A user who had a different tab open
+finds the guide's choice there after the walkthrough.
+(5) **Learning-center surfaces are Task 57's.** Chapter jump, quick answers,
+the shortcut list, the dimming/motion preference controls and the progress
+file export/import do not exist yet; Help and F1/? start or resume the
+walkthrough, and the `help` lesson's copy is overridden to say only that
+(GAP-203).
+
+### GAP-206 · Medium · The tutorial editor's light theme leaves the shared text tokens dark-only
+`src/style.css` (`[data-theme="light"]`), every editor surface. The light
+theme overrides only the ten editor surface/media tokens (`--color-panel`
+becomes white) while the shared text ladder (`text-fg` = slate-100,
+`text-fg-secondary`, `text-fg-muted`, `text-fg-subtle`) is the same in both
+themes by design — so in light mode primary text is near-white on a white
+panel: the project title in the header, disabled controls, the inspector's
+fields and the guide's card titles and bodies all read at very low contrast.
+Seen in `tests/e2e/editorGuide.spec.ts`' screenshots (Chromium's default
+colour scheme is light, so the editor seeds `data-theme="light"`); it predates
+Task 56, which only inherits it. Fix: give the light theme its own text
+ladder (the concept bundle's `reference/editor.css` light block has one) —
+an accessibility change for Task 58, checked against WCAG AA contrast.

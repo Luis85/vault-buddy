@@ -6,8 +6,9 @@
  * "Session only" beside it (ONBOARDING.md § State and persistence), so a
  * restart does not silently forget where the user was. Split out of
  * `EditorHeader` so the header's own template stays under the complexity
- * ratchet (the `ChecksButton`/`RenderVideoButton` precedent). What Help
- * opens is the learning center (Task 56).
+ * ratchet (the `ChecksButton`/`RenderVideoButton` precedent). Help starts
+ * the guided walkthrough, or resumes it at the exact lesson it was paused
+ * on (Task 56; F1 and ? do the same from the keyboard).
  */
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
@@ -23,6 +24,8 @@ const helpTarget = useGuideTarget("header.help");
     variant="ghost"
     size="sm"
     data-testid="editor-header-help"
+    title="Show the guided walkthrough (F1)"
+    @click="onboarding.start()"
   >
     Help
   </AppButton>

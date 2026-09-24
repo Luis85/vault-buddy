@@ -5,12 +5,15 @@
  * drives `ContextMenu`'s own `open` prop.
  */
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
-import { afterEach, describe, expect, it } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import DialogHost from "../src/components/editor/shell/DialogHost.vue";
 import { dialogStackSize } from "../src/editor/dialogs";
+import { useEditorOnboardingStore } from "../src/stores/editorOnboarding";
 
 enableAutoUnmount(afterEach);
+beforeEach(() => setActivePinia(createPinia()));
 
 function mountDialog(open: boolean, closable = true) {
   return mount(DialogHost, {
@@ -57,6 +60,37 @@ describe("DialogHost", () => {
     await flushPromises();
     expect(w.emitted("resume")).toHaveLength(1);
     expect(w.emitted("suspend")).toHaveLength(1); // still exactly once
+  });
+
+  // Task 56: every modal dialog suspends the guide's coach while it is open
+  // (ONBOARDING.md, A25) -- and a dialog stacked on another keeps it
+  // suspended until the LAST one closes, not the first.
+  it("suspends the guide while open, until the last stacked dialog closes", async () => {
+    const guide = useEditorOnboardingStore();
+    const outer = mountDialog(false);
+    const inner = mountDialog(false);
+
+    await outer.setProps({ open: true });
+    await inner.setProps({ open: true });
+    await flushPromises();
+    expect(guide.suspended).toBe(true);
+
+    await inner.setProps({ open: false });
+    await flushPromises();
+    expect(guide.suspended).toBe(true);
+
+    await outer.setProps({ open: false });
+    await flushPromises();
+    expect(guide.suspended).toBe(false);
+  });
+
+  it("a dialog removed while open still resumes the guide", async () => {
+    const guide = useEditorOnboardingStore();
+    const w = mountDialog(true);
+    await flushPromises();
+    expect(guide.suspended).toBe(true);
+    w.unmount();
+    expect(guide.suspended).toBe(false);
   });
 
   it("Tab cycles focus inside the dialog (the focus trap)", async () => {

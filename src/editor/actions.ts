@@ -31,7 +31,7 @@
  * action's own label instead (fix round 1, finding 1).
  *
  * **Actions with no wire command.** `copy`/`save`/`render`/`checks`/`help`/
- * `importMedia`/`webcam`/`toggleLibrary`/`toggleInspector`/`focusPreview`/
+ * `importMedia`/`webcam`/`toggleLibrary`/`toggleInspector`/`focusPreview`/`guideFocus`/
  * `ratio` never appear in `ACTION_KIND` — `save` goes through
  * `editorProject.save()` (a distinct IPC call, not `editor_execute`),
  * `render` (the toolbar's Review, Task 47) opens `ReviewDialog` — a render
@@ -277,6 +277,7 @@ const RESOLVERS: Partial<Record<ActionId, (ctx: ActionContext) => Verdict>> = {
   toggleLibrary: resolveAlways,
   toggleInspector: resolveAlways,
   focusPreview: resolveAlways,
+  guideFocus: resolveAlways,
   addTrackVideo: () => resolveNoSurfaceYet("addTrackVideo"),
   addTrackAudio: () => resolveNoSurfaceYet("addTrackAudio"),
   // Task 35: the teaching tools (`cueActions.ts` -- which clip, which

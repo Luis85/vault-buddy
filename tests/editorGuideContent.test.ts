@@ -19,29 +19,23 @@ import { defineComponent, h } from "vue";
 vi.mock("@tauri-apps/api/event", () => ({ listen: () => Promise.resolve(() => {}) }));
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
-import FadesSection from "../src/components/editor/inspector/FadesSection.vue";
-import InspectorPanel from "../src/components/editor/inspector/InspectorPanel.vue";
-import LayoutSection from "../src/components/editor/inspector/LayoutSection.vue";
-import LibraryPanel from "../src/components/editor/library/LibraryPanel.vue";
-import PreviewSurface from "../src/components/editor/preview/PreviewSurface.vue";
-import EditorShell from "../src/components/editor/shell/EditorShell.vue";
 import PreviewToolbar from "../src/components/editor/shell/PreviewToolbar.vue";
-import TimelineView from "../src/components/editor/timeline/TimelineView.vue";
 import { useGuideOverflow, useGuideTarget } from "../src/composables/useGuideTarget";
 import {
   CONTENT_REVISION,
   GUIDE_CHAPTERS,
   GUIDE_STEPS,
+  LESSON_COPY_OVERRIDES,
+  lessonCopy,
   resolveStepId,
   RETIRED_STEP_MAP,
   STEP_TARGETS,
 } from "../src/editor/guide/content";
 import type { GuideTargetKey } from "../src/editor/guide/targets";
 import { GUIDE_TARGET_KEYS, resolve } from "../src/editor/guide/targets";
-import type { Clip, EditorOpenResult, Project } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
-import { fakeEditorPort } from "./helpers/fakeEditorPort";
+import { MountedShell, shellPort } from "./helpers/guideShell";
 
 enableAutoUnmount(afterEach);
 
@@ -99,6 +93,74 @@ describe("guide content", () => {
   });
 });
 
+// GAP-203: `steps.json` stays a verbatim copy of the concept file, but that
+// file was written for the BROWSER reference. The coach renders
+// `lessonCopy(id)`, which replaces exactly the sentences that are untrue
+// in this app. Each override is pinned whole, so a lost word, a stray
+// space or a quietly reworded promise fails here.
+describe("native lesson copy", () => {
+  it("overrides exactly the sentences the reference gets wrong", () => {
+    expect(LESSON_COPY_OVERRIDES).toEqual({
+      media: {
+        tip: "Imported files are copied into this project; the file you pick is never changed. Importing is optional: the whole guide works with the recording already open.",
+        task: "Open the import picker if you want to add a file, or continue.",
+      },
+      select: {
+        tip: "Selection is not an edit: choosing which clip is selected never changes the video.",
+      },
+      split: {
+        tip: "Leave gap keeps other clips in place. Close gap on this track closes the gap on this track only, which can change its alignment with other tracks.",
+      },
+      context: {
+        body: "Right-click a clip for the actions that apply to it. Edit actions in the timeline opens the same menu for the selected clips without a right click.",
+      },
+      tracks: {
+        label: "Track menu",
+        tip: "Adding a track is optional: dropping media below the last track makes a new one.",
+        task: "Open the top track's menu to see what it offers. You do not need to change anything.",
+      },
+      fades: {
+        body: "Set Fade in and Fade out, or drag the gold handles on a timeline clip. Video fades reveal the layer beneath; audio fades change volume.",
+      },
+      audio: {
+        tip: "Listen to the actual rendered file before sharing.",
+      },
+      chapters: {
+        task: "Look through the chapter list. Adding a chapter is optional.",
+      },
+      save: {
+        tip: "Save project stores the editable project in Vault Buddy on this computer, and unsaved edits are kept for recovery if the editor closes. A portable project file may include uncensored originals.",
+        task: "Open the menu beside Save project to see the file formats. Saving is optional.",
+      },
+      render: {
+        tip: "Rendering runs on this computer with your installed ffmpeg and adds the video to this project's Products. Publishing a product copies it, with an optional companion note, into a vault. Keep the editable project for later changes.",
+      },
+      products: {
+        label: "Rendered products",
+        body: "Rendered videos are listed in the library's Products tab, separate from the editable project. Watch one, or restore the edit snapshot behind an earlier output.",
+        task: "Look through Products, then continue.",
+      },
+      help: {
+        label: "Help",
+        body: "Help is always here: it resumes a paused walkthrough at the same lesson, and so do F1 and ? when you are not typing in a field. Back revisits any earlier lesson.",
+      },
+    });
+  });
+
+  it("every other sentence is the verbatim concept text", () => {
+    for (const step of GUIDE_STEPS) {
+      const over: Partial<Record<"label" | "body" | "tip" | "task", string>> =
+        (LESSON_COPY_OVERRIDES as Record<string, Partial<Record<"label" | "body" | "tip" | "task", string>>>)[step.id] ?? {};
+      expect(lessonCopy(step.id), `lesson ${step.id}`).toEqual({
+        label: over.label ?? step.label,
+        body: over.body ?? step.body,
+        tip: over.tip ?? step.tip,
+        task: over.task ?? step.task ?? null,
+      });
+    }
+  });
+});
+
 describe("guide target registry", () => {
   it("resolves the More item when the owning control is in the overflow", async () => {
     let overflowed = false;
@@ -144,78 +206,11 @@ describe("guide target registry", () => {
 
 // ---- the mounted shell ---------------------------------------------------
 
-function clip(id: string, overrides: Partial<Clip> = {}): Clip {
-  return {
-    id, asset_id: "capture", track_id: "v1", name: id, start_ms: 0, in_ms: 0, out_ms: 3_000,
-    fade_in_ms: 0, fade_out_ms: 0, fade_curve: "linear", opacity: 1, volume: 1, muted: false,
-    x: 0, y: 0, w: 1, h: 1, ...overrides,
-  };
-}
-
-const PROJECT: Project = {
-  schema: "vault-buddy-video-project/3",
-  id: "project-a",
-  title: "Tutorial",
-  canvas: { width: 1280, height: 720, fps: 30 },
-  master_gain: 1,
-  assets: [{ id: "capture", kind: "video", name: "cap one", duration_ms: 10_000 }],
-  tracks: [
-    { id: "v1", kind: "video", name: "Video", visible: true, locked: false, muted: false, solo: false, volume: 1 },
-    { id: "a1", kind: "audio", name: "Audio", visible: true, locked: false, muted: false, solo: false, volume: 1 },
-  ],
-  clips: [clip("intro"), clip("body", { start_ms: 3_000, in_ms: 3_000, out_ms: 7_000 })],
-  effects: [],
-  markers: [],
-  transitions: [],
-  captions: null,
-  destination: { vault: "vault-a", folder: "", dated: false },
-};
-
-const OPENED: EditorOpenResult = {
-  snapshot: {
-    sessionId: "ses-a", projectId: "project-a", revision: 1, persistedRevision: 1, title: "Tutorial",
-    durationMs: 7_000, canUndo: false, canRedo: false, undoLabel: null, redoLabel: null,
-  },
-  project: PROJECT,
-  workspace: {},
-  missing: [],
-  sourceBase: "cap one",
-  recovered: false,
-};
-
-/** `EditorRoot`'s own slot filling, minus the legacy surface. */
-const MountedShell = defineComponent({
-  setup() {
-    return () =>
-      h(EditorShell, null, {
-        library: () => h(LibraryPanel),
-        preview: () => h(PreviewSurface),
-        inspector: () =>
-          h(InspectorPanel, null, {
-            layout: ({ clipIds }: { clipIds: string[] }) => h(LayoutSection, { clipIds }),
-            fades: ({ clipIds }: { clipIds: string[] }) => h(FadesSection, { clipIds }),
-          }),
-        timeline: () => h(TimelineView),
-      });
-  },
-});
-
 describe("every lesson's target in the mounted editor", () => {
   beforeEach(async () => {
     setActivePinia(createPinia());
     mockConvertFileSrc("windows");
-    const port = fakeEditorPort({
-      openStaged: () => Promise.resolve(OPENED),
-      getWorkspace: () => Promise.resolve({}),
-      saveWorkspace: () => Promise.resolve(),
-      getChecks: () => Promise.resolve([]),
-      getProducts: () => Promise.resolve([]),
-      getJobs: () => Promise.resolve([]),
-      mediaUrl: () => Promise.reject(new Error("no media in this test")),
-      mediaPeaks: () => Promise.reject(new Error("no media in this test")),
-      mediaThumbnail: () => Promise.reject(new Error("no media in this test")),
-      getGuideProgress: () => Promise.reject(new Error("not read here")),
-    });
+    const port = shellPort();
     const project = useEditorProjectStore();
     project.setPort(port);
     useEditorWorkspaceStore().setPort(port);
@@ -234,6 +229,30 @@ describe("every lesson's target in the mounted editor", () => {
     expect(unresolved()).toEqual([]);
     // The selected clip, not merely some clip.
     expect(resolve("clip.selected")?.element.getAttribute("data-testid")).toBe("clip-body");
+  });
+
+  // Task 55 review (carried into Task 56): a key whose owning panel lost its
+  // binding still resolves through its tab fallback, so "every key
+  // resolves" alone cannot see it. Open each owner and require the OWNER,
+  // not its tab, to be what resolves.
+  const OWNERS: [GuideTargetKey, "library" | "property", string, string][] = [
+    ["library.import", "library", "media", "library-import"],
+    ["library.webcam", "library", "media", "library-webcam"],
+    ["library.captions", "library", "captions", "captions-library"],
+    ["library.chapters", "library", "chapters", "chapters-library"],
+    ["library.products", "library", "products", "product-library"],
+    ["inspector.layout", "property", "layout", "layout-section"],
+    ["inspector.fades", "property", "fades", "fades-section"],
+  ];
+
+  it.each(OWNERS)("%s resolves to its owning control once its tab is open", async (key, where, tab, owner) => {
+    const workspace = useEditorWorkspaceStore();
+    if (where === "library") workspace.setLibraryTab(tab);
+    else workspace.setPropertyTab(tab);
+    mount(MountedShell, { attachTo: document.body });
+    await flushPromises();
+
+    expect(resolve(key)?.element.getAttribute("data-testid")).toBe(owner);
   });
 
   it("a lesson in a closed library tab or inspector section resolves to its tab", async () => {

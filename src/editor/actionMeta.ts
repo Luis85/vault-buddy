@@ -53,6 +53,7 @@ export type ActionId =
   | "toggleLibrary"
   | "toggleInspector"
   | "focusPreview"
+  | "guideFocus"
   | "ratio";
 
 /** Every `ActionId`, once, in the union's own declared order — the one
@@ -65,7 +66,7 @@ export const ACTION_IDS: readonly ActionId[] = [
   "addCaption", "addMarker", "addTrackVideo", "addTrackAudio",
   "fadeIn", "fadeOut", "transition", "detachAudio",
   "save", "render", "checks", "help", "importMedia", "webcam",
-  "toggleLibrary", "toggleInspector", "focusPreview", "ratio",
+  "toggleLibrary", "toggleInspector", "focusPreview", "guideFocus", "ratio",
 ];
 
 // ---- human-text reasons (Behavior section's own literal values) -----------
@@ -96,7 +97,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   save: "Save project", render: "Review", checks: "Checks", help: "Help",
   importMedia: "Import media", webcam: "Webcam",
   toggleLibrary: "Library", toggleInspector: "Inspector", focusPreview: "Focus preview",
-  ratio: "Aspect ratio",
+  guideFocus: "Guide focus", ratio: "Aspect ratio",
 };
 
 /** The one `EditorCommand` wire `kind` each action maps to, when it maps to
@@ -134,7 +135,7 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
   split: "S", delete: "Delete", deleteClose: "Shift+Delete",
   undo: "Ctrl+Z", redo: "Ctrl+Shift+Z", copy: "Ctrl+C", cut: "Ctrl+X",
   paste: "Ctrl+V", duplicate: "Ctrl+D", group: "Ctrl+G", ungroup: "Ctrl+Shift+G",
-  save: "Ctrl+S", render: "Ctrl+E", help: "F1", focusPreview: "F6",
+  save: "Ctrl+S", render: "Ctrl+E", help: "F1", guideFocus: "F6",
 };
 
 /**

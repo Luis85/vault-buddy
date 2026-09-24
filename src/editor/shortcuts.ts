@@ -19,11 +19,14 @@
  *     focused — that is a menu-visibility event, not an edit, so it has no
  *     `ActionId` to resolve. `isContextMenuShortcut` is what a focused
  *     clip's own keydown handler (a later task, once clips render) checks.
- *   - `F6` is spelled "guide focus" in the brief, but this task's `ActionId`
- *     union has no separate guide-focus id — the closest live concept is
- *     `focusPreview` (SCREENS-AND-INTERACTIONS.md §02: "focus-preview layout
- *     change[s] view state"), so F6 is bound to it. Recorded as a decision
- *     in this task's report, not invented silently.
+ *
+ * `F1`/`?` (`help`) and `F6` (`guideFocus`) are the guide's (Task 56;
+ * ONBOARDING.md: "F1 and ? open learning. F6 switches focus between the
+ * guide and its highlighted target"). Task 17 had bound F6 to
+ * `focusPreview` for want of a guide id; the guide took it back.
+ * `EditorShell`'s dispatcher answers both itself — neither sends a
+ * command — and Escape, which dismisses the guide only when no menu or
+ * popover is open (`isGuideDismissKey`, below).
  */
 import type { ActionId } from "./actions";
 
@@ -58,7 +61,7 @@ export const SHORTCUTS: ReadonlyMap<string, ActionId> = new Map<string, ActionId
   ["ctrl+e", "render"],
   ["f1", "help"],
   ["?", "help"],
-  ["f6", "focusPreview"],
+  ["f6", "guideFocus"],
 ]);
 
 /**
@@ -140,4 +143,13 @@ export function shouldHandle(event: KeyboardEvent, opts?: { menuOwnsKeys?: boole
  * names no `ActionId`, only a menu to open. */
 export function isContextMenuShortcut(event: KeyboardEvent): boolean {
   return (event.key === "F10" && event.shiftKey) || event.key === "ContextMenu";
+}
+
+/** Escape, as the guide's dismiss key: only when nothing else already
+ * answered it (a menu, a drag being cancelled) and no menu or non-modal
+ * popover is open — "Menu Escape closes the menu before dismissing the
+ * guide" (ONBOARDING.md). A modal dialog suspends the guide instead. */
+export function isGuideDismissKey(event: KeyboardEvent): boolean {
+  if (event.key !== "Escape" || event.defaultPrevented) return false;
+  return document.querySelector('[role="menu"], [role="dialog"]:not([aria-modal="true"])') === null;
 }

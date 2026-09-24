@@ -179,10 +179,10 @@ describe("resolveActions — disabled actions carry a reason", () => {
     expect(enabledReasons.every((reason) => reason === null)).toBe(true);
   });
 
-  it("resolves every one of the 38 declared action ids exactly once", () => {
-    expect(ACTION_IDS).toHaveLength(38);
-    expect(new Set(ACTION_IDS).size).toBe(38);
-    expect(Object.keys(resolveActions(ctx())).length).toBe(38);
+  it("resolves every one of the 39 declared action ids exactly once", () => {
+    expect(ACTION_IDS).toHaveLength(39);
+    expect(new Set(ACTION_IDS).size).toBe(39);
+    expect(Object.keys(resolveActions(ctx())).length).toBe(39);
   });
 
   it("still-unimplemented wire kinds are gated regardless of selection", () => {
@@ -597,7 +597,7 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
 
   it("actions with no wire command always build a null command", () => {
     const context = ctx({ project: project(), snapshot: snapshot() });
-    for (const id of ["copy", "save", "render", "checks", "help", "importMedia", "webcam", "toggleLibrary", "toggleInspector", "focusPreview", "ratio"] as const) {
+    for (const id of ["copy", "save", "render", "checks", "help", "importMedia", "webcam", "toggleLibrary", "toggleInspector", "focusPreview", "guideFocus", "ratio"] as const) {
       expect(commandFor(id, context)).toBeNull();
     }
   });
@@ -752,7 +752,11 @@ describe("matchShortcut / shortcutKey", () => {
     expect(matchShortcut(new KeyboardEvent("keydown", { key: "e", ctrlKey: true }))).toBe("render");
     expect(matchShortcut(new KeyboardEvent("keydown", { key: "F1" }))).toBe("help");
     expect(matchShortcut(new KeyboardEvent("keydown", { key: "?" }))).toBe("help");
-    expect(matchShortcut(new KeyboardEvent("keydown", { key: "F6" }))).toBe("focusPreview");
+    // F6 moves focus between the guide's card and its highlighted control
+    // (ONBOARDING.md; Task 56) -- not the Focus preview layout toggle.
+    expect(matchShortcut(new KeyboardEvent("keydown", { key: "F6" }))).toBe("guideFocus");
+    expect(SHORTCUT_DISPLAY.guideFocus).toBe("F6");
+    expect(SHORTCUT_DISPLAY.focusPreview).toBeUndefined();
   });
 
   it("does not double-apply shift for an already-shifted punctuation character", () => {

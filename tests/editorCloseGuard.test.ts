@@ -34,6 +34,7 @@ import { EditorPortError } from "../src/editor/port";
 import { noteTakeOpen, noteTakeSettled, openWebcamTakes } from "../src/editor/webcamTakes";
 import type { EditorOpenResult, EditorSnapshot, JobRecordDto } from "../src/editorTypes";
 import EditorRoot from "../src/roots/EditorRoot.vue";
+import { useEditorOnboardingStore } from "../src/stores/editorOnboarding";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
 import { mockEditor } from "./helpers/editorMount";
@@ -111,6 +112,30 @@ describe("CloseGuardDialog", () => {
     const { w, hideWindow } = await setup({ revision: 4, persisted: 4 });
     expect(hideWindow).toHaveBeenCalledTimes(1);
     expect(w.find('[data-testid="close-guard"]').exists()).toBe(false);
+  });
+
+  // Task 56: the guide's progress is saved on a 400 ms debounce; a window
+  // hidden inside that window may never run the timer again, so the last
+  // lesson change is written BEFORE the hide, not lost.
+  it("hiding flushes a pending guide progress save first", async () => {
+    const order: string[] = [];
+    const guide = useEditorOnboardingStore();
+    guide.loaded = true;
+    guide.start(); // a lesson change, still inside the save debounce
+    const { hideWindow } = await setup({
+      revision: 4,
+      persisted: 4,
+      overrides: {
+        saveGuideProgress: async (p) => {
+          order.push(`save:${p.currentStepId}`);
+        },
+        hideWindow: async () => {
+          order.push("hide");
+        },
+      },
+    });
+    expect(hideWindow).not.toHaveBeenCalled(); // the override replaced it
+    expect(order).toEqual(["save:welcome", "hide"]);
   });
 
   it("a live render changes the close copy and never cancels by itself", async () => {

@@ -23,14 +23,18 @@
  * here hides this instance's content while suspended; a caller that wants
  * visual dimming for a background dialog composes that itself.
  *
- * `suspend`/`resume` fire exactly once per open/close pair — Task 56's
- * guide listens for these to pause and resume itself, matching
- * ONBOARDING.md's "a modal dialog suspends the coach" one-to-one, whatever
- * else stacks on top in between.
+ * `suspend`/`resume` fire exactly once per open/close pair, and the same
+ * two moments suspend and resume the guide's coach (Task 56;
+ * ONBOARDING.md: "a modal dialog suspends the coach; closing it resumes
+ * the same lesson"): `editorOnboarding.suspend()`/`resume()` count, so a
+ * confirm stacked on a dialog keeps the coach suspended until the last one
+ * closes. Focus goes back to the opener exactly as before — the coach does
+ * not take it on resume.
  */
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import { isTopDialog, nextDialogId, popDialog, pushDialog } from "../../../editor/dialogs";
+import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
 
 const props = withDefaults(
   defineProps<{
@@ -51,6 +55,7 @@ const emit = defineEmits<{
 }>();
 
 const id = nextDialogId();
+const guide = useEditorOnboardingStore();
 const content = ref<HTMLElement | null>(null);
 /** Whatever had focus the instant this dialog opened — captured
  * automatically, `ContextMenu.vue`'s own `invoker` precedent, rather than
@@ -66,6 +71,7 @@ function focusablesIn(root: HTMLElement): HTMLElement[] {
 async function activate(): Promise<void> {
   pushDialog({ id, closable: props.closable });
   opener = document.activeElement as HTMLElement | null;
+  guide.suspend();
   emit("suspend");
   // Vue hasn't painted the `v-if="open"` content yet on the same tick this
   // runs (the watch below fires synchronously on the prop change) — wait
@@ -78,6 +84,7 @@ async function activate(): Promise<void> {
 
 function deactivate(): void {
   popDialog(id);
+  guide.resume();
   emit("resume");
   opener?.focus();
   opener = null;

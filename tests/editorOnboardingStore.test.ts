@@ -171,6 +171,58 @@ describe("editorOnboarding — storage", () => {
     expect(saves[0].reviewed).toEqual(["welcome", "media", "preview"]);
   });
 
+  // Carry from Task 55's review: a read that FAILED means a file exists
+  // that this session could not read. Saving over it would replace the
+  // user's real progress with a fresh one, and a save that "landed" must
+  // not then announce that progress is stored after all.
+  it("after a failed read, no save overwrites the unreadable file and session only stays", async () => {
+    const guide = install({
+      getGuideProgress: () => Promise.reject(new EditorPortError({ code: "internal", message: "denied", retryable: false, operationId: "op" })),
+    });
+    await guide.load();
+    expect(guide.sessionOnly).toBe(true);
+
+    guide.start();
+    guide.next();
+    await settle();
+    await guide.flush();
+
+    expect(saves).toEqual([]);
+    expect(guide.sessionOnly).toBe(true);
+    expect(guide.progress.currentStepId).toBe("media");
+  });
+
+  it("flush writes a pending change at once, and nothing when nothing is pending", async () => {
+    const guide = install();
+    await guide.load();
+    await guide.flush();
+    expect(saves).toHaveLength(0);
+
+    guide.start();
+    expect(saves).toHaveLength(0);
+    await guide.flush();
+    expect(saves).toHaveLength(1);
+    expect(saves[0].currentStepId).toBe("welcome");
+    // The debounced timer was cancelled, not left to write a second time.
+    await settle();
+    expect(saves).toHaveLength(1);
+  });
+
+  it("stays suspended until the last of two stacked dialogs closes", async () => {
+    const guide = install();
+    await guide.load();
+    guide.suspend();
+    guide.suspend();
+    guide.resume();
+    expect(guide.suspended).toBe(true);
+    guide.resume();
+    expect(guide.suspended).toBe(false);
+    // An unbalanced extra resume cannot go below zero.
+    guide.resume();
+    guide.suspend();
+    expect(guide.suspended).toBe(true);
+  });
+
   it("suspend and resume are transient and never persisted", async () => {
     const guide = install();
     await guide.load();
@@ -215,6 +267,24 @@ describe("editorOnboarding — navigation", () => {
     guide.restart();
     guide.back();
     expect(guide.progress.currentStepId).toBe("welcome");
+  });
+
+  // Revisiting a finished guide starts again at the first lesson; pausing
+  // that revisit must resume where it paused, not jump back to the start
+  // again because the old `completed` flag was never cleared.
+  it("a revisited completed guide resumes where the revisit paused", async () => {
+    const guide = install({}, stored({ currentStepId: "help", reviewed: ["help"], completed: true }));
+    await guide.load();
+
+    guide.start();
+    expect(guide.progress).toMatchObject({ currentStepId: "welcome", completed: false });
+    guide.next();
+    guide.pause();
+    guide.start();
+
+    expect(guide.progress.currentStepId).toBe("media");
+    // Reading the guide again keeps what was already read.
+    expect(guide.progress.reviewed).toEqual(["help", "welcome", "media"]);
   });
 
   it("pause, collapse and the invitation keep the current lesson", async () => {

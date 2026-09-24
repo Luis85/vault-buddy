@@ -82,22 +82,38 @@ const EDITOR_OPEN_RESULT = {
   recovered: false,
 };
 
-export async function installTauriStub(page: Page) {
+/** What a spec may change about the stub: the project `editor_open_staged`
+ * answers with, and extra command replies (e.g. the guide's progress). */
+export interface StubOptions {
+  openResult?: unknown;
+  replies?: Record<string, unknown>;
+}
+
+export async function installTauriStub(page: Page, options: StubOptions = {}) {
   await page.addInitScript(
-    ({ detail, videoUrl, openResult }) => {
+    ({ detail, videoUrl, openResult, replies }) => {
       const listeners = new Map<number, unknown>();
       let nextId = 1;
+      // Every command the page invoked, in order — what a spec reads to
+      // prove something was NOT sent.
+      const invoked: string[] = [];
+      (window as unknown as Record<string, unknown>).__invoked = invoked;
 
       // Only the surfaces the editor touches. Anything else returns
       // undefined rather than throwing, so a command added later shows up as
       // a behaviour change in the test rather than an unhandled rejection
       // that could be mistaken for a layout failure.
+      const table: Record<string, unknown> = {
+        take_editor_request: { kind: "staged", value: detail.base },
+        load_staged_capture: detail,
+        save_capture_timeline: null,
+        editor_open_staged: openResult,
+        editor_get_jobs: [],
+        ...replies,
+      };
       const invoke = async (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "take_editor_request") return { kind: "staged", value: detail.base };
-        if (cmd === "load_staged_capture") return detail;
-        if (cmd === "save_capture_timeline") return null;
-        if (cmd === "editor_open_staged") return openResult;
-        if (cmd === "editor_get_jobs") return [];
+        invoked.push(cmd);
+        if (Object.prototype.hasOwnProperty.call(table, cmd)) return table[cmd];
         if (cmd.startsWith("plugin:event|listen")) {
           listeners.set(nextId, args);
           return nextId++;
@@ -118,6 +134,11 @@ export async function installTauriStub(page: Page) {
         },
       };
     },
-    { detail: DETAIL, videoUrl: FIXTURE_VIDEO_URL, openResult: EDITOR_OPEN_RESULT },
+    {
+      detail: DETAIL,
+      videoUrl: FIXTURE_VIDEO_URL,
+      openResult: options.openResult ?? EDITOR_OPEN_RESULT,
+      replies: options.replies ?? {},
+    },
   );
 }

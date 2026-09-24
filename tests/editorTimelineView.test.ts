@@ -335,6 +335,28 @@ describe("TimelineView — context menu (right-click and Shift+F10)", () => {
     expect(executed).toEqual([]);
   });
 
+  // Task 55 review / Task 56: a button that opens a menu says whether it is
+  // open. A clip's right-click menu is the SAME menu but not this button's,
+  // so it must not read as expanded then.
+  it("Edit actions reports whether its menu is open (aria-expanded)", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+    const more = () => w.get('[data-testid="timeline-toolbar-more"]');
+    expect(more().attributes("aria-expanded")).toBe("false");
+
+    await more().trigger("click");
+    expect(more().attributes("aria-expanded")).toBe("true");
+
+    await w.get('[data-testid="editor-context-menu"]').trigger("keydown", { key: "Escape" });
+    expect(more().attributes("aria-expanded")).toBe("false");
+
+    await w.get('[data-testid="clip-c1"]').trigger("contextmenu", { clientX: 40, clientY: 10 });
+    expect(w.find('[data-testid="editor-context-menu-root"]').exists()).toBe(true);
+    expect(more().attributes("aria-expanded")).toBe("false");
+  });
+
   // Task 55 (onboarding lesson 9, `timeline.more`): "Edit actions in the
   // timeline opens the same kind of menu without a right click" — acting on
   // the SELECTION, since no clip was right-clicked.

@@ -14,15 +14,21 @@
  *
  * **Storage is best effort.** A read or save that fails sets `sessionOnly`
  * (the header says so) and logs; it never throws into the editor, and the
- * guide keeps working for this session. A later save that lands clears it.
- * Saves are debounced: a quick Next/Next/Next is one write of the latest
- * state.
+ * guide keeps working for this session. A later save that lands clears it
+ * — unless the READ failed (Task 56): then a file exists that this session
+ * could not read, and writing fresh progress over it would lose the user's
+ * real place, so nothing is written for the rest of the session and
+ * `sessionOnly` stays. Saves are debounced: a quick Next/Next/Next is one
+ * write of the latest state, and `flush()` writes a pending one at once
+ * (the editor shell calls it when the window hides or the shell unmounts,
+ * the close guard before it hides the window).
  *
- * **Parked actions.** The coach, the invitation and the learning center
- * that call Next/Back/Pause/Collapse/… are Task 56's; until they land, the
- * actions below are exercised only by `tests/editorOnboardingStore.test.ts`,
- * so each carries a `fallow-ignore-next-line unused-store-member` that Task
- * 56 removes (fallow reports a suppression that has gone stale).
+ * **Callers (Task 56).** `GuideInvitation` (start, dismissInvitation),
+ * `GuideCoach` (next, back, pause, collapse, restart, markExplored — a
+ * click on the highlighted control), `GuideHelpButton` and F1/? (start),
+ * and every `DialogHost` (suspend on open, resume on close: a depth, so
+ * a confirm stacked on a dialog keeps the coach suspended until the last
+ * one closes).
  */
 import { defineStore } from "pinia";
 
@@ -74,10 +80,16 @@ export const useEditorOnboardingStore = defineStore("editorOnboarding", {
     loaded: false,
     /** Storage failed: progress lasts for this session only. */
     sessionOnly: false,
-    /** A modal dialog has the screen; transient, never persisted. */
-    suspended: false,
+    /** Storage exists and could not be read: never write over it. */
+    readFailed: false,
+    /** Open modal dialogs; transient, never persisted. */
+    suspendDepth: 0,
   }),
   getters: {
+    /** A modal dialog has the screen. */
+    suspended(state): boolean {
+      return state.suspendDepth > 0;
+    },
     /** The current lesson's position in `GUIDE_STEPS`, or -1. */
     stepIndex(state): number {
       return GUIDE_STEPS.findIndex((s) => s.id === state.progress.currentStepId);
@@ -91,21 +103,23 @@ export const useEditorOnboardingStore = defineStore("editorOnboarding", {
         this.progress = hydrate(await useEditorProjectStore().port.getGuideProgress());
       } catch (e) {
         this.sessionOnly = true;
+        this.readFailed = true;
         logWarning(`editor guide: could not read saved progress, this session only: ${String(e)}`);
       } finally {
         this.loaded = true;
       }
     },
-    /** Starts, or resumes at the exact saved lesson. */
+    /** Starts, or resumes at the exact saved lesson. A finished guide is
+     * revisited from its first lesson (what was read stays read). */
     start(): void {
       const p = this.progress;
       const resume = !p.completed && p.currentStepId !== null;
+      p.completed = false;
       p.active = true;
       p.collapsed = false;
       p.invitationDismissed = true;
       this.show(resume ? (p.currentStepId as GuideStepId) : GUIDE_STEPS[0].id);
     },
-    // fallow-ignore-next-line unused-store-member
     next(): void {
       const i = this.stepIndex;
       if (i === GUIDE_STEPS.length - 1) {
@@ -117,31 +131,26 @@ export const useEditorOnboardingStore = defineStore("editorOnboarding", {
       }
       this.show(GUIDE_STEPS[Math.max(0, i + 1)].id);
     },
-    // fallow-ignore-next-line unused-store-member
     back(): void {
       const i = this.stepIndex;
       if (i > 0) this.show(GUIDE_STEPS[i - 1].id);
     },
     /** Closes the coach, keeping the lesson for Resume. */
-    // fallow-ignore-next-line unused-store-member
     pause(): void {
       this.progress.active = false;
       this.progress.collapsed = false;
       this.persist();
     },
     /** Keeps a small resume control while the user works. */
-    // fallow-ignore-next-line unused-store-member
     collapse(): void {
       this.progress.collapsed = true;
       this.persist();
     },
-    // fallow-ignore-next-line unused-store-member
     dismissInvitation(): void {
       this.progress.invitationDismissed = true;
       this.persist();
     },
     /** A control was tried. Recorded only — the lesson stays put. */
-    // fallow-ignore-next-line unused-store-member
     markExplored(id: string): void {
       if (!isGuideStepId(id) || this.progress.explored.includes(id)) return;
       this.progress.explored.push(id);
@@ -149,18 +158,15 @@ export const useEditorOnboardingStore = defineStore("editorOnboarding", {
     },
     /** Start over: guide state only. Preferences — and the fact the
      * invitation was already answered — are the person's, and stay. */
-    // fallow-ignore-next-line unused-store-member
     restart(): void {
       this.progress = { ...fresh(this.progress.preferences), invitationDismissed: true };
       this.start();
     },
-    // fallow-ignore-next-line unused-store-member
     suspend(): void {
-      this.suspended = true;
+      this.suspendDepth += 1;
     },
-    // fallow-ignore-next-line unused-store-member
     resume(): void {
-      this.suspended = false;
+      this.suspendDepth = Math.max(0, this.suspendDepth - 1);
     },
     /** Internal: makes `id` current and records it as read. */
     show(id: GuideStepId): void {
@@ -176,7 +182,15 @@ export const useEditorOnboardingStore = defineStore("editorOnboarding", {
         void this.save();
       }, PERSIST_DEBOUNCE_MS);
     },
+    /** Writes a pending (debounced) save now. Never throws. */
+    async flush(): Promise<void> {
+      if (persistTimer === null) return;
+      clearTimeout(persistTimer);
+      persistTimer = null;
+      await this.save();
+    },
     async save(): Promise<void> {
+      if (this.readFailed) return;
       const p = this.progress;
       const snapshot: GuideProgress = {
         ...p,

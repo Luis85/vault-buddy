@@ -348,6 +348,7 @@ async function onBelowLanesDrop(event: DragEvent) {
     />
 
     <TimelineToolbar
+      :more-open="menuOpen && menuTarget === null"
       @fit="onFit"
       @more="onToolbarMore"
     />

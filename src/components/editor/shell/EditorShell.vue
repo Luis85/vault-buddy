@@ -43,8 +43,9 @@
  * field) — bubbling, no capture — and calls `event.stopPropagation()` for
  * every combo it actually handles, so a shortcut this dispatcher claims
  * never reaches the legacy surface's `window` listener at all; an
- * unmatched, currently-disabled, or nothing-to-send combo (Ctrl+S, F1, F6 —
- * `activateEditorAction` returns `false` for those) is left alone to
+ * unmatched, currently-disabled, or nothing-to-send combo (Ctrl+S, or F6
+ * with the guide closed — `activateEditorAction` returns `false` for
+ * those; F1/? and F6 are the guide's, below) is left alone to
  * bubble normally, never swallowed with nothing done. A keystroke whose
  * target sits inside an open `role="menu"`/`role="dialog"` is the menu's
  * (`shouldHandle`'s `menuOwnsKeys`): Delete pressed in the context menu
@@ -72,17 +73,29 @@
  * **Guide progress (Task 55)** is read once per window when the shell first
  * mounts (`editorOnboarding.load()` — idempotent, and it never throws: an
  * unreadable store only flips the header's "Session only").
+ *
+ * **The guide (Task 56)** — `GuideInvitation` and `GuideCoach` — mounts
+ * here, at the shell root: fixed-position layers OUTSIDE the preview
+ * section, so nothing the guide draws can sit inside what a render mirrors
+ * (A26). The dispatcher below answers the guide's keys itself: F1/?
+ * (`help`) start or resume the walkthrough, F6 (`guideFocus`) moves focus
+ * between the card and its control, and an Escape nothing else answered
+ * pauses it once no menu is open. A pending progress save is flushed when
+ * the window hides and when the shell unmounts.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import { baseActionContext } from "../../../editor/actionContext";
+import type { ActionId } from "../../../editor/actionMeta";
 import { activateEditorAction } from "../../../editor/clipboard";
 import { onReveal } from "../../../editor/revealBus";
-import { matchShortcut, shouldHandle } from "../../../editor/shortcuts";
+import { isGuideDismissKey, matchShortcut, shouldHandle } from "../../../editor/shortcuts";
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import NotificationHost from "../../NotificationHost.vue";
+import GuideCoach from "../guide/GuideCoach.vue";
+import GuideInvitation from "../guide/GuideInvitation.vue";
 import EditorHeader from "./EditorHeader.vue";
 import PreviewToolbar from "./PreviewToolbar.vue";
 
@@ -102,6 +115,17 @@ onBeforeUnmount(() => window.removeEventListener("resize", onResize));
 
 const onboarding = useEditorOnboardingStore();
 onMounted(() => void onboarding.load());
+
+/** A hidden window may never show again (the X hides it; a quit follows):
+ * the last lesson change must not wait out the save debounce. */
+function onVisibilityChange() {
+  if (document.visibilityState === "hidden") void onboarding.flush();
+}
+onMounted(() => document.addEventListener("visibilitychange", onVisibilityChange));
+onBeforeUnmount(() => {
+  document.removeEventListener("visibilitychange", onVisibilityChange);
+  void onboarding.flush();
+});
 
 const isCompact = computed(() => viewportWidth.value < COMPACT_BREAKPOINT);
 
@@ -181,9 +205,26 @@ function menuOwnsKeys(event: KeyboardEvent): boolean {
   return target instanceof Element && target.closest('[role="menu"], [role="dialog"]') !== null;
 }
 
+const coach = ref<InstanceType<typeof GuideCoach> | null>(null);
+
+/** The guide's own keys (Task 56). True when one was acted on. */
+function onGuideKey(event: KeyboardEvent, actionId: ActionId | null): boolean {
+  if (actionId === "help") {
+    onboarding.start();
+    return true;
+  }
+  if (actionId === "guideFocus") return coach.value?.toggleFocus() ?? false;
+  return isGuideDismissKey(event) && (coach.value?.dismiss() ?? false);
+}
+
 function onShellKeydown(event: KeyboardEvent) {
   if (!shouldHandle(event, { menuOwnsKeys: menuOwnsKeys(event) })) return;
   const actionId = matchShortcut(event);
+  if (onGuideKey(event, actionId)) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
   if (!actionId) return;
   const selection = workspace.selectionClipIds;
   const clip = selection.length === 1 ? editorProject.clipById(selection[0]) : undefined;
@@ -287,6 +328,8 @@ function onShellKeydown(event: KeyboardEvent) {
     </section>
 
     <NotificationHost />
+    <GuideInvitation />
+    <GuideCoach ref="coach" />
   </div>
 </template>
 

@@ -27,6 +27,7 @@ import { ref } from "vue";
 import { openWebcamTakes } from "../editor/webcamTakes";
 import type { JobPhase, JobRecordDto } from "../editorTypes";
 import { logWarning } from "../logging";
+import { useEditorOnboardingStore } from "../stores/editorOnboarding";
 import { toEditorError, useEditorProjectStore } from "../stores/editorProject";
 
 type CloseGuardMode = "dirty" | "render" | "take";
@@ -50,6 +51,9 @@ export function useEditorCloseGuard() {
 
   async function hide(): Promise<void> {
     mode.value = null;
+    // The guide's debounced progress save must land before the window goes
+    // (Task 56): a hidden editor may never run its timer again.
+    await useEditorOnboardingStore().flush();
     try {
       await project.port.hideWindow();
     } catch (e) {

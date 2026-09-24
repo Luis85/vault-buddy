@@ -46,6 +46,9 @@ import { commandFor, resolveActions } from "../../../editor/actions";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 
+/** `moreOpen`: the menu Edit actions opened is showing (Task 56 —
+ * `aria-expanded`; a clip's right-click menu is not this button's). */
+defineProps<{ moreOpen?: boolean }>();
 const emit = defineEmits<{ (e: "fit"): void; (e: "more", at: { x: number; y: number }): void }>();
 
 const editorProject = useEditorProjectStore();
@@ -143,6 +146,7 @@ function itemClass(id: ActionId): string {
       type="button"
       data-testid="timeline-toolbar-more"
       aria-haspopup="menu"
+      :aria-expanded="moreOpen ? 'true' : 'false'"
       title="Actions for the selected clips (right-click a clip for its own)"
       class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       @click="onMore"
