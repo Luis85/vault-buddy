@@ -8,7 +8,7 @@
  */
 import { readFileSync } from "node:fs";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { EditorPort } from "../src/editor/port";
 import { EditorPortError } from "../src/editor/port";
@@ -21,8 +21,11 @@ import {
   WebcamRecorder,
 } from "../src/editor/webcamRecorder";
 import type { TakeDto } from "../src/editorTypes";
+import { logWarning } from "../src/logging";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
 import { deferred, type FakeDevices, fakeMediaDevices, FakeRecorder, resetFakeRecorder } from "./helpers/fakeWebcam";
+
+vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
 const TAKE: TakeDto = { takeId: "take-7", assetId: "take-7", durationMs: 4_300, width: 1280, height: 720, hasAudio: true };
 
@@ -40,6 +43,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.mocked(logWarning).mockClear();
   FakeRecorder.supported = new Set(["video/webm;codecs=vp9,opus", "video/webm"]);
 });
 
@@ -390,5 +394,94 @@ describe("webcamRecorder — failure and no-op paths", () => {
     expect(calls).toBe(0);
     expect(r.view.state).toBe("idle");
     expect(r.stream).toBeNull();
+  });
+});
+
+describe("webcamRecorder — dispose mid-recording (fix round 1)", () => {
+  /** A take mid-recording whose chunk 0 append is still in flight. */
+  async function midRecording(append: () => Promise<void>, extra: Partial<WebcamDeps> = {}) {
+    const log: string[] = [];
+    const r = recorder(
+      {
+        webcamAppend: async (_s, _t, seq) => {
+          log.push(`append ${seq}`);
+          await append();
+          log.push(`appended ${seq}`);
+        },
+        webcamDiscard: (_s, takeId) => (log.push(`discard ${takeId}`), Promise.resolve()),
+      },
+      extra,
+    );
+    await r.enable(undefined, true);
+    await r.start();
+    live().emit([1]);
+    await settle();
+    return { r, log };
+  }
+
+  it("stops every track at once, drains the append in flight, drops the final chunk, then discards", async () => {
+    // The failure mode: dispose discarded the take while chunk 0 was still
+    // being appended and then appended the recorder's final chunk to a take
+    // Rust had already removed.
+    const slow = deferred();
+    const { r, log } = await midRecording(() => slow.promise);
+    r.dispose();
+    expect(devices.tracks().every((t) => t.stopped)).toBe(true);
+    expect(r.view.state).toBe("idle");
+    await settle();
+    expect(log).toEqual(["append 0"]);
+    slow.resolve();
+    await settle();
+    expect(log).toEqual(["append 0", "appended 0", "discard take-7"]);
+  });
+
+  it("an append that fails after the take was dropped is logged, never swallowed", async () => {
+    const slow = deferred();
+    const { r, log } = await midRecording(() => slow.promise);
+    r.dispose();
+    slow.reject(new Error("take gone"));
+    await settle();
+    expect(log).toEqual(["append 0", "discard take-7"]);
+    expect(vi.mocked(logWarning)).toHaveBeenCalledWith(expect.stringMatching(/take-7.*chunk 0.*take gone/));
+  });
+
+  it("an append that never answers does not hold the discard forever", async () => {
+    const { r, log } = await midRecording(() => new Promise(() => undefined), { drainLimitMs: 5 });
+    r.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await settle();
+    expect(log).toEqual(["append 0", "discard take-7"]);
+  });
+});
+
+describe("webcamRecorder — the ffmpeg pre-flight (fix round 1)", () => {
+  it("a known-missing ffmpeg is reported before the countdown, and nothing is begun", async () => {
+    let begun = 0;
+    const counts: (number | null)[] = [];
+    const r = recorder(
+      { webcamBegin: () => (begun++, Promise.resolve({ takeId: "take-7" })) },
+      {
+        preflight: () => Promise.resolve({ kind: "encoderUnavailable", message: ENCODER_UNAVAILABLE_TEXT }),
+        onChange: (v) => counts.push(v.count),
+      },
+    );
+    await r.enable();
+    await r.start();
+    expect(counts.filter((c) => c !== null)).toEqual([]);
+    expect(begun).toBe(0);
+    expect(r.view.problem).toEqual({ kind: "encoderUnavailable", message: ENCODER_UNAVAILABLE_TEXT });
+    expect(devices.tracks().every((t) => t.stopped)).toBe(true);
+  });
+
+  it("a pre-flight that finds nothing wrong leaves the native refusal as the authority", async () => {
+    let begun = 0;
+    const r = recorder(
+      { webcamBegin: () => (begun++, Promise.resolve({ takeId: "take-7" })) },
+      { preflight: () => Promise.resolve(null) },
+    );
+    await r.enable();
+    await r.start();
+    expect(begun).toBe(1);
+    expect(r.view.state).toBe("recording");
   });
 });

@@ -26,13 +26,25 @@
  * track, the take as its own clip at the playhead, the ADR's presenter
  * placement — three labelled undo steps. Rust stays the authority; a
  * refused step keeps the dialog open with the store's error.
+ *
+ * **ffmpeg is pre-flighted** through the app's cached `useFfmpegStore`
+ * probe before the countdown (fix round 1), so a KNOWN-missing ffmpeg is
+ * reported at once. An unknown status (a failed probe) blocks nothing:
+ * `editor_webcam_begin`'s own `encoderUnavailable` stays the authority.
  */
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 
 import { placePresenterTake } from "../../../editor/placeTake";
-import { type RecorderConstructor, WebcamRecorder, type WebcamView } from "../../../editor/webcamRecorder";
+import {
+  ENCODER_UNAVAILABLE_TEXT,
+  type RecorderConstructor,
+  type WebcamProblem,
+  WebcamRecorder,
+  type WebcamView,
+} from "../../../editor/webcamRecorder";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import { useFfmpegStore } from "../../../stores/ffmpeg";
 import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
 import WebcamCloseConfirm from "./WebcamCloseConfirm.vue";
@@ -45,6 +57,7 @@ const emit = defineEmits<{ (e: "close"): void }>();
 
 const project = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
+const ffmpeg = useFfmpegStore();
 
 const IDLE: WebcamView = { state: "idle", count: null, cameras: [], take: null, problem: null };
 const view = shallowRef<WebcamView>(IDLE);
@@ -56,12 +69,20 @@ const asking = ref(false);
 const placeError = ref<string | null>(null);
 let recorder: WebcamRecorder | null = null;
 
+/** A take needs ffmpeg to be finished; refuse early only when the probe
+ * positively says it is missing. */
+async function ffmpegPreflight(): Promise<WebcamProblem | null> {
+  await ffmpeg.ensureDetected();
+  return ffmpeg.status?.installed === false ? { kind: "encoderUnavailable", message: ENCODER_UNAVAILABLE_TEXT } : null;
+}
+
 function create(): WebcamRecorder {
   return new WebcamRecorder({
     port: project.port,
     sessionId: () => project.sessionId,
     mediaDevices: navigator.mediaDevices,
     Recorder: (globalThis as { MediaRecorder?: RecorderConstructor }).MediaRecorder,
+    preflight: ffmpegPreflight,
     onChange: (next) => {
       view.value = next;
     },

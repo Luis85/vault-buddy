@@ -6,7 +6,7 @@
  * video track at the ADR's presenter placement — never baked into the
  * screen capture. The platform is faked (`helpers/fakeWebcam.ts`).
  */
-import { clearMocks, mockConvertFileSrc } from "@tauri-apps/api/mocks";
+import { clearMocks, mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
 import { enableAutoUnmount, flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebcamDialog from "../src/components/editor/dialogs/WebcamDialog.vue";
 import MediaLibrary from "../src/components/editor/library/MediaLibrary.vue";
 import { cornerPreset, PRESENTER_CORNER } from "../src/editor/layoutGeometry";
-import { type EditorPort,EditorPortError } from "../src/editor/port";
+import { type EditorPort, EditorPortError } from "../src/editor/port";
 import { PERMISSION_DENIED_TEXT } from "../src/editor/webcamRecorder";
 import type { Clip, EditorCommand, EditorOpenResult, Project, TakeDto } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
@@ -55,6 +55,8 @@ function project(): Project {
 }
 
 let devices: FakeDevices;
+/** What `detect_ffmpeg` (the `useFfmpegStore` pre-flight) reports. */
+let ffmpegInstalled: boolean;
 let executed: EditorCommand[];
 let begun: number;
 let live: Project;
@@ -139,6 +141,12 @@ beforeEach(() => {
   setActivePinia(createPinia());
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   resetFakeRecorder();
+  ffmpegInstalled = true;
+  mockIPC((cmd) =>
+    cmd === "detect_ffmpeg"
+      ? { installed: ffmpegInstalled, version: null, path: null, ffprobePath: null, h264Encoder: null, configuredPath: null }
+      : undefined,
+  );
   mockConvertFileSrc("windows");
   devices = fakeMediaDevices();
   Object.defineProperty(navigator, "mediaDevices", { value: devices.mediaDevices, configurable: true });
@@ -203,6 +211,18 @@ describe("WebcamDialog — the camera", () => {
     expect(begun).toBe(0);
     expect(store.snapshot?.revision).toBe(5);
     expect(store.project).toEqual(before);
+  });
+
+  it("a known-missing ffmpeg is reported at Record, before any countdown (fix round 1)", async () => {
+    ffmpegInstalled = false;
+    await openStore();
+    const w = mountDialog();
+    await click(w, "webcam-enable");
+    await click(w, "webcam-record");
+    expect(w.find('[data-testid="webcam-countdown"]').exists()).toBe(false);
+    expect(w.get('[data-testid="webcam-problem"]').text()).toMatch(/install ffmpeg/i);
+    expect(begun).toBe(0);
+    expect(devices.tracks().every((t) => t.stopped)).toBe(true);
   });
 
   it("a missing ffmpeg says to install it, not that the camera failed", async () => {

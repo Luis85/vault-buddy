@@ -26,7 +26,17 @@
  *
  * **Tracks are stopped on every way out**: `dispose` (the dialog's close,
  * `pagehide`) and every error. A camera left running would keep its light
- * on for the rest of the process.
+ * on for the rest of the process. A take still recording at `dispose` is
+ * DROPPED in order (fix round 1): its final chunk is deliberately not sent,
+ * the append already in flight is awaited (bounded by `DRAIN_LIMIT_MS`, so
+ * an append that never answers cannot hold it), and only then is the take
+ * discarded — never an append landing on a take Rust already removed. Any
+ * append or discard that fails is logged, never swallowed.
+ *
+ * **ffmpeg is pre-flighted** (`deps.preflight`, the dialog's cached
+ * `useFfmpegStore` probe) before the countdown, so a known-missing ffmpeg is
+ * reported at once; `editor_webcam_begin`'s own `encoderUnavailable` stays
+ * the authority for everything the pre-flight could not know.
  */
 import type { TakeDto } from "../editorTypes";
 import { logWarning } from "../logging";
@@ -49,6 +59,8 @@ const COUNTDOWN = [3, 2, 1] as const;
 const COUNTDOWN_STEP_MS = 1000;
 /** One chunk per second (ADR R10's timeslice). */
 const TIMESLICE_MS = 1000;
+/** How long a dropped take waits for the append already in flight. */
+const DRAIN_LIMIT_MS = 2000;
 
 export type WebcamState = "idle" | "requesting" | "ready" | "countdown" | "recording" | "review" | "committing";
 
@@ -96,6 +108,10 @@ export interface WebcamDeps {
   Recorder: RecorderConstructor | undefined;
   /** The countdown's clock; `setTimeout` unless a test supplies one. */
   wait?: (ms: number) => Promise<void>;
+  /** How long `dispose` waits for an in-flight append (`DRAIN_LIMIT_MS`). */
+  drainLimitMs?: number;
+  /** A refusal known before any take is begun (a missing ffmpeg), or `null`. */
+  preflight?: () => Promise<WebcamProblem | null>;
   onChange: (view: WebcamView) => void;
 }
 
@@ -109,10 +125,20 @@ interface Session {
   nextSeq: number;
   failure: unknown;
   stopped: Promise<void>;
+  /** Being dropped by `dispose`: no further chunk is sent. */
+  dropped: boolean;
 }
 
 function defaultWait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** `work`, or give up waiting after `ms` (the work itself carries on). */
+async function bounded(work: Promise<void>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<void>((resolve) => (timer = setTimeout(resolve, ms)));
+  await Promise.race([work, limit]);
+  clearTimeout(timer);
 }
 
 /** A `getUserMedia` refusal, as the copy the user reads. */
@@ -206,6 +232,9 @@ export class WebcamRecorder {
   async start(): Promise<void> {
     if (this.state !== "ready") return;
     const epoch = this.epoch;
+    const refused = await this.preflight();
+    if (refused) return this.fail(refused);
+    if (epoch !== this.epoch) return;
     const wait = this.deps.wait ?? defaultWait;
     for (const n of COUNTDOWN) {
       this.set({ state: "countdown", count: n, problem: null });
@@ -214,6 +243,16 @@ export class WebcamRecorder {
     }
     this.set({ count: null });
     await this.record(epoch);
+  }
+
+  private async preflight(): Promise<WebcamProblem | null> {
+    try {
+      return (await this.deps.preflight?.()) ?? null;
+    } catch (e) {
+      // A broken pre-flight blocks nothing: the native refusal still decides.
+      logWarning(`webcam: ffmpeg pre-flight failed: ${String(e)}`);
+      return null;
+    }
   }
 
   private async record(epoch: number): Promise<void> {
@@ -249,6 +288,7 @@ export class WebcamRecorder {
       nextSeq: 0,
       failure: null,
       stopped: new Promise<void>((resolve) => (stopped = resolve)),
+      dropped: false,
     };
     recorder.ondataavailable = (event) => this.enqueue(session, event.data);
     recorder.onstop = () => stopped();
@@ -262,7 +302,7 @@ export class WebcamRecorder {
 
   /** Number the chunk NOW and append it after every chunk ahead of it. */
   private enqueue(session: Session, data: Blob): void {
-    if (data.size === 0) return;
+    if (data.size === 0 || session.dropped) return;
     const seq = session.nextSeq;
     session.nextSeq += 1;
     session.chain = session.chain.then(async () => {
@@ -272,6 +312,7 @@ export class WebcamRecorder {
         await this.deps.port.webcamAppend(session.sessionId, session.takeId, seq, bytes);
       } catch (e) {
         session.failure = e;
+        logWarning(`webcam: take ${session.takeId} chunk ${seq} was not appended: ${String(e)}`);
       }
     });
   }
@@ -341,12 +382,18 @@ export class WebcamRecorder {
     this.epoch += 1;
     const session = this.session;
     this.session = null;
-    if (session) {
-      if (session.recorder.state !== "inactive") session.recorder.stop();
-      this.discardOpen(session.sessionId, session.takeId);
-    }
+    if (session) void this.drop(session);
     this.stopTracks();
     this.set({ state: "idle", count: null, take: null });
+  }
+
+  /** Stop a take still recording without sending its final chunk, let the
+   * append in flight land (bounded), then discard it. */
+  private async drop(session: Session): Promise<void> {
+    session.dropped = true;
+    if (session.recorder.state !== "inactive") session.recorder.stop();
+    await bounded(session.chain, this.deps.drainLimitMs ?? DRAIN_LIMIT_MS);
+    this.discardOpen(session.sessionId, session.takeId);
   }
 
   private fail(problem: WebcamProblem): void {
