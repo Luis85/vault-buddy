@@ -65,7 +65,7 @@ pub struct ScreenNoteMeta {
 /// the note from where the video landed), so the destination is the file
 /// name alone — no `../` depth to compute. The extension is left literal,
 /// `parent_link`'s own convention for the `.md` it appends.
-fn embed(mp4_file_name: &str) -> String {
+pub(crate) fn embed(mp4_file_name: &str) -> String {
     if is_wikilink_safe(mp4_file_name) {
         return format!("![[{mp4_file_name}]]\n");
     }

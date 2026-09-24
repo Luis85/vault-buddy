@@ -50,3 +50,34 @@ export interface ProductDto {
   renderRange: RenderRange | null;
   available: boolean;
 }
+
+/** Contract reference `PublishDestination` (Task 48) —
+ * `editor_publish_product`'s destination. `folder` blank means the vault's
+ * screen-capture folder; `vaultId` is Obsidian's vault ID, never a name. */
+export interface PublishDestination {
+  vaultId: string;
+  folder: string;
+  dated: boolean;
+  createNote: boolean;
+}
+
+/** Contract reference `PublishReceipt`: where the video (and its note)
+ * landed — absolute paths, for `open_screen_capture` only. `warning` is set
+ * when the video landed and its note did not. */
+export interface PublishReceipt {
+  videoPath: string;
+  notePath: string | null;
+  vaultId: string;
+  vaultName: string;
+  warning: string | null;
+}
+
+/** `editor_export_subtitles`' `format`. */
+export type SubtitleFormat = "srt" | "vtt";
+
+/** One Obsidian vault the Publish dialog can offer (`list_vaults`' id and
+ * display name; the path never reaches the webview's UI). */
+export interface VaultChoice {
+  id: string;
+  name: string;
+}

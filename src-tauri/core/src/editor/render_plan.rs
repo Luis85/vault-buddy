@@ -70,6 +70,11 @@ use super::Num;
 
 pub use super::render_plan_audio::AudioContribution;
 
+/// The subtitle export's cues and the companion note's chapters (Task 48).
+#[path = "render_plan_outputs.rs"]
+mod outputs;
+pub use outputs::{chapters_for, subtitle_cues};
+
 /// What the shell knows about one source file (from `sources.json` and its
 /// probe): which ffmpeg input it is, and what it holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -625,25 +630,10 @@ fn captions_of(project: &Project, window: &Window) -> Option<PlannedCaptions> {
         .captions
         .as_ref()
         .filter(|c| c.enabled && c.burn_in)?;
-    let mut cues: Vec<PlannedCaption> = settings
-        .cues
-        .iter()
-        .filter_map(|q| {
-            let clip = project.clips.iter().find(|c| c.id == q.clip_id)?;
-            let (s, e) = time::cue_output_span(&clip_span(clip), q.start_ms, q.end_ms)?;
-            let (output_start, output_end, _) = window.clip(s, e)?;
-            Some(PlannedCaption {
-                id: q.id.clone(),
-                output_start,
-                output_end,
-                text: q.text.clone(),
-            })
-        })
-        .collect();
+    let cues = outputs::caption_rows(project, window);
     if cues.is_empty() {
         return None;
     }
-    cues.sort_by_key(|q| (q.output_start, q.output_end));
     Some(PlannedCaptions {
         font_size: f64_of(Some(&settings.font_size), 0.0),
         position: settings.position,

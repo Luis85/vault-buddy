@@ -12,13 +12,17 @@
  * its phases in words and a bar that reaches 100 % ONLY on the `complete`
  * terminal (R20). Cancel asks Rust to stop (`editor_cancel_job`); a cancel
  * is not a failure and never reads as one. Completion offers Watch rendered
- * file, Publish to vault… (Task 48) and Render another.
+ * file, Publish to vault… (Task 48, `PublishDialog` over this one) and
+ * Render another.
  *
  * Every error here is the RENDER's (`editorJobs.renderError`, the job's
  * terminal) — never `editorProject.saveError`, so a refused render cannot
  * read as "Save failed" in the header (Task 46's carry). While a render is
- * running the dialog cannot be dismissed by Escape or the backdrop: Cancel
- * is the explicit way out (`DialogHost`'s `closable`).
+ * running — and from the Render click until Rust has answered with its job
+ * (Task 47's carry: `running` is false until `jobId` is set, so a close
+ * then would leave a render nobody is following) — the dialog cannot be
+ * dismissed by Close, Escape or the backdrop: Cancel is the explicit way
+ * out (`DialogHost`'s `closable`).
  */
 import { computed, ref, watch } from "vue";
 
@@ -31,6 +35,7 @@ import { useEditorProductsStore } from "../../../stores/editorProducts";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
+import PublishDialog from "./PublishDialog.vue";
 import RenderOutcome from "./RenderOutcome.vue";
 import RenderSettingsForm from "./RenderSettingsForm.vue";
 
@@ -55,6 +60,10 @@ const starting = ref(false);
 const startedName = ref("");
 
 const { job, running, refusal } = useRenderJob(jobId);
+/** A start in flight OR a render running: nothing may close the dialog. */
+const busy = computed(() => starting.value || running.value);
+/** Task 48: the Publish dialog, over this one, for the new product. */
+const publishOpen = ref(false);
 
 const durationMs = computed(() => editorProject.durationMs);
 const defaultName = computed(
@@ -68,6 +77,7 @@ const name = computed({
 });
 
 function another(): void {
+  publishOpen.value = false;
   jobId.value = null;
   nameDraft.value = null;
   jobs.renderError = null;
@@ -147,7 +157,7 @@ function cancel(): void {
 }
 
 function close(): void {
-  if (!running.value) emit("close");
+  if (!busy.value) emit("close");
 }
 </script>
 
@@ -155,7 +165,7 @@ function close(): void {
   <DialogHost
     :open="open"
     label="Render a video"
-    :closable="!running"
+    :closable="!busy"
     @close="close"
   >
     <div
@@ -175,7 +185,7 @@ function close(): void {
           variant="ghost"
           size="sm"
           data-testid="render-dialog-close"
-          :disabled="running"
+          :disabled="busy"
           @click="close"
         >
           Close
@@ -216,6 +226,13 @@ function close(): void {
         :name="startedName"
         @cancel="cancel"
         @another="another"
+        @publish="publishOpen = true"
+      />
+      <PublishDialog
+        :open="publishOpen"
+        :product-id="productId"
+        :product-name="startedName"
+        @close="publishOpen = false"
       />
     </div>
   </DialogHost>

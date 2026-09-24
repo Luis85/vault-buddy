@@ -11,6 +11,8 @@
  * only an approximation of a render. **Restore this edit** asks first, then
  * makes the product's frozen edit the live one (`editor_restore_product`:
  * a new revision, one undo step); the product itself never changes.
+ * **Publish to vault…** (Task 48) opens `PublishDialog` for that product —
+ * any available product, not only the one a render just finished.
  *
  * A product whose file is gone keeps its card and its lineage — the
  * revision and edit it came from are in the ledger, not in the file — so it
@@ -21,6 +23,7 @@ import { onMounted, ref, watch } from "vue";
 
 import { useEditorProductsStore } from "../../../stores/editorProducts";
 import { useEditorProjectStore } from "../../../stores/editorProject";
+import PublishDialog from "../dialogs/PublishDialog.vue";
 import ProductCard from "./ProductCard.vue";
 
 const editorProject = useEditorProjectStore();
@@ -35,6 +38,8 @@ watch(
 const watchingId = ref<string | null>(null);
 const confirmingId = ref<string | null>(null);
 const restoringId = ref<string | null>(null);
+/** The product the Publish dialog is open for. */
+const publishing = ref<{ id: string; name: string } | null>(null);
 
 function toggleWatch(id: string): void {
   watchingId.value = watchingId.value === id ? null : id;
@@ -79,9 +84,16 @@ async function confirmRestore(id: string): Promise<void> {
       :confirming="confirmingId === p.id"
       :busy="restoringId !== null"
       @toggle-watch="toggleWatch(p.id)"
+      @publish="publishing = { id: p.id, name: p.name }"
       @ask-restore="confirmingId = p.id"
       @confirm-restore="confirmRestore(p.id)"
       @cancel-restore="confirmingId = null"
+    />
+    <PublishDialog
+      :open="publishing !== null"
+      :product-id="publishing?.id ?? null"
+      :product-name="publishing?.name ?? ''"
+      @close="publishing = null"
     />
   </div>
 </template>

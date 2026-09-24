@@ -164,11 +164,8 @@ describe("RenderDialog — completion", () => {
     await flushPromises();
     expect(mediaUrl).toHaveBeenCalledWith(SESSION, { productId: "prod-b" });
     expect(w.get('[data-testid="product-player-video"]').attributes("src")).toContain("prod-b.mp4");
-    // Task 48 builds publishing; until then it is a real, disabled control
-    // with a reason (R20).
-    const publish = w.get('[data-testid="render-dialog-publish"]');
-    expect(publish.attributes("disabled")).toBeDefined();
-    expect(w.get('[data-testid="render-dialog-publish-reason"]').text().length).toBeGreaterThan(0);
+    // Task 48: publishing is live (its dialog is `editorPublishDialog.test.ts`'s).
+    expect(w.get('[data-testid="render-dialog-publish"]').attributes("disabled")).toBeUndefined();
     await w.get('[data-testid="render-dialog-another"]').trigger("click");
     expect(w.find('[data-testid="render-dialog-start"]').exists()).toBe(true);
     await start(w);

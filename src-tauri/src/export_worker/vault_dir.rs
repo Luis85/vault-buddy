@@ -71,7 +71,7 @@ fn human_mib(bytes: u64) -> String {
 /// Returns the directories this call CREATED, deepest first, so a save that
 /// then does not happen can put the vault back exactly as it found it —
 /// `rollback_export_dir` below.
-pub(super) fn prepare_export_dir(vault_path: &Path, dir: &Path) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn prepare_export_dir(vault_path: &Path, dir: &Path) -> Result<Vec<PathBuf>, String> {
     prepare_export_dir_confirmed(vault_path, dir, &assert_path_inside_vault)
 }
 
@@ -156,7 +156,7 @@ fn missing_ancestors(vault_path: &Path, dir: &Path) -> Vec<PathBuf> {
 ///
 /// Best-effort and never an error: the user's save already failed, and a
 /// folder that outlives it is litter, not loss.
-pub(super) fn rollback_export_dir(created: &[PathBuf]) {
+pub(crate) fn rollback_export_dir(created: &[PathBuf]) {
     for dir in created {
         // Nothing there is not the same as "not empty", and only the second
         // is the guard. `created` is sampled BEFORE `create_dir_all`, so a
@@ -404,7 +404,7 @@ mod tests {
 
         // The seam carries the REAL containment check in production.
         assert!(
-            body_of("pub(super) fn prepare_export_dir(").contains("&assert_path_inside_vault"),
+            body_of("pub(crate) fn prepare_export_dir(").contains("&assert_path_inside_vault"),
             "prepare_export_dir must hand the real containment check to the seam"
         );
 

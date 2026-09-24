@@ -566,8 +566,9 @@ pub(crate) fn cancel_session_thumbnails(state: &EditorState, session_id: &str) {
 
 fn derivations_running(state: &EditorState, session_id: &str) -> bool {
     let jobs = lock_ignoring_poison(&state.jobs);
-    let running =
-        jobs.is_running(session_id, JobKind::Peaks) || jobs.is_running(session_id, JobKind::Render);
+    let running = [JobKind::Peaks, JobKind::Render, JobKind::Publish]
+        .into_iter()
+        .any(|kind| jobs.is_running(session_id, kind));
     drop(jobs);
     running
         || lock_ignoring_poison(&state.thumbnails)
@@ -575,8 +576,8 @@ fn derivations_running(state: &EditorState, session_id: &str) -> bool {
             .any(|(s, _)| s == session_id)
 }
 
-/// Cancel `session_id`'s peaks decodes, thumbnail renders AND editor
-/// renders (Task 46) and wait (at most `STOP_WAIT`) for them to end — a
+/// Cancel `session_id`'s peaks decodes, thumbnail renders, editor renders
+/// (Task 46) AND publishes (Task 48) and wait (at most `STOP_WAIT`) for them to end — a
 /// discard's first step, taken BEFORE it holds the session's save lock
 /// (their final cache write, and a render's publish, need it). A render is
 /// killed and its part and job directory deleted before its terminal
@@ -585,6 +586,9 @@ pub(crate) fn stop_session_derivations(state: &EditorState, session_id: &str) {
     let jobs = lock_ignoring_poison(&state.jobs);
     jobs.cancel_session_kind(session_id, JobKind::Peaks);
     jobs.cancel_session_kind(session_id, JobKind::Render);
+    // Task 48: a publish reads the product out of the directory a discard
+    // removes, and journals into it; it stops between chunks.
+    jobs.cancel_session_kind(session_id, JobKind::Publish);
     drop(jobs);
     cancel_session_thumbnails(state, session_id);
     let started = std::time::Instant::now();

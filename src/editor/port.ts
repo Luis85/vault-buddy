@@ -35,10 +35,14 @@ import type {
   PackageReceipt,
   ProductDto,
   ProjectSummaryDto,
+  PublishDestination,
+  PublishReceipt,
   RelinkReport,
   RenderRequest,
   RenderStarted,
   SaveReceipt,
+  SubtitleFormat,
+  VaultChoice,
   Workspace,
 } from "../editorTypes";
 import { logWarning } from "../logging";
@@ -60,7 +64,13 @@ import {
   isEditorError,
 } from "./decode";
 import { decodeRelinkReport } from "./decodeRelink";
-import { decodeProducts, decodeRenderStarted } from "./decodeRender";
+import {
+  decodeNullableFileName,
+  decodeProducts,
+  decodePublishReceipt,
+  decodeRenderStarted,
+  decodeVaultChoices,
+} from "./decodeRender";
 
 /** Thrown by every `EditorPort` method on a rejected invoke — `error` is
  * the decoded `EditorError`, so a caller reads `err.error.code` rather
@@ -191,6 +201,19 @@ export interface EditorPort {
     productId: string,
     commandId: string,
   ): Promise<EditorProjection>;
+  /** `editor_publish_product` (Task 48) — the tenth vault write: Rust
+   * copies the product into the vault (never overwriting) and writes its
+   * companion note; the receipt names where both landed. */
+  publishProduct(sessionId: string, productId: string, destination: PublishDestination): Promise<PublishReceipt>;
+  /** `editor_export_subtitles` — Rust opens its OWN save dialog and writes
+   * the timeline's captions in output time; the file name, or `null` when
+   * the dialog was dismissed. */
+  exportSubtitles(sessionId: string, format: SubtitleFormat): Promise<string | null>;
+  /** `list_vaults` — the vaults a publish can go into. */
+  listVaults(): Promise<VaultChoice[]>;
+  /** `open_screen_capture` — open a PUBLISHED file in Obsidian (Rust
+   * requires it to be inside the named vault). */
+  openScreenCapture(vaultId: string, path: string): Promise<void>;
 }
 
 /** The per-job Channel (Tauri's ordered, subscriber-scoped delivery) —
@@ -298,6 +321,18 @@ export function createTauriEditorPort(): EditorPort {
         { sessionId, expectedRevision, productId, commandId },
         decodeProjection,
       );
+    },
+    publishProduct(sessionId, productId, destination) {
+      return call("editor_publish_product", { sessionId, productId, destination }, decodePublishReceipt);
+    },
+    exportSubtitles(sessionId, format) {
+      return call("editor_export_subtitles", { sessionId, format }, decodeNullableFileName);
+    },
+    listVaults() {
+      return call("list_vaults", undefined, decodeVaultChoices);
+    },
+    async openScreenCapture(vaultId, path) {
+      await call("open_screen_capture", { id: vaultId, path }, () => undefined);
     },
   };
 }

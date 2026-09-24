@@ -4,7 +4,7 @@
  * (`RenderProgress` — 100 % only from the `complete` terminal), Cancel
  * while it runs, the one status line once it ends, and on completion
  * **Watch rendered file** (the real file, `ProductPlayer`), **Publish to
- * vault…** (Task 48; until then disabled with its reason, R20) and
+ * vault…** (Task 48: the dialog opens `PublishDialog` for the product) and
  * **Render another**. Presentational: the dialog owns the job.
  */
 import { computed, ref } from "vue";
@@ -24,10 +24,7 @@ const props = defineProps<{
   productId: string | null;
   name: string;
 }>();
-const emit = defineEmits<{ (e: "cancel"): void; (e: "another"): void }>();
-
-/** Task 48 builds publishing; until then the control is real and says so. */
-const PUBLISH_REASON = "Publishing to a vault arrives in a later update.";
+const emit = defineEmits<{ (e: "cancel"): void; (e: "another"): void; (e: "publish"): void }>();
 
 const watching = ref(false);
 const media = computed(() => (props.productId ? { productId: props.productId } : null));
@@ -83,15 +80,10 @@ function another(): void {
         variant="secondary"
         size="sm"
         data-testid="render-dialog-publish"
-        :disabled="true"
-        :title="PUBLISH_REASON"
+        @click="emit('publish')"
       >
         Publish to vault…
       </AppButton>
-      <span
-        data-testid="render-dialog-publish-reason"
-        class="text-micro text-fg-subtle"
-      >{{ PUBLISH_REASON }}</span>
     </template>
     <AppButton
       v-if="status"

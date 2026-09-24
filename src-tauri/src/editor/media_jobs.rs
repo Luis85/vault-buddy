@@ -56,9 +56,6 @@ pub(crate) const MAX_TERMINAL_RECORDS: usize = 8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum JobKind {
-    // `publish` joins with Task 48 -- a variant nothing constructs is dead
-    // code, and its wire spelling is already pinned by the frontend's
-    // decoder.
     Import,
     /// An editor render (Task 46, `render_jobs`). Exclusive: one per
     /// session. Its wire spelling, `"render"`, is what the close guard
@@ -68,6 +65,12 @@ pub enum JobKind {
     /// may be registered at once (one per visible asset); `media_derive`'s
     /// own gate runs them one at a time.
     Peaks,
+    /// A publication into a vault (Task 48, `publish`, the tenth
+    /// sanctioned vault write). Exclusive: one per session. It has no
+    /// Channel -- `editor_publish_product` answers with its receipt -- but
+    /// it is registered so `editor_get_jobs`, the close guard and the
+    /// shutdown gate's publish term all see it while it writes.
+    Publish,
 }
 
 impl JobKind {
@@ -76,7 +79,7 @@ impl JobKind {
     /// peaks decode is not — the timeline asks for every visible asset's
     /// waveform at once, and refusing all but one would draw one waveform.
     fn exclusive(self) -> bool {
-        matches!(self, Self::Import | Self::Render)
+        matches!(self, Self::Import | Self::Render | Self::Publish)
     }
 
     /// The refusal a second exclusive job of this kind gets.
@@ -85,6 +88,9 @@ impl JobKind {
             Self::Render => {
                 "A render is already running in this editing session. Wait for it to finish \
                  or cancel it."
+            }
+            Self::Publish => {
+                "A video is already being published from this editing session. Wait for it to finish."
             }
             _ => {
                 "An import is already running in this editing session. Wait for it to finish \
@@ -579,6 +585,10 @@ pub(crate) mod tests {
         assert_eq!(
             serde_json::to_value(JobKind::Render).unwrap(),
             json!("render")
+        );
+        assert_eq!(
+            serde_json::to_value(JobKind::Publish).unwrap(),
+            json!("publish")
         );
         assert_eq!(
             serde_json::to_value([JobPhase::Rendering, JobPhase::Publishing]).unwrap(),

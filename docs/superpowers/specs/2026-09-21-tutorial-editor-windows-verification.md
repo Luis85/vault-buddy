@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **28 rows** today (T1–T28), of which **0** carry a result. An
+This file carries **31 rows** today (T1–T31), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -313,3 +313,18 @@ phases and Cancel as a user sees them.
 | # | Check | Steps | Result |
 | --- | --- | --- | --- |
 | T28 | **Render, watch, restore, and Review for real** | Open a project with at least 30 s of edited footage. (a) **Render video** in the header: note the default name (`<title> v<n>`), choose **A range of the output** and render 5–15 s at **Low**. **Record**: that the phase text moves through preparing, rendering and saving; that the bar never shows 100 % until "Render complete" appears; then **Watch rendered file**: that the video plays WITH sound in the dialog. (b) Start a second whole render and press **Cancel render**. **Record**: that the dialog says "Render cancelled" (not failed), that no new product appears in the library, and that no `ffmpeg.exe` is left in Task Manager. (c) Library → **Products**: **Record** each card's name, `r<revision>`, range and created time, and that **Watch** plays the product (not the editable preview). Make an edit, then **Restore this edit** → **Restore** on the first product: **Record** that the edit is back to the rendered one and that Undo returns your edit; the product still plays. (d) Rename `products\<productId>.mp4` in `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\` and reopen the Products tab: **Record** that the card reads "Unavailable" with Watch disabled, and Restore still works. Rename it back. (e) Select a clip and press **Review** in the preview toolbar: **Record** that a review renders just that clip's span and plays; that `cache\review-<jobId>.mp4` exists while it plays, that `products\` and `products.json` did not change, and that after closing the editor (Keep) the review file is gone. | |
+
+## Publish to vault and subtitle export (Task 48)
+
+`publish_tests.rs` drives the tenth vault write over a tempdir vault with the
+copy and the note injectable, `publish_io`'s own tests the copy, and
+`subtitle_commands_tests.rs` the export with the save dialog answered by a
+fixed path. What no automated test reaches: a real Obsidian vault on a real
+volume (a sync client, a second drive, a full disk), the real native save
+dialog, and a quit or a crash on Windows while a copy holds its files open.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T29 | **Publish into a vault that already has a same-name file** | Render a product, then in the vault's target folder (the Publish dialog's folder; blank = the vault's screen-capture folder, dated if ticked) create `<the name it will take>.mp4` AND `.md` by hand (publish once first to learn the name, `YYYY-MM-DD HHmm <product name>`, then copy both files). Open **Publish to vault…** from the Products tab. **Record**: that the vault picker preselects the vault the capture was RECORDED for (not the one last used in the panel); the names the dialog reports; that they carry the next ` (N)` suffix TOGETHER (the `.mp4` and `.md` share it); that both hand-made files are byte-identical afterwards; that the note embeds the ` (N)` video and plays it in Obsidian; its `## Chapters` times against the rendered video; and that **Open in Obsidian** opens the note. Then **Export .srt** and **Export .vtt** from the Captions library: **Record** that the native save dialog opens, that the files' times match where each caption plays in the rendered video, and that choosing an existing file name is refused with the file untouched. | |
+| T30 | **Disk full during publish (R-H5)** | Use a small volume (a USB stick or a VHD of a few hundred MB) as, or inside, a vault, fill it until less space is free than the product's size but more than zero, and publish a product into it. **Record**: whether it is refused BEFORE copying ("Not enough disk space in that vault…") and that nothing was created (no folder, no file, no hidden `.…vault-buddy.tmp`). Then free JUST enough for the check to pass and fill the rest during the copy (start a large file copy onto the volume right after pressing Publish): **Record** the error shown, that no `.mp4`, `.md` or hidden temp is left in the folder, that a dated folder this publish created is gone again, and that the product still plays in the Products tab. | |
+| T31 | **Quit, Install & restart and a crash while publishing** | Publish a LARGE product (a long render at High) into a vault on a slow or network drive so the copy takes several seconds. (a) While it copies, **Quit** from the tray: **Record** how long the app took to exit (the publish cancel is bounded at 5 s) and that the vault folder holds no new `.mp4`, `.md` or hidden `.…vault-buddy.tmp`. (b) Start another publish and use Settings → Updates → **Install & restart**: **Record** the refusal ("A video is being published into a vault…"). (c) Start another publish and end the process in Task Manager mid-copy, then relaunch: **Record** the `editor-recovery-sweep: A publish was interrupted …` line in `vault-buddy.log`, that `editor-projects\<projectId>\jobs\<jobId>\publish.json` is still there after the relaunch, and whether a hidden partial temp was left in the vault folder (docs/Gaps.md GAP-192). | |

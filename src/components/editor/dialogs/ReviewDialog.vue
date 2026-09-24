@@ -14,7 +14,10 @@
  * cancellable here, and counted by the quit/update gate.
  *
  * The review starts the moment the dialog opens; its errors are the
- * render's (`editorJobs.renderError`), never the header's save error.
+ * render's (`editorJobs.renderError`), never the header's save error. From
+ * that moment until Rust answers with the job the dialog cannot be closed
+ * either (Task 47's carry): `running` is false until `jobId` is set, and a
+ * close then would leave a review render nobody is following.
  */
 import { computed, ref, watch } from "vue";
 
@@ -32,12 +35,19 @@ const emit = defineEmits<{ (e: "close"): void }>();
 
 const jobs = useEditorJobsStore();
 const jobId = ref<string | null>(null);
+/** The start request is in flight (no job id yet). */
+const starting = ref(false);
 
 async function begin(range: RenderRange | null): Promise<void> {
   jobId.value = null;
   jobs.renderError = null;
   if (!range) return;
-  jobId.value = await jobs.startRender({ name: "Review", range, quality: "balanced", review: true });
+  starting.value = true;
+  try {
+    jobId.value = await jobs.startRender({ name: "Review", range, quality: "balanced", review: true });
+  } finally {
+    starting.value = false;
+  }
 }
 
 watch(
@@ -49,6 +59,7 @@ watch(
 );
 
 const { job, running, refusal } = useRenderJob(jobId);
+const busy = computed(() => starting.value || running.value);
 const media = computed(() => (job.value && isComplete(job.value) ? { reviewJobId: job.value.jobId } : null));
 const cancelled = computed(() => job.value?.phase === "cancelled");
 /** A failed job's own message (`null` unless it failed). */
@@ -63,7 +74,7 @@ const problem = computed<string | null>(() => {
 });
 
 function close(): void {
-  if (!running.value) emit("close");
+  if (!busy.value) emit("close");
 }
 </script>
 
@@ -71,7 +82,7 @@ function close(): void {
   <DialogHost
     :open="open"
     label="Review the rendered range"
-    :closable="!running"
+    :closable="!busy"
     @close="close"
   >
     <div
@@ -92,7 +103,7 @@ function close(): void {
           variant="ghost"
           size="sm"
           data-testid="review-dialog-close"
-          :disabled="running"
+          :disabled="busy"
           @click="close"
         >
           Close

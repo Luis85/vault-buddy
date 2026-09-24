@@ -3,12 +3,13 @@
  * One Rendered Product in the library (Task 47; F-41; SCREENS 09): its
  * name, the revision it was rendered from, its range, when it was made and
  * whether its file is still on disk — plus Watch (the real file,
- * `ProductPlayer`) and Restore this edit with its confirmation step.
+ * `ProductPlayer`), Publish to vault… (Task 48; `ProductLibrary` opens the
+ * Publish dialog) and Restore this edit with its confirmation step.
  * Presentational: `ProductLibrary` owns which card is watching/confirming
  * and performs the restore.
  *
- * A missing file keeps the card and its lineage; only Watch goes, and it
- * says why (R20: a disabled control carries a reason).
+ * A missing file keeps the card and its lineage; only Watch and Publish
+ * go, and each says why (R20: a disabled control carries a reason).
  */
 import { computed } from "vue";
 
@@ -26,6 +27,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   (e: "toggle-watch"): void;
+  (e: "publish"): void;
   (e: "ask-restore"): void;
   (e: "confirm-restore"): void;
   (e: "cancel-restore"): void;
@@ -78,6 +80,16 @@ const showPlayer = computed(() => props.watching && props.product.available);
         @click="emit('toggle-watch')"
       >
         {{ watching ? "Hide" : "Watch" }}
+      </AppButton>
+      <AppButton
+        variant="secondary"
+        size="sm"
+        :data-testid="`product-publish-${id}`"
+        :disabled="!product.available"
+        :title="watchTitle"
+        @click="emit('publish')"
+      >
+        Publish to vault…
       </AppButton>
       <AppButton
         variant="ghost"

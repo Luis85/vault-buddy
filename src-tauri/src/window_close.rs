@@ -113,12 +113,17 @@ fn handle_main_close(window: &Window, api: &CloseRequestApi) {
                     &app,
                     std::time::Duration::from_secs(5),
                 );
+                // Task 48 (F19): a publish too, with its own latch
+                // (`PUBLISHES_ABANDONED`), so a wedged copy cannot loop
+                // this re-triggered close either.
+                crate::editor::publish::cancel_all_bounded(&app, std::time::Duration::from_secs(5));
                 crate::capture_commands::finalize_if_recording(&app);
                 crate::screen_commands::finalize_if_capturing(&app);
-                // All four are dealt with, so the gate above normally reads
+                // All five are dealt with, so the gate above normally reads
                 // false and the re-triggered CloseRequested takes the else
                 // branch below (pass through to destruction). A render that
-                // outlived its bound stops counting (`RENDERS_ABANDONED`);
+                // outlived its bound stops counting (`RENDERS_ABANDONED`),
+                // and so does a publish (`PUBLISHES_ABANDONED`);
                 // an EXPORT that did does not — `cancel_if_exporting` only
                 // logs on expiry, so a wedged export re-enters this worker
                 // every 5 s until it ends (docs/Gaps.md GAP-190).

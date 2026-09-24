@@ -2925,6 +2925,32 @@ only. **Fix:** sweep `review-<valid id>.mp4` files from every project's
 `cache\` on the Task 37 startup sweep thread (`recovery::run_startup_repin`),
 owned names only, no-follow — the `sweep_stale_imports` posture.
 
+### GAP-192 · Low · Publish has no resume-from-journal: an interrupted publish is reported, never continued
+`src-tauri/src/editor/publish.rs`, `src-tauri/src/editor/recovery.rs`
+(`interrupted_publishes`), Task 48 (F36; ADR R13). A publish (the tenth
+sanctioned vault write) records its progress in
+`jobs\<jobId>\publish.json` (`{step: reserved|video|note|complete, video,
+note}`) and removes that directory when the command returns, so only a
+process that dies mid-publish leaves one. What the journal buys is a
+TRUTHFUL REPORT: the next start's recovery sweep says "A publish was
+interrupted: the video was saved as … but its note was not" (or, at
+`reserved`, that the video was not saved and a hidden partial copy may be
+left in that folder). What it does NOT buy is resumption: nothing continues
+from the last completed step — the user must publish again from scratch,
+which lands a SECOND video beside the first under the next ` (N)` name
+(never-clobber), and a note-less video from the interrupted run stays as it
+is. Two further limits of the same report: it reaches the user only through
+`vault-buddy.log` (the editor shows no notice for it), and it repeats on
+every start until someone removes the journal by hand — it is never
+auto-deleted, deliberately, because deleting it would discard the only
+record of a partial vault write. A `reserved`-step crash can also leave the
+copy's hidden `.<name>.mp4.vault-buddy.tmp` in the vault folder, which no
+sweep collects (the ninth write's own posture: nothing sweeps a vault
+capture folder). **Fix:** surface the report in the editor (the open result
+or a notice on the Products tab), offer "Write the missing note" for a
+`video`-step journal (the product and the landed name are both known), and
+let the user dismiss a report, which then removes its journal.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md

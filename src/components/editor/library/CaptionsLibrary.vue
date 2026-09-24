@@ -39,6 +39,7 @@ import CaptionCueRow from "./CaptionCueRow.vue";
 import CaptionNotices from "./CaptionNotices.vue";
 import type { CaptionSettingsPatch } from "./CaptionSettingsPanel.vue";
 import CaptionSettingsPanel from "./CaptionSettingsPanel.vue";
+import CaptionsExport from "./CaptionsExport.vue";
 import CaptionsToolbar from "./CaptionsToolbar.vue";
 
 const ROW_HEIGHT = 76;
@@ -68,6 +69,8 @@ const importReason = computed(() => {
 });
 const settings = computed(() => project.project?.captions ?? null);
 const settingsReason = computed(() => (project.project ? null : "No project is open."));
+/** Task 48: why there is nothing to export as SRT/WebVTT, or `null`. */
+const exportReason = computed(() => (rows.value.length === 0 ? "There are no captions to export yet." : null));
 const replace = ref(false);
 const importing = ref(false);
 const importStatus = ref<string | null>(null);
@@ -164,6 +167,7 @@ function selectCue(row: CaptionRow): void {
       @add="send(addDraft)"
       @split="send(splitDraft)"
     />
+    <CaptionsExport :reason="exportReason" />
     <p
       v-if="importStatus"
       data-testid="caption-import-status"

@@ -45,6 +45,8 @@ use vault_buddy_screen::staging;
 
 use super::package_import::importing_project_id;
 use super::project_store::{pin_staged, pinned_project, project_dir, store_dir, SourceLocator};
+use super::publish::{PublishJournal, PublishStep, PUBLISH_JOURNAL};
+use super::render_jobs::JOBS_DIR;
 use super::save_commands::session_save_lock;
 use super::store_io::{load_sources, read_bounded, remove_dir_no_follow, RECOVERY_FILE};
 use super::EditorState;
@@ -324,17 +326,7 @@ pub struct RepinReport {
 /// read is logged and skipped, never allowed to abort the sweep.
 pub fn run_startup_repin(root: &Path, staging_dir: &Path) -> RepinReport {
     let mut report = RepinReport::default();
-    let Ok(entries) = std::fs::read_dir(store_dir(root)) else {
-        return report;
-    };
-    let mut ids: Vec<String> = entries
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|id| is_valid_id(id))
-        .collect();
-    ids.sort();
-    for id in ids {
+    for id in valid_dir_names(&store_dir(root)) {
         let sources = match load_sources(root, &id) {
             Ok(sources) => sources,
             Err(e) => {
@@ -414,6 +406,83 @@ fn repin_one(root: &Path, staging_dir: &Path, project_id: &str, base: &str) -> R
     }
 }
 
+/// The sorted names of `dir`'s subdirectories that are valid ids -- a
+/// project id in the store, a job id under `jobs\`. A VIEW: an unreadable
+/// directory is an empty list.
+fn valid_dir_names(dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|id| is_valid_id(id))
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// The largest `publish.json` read: three short fields.
+const PUBLISH_JOURNAL_MAX_BYTES: u64 = 64 * 1024;
+
+/// What one interrupted publish's journal says, in words (F36).
+fn publish_report(journal: &PublishJournal) -> String {
+    let video = &journal.video;
+    match (journal.step, &journal.note) {
+        (PublishStep::Reserved, _) => format!(
+            "A publish was interrupted before its video was saved as {video}. A hidden partial copy \
+             may be left in that folder; publish it again."
+        ),
+        (PublishStep::Video, Some(_)) => format!(
+            "A publish was interrupted: the video was saved as {video} but its note was not."
+        ),
+        (_, Some(note)) => format!(
+            "A publish was interrupted after it saved the video as {video} and its note as \
+             {note}."
+        ),
+        (_, None) => format!("A publish was interrupted after it saved the video as {video}."),
+    }
+}
+
+/// Task 48 (F36; ADR R13): every publish a crash interrupted, in words, by
+/// project then job. A journal not at `complete` is REPORTED and left
+/// exactly where it is -- never deleted, never retried (docs/Gaps.md: no
+/// resume from the journal), so it is reported again on the next start. A
+/// `complete` one (a crash after the last step, before the publish removed
+/// its own job directory) is removed quietly: nothing was lost. A journal
+/// that cannot be read is reported as such, and kept.
+pub(crate) fn interrupted_publishes(root: &Path) -> Vec<String> {
+    let mut reports = Vec::new();
+    for project in valid_dir_names(&store_dir(root)) {
+        let Some(jobs) = project_dir(root, &project).map(|d| d.join(JOBS_DIR)) else {
+            continue;
+        };
+        for job in valid_dir_names(&jobs) {
+            let dir = jobs.join(&job);
+            let path = dir.join(PUBLISH_JOURNAL);
+            if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
+                continue;
+            }
+            let journal = read_bounded(&path, PUBLISH_JOURNAL_MAX_BYTES)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<PublishJournal>(&bytes).ok());
+            match journal {
+                Some(j) if j.step == PublishStep::Complete => {
+                    if let Err(e) = remove_dir_no_follow(&dir) {
+                        log::warn!("editor-recovery-sweep: could not remove {job}: {e}");
+                    }
+                }
+                Some(j) => reports.push(publish_report(&j)),
+                None => reports.push(format!(
+                    "A publish was interrupted, and its record ({job}) could not be read."
+                )),
+            }
+        }
+    }
+    reports
+}
+
 /// Task 39: remove every import build directory (`.<projectId>.importing`,
 /// `package_import`'s own name) whose last change is at least an hour
 /// before `now`. Nothing else in the store is touched.
@@ -474,6 +543,9 @@ pub fn spawn_startup_repin(app: &AppHandle) {
             };
             let state = app.state::<EditorState>();
             let _open = lock_ignoring_poison(&state.open);
+            for report in interrupted_publishes(&root) {
+                log::warn!("editor-recovery-sweep: {report}");
+            }
             let swept = sweep_stale_imports(&root, std::time::SystemTime::now());
             if !swept.is_empty() {
                 log::info!(

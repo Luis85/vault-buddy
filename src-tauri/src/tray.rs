@@ -111,6 +111,9 @@ pub fn quit(app: &AppHandle) {
                     &app,
                     std::time::Duration::from_secs(5),
                 );
+                // Task 48 (F19): a publish copying into a vault -- cancel,
+                // bounded; a cancelled copy removes its own temp.
+                crate::editor::publish::cancel_all_bounded(&app, std::time::Duration::from_secs(5));
                 crate::capture_commands::finalize_if_recording(&app);
                 crate::screen_commands::finalize_if_capturing(&app);
                 finish_quit(&app);

@@ -693,3 +693,54 @@ fn stale_import_directories_are_swept_and_nothing_else() {
     }
     assert!(store.join(".def456.importing").is_file());
 }
+
+// Task 48 (F36; ADR R13): a publish journal a crash left behind, not at
+// `complete`, is REPORTED -- naming where the video landed and that its
+// note did not -- and left exactly where it was: never deleted, never
+// retried, so the next start reports it again. A finished publish's
+// leftover journal directory is removed quietly: nothing was lost.
+#[test]
+fn interrupted_publish_is_reported_not_deleted() {
+    let f = Fixture::new();
+    let jobs = project_dir(f.root(), "proj-a").unwrap().join("jobs");
+    let write = |job: &str, json: &str| {
+        let dir = jobs.join(job);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("publish.json"), json).unwrap();
+        dir.join("publish.json")
+    };
+    let video = write(
+        "job-video",
+        r#"{"step":"video","video":"Tutorials/Demo (2).mp4","note":"Tutorials/Demo (2).md"}"#,
+    );
+    let reserved = write(
+        "job-reserved",
+        r#"{"step":"reserved","video":"Tutorials/Other.mp4","note":null}"#,
+    );
+    let complete = write(
+        "job-done",
+        r#"{"step":"complete","video":"Tutorials/Done.mp4","note":null}"#,
+    );
+    let before = std::fs::read(&video).unwrap();
+
+    let reports = interrupted_publishes(f.root());
+
+    assert_eq!(
+        reports,
+        vec![
+            "A publish was interrupted before its video was saved as Tutorials/Other.mp4. \
+             A hidden partial copy may be left in that folder; publish it again."
+                .to_string(),
+            "A publish was interrupted: the video was saved as Tutorials/Demo (2).mp4 but \
+             its note was not."
+                .to_string(),
+        ]
+    );
+    assert_eq!(std::fs::read(&video).unwrap(), before, "never rewritten");
+    assert!(reserved.is_file(), "never deleted");
+    assert!(
+        !complete.parent().unwrap().exists(),
+        "a finished one is swept"
+    );
+    assert_eq!(interrupted_publishes(f.root()).len(), 2, "reported again");
+}

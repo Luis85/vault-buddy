@@ -59,8 +59,8 @@ use std::path::{Path, PathBuf};
 use crate::structural_scan::code_only;
 
 /// The `editor_*` session, save/list/reopen, workspace, media and job commands —
-/// twenty-three as of Task 46 (`editor_start_render`, `editor_get_products`,
-/// `editor_restore_product`). Add a new one here in the same commit that adds it to
+/// twenty-five as of Task 48 (`editor_publish_product`,
+/// `editor_export_subtitles`). Add a new one here in the same commit that adds it to
 /// `generate_handler!` (`lib.rs`), `build.rs`'s `ALL_COMMANDS`, and
 /// `capabilities/editor.json`'s `permissions` — never to
 /// `capabilities/default.json`.
@@ -69,6 +69,7 @@ const EXPECTED_EDITOR: &[&str] = &[
     "editor_close_session",
     "editor_execute",
     "editor_export_package",
+    "editor_export_subtitles",
     "editor_get_jobs",
     "editor_get_products",
     "editor_get_snapshot",
@@ -83,6 +84,7 @@ const EXPECTED_EDITOR: &[&str] = &[
     "editor_media_url",
     "editor_open_project",
     "editor_open_staged",
+    "editor_publish_product",
     "editor_relink_media",
     "editor_restore_product",
     "editor_save_project",

@@ -27,6 +27,7 @@ pub mod package_import;
 mod package_test_support;
 pub mod prefs_commands;
 pub mod project_store;
+pub mod publish;
 pub mod recovery;
 pub mod relink_commands;
 pub mod relink_media;
@@ -36,6 +37,7 @@ pub mod render_review;
 pub mod save_commands;
 pub mod session_commands;
 pub mod store_io;
+pub mod subtitle_commands;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};

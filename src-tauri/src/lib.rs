@@ -68,10 +68,12 @@ use editor::caption_commands;
 use editor::media_commands;
 use editor::package_commands;
 use editor::prefs_commands;
+use editor::publish;
 use editor::relink_commands;
 use editor::render_commands;
 use editor::save_commands;
 use editor::session_commands;
+use editor::subtitle_commands;
 
 /// Stamped by a Ctrl-open (`open_search_result` with `keep_open`): Obsidian
 /// grabs foreground focus while handling the `obsidian://` URI, which blurs
@@ -528,6 +530,8 @@ pub fn run() {
             render_commands::editor_start_render,
             render_commands::editor_get_products,
             render_commands::editor_restore_product,
+            publish::editor_publish_product,
+            subtitle_commands::editor_export_subtitles,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to

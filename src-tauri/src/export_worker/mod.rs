@@ -64,7 +64,7 @@ use vault_buddy_screen::{staging, ScreenError};
 use crate::editor::project_store::pinned_project;
 use crate::export_commands::{cancel_flag, emit_export_progress, timeline_from_sidecar};
 
-mod vault_dir;
+pub(crate) mod vault_dir;
 use vault_dir::{check_free_space, prepare_export_dir, rollback_export_dir};
 
 /// How an export ended when it did not produce a saved capture.

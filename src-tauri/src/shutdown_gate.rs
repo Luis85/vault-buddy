@@ -1,8 +1,8 @@
 //! The one composition of "something is running that a process exit would
 //! destroy".
 //!
-//! Four domains can be mid-write when the app is asked to go away, and an
-//! exit path has to consult all four:
+//! Five domains can be mid-write when the app is asked to go away, and an
+//! exit path has to consult all five:
 //!
 //! - `capture_commands::recording_blocks_shutdown` — an audio recording,
 //!   whose `.mp3.part` is stranded by an exit;
@@ -17,6 +17,12 @@
 //!   start one, or a finished one being moved into
 //!   `products\` and recorded. Like the export it has a child and needs no
 //!   indicator, so hide-to-tray does not gate on it either.
+//! - `editor::publish::blocks_shutdown` (Task 48, F19) — a PUBLISH, the
+//!   tenth sanctioned vault write, copying a product into a vault. Its own
+//!   term by KIND: folding it into the render term's set would report it as
+//!   a render and, since the render cancel never ends it, re-open GAP-190's
+//!   Alt+F4 loop. The quit workers cancel it (bounded; a cancelled copy
+//!   removes its temp) and the updater refuses while it runs.
 //!
 //! GAP-160 is why the disjunction lives in one place instead of being
 //! spelled at each door. `tray::quit` and `window_close::handle_main_close`
@@ -38,8 +44,9 @@
 //! only one of them.
 //!
 //! What a caller does with the answer is its own business, and the three
-//! doors differ: the two quit paths park a worker that cancels the export
-//! and the renders (bounded), finalizes the captures, then exits. The updater REFUSES — it is
+//! doors differ: the two quit paths park a worker that cancels the export,
+//! the renders and the publishes (bounded), finalizes the captures, then
+//! exits. The updater REFUSES — it is
 //! a synchronous command that must stay on the main thread (see
 //! `commands::prepare_update_install`), so it cannot sleep-wait for
 //! anything; and unlike a tray quit the user is right there, having just
@@ -59,6 +66,10 @@ pub enum ShutdownBlocker {
     /// An editor render (Task 46, R12): an ffmpeg child writing a product,
     /// or a finished one being moved into place and recorded.
     Render,
+    /// A publication into a vault (Task 48, F19): the tenth sanctioned
+    /// vault write, copying a product in. Counted by its own kind, never
+    /// inside the render term.
+    Publish,
 }
 
 impl ShutdownBlocker {
@@ -86,6 +97,10 @@ impl ShutdownBlocker {
                 "A video is being rendered in the editor. Wait for the render to finish, or \
                  cancel it in the editor, then install the update."
             }
+            ShutdownBlocker::Publish => {
+                "A video is being published into a vault. Wait for the publish to finish, \
+                 then install the update."
+            }
         }
         .to_string()
     }
@@ -104,13 +119,15 @@ pub fn shutdown_blocker(app: &AppHandle) -> Option<ShutdownBlocker> {
         Some(ShutdownBlocker::Export)
     } else if crate::editor::render_jobs::blocks_shutdown(app) {
         Some(ShutdownBlocker::Render)
+    } else if crate::editor::publish::blocks_shutdown(app) {
+        Some(ShutdownBlocker::Publish)
     } else {
         None
     }
 }
 
 /// True while anything above is running. The form the two quit paths want:
-/// they deal with all four regardless of which answered, so they never
+/// they deal with all five regardless of which answered, so they never
 /// need to know which one did.
 pub fn shutdown_is_blocked(app: &AppHandle) -> bool {
     shutdown_blocker(app).is_some()
@@ -121,11 +138,12 @@ mod tests {
     use super::*;
     use crate::structural_scan::{fn_body, offset_of, shell_file};
 
-    const ALL: [ShutdownBlocker; 4] = [
+    const ALL: [ShutdownBlocker; 5] = [
         ShutdownBlocker::Recording,
         ShutdownBlocker::ScreenCapture,
         ShutdownBlocker::Export,
         ShutdownBlocker::Render,
+        ShutdownBlocker::Publish,
     ];
 
     // ---- GAP-160: the refusal has to be actionable ----
@@ -143,8 +161,10 @@ mod tests {
                 msg.contains("install the update"),
                 "{blocker:?}: the refusal must say what was refused: {msg:?}"
             );
+            // A publish (Task 48) has no Cancel of its own -- a short
+            // copy -- so waiting for it IS the action that clears it.
             assert!(
-                msg.contains("Stop the") || msg.contains("cancel it"),
+                msg.contains("Stop the") || msg.contains("cancel it") || msg.contains("Wait for"),
                 "{blocker:?}: the refusal must name the action that clears it: {msg:?}"
             );
             // Fix round 1: a lost line continuation once left a run of
@@ -156,7 +176,9 @@ mod tests {
         }
         let refusals: std::collections::BTreeSet<String> =
             ALL.iter().map(|b| b.install_refusal()).collect();
-        assert_eq!(refusals.len(), ALL.len(), "four distinguishable refusals");
+        assert_eq!(refusals.len(), ALL.len(), "five distinguishable refusals");
+        // Task 48: the tenth vault write names the vault too.
+        assert!(ShutdownBlocker::Publish.install_refusal().contains("vault"));
         let export = ShutdownBlocker::Export.install_refusal();
         assert!(
             ShutdownBlocker::Render.install_refusal().contains("render"),
@@ -195,7 +217,7 @@ mod tests {
     // for it, and no caller can tell — which is precisely how the updater
     // came to consult none of the three.
     #[test]
-    fn the_gate_composes_all_four_domain_predicates() {
+    fn the_gate_composes_all_five_domain_predicates() {
         let src = shell_file("shutdown_gate.rs");
         let body = fn_body(&src, "pub fn shutdown_blocker(");
         for needle in [
@@ -204,6 +226,9 @@ mod tests {
             "export_blocks_shutdown",
             // Task 46 (R12): an editor render.
             "render_jobs::blocks_shutdown(",
+            // Task 48 (F19): a publication into a vault -- its OWN term,
+            // by kind, never folded into the render term's set.
+            "publish::blocks_shutdown(",
         ] {
             assert!(
                 body.contains(needle),

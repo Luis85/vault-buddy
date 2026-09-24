@@ -219,7 +219,7 @@ fn copy_noreplace_with(
 /// because an orphan from an earlier crashed run must not wedge every later
 /// export. Both rules, and the marker itself, are the note writer's
 /// (`capture_note::write_note_atomic`) — one spelling, one meaning.
-fn create_owned_temp(to: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
+pub(crate) fn create_owned_temp(to: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
     let dir = to.parent().unwrap_or_else(|| Path::new("."));
     let file_name = to
         .file_name()
