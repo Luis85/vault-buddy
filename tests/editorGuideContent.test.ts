@@ -140,10 +140,6 @@ describe("native lesson copy", () => {
         body: "Rendered videos are listed in the library's Products tab, separate from the editable project. Watch one, or restore the edit snapshot behind an earlier output.",
         task: "Look through Products, then continue.",
       },
-      help: {
-        label: "Help",
-        body: "Help is always here: it resumes a paused walkthrough at the same lesson, and so do F1 and ? when you are not typing in a field. Back revisits any earlier lesson.",
-      },
     });
   });
 

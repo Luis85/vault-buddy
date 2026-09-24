@@ -180,3 +180,39 @@ fn nothing_saved_yet_is_the_fresh_default() {
     assert_eq!(fresh.preferences.motion, GuideMotion::System);
     assert_eq!(resolve_step_id("media"), "media");
 }
+
+// Task 57 (F-47): a progress FILE the user picked in the Restore dialog is
+// judged by the SAME strict gate as a save — the raw byte bound first (so
+// trailing padding cannot slip past a re-serialized size), JSON next, then
+// `validate_for_save`. Foreign JSON (a project file) is refused, and no
+// refusal echoes what the file held.
+#[test]
+fn a_progress_file_is_read_strictly_and_foreign_json_is_refused() {
+    let good = saved(json!({})).to_string();
+    assert_eq!(
+        parse_progress_file(good.as_bytes()).unwrap(),
+        validate_for_save(&saved(json!({}))).unwrap()
+    );
+
+    let project = json!({
+        "schema": "vault-buddy-video-project/3",
+        "id": "project-a",
+        "title": r"C:\Users\me\secret"
+    })
+    .to_string();
+    let mut padded = good.clone();
+    padded.push_str(&" ".repeat(MAX_GUIDE_PROGRESS_BYTES));
+    let unknown = saved(json!({ "currentStepId": "trim" })).to_string();
+    let cases: [Vec<u8>; 5] = [
+        b"not json".to_vec(),
+        vec![0xff, 0xfe, 0x00],
+        project.into_bytes(),
+        padded.into_bytes(),
+        unknown.into_bytes(),
+    ];
+    for bytes in cases {
+        let err = parse_progress_file(&bytes).expect_err("must be refused");
+        assert_eq!(err.code, EditorErrorCode::InvalidRequest);
+        assert!(!err.message.contains("Users"), "{}", err.message);
+    }
+}

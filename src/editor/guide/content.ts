@@ -142,8 +142,9 @@ type CopyOverride = Partial<Record<"label" | "body" | "tip" | "task", string>>;
  *   project's Products, and Publish DOES write a copy into a vault;
  * - `products`: there is no Project menu — products are the library's
  *   Products tab;
- * - `help`: the learning center (quick answers, chapters, shortcuts) is
- *   not in this build yet; Help resumes the walkthrough (label and body).
+ * `help` carried an override until Task 57 shipped the learning center its
+ * verbatim text describes (Help's menu, chapter jumps, quick answers,
+ * shortcuts); it is the concept text again.
  * `tests/editorGuideContent.test.ts` pins every entry whole.
  */
 export const LESSON_COPY_OVERRIDES: Readonly<Partial<Record<GuideStepId, CopyOverride>>> = {
@@ -185,10 +186,6 @@ export const LESSON_COPY_OVERRIDES: Readonly<Partial<Record<GuideStepId, CopyOve
     label: "Rendered products",
     body: "Rendered videos are listed in the library's Products tab, separate from the editable project. Watch one, or restore the edit snapshot behind an earlier output.",
     task: "Look through Products, then continue.",
-  },
-  help: {
-    label: "Help",
-    body: "Help is always here: it resumes a paused walkthrough at the same lesson, and so do F1 and ? when you are not typing in a field. Back revisits any earlier lesson.",
   },
 };
 

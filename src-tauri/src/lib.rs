@@ -67,6 +67,7 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 // every other command (the handler count's one-liner counts exactly those).
 use editor::caption_commands;
 use editor::checks_commands;
+use editor::guide_commands;
 use editor::media_commands;
 use editor::package_commands;
 use editor::prefs_commands;
@@ -521,8 +522,10 @@ pub fn run() {
             save_commands::editor_open_project,
             prefs_commands::editor_get_workspace,
             prefs_commands::editor_save_workspace,
-            prefs_commands::editor_get_guide_progress,
-            prefs_commands::editor_save_guide_progress,
+            guide_commands::editor_get_guide_progress,
+            guide_commands::editor_save_guide_progress,
+            guide_commands::editor_export_guide_progress,
+            guide_commands::editor_import_guide_progress,
             media_commands::editor_media_url,
             media_commands::editor_media_peaks,
             media_commands::editor_media_thumbnail,

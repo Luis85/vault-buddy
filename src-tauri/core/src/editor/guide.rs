@@ -210,6 +210,23 @@ pub fn validate_for_save(raw: &Value) -> Result<GuideProgress, EditorError> {
     })
 }
 
+/// The strict read of a progress FILE the user picked (Task 57, F-47:
+/// Restore progress file): the RAW byte bound first — `validate_for_save`
+/// measures a re-serialized value, which padding would slip past — then
+/// JSON, then [`validate_for_save`] itself, so a restored file can hold
+/// exactly what a save may write and nothing else (a project file, an
+/// unknown lesson and a path are all refused, never echoed).
+pub fn parse_progress_file(bytes: &[u8]) -> Result<GuideProgress, EditorError> {
+    if bytes.len() > MAX_GUIDE_PROGRESS_BYTES {
+        return Err(invalid(format!(
+            "That file is too large to be guide progress (the limit is {MAX_GUIDE_PROGRESS_BYTES} bytes)."
+        )));
+    }
+    let raw: Value = serde_json::from_slice(bytes)
+        .map_err(|_| invalid("That file is not Vault Buddy guide progress."))?;
+    validate_for_save(&raw)
+}
+
 /// The lenient read of the stored file: `None` when it is oversized or not
 /// a progress document at all (the caller logs and uses the default);
 /// otherwise the document with every step id resolved or dropped.

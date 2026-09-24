@@ -39,6 +39,8 @@ export function fakeEditorPort(overrides: Partial<EditorPort> = {}): EditorPort 
     getChecks: unimplemented("getChecks"),
     getGuideProgress: unimplemented("getGuideProgress"),
     saveGuideProgress: unimplemented("saveGuideProgress"),
+    exportGuideProgress: unimplemented("exportGuideProgress"),
+    importGuideProgress: unimplemented("importGuideProgress"),
     listVaults: unimplemented("listVaults"),
     openScreenCapture: unimplemented("openScreenCapture"),
     webcamBegin: unimplemented("webcamBegin"),

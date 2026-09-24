@@ -485,7 +485,7 @@ describe("EditorShell — guide progress storage", () => {
     const note = w.get('[data-testid="editor-header-guide-session-only"]');
     expect(note.text()).toBe("Session only");
     expect(note.attributes("title")).toBe(
-      "Guide progress cannot be stored on this device right now. It lasts until the editor closes.",
+      "Guide progress cannot be stored on this device right now. It lasts until the editor closes; Help → Learning center can save it to a file.",
     );
   });
 

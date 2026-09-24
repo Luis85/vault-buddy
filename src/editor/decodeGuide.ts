@@ -33,3 +33,8 @@ export function decodeGuideProgress(value: unknown): GuideProgress {
     },
   };
 }
+
+/** `editor_import_guide_progress`' reply: `null` is a dismissed dialog. */
+export function decodeNullableGuideProgress(value: unknown): GuideProgress | null {
+  return value === null ? null : decodeGuideProgress(value);
+}

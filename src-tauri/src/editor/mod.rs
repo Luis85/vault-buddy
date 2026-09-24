@@ -17,6 +17,7 @@ mod authz_guard;
 mod capability_guard;
 pub mod caption_commands;
 pub mod checks_commands;
+pub mod guide_commands;
 pub mod media_commands;
 pub mod media_derive;
 pub mod media_import;

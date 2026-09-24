@@ -243,7 +243,9 @@ describe("the invitation", () => {
     await useEditorOnboardingStore().flush();
     expect(saved).toMatchObject({ invitationDismissed: true, active: false, currentStepId: null });
 
+    // Help → Resume walkthrough (Task 57 made Help a menu).
     await click(w, "editor-header-help");
+    await click(w, "editor-help-resume");
     expect(coach(w).attributes("data-step-id")).toBe("welcome");
     expect(w.get('[data-testid="guide-coach-count"]').text()).toBe("1 / 22");
   });
@@ -296,6 +298,7 @@ describe("the coach", () => {
     expect(second.find('[data-testid="guide-invitation"]').exists()).toBe(false);
 
     await click(second, "editor-header-help");
+    await click(second, "editor-help-resume");
     expect(coach(second).attributes("data-step-id")).toBe("fades");
     expect(second.get('[data-testid="guide-coach-count"]').text()).toBe("13 / 22");
     expect(useEditorOnboardingStore().progress.reviewed).toEqual(STEP_IDS.slice(0, 13));

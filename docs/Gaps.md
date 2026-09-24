@@ -6370,6 +6370,14 @@ walkthrough — Task 57 should drop that override when it ships them). No
 lesson was removed, so `CONTENT_REVISION` stays 1. The lesson-10 target is
 still the top track's own menu; the override says so instead of promising
 an Add track menu.
+**Task 57 dropped the `help` override**: Help is now a menu (Learning
+center, Resume walkthrough, Keyboard shortcuts), so the verbatim "Resume a
+paused walkthrough at the same step, jump to a chapter, search a quick
+answer, or revisit shortcuts" is true. The learning center's quick answers
+are built from `lessonCopy` too (`src/editor/guide/answers.ts`), and
+`tests/editorLearningCenter.test.ts` searches for "download",
+"three-minute" and "sample" — words the raw file holds only inside
+overridden sentences — and requires no answer.
 
 ### GAP-204 · Low · Guide progress: a newer build's file reads as fresh
 `src/stores/editorOnboarding.ts`, `src-tauri/core/src/editor/guide.rs` (Task
@@ -6418,11 +6426,11 @@ with a selected clip select the earliest clip when nothing is selected, and
 library/inspector lessons switch the open tab — both persisted like any view
 change (`workspace.json`), never an edit. A user who had a different tab open
 finds the guide's choice there after the walkthrough.
-(5) **Learning-center surfaces are Task 57's.** Chapter jump, quick answers,
-the shortcut list, the dimming/motion preference controls and the progress
-file export/import do not exist yet; Help and F1/? start or resume the
-walkthrough, and the `help` lesson's copy is overridden to say only that
-(GAP-203).
+(5) ~~**Learning-center surfaces are Task 57's.**~~ **Closed by Task 57**:
+Help → Learning center has chapter and lesson jumps, quick answers, the
+shortcut table, the dimming/motion preferences and the progress file; the
+`help` override is gone (GAP-203). F1/? still start or resume the
+walkthrough (see GAP-207 (1)).
 (6) **Revisiting a finished guide clears `completed`.** `start()` on a
 completed guide opens lesson 1 and sets `completed` back to `false` (what
 was read stays in `reviewed`), so a paused revisit resumes where it paused
@@ -6431,9 +6439,12 @@ and not reopened since", not "has ever finished" — the moment a person
 revisits, nothing records that they once completed it. Task 57's learning
 center must not read `completed` as "has finished the guide" (for a badge
 or a "you've done this" state); derive that from `reviewed` covering all
-22 lessons, or add a field in a `CONTENT_REVISION`-bumped change. Its
-per-lesson jump should go through `show()`-style navigation after
-`start()`, which already clears the flag.
+22 lessons, or add a field in a `CONTENT_REVISION`-bumped change.
+**Task 57 follows this**: the learning center's "You have read every lesson"
+is `hasFinished` (`reviewed` covers all 22), pinned by a test that sets
+`completed: true` with 5 lessons read and requires no finished state; its
+lesson and chapter jumps go through `jumpTo`, which clears the flag like
+`start()`.
 
 ### GAP-206 · Medium · The tutorial editor's light theme leaves the shared text tokens dark-only
 `src/style.css` (`[data-theme="light"]`), every editor surface. The light
@@ -6448,3 +6459,30 @@ colour scheme is light, so the editor seeds `data-theme="light"`); it predates
 Task 56, which only inherits it. Fix: give the light theme its own text
 ladder (the concept bundle's `reference/editor.css` light block has one) —
 an accessibility change for Task 58, checked against WCAG AA contrast.
+
+### GAP-207 · Low · The learning center's recorded limits
+`src/components/editor/guide/LearningCenter.vue` (+ `LearningPreferences.vue`),
+`src/editor/guide/answers.ts`, `src-tauri/src/editor/guide_commands.rs`
+(Task 57, F-47).
+(1) **F1 and ? resume the walkthrough; they do not open the learning
+center.** ONBOARDING.md says "F1 and ? open learning"; Task 56 bound them to
+start/resume the coach and Task 57 was told to keep that behaviour, so the
+learning center is reached through Help → Learning center (or Keyboard
+shortcuts). The shortcut table says what F1 does.
+(2) **A restore after a failed READ stays session-only.** When the stored
+progress exists but could not be read (`readFailed`), the store writes
+nothing for the session (so it never overwrites what it could not read) —
+and that includes a restored progress file: it is installed and used, and
+"Session only" stays. Saving a progress file is the way to keep it.
+(3) **The export's replace check is a check, then a rename.** An existing
+file is replaced only when it reads as valid guide progress AND is the path
+the dialog confirmed; a file swapped in between that check and the
+replacing rename would be replaced. The window is a user-chosen file in
+their own folder, a few milliseconds wide.
+(4) **Quick answers are the lessons.** One answer per lesson, in the coach's
+corrected words, so a question no lesson teaches (the reference's "Why can't
+I hear my audio?") has no answer of its own; the search still finds the
+audio lesson. Hand-written answers would be a second copy of the app's
+truth to keep correct.
+(5) **The Help menu is Tab-navigated.** Like the Save project menu it has no
+arrow-key roving focus; Escape closes it and returns focus to Help.

@@ -26,7 +26,8 @@
  * **Callers (Task 56).** `GuideInvitation` (start, dismissInvitation),
  * `GuideCoach` (next, back, pause, collapse, restart, markExplored — a
  * click on the highlighted control), `GuideHelpButton` and F1/? (start),
- * and every `DialogHost` (suspend on open, resume on close: a depth, so
+ * the learning center (jumpTo, setPreferences, restoreFrom, restart —
+ * Task 57), and every `DialogHost` (suspend on open, resume on close: a depth, so
  * a confirm stacked on a dialog keeps the coach suspended until the last
  * one closes).
  */
@@ -94,6 +95,15 @@ export const useEditorOnboardingStore = defineStore("editorOnboarding", {
     stepIndex(state): number {
       return GUIDE_STEPS.findIndex((s) => s.id === state.progress.currentStepId);
     },
+    /** Lessons read (Task 57's progress line). */
+    reviewedCount(state): number {
+      return state.progress.reviewed.filter(isGuideStepId).length;
+    },
+    /** Every lesson has been read. Judged from `reviewed`, never from
+     * `completed`, which a revisit clears (docs/Gaps.md GAP-205 (6)). */
+    hasFinished(state): boolean {
+      return GUIDE_STEPS.every((s) => state.progress.reviewed.includes(s.id));
+    },
   },
   actions: {
     /** Reads the saved progress once per window. Never throws. */
@@ -114,11 +124,7 @@ export const useEditorOnboardingStore = defineStore("editorOnboarding", {
     start(): void {
       const p = this.progress;
       const resume = !p.completed && p.currentStepId !== null;
-      p.completed = false;
-      p.active = true;
-      p.collapsed = false;
-      p.invitationDismissed = true;
-      this.show(resume ? (p.currentStepId as GuideStepId) : GUIDE_STEPS[0].id);
+      this.jumpTo(resume ? (p.currentStepId as GuideStepId) : GUIDE_STEPS[0].id);
     },
     next(): void {
       const i = this.stepIndex;
@@ -156,6 +162,29 @@ export const useEditorOnboardingStore = defineStore("editorOnboarding", {
       this.progress.explored.push(id);
       this.persist();
     },
+    /** The learning center's lesson and chapter jumps (Task 57): open the
+     * coach at `id`, exactly as a Resume would open it at a saved one. */
+    jumpTo(id: GuideStepId): void {
+      const p = this.progress;
+      p.completed = false;
+      p.active = true;
+      p.collapsed = false;
+      p.invitationDismissed = true;
+      this.show(id);
+    },
+    /** Presentation only — never guide state. */
+    setPreferences(preferences: Partial<GuidePreferences>): void {
+      this.progress.preferences = { ...this.progress.preferences, ...preferences };
+      this.persist();
+    },
+    /** Restore progress file (Task 57): install what Rust validated,
+     * PAUSED — restoring never starts the guide, and the invitation it
+     * answers stays answered. Saved like any other change (so not at all
+     * after a failed read: see the module doc). */
+    restoreFrom(restored: GuideProgress): void {
+      this.progress = { ...hydrate(restored), active: false, collapsed: false, invitationDismissed: true };
+      this.persist();
+    },
     /** Start over: guide state only. Preferences — and the fact the
      * invitation was already answered — are the person's, and stay. */
     restart(): void {
@@ -189,18 +218,22 @@ export const useEditorOnboardingStore = defineStore("editorOnboarding", {
       persistTimer = null;
       await this.save();
     },
-    async save(): Promise<void> {
-      if (this.readFailed) return;
+    /** A plain copy of the progress, stamped with this build's content
+     * revision — what a save and a progress file carry. */
+    snapshot(): GuideProgress {
       const p = this.progress;
-      const snapshot: GuideProgress = {
+      return {
         ...p,
         contentRevision: CONTENT_REVISION,
         reviewed: [...p.reviewed],
         explored: [...p.explored],
         preferences: { ...p.preferences },
       };
+    },
+    async save(): Promise<void> {
+      if (this.readFailed) return;
       try {
-        await useEditorProjectStore().port.saveGuideProgress(snapshot);
+        await useEditorProjectStore().port.saveGuideProgress(this.snapshot());
         this.sessionOnly = false;
       } catch (e) {
         this.sessionOnly = true;

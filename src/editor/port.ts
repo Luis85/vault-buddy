@@ -68,7 +68,7 @@ import {
   isEditorError,
 } from "./decode";
 import { decodeCheckFindings } from "./decodeChecks";
-import { decodeGuideProgress } from "./decodeGuide";
+import { decodeGuideProgress, decodeNullableGuideProgress } from "./decodeGuide";
 import { decodeRelinkReport } from "./decodeRelink";
 import {
   decodeNullableFileName,
@@ -226,6 +226,14 @@ export interface EditorPort {
   /** `editor_save_guide_progress` — refused (`invalidRequest`) unless every
    * id is a lesson this build knows. */
   saveGuideProgress(progress: GuideProgress): Promise<void>;
+  /** `editor_export_guide_progress` (Task 57) — Rust validates the progress
+   * like a save, opens its OWN save dialog and writes it; the file name, or
+   * `null` when the dialog was dismissed. */
+  exportGuideProgress(progress: GuideProgress): Promise<string | null>;
+  /** `editor_import_guide_progress` — Rust opens its OWN open dialog and
+   * returns the file's progress, validated like a save (or `null`). It
+   * writes nothing. */
+  importGuideProgress(): Promise<GuideProgress | null>;
   /** `list_vaults` — the vaults a publish can go into. */
   listVaults(): Promise<VaultChoice[]>;
   /** `open_screen_capture` — open a PUBLISHED file in Obsidian (Rust
@@ -378,6 +386,12 @@ export function createTauriEditorPort(): EditorPort {
     },
     async saveGuideProgress(progress) {
       await call("editor_save_guide_progress", { progress }, () => undefined);
+    },
+    exportGuideProgress(progress) {
+      return call("editor_export_guide_progress", { progress }, decodeNullableFileName);
+    },
+    importGuideProgress() {
+      return call("editor_import_guide_progress", undefined, decodeNullableGuideProgress);
     },
     listVaults() {
       return call("list_vaults", undefined, decodeVaultChoices);
