@@ -126,6 +126,7 @@ pub(crate) fn open_staged_in(
     }
 
     let project_id = new_project_id();
+    let webcam = staged_webcam(staging_dir, &sidecar);
     let migration = migrate::from_staged(
         &migrate::StagedInput {
             base,
@@ -137,7 +138,7 @@ pub(crate) fn open_staged_in(
             has_audio: !sidecar.inputs.is_empty(),
             legacy_timeline: sidecar.timeline.as_ref(),
             stems: &[],
-            webcam: None,
+            webcam: webcam.as_ref().map(|(input, _)| input.clone()),
         },
         &project_id,
     );
@@ -169,10 +170,67 @@ pub(crate) fn open_staged_in(
             replaced_from: None,
         },
     );
+    if let Some((_, record)) = webcam {
+        sources.insert(migrate::WEBCAM_ASSET_ID.to_string(), record);
+    }
     create_project(root, &migration.project, &sources)
         .map_err(|e| internal(format!("Could not create the project: {e}")))?;
     pin(staging_dir, base, &project_id)?;
     load_opened(root, &project_id)
+}
+
+/// The capture's synchronized webcam track (F-22, F26) as migration input,
+/// with the `StagingFile` source record that makes its file resolvable —
+/// or `None`: no `webcam` block, a block naming any file but this
+/// capture's own `<base>.webcam.mp4` (the sidecar is hand-editable, and a
+/// record that could never resolve is worse than no webcam), or no length.
+///
+/// Its length is the capture's from `offset_ms` on: both streams stamp from
+/// the one `CaptureClock` and stop on the one Stop (ADR §4), and nothing on
+/// disk records the webcam's own length without a probe.
+fn staged_webcam(
+    staging_dir: &Path,
+    sidecar: &staging::StagedSidecar,
+) -> Option<(migrate::WebcamInput, SourceRecord)> {
+    let webcam = sidecar.webcam.as_ref()?;
+    if webcam.file != staging::webcam_file_name(&sidecar.base) {
+        log::warn!(
+            "editor_open_staged: {:?}'s webcam block names {:?}, not its own webcam file; ignored",
+            sidecar.base,
+            webcam.file
+        );
+        return None;
+    }
+    let length = i128::from(sidecar.duration_ms) - i128::from(webcam.offset_ms);
+    let duration_ms = u64::try_from(length).ok().filter(|ms| *ms > 0)?;
+    let size = std::fs::metadata(staging_dir.join(&webcam.file))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let input = migrate::WebcamInput {
+        duration_ms,
+        width: webcam.width,
+        height: webcam.height,
+        file: webcam.file.clone(),
+        offset_ms: webcam.offset_ms,
+    };
+    let record = SourceRecord {
+        locator: SourceLocator::StagingFile {
+            base: sidecar.base.clone(),
+            file: webcam.file.clone(),
+        },
+        sha256: None,
+        size,
+        duration_ms,
+        width: Some(webcam.width),
+        height: Some(webcam.height),
+        // The webcam sink is video-only (ADR §4); the capture's sound lives
+        // on the screen track.
+        has_audio: false,
+        has_video: true,
+        media_kind: SourceMediaKind::Video,
+        replaced_from: None,
+    };
+    Some((input, record))
 }
 
 /// The pin is a claim made by a hand-editable sidecar: refuse a project

@@ -20,6 +20,7 @@ fn sidecar(base: &str) -> StagedSidecar {
         height: 1080,
         recorded_at: "2026-09-20T10:00:00Z".into(),
         timeline: None,
+        webcam: None,
         extra: Default::default(),
     }
 }
@@ -396,6 +397,7 @@ fn saving_a_timeline_preserves_every_other_sidecar_field() {
         updated,
         StagedSidecar {
             timeline: Some(timeline),
+            webcam: None,
             ..s
         }
     );

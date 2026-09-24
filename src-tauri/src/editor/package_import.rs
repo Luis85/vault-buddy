@@ -31,9 +31,9 @@
 //! `Media { file }` record in the new project's own `media\`: a packaged
 //! original is the extracted file (with its SHA-256), anything else is a
 //! placeholder at `<assetId>.<ext>` that `missing_media` reports for
-//! reconnection. A source that was a STAGING locator on the exporting
-//! machine is no exception — that staged base does not exist here, so it
-//! is a packaged media file (portable) or a missing placeholder
+//! reconnection. A source that was a STAGING (or `StagingFile`) locator on
+//! the exporting machine is no exception — that staged base does not exist
+//! here, so it is a packaged media file (portable) or a missing placeholder
 //! (lightweight). The import never reads or writes any staged capture's
 //! sidecar, so it can never pin one.
 //!

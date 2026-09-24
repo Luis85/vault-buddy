@@ -106,6 +106,7 @@ fn minimal_sidecar(base: &str, modified: SystemTime) -> staging::StagedSidecar {
         height: 0,
         recorded_at: recorded_at_from(modified),
         timeline: None,
+        webcam: None,
         extra,
     }
 }
@@ -219,8 +220,11 @@ fn sweep_staging_dir(dir: &Path, now: SystemTime, stale_after: Duration) -> Swee
     let bases = |want: fn(&Entry) -> Option<&str>| -> std::collections::HashSet<&str> {
         found.iter().filter_map(|f| want(&f.entry)).collect()
     };
+    // A published webcam file counts as a staged NAME here: a capture staged
+    // before F25 under a base ending ".webcam" has its video classified as a
+    // companion, and its sidecar must not then read as orphaned.
     let staged = bases(|e| match e {
-        Entry::Staged(b) => Some(b.as_str()),
+        Entry::Staged(b) | Entry::Companion(b) => Some(b.as_str()),
         _ => None,
     });
     let sidecars = bases(|e| match e {
@@ -268,6 +272,11 @@ fn sweep_staging_dir(dir: &Path, now: SystemTime, stale_after: Duration) -> Swee
                     &mut sweep,
                 )
             }
+            Entry::WebcamPart(_) | Entry::StemPart(..) => {
+                promote_or_delete_companion_part(f, &mut sweep)
+            }
+            // Its capture's own file, never a capture: nothing to decide.
+            Entry::Companion(_) => {}
             Entry::Foreign => unreachable!("scan_dir drops Foreign entries"),
         }
     }
@@ -287,7 +296,9 @@ fn delete(f: &Found, what: &str, action: fn(PathBuf) -> RecoveryAction, sweep: &
     }
 }
 
-fn promote_or_delete_part(f: &Found, dir: &Path, base: &str, sweep: &mut Sweep) {
+/// `true` when `f` is a part worth promoting; otherwise it has already been
+/// dealt with — deleted when proven empty, left pending when unreadable.
+fn part_is_footage(f: &Found, sweep: &mut Sweep) -> bool {
     // A read failure (permissions, AV lock, transient I/O) must NOT look like
     // "no footage" — the audio side's rule, and what keeps deletion reserved
     // for a file proven empty. Leave it for a later pass. (Unexercised: the
@@ -298,7 +309,7 @@ fn promote_or_delete_part(f: &Found, dir: &Path, base: &str, sweep: &mut Sweep) 
             f.path.display()
         );
         sweep.pending += 1;
-        return;
+        return false;
     };
     if !part_holds_footage(&prefix) {
         delete(
@@ -307,6 +318,44 @@ fn promote_or_delete_part(f: &Found, dir: &Path, base: &str, sweep: &mut Sweep) 
             RecoveryAction::DeletedEmptyPart,
             sweep,
         );
+        return false;
+    }
+    true
+}
+
+/// A webcam or stem part (F-22, F24) is promoted to its OWN published name —
+/// the part's name without the leading dot and `.part`, which its capture
+/// already owns (`staging_files::capture_file_names`) — never to a free
+/// capture name: the name IS its link to the capture, so there is no
+/// ` (N)` to fall back to. A taken name is left alone (`rename_noreplace`)
+/// and not counted pending: no later pass would answer differently.
+fn promote_or_delete_companion_part(f: &Found, sweep: &mut Sweep) {
+    let published = f
+        .path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_prefix('.'))
+        .and_then(|n| n.strip_suffix(".part"))
+        .map(|n| f.path.with_file_name(n));
+    let Some(to) = published else { return };
+    if !part_is_footage(f, sweep) {
+        return;
+    }
+    match vault_buddy_core::capture_paths::rename_noreplace(&f.path, &to) {
+        Ok(()) => {
+            log::info!("screen-recovery: recovered {}", to.display());
+            sweep.actions.push(RecoveryAction::Promoted(to));
+        }
+        Err(e) => log::warn!(
+            "screen-recovery: could not promote {} to {}: {e}",
+            f.path.display(),
+            to.display()
+        ),
+    }
+}
+
+fn promote_or_delete_part(f: &Found, dir: &Path, base: &str, sweep: &mut Sweep) {
+    if !part_is_footage(f, sweep) {
         return;
     }
     match promote_into_free_name(&f.path, dir, base) {
@@ -437,6 +486,38 @@ mod tests {
             Some(&serde_json::Value::Bool(true))
         );
         assert!(sweep.actions.contains(&RecoveryAction::Promoted(mp4)));
+    }
+
+    // F-22: a webcam part left by a crash is PROMOTED with its capture (to
+    // `<base>.webcam.mp4`, so discard/clear/the project store find it), an
+    // empty one is swept like any empty part, and neither -- nor the
+    // published webcam file -- is ever mistaken for a capture of its own.
+    #[test]
+    fn a_stale_webcam_part_is_promoted_beside_its_capture_never_as_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let (part, mp4, json) = names(dir.path(), BASE);
+        std::fs::write(&part, footage()).unwrap();
+        let webcam_part = dir.path().join(staging::webcam_part_file_name(BASE));
+        std::fs::write(&webcam_part, footage()).unwrap();
+        let empty_part = dir.path().join(staging::webcam_part_file_name(KEPT));
+        std::fs::write(&empty_part, header_only()).unwrap();
+
+        let sweep = stale(dir.path(), much_later());
+
+        let webcam = dir.path().join(staging::webcam_file_name(BASE));
+        assert!(webcam.is_file(), "the webcam footage was lost: {sweep:?}");
+        assert!(!webcam_part.exists());
+        assert!(sweep.actions.contains(&RecoveryAction::Promoted(webcam)));
+        assert!(mp4.is_file() && json.is_file(), "the capture itself too");
+        assert!(!empty_part.exists(), "an empty webcam part is swept");
+        let bogus = format!("{BASE}.webcam");
+        assert!(
+            !dir.path().join(staging::sidecar_file_name(&bogus)).exists(),
+            "the webcam track was handed a sidecar of its own"
+        );
+        // A second pass finds the published webcam file and leaves it be.
+        let again = stale(dir.path(), much_later());
+        assert!(again.actions.is_empty(), "{again:?}");
     }
 
     #[test]

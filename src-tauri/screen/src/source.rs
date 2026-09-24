@@ -93,6 +93,42 @@ pub struct CaptureSourceInfo {
     pub is_primary: bool,
 }
 
+/// A webcam, in the form that crosses the IPC boundary (F-22):
+/// `webcam:<symbolic-link-hash>` -- a hash of the device's Media Foundation
+/// symbolic link rather than the link itself, whose `usb#vid_...#{...}`
+/// spelling is neither stable to print nor safe to hand a webview. NOT a
+/// `SourceId` variant: a webcam is recorded BESIDE a screen source, never
+/// instead of one.
+///
+/// Strict for `SourceId`'s reason -- the id comes back untrusted -- and by
+/// the rule `region` uses: exactly one spelling is legal, lowercase hex of
+/// 1..=64 digits, so `parse(s).to_string() == s` for every accepted `s`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebcamDeviceId(String);
+
+impl WebcamDeviceId {
+    /// Longest hash accepted: a SHA-256 in hex.
+    pub const MAX_HASH_LEN: usize = 64;
+
+    pub fn parse(s: &str) -> Option<WebcamDeviceId> {
+        let hash = s.strip_prefix("webcam:")?;
+        let canonical = (1..=Self::MAX_HASH_LEN).contains(&hash.len())
+            && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        canonical.then(|| WebcamDeviceId(hash.to_string()))
+    }
+
+    /// The symbolic-link hash, as `list_webcams` compares it.
+    pub fn hash(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for WebcamDeviceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "webcam:{}", self.0)
+    }
+}
+
 pub use crate::source_derive::{
     capture_size_from_bounds, display_label, region_dims, uncropped_dims,
 };
@@ -611,5 +647,40 @@ mod tests {
                 "an excluded title must not come back"
             );
         }
+    }
+
+    // F-22: the webcam id crosses the IPC boundary and comes back untrusted,
+    // so -- like `region` -- exactly one spelling is legal. A lenient parse
+    // (trimming, case-folding) would open SOME device the user did not pick.
+    #[test]
+    fn webcam_device_id_requires_a_canonical_round_trip() {
+        let hash = "0f3a9c";
+        let id = WebcamDeviceId::parse(&format!("webcam:{hash}")).expect("canonical");
+        assert_eq!(id.hash(), hash);
+        assert_eq!(id.to_string(), "webcam:0f3a9c");
+        let longest = format!("webcam:{}", "a".repeat(WebcamDeviceId::MAX_HASH_LEN));
+        assert_eq!(
+            WebcamDeviceId::parse(&longest).map(|d| d.to_string()),
+            Some(longest.clone())
+        );
+        for rejected in [
+            "webcam: x",
+            "webcam:",
+            "webcam: 0f3a9c",
+            "webcam:0f3a9c ",
+            "webcam:0F3A9C",
+            "webcam:0f3a:9c",
+            "webcam:0x0f3a",
+            "Webcam:0f3a9c",
+            "webcam0f3a9c",
+            "screen:0",
+            "",
+        ] {
+            assert_eq!(WebcamDeviceId::parse(rejected), None, "{rejected:?}");
+        }
+        let too_long = format!("webcam:{}", "a".repeat(WebcamDeviceId::MAX_HASH_LEN + 1));
+        assert_eq!(WebcamDeviceId::parse(&too_long), None);
+        // Not a screen source either way round.
+        assert_eq!(SourceId::parse("webcam:0f3a9c"), None);
     }
 }

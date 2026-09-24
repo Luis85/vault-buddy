@@ -13,12 +13,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import WebcamDialog from "../src/components/editor/dialogs/WebcamDialog.vue";
 import MediaLibrary from "../src/components/editor/library/MediaLibrary.vue";
-import { cornerPreset, PRESENTER_CORNER } from "../src/editor/layoutGeometry";
+import { cornerPreset, PRESENTER_CORNER, presenterBox } from "../src/editor/layoutGeometry";
 import { type EditorPort, EditorPortError } from "../src/editor/port";
 import { PERMISSION_DENIED_TEXT } from "../src/editor/webcamRecorder";
 import type { Clip, EditorCommand, EditorOpenResult, Project, TakeDto } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
+import placement from "./fixtures/editor-presenter-placement.json";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
 import { type FakeDevices, fakeMediaDevices, FakeRecorder, resetFakeRecorder } from "./helpers/fakeWebcam";
 
@@ -374,5 +375,21 @@ describe("MediaLibrary — the Webcam entry", () => {
     await click(w, "library-webcam");
     expect(w.find('[data-testid="webcam-dialog"]').exists()).toBe(true);
     expect(devices.requests).toEqual([]);
+  });
+});
+
+// Task 51 (F35): the synchronized-webcam migration places the presenter in
+// RUST (`core::editor::migrate`), the webcam dialog in TS. Both read ONE
+// table (`core/src/editor/migrate_webcam_tests.rs` is the other reader), so
+// neither language's copy can drift from the other.
+describe("the presenter placement matches core::editor::migrate's", () => {
+  it("PRESENTER_CORNER and presenterBox agree with the shared table", () => {
+    const { x, y, w, frameShape, fit } = placement;
+    expect(PRESENTER_CORNER).toEqual({ x, y, w, frameShape, fit });
+    expect(placement.heights).toHaveLength(4);
+    for (const { canvas, h } of placement.heights) {
+      const box = presenterBox({ width: canvas[0], height: canvas[1] });
+      expect({ canvas, box }).toEqual({ canvas, box: { x, y, w, h } });
+    }
   });
 });

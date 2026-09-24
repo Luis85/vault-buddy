@@ -23,11 +23,14 @@ use crate::editor_commands::is_safe_base;
 /// abandoned one is never mistaken for a capture and PROMOTED. Imported,
 /// never respelled: two literals is how a temp quietly stops being swept.
 use vault_buddy_screen::staging::EXPORT_PART_INFIX;
+/// The webcam infix (F-22), imported for the same reason.
+use vault_buddy_screen::staging::WEBCAM_INFIX;
 
 /// What a name in the staging directory is, decided by name alone:
 /// `.<base>.mp4.part` (a capture being written), `.<base>.export.mp4.part`
 /// (an export being written), `<base>.mp4` (a published staged capture),
-/// `<base>.json` (its sidecar) — and everything else, which is **never
+/// `<base>.json` (its sidecar), a capture's webcam and stem parts and its
+/// published webcam file — and everything else, which is **never
 /// touched**, whatever it looks like.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Entry {
@@ -35,6 +38,17 @@ pub(super) enum Entry {
     ExportTemp(String),
     Staged(String),
     Sidecar(String),
+    /// `.<base>.webcam.mp4.part`, owned by `<base>` (F-22) — promoted to
+    /// `<base>.webcam.mp4` when it holds footage.
+    WebcamPart(String),
+    /// `.<base>.stem-<n>.m4a.part` (`base`, `n`), owned by PATTERN (F24):
+    /// no sidecar lists an orphan's stems.
+    StemPart(String, String),
+    /// `<base>.webcam.mp4`, published beside capture `<base>`. Carries its
+    /// OWN stem (`<base>.webcam`) and is never acted on: judged as a staged
+    /// capture it would be handed a sidecar of its own and listed as a
+    /// second recording.
+    Companion(String),
     Foreign,
 }
 
@@ -58,14 +72,37 @@ pub(super) enum Entry {
 /// It is not retroactive: a capture staged under such a base BEFORE that fix
 /// keeps it, and its orphaned `.part` is still swept as an export temp. Only
 /// new captures are covered.
+///
+/// The webcam and stem shapes (F-22, F24) are checked the same way and for
+/// the same reason: `base_from_part(".Demo.webcam.mp4.part")` is the safe
+/// base `Demo.webcam`, so a plain-part-first order would promote a webcam
+/// track as a capture of its own. A stem part (`.m4a.part`) matches no
+/// other shape and used to be Foreign — ignored forever.
 pub(super) fn classify(file_name: &str) -> Entry {
+    if let Some((base, index)) = staging::stem_part_base(file_name) {
+        return if ours(&base) {
+            Entry::StemPart(base, index)
+        } else {
+            Entry::Foreign
+        };
+    }
     if let Some(base) = staging::base_from_part(file_name) {
         if let Some(stem) = base.strip_suffix(EXPORT_PART_INFIX) {
             return owned(stem, Entry::ExportTemp);
         }
+        if let Some(stem) = base.strip_suffix(WEBCAM_INFIX) {
+            return owned(stem, Entry::WebcamPart);
+        }
         return owned(&base, Entry::Part);
     }
     if let Some(stem) = file_name.strip_suffix(".mp4") {
+        if let Some(owner) = stem.strip_suffix(WEBCAM_INFIX) {
+            return if ours(owner) && is_safe_base(stem) {
+                Entry::Companion(stem.to_string())
+            } else {
+                Entry::Foreign
+            };
+        }
         return owned(stem, Entry::Staged);
     }
     if let Some(stem) = file_name.strip_suffix(".json") {
@@ -87,11 +124,17 @@ pub(super) fn classify(file_name: &str) -> Entry {
 /// audio side's `YYYY-MM-DD HHmm <title>` check applies verbatim.
 /// `is_safe_base` stays in front of the path join as defence in depth.
 pub(super) fn owned(stem: &str, make: fn(String) -> Entry) -> Entry {
-    if is_safe_base(stem) && vault_buddy_core::capture_paths::is_capture_base(stem) {
+    if ours(stem) {
         make(stem.to_string())
     } else {
         Entry::Foreign
     }
+}
+
+/// Both halves of rule 1 (see `owned`), for the shapes that carry more than
+/// a base.
+fn ours(base: &str) -> bool {
+    is_safe_base(base) && vault_buddy_core::capture_paths::is_capture_base(base)
 }
 
 /// Does this `.part` prefix hold footage worth promoting? BOTH halves are
@@ -288,6 +331,55 @@ mod tests {
             classify(&staging::export_part_file_name(&base)),
             Entry::ExportTemp(base)
         );
+    }
+
+    // F-22: a webcam part belongs to the capture whose base it carries. Read
+    // as an ordinary part it was a capture named "<base>.webcam" -- promoted
+    // with a sidecar of its own and listed as a second, bogus recording.
+    #[test]
+    fn recovery_treats_a_webcam_part_as_owned_not_foreign() {
+        assert_eq!(
+            classify(&staging::webcam_part_file_name(BASE)),
+            Entry::WebcamPart(BASE.into())
+        );
+        // Its published file is the capture's companion, never a capture.
+        assert_eq!(
+            classify(&staging::webcam_file_name(BASE)),
+            Entry::Companion(format!("{BASE}.webcam"))
+        );
+        // Rule 1 still holds: a webcam-shaped name on a base this app never
+        // minted is not ours.
+        for foreign in [".download.webcam.mp4.part", "Demo.webcam.mp4"] {
+            assert_eq!(classify(foreign), Entry::Foreign, "{foreign} was claimed");
+        }
+    }
+
+    // F24: an orphan sweep has no sidecar to read a stem list from, so a stem
+    // part is recognised by its SHAPE -- any index -- and never as Foreign,
+    // which is what an `.m4a.part` was before (the sweep ignored it forever).
+    #[test]
+    fn recovery_treats_any_stem_indexed_part_as_owned_by_pattern() {
+        for index in ["7", "0", "12", "99999999999999999999"] {
+            let name = format!(".{BASE}.stem-{index}.m4a.part");
+            assert_eq!(
+                classify(&name),
+                Entry::StemPart(BASE.into(), index.into()),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            classify(&staging::stem_part_file_name(BASE, 3)),
+            Entry::StemPart(BASE.into(), "3".into())
+        );
+        // Rule 1: the owning base must be one this app mints.
+        for foreign in [
+            ".foo.stem-7.m4a.part",
+            &format!(".{BASE}.stem-.m4a.part"),
+            &format!(".{BASE}.stem-7a.m4a.part"),
+            &format!("{BASE}.stem-7.m4a.part"),
+        ] {
+            assert_eq!(classify(foreign), Entry::Foreign, "{foreign} was claimed");
+        }
     }
 
     #[test]

@@ -3047,6 +3047,43 @@ no-follow, staleness-gated like the screen sweep): remux-and-register a part
 that probes as video (or keep it raw, A09), remove a leftover
 `.remux.webm`, and report what it recovered in the next open of that project.
 
+### GAP-198 · Low · A capture's webcam file can outlive its capture as untracked staging litter
+`src-tauri/src/export_worker/mod.rs` (`remove_staged_capture`),
+`src-tauri/src/screen_recovery/mod.rs`, Task 51 (F-22). A staged capture now
+owns a fourth file, `<base>.webcam.mp4` (`staging_files::capture_file_names`),
+and discard, Clear and the size readout all include it. Two paths still do
+not: (1) the LEGACY export's post-save cleanup removes only the `.mp4` and
+the sidecar of an unpinned capture, so a webcam capture saved through
+`LegacyCaptureEditor` leaves its webcam file behind (retired with that path
+in Task 59; a capture opened in the new editor is pinned and never reaches
+this cleanup); (2) the recovery sweep classifies a published webcam file as
+its capture's companion and never acts on it — correct while the capture
+exists, but one whose `.mp4` and sidecar are gone (the legacy cleanup above,
+or a crash whose main `.part` held no footage while the webcam part did) is
+then listed nowhere, counted nowhere and swept never. Nothing is lost —
+that is the point of leaving it — but it costs disk the user cannot see.
+**Fix:** route `remove_staged_capture` through `capture_file_names`, and
+surface a companion with no capture in `StagedCaptureList` (or as a
+recovered capture of its own) rather than deleting footage.
+
+### GAP-199 · Medium (unverified until Task 52) · A synchronized webcam track's length is derived, not measured
+`src-tauri/src/editor/session_commands.rs` (`staged_webcam`), Task 51
+(F-22, F26). The sidecar's `webcam` block carries `file`, `width`,
+`height`, `deviceLabel` and `offsetMs` — no length, and migration needs one
+for the asset, the clip's `outMs` and the `sources.json` record. It is
+taken as the capture's own length from `offsetMs` on, which is exact only
+if both streams stamp from the one `CaptureClock` and stop on the one Stop.
+Task 52's producer finalizes the webcam file EARLY when the device vanishes
+mid-capture (spec §14's posture), and then the clip runs past the media's
+real end — a frozen or black presenter for the rest of the capture, with no
+error. It also assumes the webcam file's own timestamps start at 0 at its
+first frame: Task 52's mapping writes CLOCK time (the first sample lands at
+the clock's elapsed ms), and if that reaches the file unrebased, placing
+the clip at `offsetMs` counts the offset twice. **Fix (Task 52):** rebase
+the webcam file's timestamps to its first frame, and write the webcam's
+measured length into the sidecar block (an additive field, read with
+`#[serde(default)]` and falling back to today's derivation).
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md

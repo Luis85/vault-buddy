@@ -515,6 +515,7 @@ fn finalize_stopped(
         height: outcome.height,
         recorded_at,
         timeline: None,
+        webcam: None,
         extra: Default::default(),
     };
     if let Err(e) = staging::write_sidecar(dir, &base, &sidecar) {

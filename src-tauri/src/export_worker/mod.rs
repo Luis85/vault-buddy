@@ -455,6 +455,7 @@ mod tests {
             height: 720,
             recorded_at: "2026-09-20T14:32:00+02:00".into(),
             timeline: None,
+            webcam: None,
             extra: serde_json::Map::new(),
         }
     }

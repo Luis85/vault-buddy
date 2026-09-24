@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use vault_buddy_core::editor::is_valid_id;
 use vault_buddy_screen::staging::{self, StagedSidecar};
+use vault_buddy_screen::staging_files;
 
 /// The store's own directory name under the app's local data dir — a
 /// sibling of `staging::STAGING_DIR_NAME`, never inside it: a project and
@@ -54,6 +55,13 @@ pub enum SourceLocator {
     /// A staged screen capture, adopted by reference (R6) — never copied
     /// into the project directory.
     Staging { base: String },
+    /// A COMPANION file of a staged capture (F-22, F26) — its synchronized
+    /// webcam track `<base>.webcam.mp4` today, a stem after Task 53 — also
+    /// adopted by reference. `Staging { base }` can only ever name
+    /// `<base>.mp4`; this names one more of the files the capture owns, and
+    /// nothing else (see `resolve_source`).
+    #[serde(rename = "stagingFile")]
+    StagingFile { base: String, file: String },
     /// An imported original, copied into this project's own `media/`.
     Media { file: String },
     /// A recorded webcam take, in this project's own `takes/`.
@@ -165,6 +173,15 @@ pub fn resolve_source(
         SourceLocator::Staging { base } => {
             let dir = staging::staging_dir(root_local_app_data);
             join_contained(&dir, &staging::mp4_file_name(base))
+        }
+        // Membership first (F26): `file` must be literally one of the names
+        // `capture_file_names` says `base` owns. Stems are `&[]` until Task
+        // 53 threads the sidecar's list through; the webcam name needs none.
+        SourceLocator::StagingFile { base, file } => {
+            if !staging_files::capture_file_names(base, &[]).contains(file) {
+                return None;
+            }
+            join_contained(&staging::staging_dir(root_local_app_data), file)
         }
         SourceLocator::Media { file } => {
             let dir = project_dir(root_local_app_data, project_id)?.join("media");
@@ -287,6 +304,7 @@ mod tests {
             height: 1080,
             recorded_at: "2026-09-20T14:32:00Z".into(),
             timeline: None,
+            webcam: None,
             extra: serde_json::Map::new(),
         }
     }
@@ -417,6 +435,91 @@ mod tests {
             replaced_from: None,
         };
         assert_eq!(resolve_source(root.path(), "proj1", &record), None);
+    }
+
+    // F26: a `StagingFile` names a file under STAGING, where every capture's
+    // recordings live side by side -- so membership in what its OWN capture
+    // owns is the whole guard. A bare containment check would let a
+    // hand-edited `sources.json` serve (and a package export copy) any
+    // other capture's video, or anything else that happens to sit there.
+    #[test]
+    fn staging_file_locator_refuses_a_name_capture_file_names_does_not_own() {
+        let root = tempfile::tempdir().unwrap();
+        let base = "2026-09-20 1432 Demo";
+        let record = |file: &str| SourceRecord {
+            locator: SourceLocator::StagingFile {
+                base: base.to_string(),
+                file: file.to_string(),
+            },
+            sha256: None,
+            size: 0,
+            duration_ms: 0,
+            width: None,
+            height: None,
+            has_audio: false,
+            has_video: true,
+            media_kind: SourceMediaKind::Video,
+            replaced_from: None,
+        };
+        assert_eq!(
+            resolve_source(
+                root.path(),
+                "proj1",
+                &record(&staging::webcam_file_name(base))
+            ),
+            Some(
+                root.path()
+                    .join("screen-captures")
+                    .join("2026-09-20 1432 Demo.webcam.mp4")
+            ),
+            "the capture's own webcam file resolves"
+        );
+        for not_owned in [
+            "../x",
+            "unrelated.mp4",
+            "2026-09-20 1500 Other.webcam.mp4",
+            "2026-09-20 1500 Other.mp4",
+            "",
+        ] {
+            assert_eq!(
+                resolve_source(root.path(), "proj1", &record(not_owned)),
+                None,
+                "{not_owned:?} is not a file {base:?} owns"
+            );
+        }
+        // An escaping BASE is refused even when the file is "its own".
+        let escaping = SourceRecord {
+            locator: SourceLocator::StagingFile {
+                base: "../x".into(),
+                file: staging::webcam_file_name("../x"),
+            },
+            ..record("")
+        };
+        assert_eq!(resolve_source(root.path(), "proj1", &escaping), None);
+    }
+
+    // `sources.json` is read back by every later build: pin the new tag's
+    // spelling literally, never against the struct re-serialized.
+    #[test]
+    fn a_staging_file_locator_serializes_its_literal_wire_shape() {
+        let v = serde_json::to_value(SourceLocator::StagingFile {
+            base: "2026-09-20 1432 Demo".to_string(),
+            file: "2026-09-20 1432 Demo.webcam.mp4".to_string(),
+        })
+        .unwrap();
+        let literal = serde_json::json!({
+            "store": "stagingFile",
+            "base": "2026-09-20 1432 Demo",
+            "file": "2026-09-20 1432 Demo.webcam.mp4"
+        });
+        assert_eq!(v, literal);
+        assert_eq!(
+            serde_json::from_value::<SourceLocator>(literal).unwrap(),
+            SourceLocator::StagingFile {
+                base: "2026-09-20 1432 Demo".to_string(),
+                file: "2026-09-20 1432 Demo.webcam.mp4".to_string(),
+            }
+        );
     }
 
     #[test]

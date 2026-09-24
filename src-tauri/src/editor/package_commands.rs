@@ -151,7 +151,9 @@ struct MediaFile {
 /// builtin): a source with no record, no file, or a non-file at its path (a
 /// symlink, a directory) is left out and reported missing by the import —
 /// reported, never silently pruned. A staging locator packages the staged
-/// capture's own `.mp4`, whose base exists only on this machine. Refuses
+/// capture's own `.mp4`, whose base exists only on this machine, and a
+/// `StagingFile` locator (Task 51) its webcam track the same way — every
+/// locator reaches its file through `resolve_source`. Refuses
 /// the portable format past `MAX_PACKAGE_MEDIA_BYTES` before any dialog.
 fn collect_media(
     root: &Path,

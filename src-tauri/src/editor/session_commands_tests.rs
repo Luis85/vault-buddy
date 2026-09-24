@@ -63,6 +63,7 @@ fn sidecar(base: &str, vault_id: &str) -> StagedSidecar {
         height: 900,
         recorded_at: "2026-09-20T14:32:00Z".into(),
         timeline: None,
+        webcam: None,
         extra: serde_json::Map::new(),
     }
 }
@@ -87,6 +88,92 @@ fn open_staged_resolves_the_vault_from_the_sidecar() {
         Some(opened.envelope.project.id.as_str()),
         "the sidecar must be pinned to the project it opened"
     );
+}
+
+// F26: a capture recorded with a webcam migrates with a SECOND source
+// record. Without it the webcam asset has no resolvable file: the preview
+// (`editor_media_url`) cannot reach it, a portable package drops it, and
+// `missing_media` reports a track that is sitting right there in staging.
+#[test]
+fn open_staged_registers_a_resolvable_webcam_source() {
+    let f = Fixture::new();
+    let mut s = sidecar(BASE, "vaultA");
+    s.webcam = Some(staging::WebcamSidecar {
+        file: staging::webcam_file_name(BASE),
+        width: 640,
+        height: 480,
+        device_label: "Integrated Camera".into(),
+        offset_ms: 120,
+        extra: serde_json::Map::new(),
+    });
+    f.stage(&s);
+    let webcam_path = f.staging().join(staging::webcam_file_name(BASE));
+    std::fs::write(&webcam_path, b"webcam bytes, 27 long......").unwrap();
+
+    let opened = open_staged_in(f.root(), &f.staging(), BASE).expect("opens");
+    let project = &opened.envelope.project;
+    let record = opened
+        .sources
+        .get(migrate::WEBCAM_ASSET_ID)
+        .expect("the webcam asset has a source record");
+    assert_eq!(
+        record.locator,
+        SourceLocator::StagingFile {
+            base: BASE.to_string(),
+            file: staging::webcam_file_name(BASE),
+        }
+    );
+    assert_eq!(
+        resolve_source(f.root(), &project.id, record),
+        Some(webcam_path.clone()),
+        "the record resolves to the real webcam file"
+    );
+    assert_eq!(record.size, 27);
+    assert_eq!((record.width, record.height), (Some(640), Some(480)));
+    assert!(record.has_video && !record.has_audio, "a video-only sink");
+    assert!(missing_media(f.root(), project, &opened.sources).is_empty());
+
+    let clip = project
+        .clips
+        .iter()
+        .find(|c| c.asset_id == migrate::WEBCAM_ASSET_ID)
+        .expect("the webcam was placed");
+    assert_eq!(clip.start_ms, 120);
+    // Synchronized: it runs to the capture's end from where it started.
+    assert_eq!(clip.out_ms, 61_500 - 120);
+
+    // The pin still names the capture, and only the capture.
+    assert_eq!(opened.sources.len(), 2);
+    assert_eq!(
+        pinned_project(&f.sidecar(BASE)).as_deref(),
+        Some(project.id.as_str())
+    );
+}
+
+// A hand-edited sidecar naming a file the capture does not own is not a
+// webcam track: it migrates as a plain capture rather than registering a
+// source that would never resolve.
+#[test]
+fn open_staged_ignores_a_webcam_block_naming_a_file_the_capture_does_not_own() {
+    let f = Fixture::new();
+    let mut s = sidecar(BASE, "vaultA");
+    s.webcam = Some(staging::WebcamSidecar {
+        file: "../elsewhere.mp4".into(),
+        width: 640,
+        height: 480,
+        device_label: String::new(),
+        offset_ms: 0,
+        extra: serde_json::Map::new(),
+    });
+    f.stage(&s);
+    let opened = open_staged_in(f.root(), &f.staging(), BASE).expect("opens");
+    assert_eq!(opened.sources.len(), 1, "{:?}", opened.sources.keys());
+    assert!(opened
+        .envelope
+        .project
+        .assets
+        .iter()
+        .all(|a| a.id != migrate::WEBCAM_ASSET_ID));
 }
 
 // A duplicated `editor:open` (or a second Edit click) must never mint a

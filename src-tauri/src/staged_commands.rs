@@ -164,7 +164,9 @@ pub(crate) fn staging_dir_for(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(staging::staging_dir(&local))
 }
 
-/// Forget a staged capture, on disk.
+/// Forget a staged capture, on disk: every file
+/// `staging_files::capture_file_names` says it owns, the synchronized
+/// webcam file (F-22) included.
 ///
 /// **The export `.part` is the third file and the one a two-file discard
 /// forgets.** It is often the LARGEST of the three, and `discard_conflict`
@@ -185,7 +187,7 @@ pub(crate) fn staging_dir_for(app: &AppHandle) -> Result<PathBuf, String> {
 /// property of the function rather than of whoever wrote the directory.
 pub(crate) fn discard_staged_files(dir: &Path, base: &str) -> Result<(), String> {
     let mut targets = Vec::new();
-    for name in staging_files::capture_file_names(base) {
+    for name in staging_files::capture_file_names(base, &[]) {
         let path = dir.join(&name);
         match std::fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -273,10 +275,11 @@ pub(crate) fn staged_summaries(dir: &Path) -> Vec<StagedCaptureSummaryDto> {
     out
 }
 
-/// Forget a staged capture — its video, its sidecar and any abandoned export
-/// temp. Irreversible; the editor confirm-gates it (spec §10).
+/// Forget a staged capture — its video, its sidecar, its webcam file (F-22)
+/// and any abandoned export temp. Irreversible; the editor confirm-gates it
+/// (spec §10).
 ///
-/// ASYNC: three unlinks on a volume that may be slow or networked.
+/// ASYNC: up to four unlinks on a volume that may be slow or networked.
 #[tauri::command]
 pub async fn discard_staged_capture(app: AppHandle, base: String) -> Result<(), String> {
     if !crate::editor_commands::is_safe_base(&base) {
@@ -291,7 +294,7 @@ pub async fn discard_staged_capture(app: AppHandle, base: String) -> Result<(), 
     // The pin check reads the sidecar, so it rides the same spawn_blocking
     // as the discard itself — a sync command must not touch disk on the
     // async runtime thread, and this is one more small file read joining
-    // the three unlinks that already needed the blocking pool.
+    // the unlinks that already needed the blocking pool.
     tauri::async_runtime::spawn_blocking(move || {
         let pinned = pinned_project_of(&dir, &target);
         if let Some(message) = discard_conflict(exporting.as_deref(), &target, pinned.as_deref()) {
@@ -444,6 +447,7 @@ mod tests {
             height: 1080,
             recorded_at: "2026-09-20T14:32:00Z".into(),
             timeline: None,
+            webcam: None,
             extra: serde_json::Map::new(),
         }
     }
@@ -560,6 +564,7 @@ mod tests {
             height: 720,
             recorded_at: recorded_at.to_string(),
             timeline: None,
+            webcam: None,
             extra: serde_json::Map::new(),
         }
     }

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use serde_json::json;
 use vault_buddy_core::editor::{EditorErrorCode, InternalCommand};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
+use vault_buddy_screen::staging;
 
 use super::*;
 use crate::editor::package_test_support::*;
@@ -369,4 +370,77 @@ fn a_normalized_name_never_replaces_a_file_the_dialog_did_not_confirm() {
     .expect("choosing that exact file replaces it");
     assert_ne!(std::fs::read(&saved).unwrap(), before);
     assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 1);
+}
+
+// Task 51 (F26): a capture's synchronized webcam track is a `StagingFile`
+// source -- a locator the package collector had never seen. A portable file
+// must CARRY it (else the presenter silently vanishes from the copy), and a
+// lightweight one must report it missing on the other machine, exactly as
+// it does the capture itself.
+#[test]
+fn a_staged_webcam_track_is_packaged_or_reported_missing() {
+    const WEBCAM_BYTES: &[u8] = b"a synchronized webcam track (38 long).";
+    let a = Machine::new();
+    a.stage();
+    let mut sidecar =
+        staging::read_sidecar(&a.staging().join(staging::sidecar_file_name(BASE))).unwrap();
+    sidecar.webcam = Some(staging::WebcamSidecar {
+        file: staging::webcam_file_name(BASE),
+        width: 640,
+        height: 480,
+        device_label: "Integrated Camera".into(),
+        offset_ms: 250,
+        extra: serde_json::Map::new(),
+    });
+    staging::write_sidecar(&a.staging(), BASE, &sidecar).unwrap();
+    std::fs::write(
+        a.staging().join(staging::webcam_file_name(BASE)),
+        WEBCAM_BYTES,
+    )
+    .unwrap();
+    let opened = crate::editor::session_commands::open_staged_session(
+        &a.state,
+        a.root(),
+        &a.staging(),
+        BASE,
+    )
+    .unwrap();
+    let session_id = opened.snapshot.session_id.clone();
+    let project_id = opened.snapshot.project_id.clone();
+    let out = tempfile::tempdir().unwrap();
+
+    export(
+        &a,
+        &session_id,
+        &FakeChooser::saving_to(out.path().join("Cam")),
+        PackageFormat::Portable,
+    )
+    .unwrap()
+    .unwrap();
+    let b = Machine::new();
+    let imported = import(&b, out.path().join("Cam.vbproject.zip"))
+        .unwrap()
+        .unwrap();
+    assert!(imported.missing.is_empty(), "{:?}", imported.missing);
+    assert_eq!(media_file(&b, &project_id, "webcam.mp4"), WEBCAM_BYTES);
+    assert_eq!(
+        load_sources(b.root(), &project_id).unwrap()["webcam"].locator,
+        SourceLocator::Media {
+            file: "webcam.mp4".into()
+        }
+    );
+
+    export(
+        &a,
+        &session_id,
+        &FakeChooser::saving_to(out.path().join("Cam")),
+        PackageFormat::Lightweight,
+    )
+    .unwrap()
+    .unwrap();
+    let c = Machine::new();
+    let imported = import(&c, out.path().join("Cam.vbproject.json"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(sorted_missing(&imported), ["src", "webcam"]);
 }

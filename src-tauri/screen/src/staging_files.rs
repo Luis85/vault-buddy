@@ -27,15 +27,35 @@ use crate::staging;
 /// out of the accounting would under-report the directory by more than the
 /// captures themselves.
 ///
-/// Deliberately NOT the in-progress `.<base>.mp4.part`: that file belongs to
-/// a capture that is still being written, which is not a staged capture and
-/// is not something a bulk clear may touch.
-pub fn capture_file_names(base: &str) -> [String; 3] {
-    [
+/// Plus the synchronized webcam file (F-22) — ALWAYS, since its name
+/// derives from `base` alone — and each of the sidecar's `stems` (F24; Task
+/// 53 supplies the list, every caller passes `&[]` until then). A stem name
+/// is owned only when it is literally `staging::stem_file_name(base, n)`:
+/// the list comes from a hand-editable sidecar, and whatever this returns a
+/// discard deletes and `resolve_source` serves.
+///
+/// Deliberately NOT the in-progress `.<base>.mp4.part` (nor the webcam or
+/// stem `.part`): those belong to a capture that is still being written,
+/// which is not a staged capture and is not something a bulk clear may
+/// touch. An abandoned one is the recovery sweep's.
+pub fn capture_file_names(base: &str, stems: &[String]) -> Vec<String> {
+    let mut names = vec![
         staging::mp4_file_name(base),
         staging::sidecar_file_name(base),
         staging::export_part_file_name(base),
-    ]
+        staging::webcam_file_name(base),
+    ];
+    names.extend(stems.iter().filter(|s| is_stem_of(base, s)).cloned());
+    names
+}
+
+/// Is `name` exactly `staging::stem_file_name(base, n)` for some index?
+fn is_stem_of(base: &str, name: &str) -> bool {
+    name.strip_prefix(base)
+        .and_then(|rest| rest.strip_prefix(staging::STEM_INFIX))
+        .and_then(|rest| rest.strip_suffix(".m4a"))
+        .and_then(|index| index.parse::<u32>().ok())
+        .is_some_and(|n| staging::stem_file_name(base, n) == name)
 }
 
 /// What staging is holding, as a settings card reports it.
@@ -46,14 +66,14 @@ pub struct StagingUsage {
     pub bytes: u64,
 }
 
-/// The bytes one staged capture occupies, across all three of its files.
+/// The bytes one staged capture occupies, across every file it owns.
 ///
 /// A missing file contributes nothing rather than failing the measurement: a
 /// capture that never had an export temp is the ordinary case, and a size
 /// readout that errors because a file it did not need is absent would be
 /// worse than useless.
 pub fn capture_bytes(dir: &Path, base: &str) -> u64 {
-    capture_file_names(base)
+    capture_file_names(base, &[])
         .iter()
         .filter_map(|name| std::fs::symlink_metadata(dir.join(name)).ok())
         .filter(|meta| meta.file_type().is_file())
@@ -88,7 +108,7 @@ mod tests {
 
     #[test]
     fn a_capture_owns_its_video_its_sidecar_and_its_export_temp() {
-        let names = capture_file_names(BASE);
+        let names = capture_file_names(BASE, &[]);
         assert!(names.contains(&staging::mp4_file_name(BASE)));
         assert!(names.contains(&staging::sidecar_file_name(BASE)));
         assert!(
@@ -97,12 +117,47 @@ mod tests {
         );
     }
 
+    // F24: the webcam file is derivable from the base and so ALWAYS owned;
+    // stems come from the sidecar's list (empty until Task 53), and only a
+    // name in this capture's own stem shape may join the set -- the list is
+    // hand-editable, and whatever this returns, a discard deletes.
+    #[test]
+    fn capture_file_names_includes_webcam_and_accepts_a_stem_list() {
+        let names = capture_file_names(BASE, &[]);
+        assert!(
+            names.contains(&staging::webcam_file_name(BASE)),
+            "the webcam file must be discarded, cleared and measured with its capture: {names:?}"
+        );
+        assert_eq!(names.len(), 4, "{names:?}");
+        assert!(!names.contains(&staging::webcam_part_file_name(BASE)));
+
+        let stems = vec![
+            staging::stem_file_name(BASE, 1),
+            staging::stem_file_name(BASE, 2),
+            // Not this capture's stem shape: never owned, whatever the
+            // sidecar claims.
+            "../escape.m4a".to_string(),
+            staging::stem_file_name(OTHER, 1),
+            staging::mp4_file_name(OTHER),
+            format!("{BASE}.stem-.m4a"),
+        ];
+        let names = capture_file_names(BASE, &stems);
+        assert_eq!(
+            names[4..],
+            [
+                staging::stem_file_name(BASE, 1),
+                staging::stem_file_name(BASE, 2)
+            ],
+            "{names:?}"
+        );
+    }
+
     #[test]
     fn the_in_progress_part_is_not_one_of_a_staged_captures_files() {
         // A live capture's `.part` belongs to a recording still being
         // written. Counting it would bill the user for a capture they have
         // not finished; clearing it would delete one mid-write.
-        let names = capture_file_names(BASE);
+        let names = capture_file_names(BASE, &[]);
         assert!(
             !names.contains(&staging::part_file_name(BASE)),
             "a bulk clear must never reach a live capture's .part: {names:?}"
@@ -115,7 +170,8 @@ mod tests {
         write(d.path(), &staging::mp4_file_name(BASE), 100);
         write(d.path(), &staging::sidecar_file_name(BASE), 20);
         write(d.path(), &staging::export_part_file_name(BASE), 300);
-        assert_eq!(capture_bytes(d.path(), BASE), 420);
+        write(d.path(), &staging::webcam_file_name(BASE), 4_000);
+        assert_eq!(capture_bytes(d.path(), BASE), 4_420);
     }
 
     #[test]

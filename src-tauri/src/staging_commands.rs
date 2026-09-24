@@ -18,7 +18,7 @@
 //! deletes many of the user's recordings at once.
 //!
 //! **It deliberately does NOT refuse while a capture is recording.** A live
-//! capture writes `.<base>.mp4.part`, which is not one of the three files a
+//! capture writes `.<base>.mp4.part`, which is not one of the files a
 //! staged capture owns, and it has no published `<base>.mp4`, so
 //! `staged_summaries` cannot see it and a clear cannot reach it. Adding a
 //! capture-guard refusal here would therefore block a safe operation and
@@ -129,7 +129,7 @@ pub async fn staging_usage(app: AppHandle) -> StagingUsage {
 /// its removal has actually succeeded, so a refusal cannot inflate the
 /// number the user is shown.
 ///
-/// ASYNC: up to three unlinks per capture on a volume that may be slow.
+/// ASYNC: up to four unlinks per capture on a volume that may be slow.
 #[tauri::command]
 pub async fn clear_staged_captures(app: AppHandle) -> Result<ClearStagedResultDto, String> {
     let dir = staging_dir_for(&app)?;
@@ -178,6 +178,7 @@ mod tests {
             height: 1080,
             recorded_at: "2026-09-20T14:32:00Z".into(),
             timeline: None,
+            webcam: None,
             extra: serde_json::Map::new(),
         }
     }
@@ -229,6 +230,56 @@ mod tests {
         assert_eq!(result.skipped_pinned, 1, "the pinned capture");
         assert_eq!(result.skipped, 1, "the exporting capture");
         assert!(cleared.is_empty());
+    }
+
+    /// A file symlink, or `false` where this host cannot make one (Windows
+    /// without Developer Mode or elevation).
+    fn symlink_file(target: &Path, link: &Path) -> bool {
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(target, link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(target, link);
+        made.is_ok()
+    }
+
+    // F-22: a capture's webcam file is one of ITS files. Left out of
+    // `capture_file_names` it survives every discard and every Clear as
+    // untracked litter keyed to a capture the user told us to forget -- and
+    // it must go through the same two-pass no-follow refusal as the rest, or
+    // a link wearing its name deletes whatever it points at.
+    #[test]
+    fn discard_removes_the_webcam_file_and_refuses_a_symlink_wearing_its_name() {
+        let dir = tempfile::tempdir().unwrap();
+        stage(dir.path(), "A", None);
+        let webcam_a = dir.path().join(staging::webcam_file_name("A"));
+        std::fs::write(&webcam_a, b"webcam footage").unwrap();
+        discard_staged_files(dir.path(), "A").expect("the discard lands");
+        assert!(
+            !webcam_a.exists(),
+            "the discard left the webcam file behind"
+        );
+
+        stage(dir.path(), "B", None);
+        let webcam_b = dir.path().join(staging::webcam_file_name("B"));
+        std::fs::write(&webcam_b, b"more webcam footage").unwrap();
+        let (result, _) = clear_staged(dir.path(), None);
+        assert_eq!(result.cleared, 1);
+        assert!(!webcam_b.exists(), "Clear left the webcam file behind");
+
+        stage(dir.path(), "C", None);
+        let outside = tempfile::tempdir().unwrap();
+        let precious = outside.path().join("precious.mp4");
+        std::fs::write(&precious, b"not ours").unwrap();
+        if !symlink_file(&precious, &dir.path().join(staging::webcam_file_name("C"))) {
+            eprintln!("SKIP: this host cannot create a symlink; the no-follow half did not run");
+            return;
+        }
+        discard_staged_files(dir.path(), "C").expect_err("a symlinked webcam leaf is refused");
+        assert!(precious.is_file(), "the discard deleted through a symlink");
+        assert!(
+            dir.path().join(staging::mp4_file_name("C")).is_file(),
+            "a refused discard removed the video anyway"
+        );
     }
 
     // The frontend reads `skippedPinned` off this exact spelling

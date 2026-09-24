@@ -8,7 +8,8 @@
 
 use super::ids;
 use super::model::{
-    Asset, AssetKind, Builtin, Canvas, Clip, Destination, FadeCurve, Project, Track, TrackKind,
+    Asset, AssetKind, Builtin, Canvas, Clip, Destination, FadeCurve, Fit, FrameShape, Project,
+    Track, TrackKind,
 };
 use super::{limits, Map, Num};
 use crate::timeline::Timeline;
@@ -22,14 +23,52 @@ pub struct StemInput {
     pub input: String,
 }
 
-/// A staged capture's own webcam take. Always `None` today — the webcam
-/// take lands in Task 53 — kept on the input shape for the same reason as
-/// `StemInput`.
-#[derive(Debug, Clone, Copy)]
+/// A staged capture's own SYNCHRONIZED webcam track (F-22, F26): recorded
+/// on the capture's shared clock, into the staging file `file`
+/// (`<base>.webcam.mp4`), its first frame `offset_ms` into the capture.
+#[derive(Debug, Clone)]
 pub struct WebcamInput {
     pub duration_ms: u64,
     pub width: u32,
     pub height: u32,
+    /// The staging file NAME — the shell registers it as a
+    /// `StagingFile { base, file }` source for `WEBCAM_ASSET_ID`.
+    pub file: String,
+    /// Where the webcam's first frame sits on the capture's clock; negative
+    /// when the device delivered before the screen's first frame.
+    pub offset_ms: i64,
+}
+
+/// The asset id a synchronized webcam track migrates to, and so the key
+/// its `sources.json` entry lives under.
+pub const WEBCAM_ASSET_ID: &str = "webcam";
+
+/// `asset.extra[CAPTURE_SYNC_KEY] = SHARED_CLOCK` marks the ONE asset kind
+/// whose timing is synchronized with the capture by construction (F-22) —
+/// never a later webcam take (`take::take_asset`), which is placed by hand.
+pub const CAPTURE_SYNC_KEY: &str = "capture_sync";
+pub const SHARED_CLOCK: &str = "shared-clock";
+
+/// The presenter placement (ADR §4; F-21; pre-flight F35) — the SAME
+/// constant as `src/editor/layoutGeometry.ts`'s `PRESENTER_CORNER`, which
+/// `tests/editorWebcamDialog.test.ts` pins to these lines by reading them.
+/// `cornerPreset`'s generic margin is a different place.
+pub const PRESENTER_X: f64 = 0.775;
+pub const PRESENTER_Y: f64 = 0.06;
+pub const PRESENTER_W: f64 = 0.19;
+pub const PRESENTER_FRAME_SHAPE: FrameShape = FrameShape::Circle;
+pub const PRESENTER_FIT: Fit = Fit::Cover;
+
+/// The presenter's height on a `(width, height)` canvas: a circle, so it is
+/// square in PIXELS (`presenterBox`'s `aspectHeight(w, canvas, 1)`),
+/// rounded to four places as `roundBox` does — `0.3378` on 1280x720, the
+/// ADR's own figure.
+pub fn presenter_height(canvas_width: u32, canvas_height: u32) -> f64 {
+    if canvas_height == 0 {
+        return PRESENTER_W;
+    }
+    let square = PRESENTER_W * f64::from(canvas_width) / f64::from(canvas_height);
+    (square * 10_000.0).round() / 10_000.0
 }
 
 /// The plain inputs a staged screen capture supplies for migration. No
@@ -148,28 +187,11 @@ pub fn from_staged(input: &StagedInput<'_>, project_id: &str) -> MigrationResult
         extra: Map::new(),
     };
 
-    let video_track = Track {
-        id: "v1".to_string(),
-        kind: TrackKind::Video,
-        name: "Screen".to_string(),
-        visible: true,
-        locked: false,
-        muted: false,
-        solo: false,
-        volume: Num::from(1),
-        extra: Map::new(),
-    };
-    let audio_track = Track {
-        id: "a1".to_string(),
-        kind: TrackKind::Audio,
-        name: "Audio".to_string(),
-        visible: true,
-        locked: false,
-        muted: false,
-        solo: false,
-        volume: Num::from(1),
-        extra: Map::new(),
-    };
+    let mut assets = vec![asset];
+    let mut tracks = vec![
+        track("v1", TrackKind::Video, "Screen"),
+        track("a1", TrackKind::Audio, "Audio"),
+    ];
 
     let timeline = match input.legacy_timeline {
         Some(value) => Timeline::from_sidecar_value(value, input.duration_ms),
@@ -187,40 +209,23 @@ pub fn from_staged(input: &StagedInput<'_>, project_id: &str) -> MigrationResult
         }
         surviving += 1;
         let duration_ms = segment.source_end_ms - segment.source_start_ms;
-        clips.push(Clip {
-            id: format!("c{surviving}"),
-            asset_id: "src".to_string(),
-            track_id: "v1".to_string(),
-            name: format!("Clip {surviving}"),
-            start_ms: cursor_ms,
-            in_ms: segment.source_start_ms,
-            out_ms: segment.source_end_ms,
-            fade_in_ms: 0,
-            fade_out_ms: 0,
-            fade_curve: FadeCurve::Linear,
-            opacity: Num::from(1),
-            volume: Num::from(1),
-            muted: false,
-            x: Num::from(0),
-            y: Num::from(0),
-            w: Num::from(1),
-            h: Num::from(1),
-            speed: None,
-            rotation: None,
-            frame_shape: None,
-            fit: None,
-            mirror: None,
-            flip_y: None,
-            preserve_pitch: None,
-            group_id: None,
-            crop_zoom: None,
-            crop_x: None,
-            crop_y: None,
-            adjustments: None,
-            card: None,
-            extra: Map::new(),
-        });
+        clips.push(plain_clip(
+            format!("c{surviving}"),
+            "src",
+            "v1",
+            format!("Clip {surviving}"),
+            cursor_ms,
+            (segment.source_start_ms, segment.source_end_ms),
+        ));
         cursor_ms += duration_ms;
+    }
+
+    if let Some(webcam) = &input.webcam {
+        let (asset, track, clip) = webcam_parts(webcam, canvas_width, canvas_height);
+        assets.push(asset);
+        // Index 0 is the TOP layer: the presenter sits over the screen.
+        tracks.insert(0, track);
+        clips.extend(clip);
     }
 
     let title: String = input
@@ -240,8 +245,8 @@ pub fn from_staged(input: &StagedInput<'_>, project_id: &str) -> MigrationResult
             extra: Map::new(),
         },
         master_gain: 1.0,
-        assets: vec![asset],
-        tracks: vec![video_track, audio_track],
+        assets,
+        tracks,
         clips,
         effects: Vec::new(),
         markers: Vec::new(),
@@ -271,6 +276,136 @@ pub fn from_staged(input: &StagedInput<'_>, project_id: &str) -> MigrationResult
         dropped_segments,
     }
 }
+
+/// An ordinary, unhidden, unit-volume track.
+fn track(id: &str, kind: TrackKind, name: &str) -> Track {
+    Track {
+        id: id.to_string(),
+        kind,
+        name: name.to_string(),
+        visible: true,
+        locked: false,
+        muted: false,
+        solo: false,
+        volume: Num::from(1),
+        extra: Map::new(),
+    }
+}
+
+/// A full-frame clip playing `source` (`[in, out)`) of `asset_id` from
+/// output `start_ms`, every property a migration does not decide at its
+/// default.
+fn plain_clip(
+    id: String,
+    asset_id: &str,
+    track_id: &str,
+    name: String,
+    start_ms: u64,
+    source: (u64, u64),
+) -> Clip {
+    Clip {
+        id,
+        asset_id: asset_id.to_string(),
+        track_id: track_id.to_string(),
+        name,
+        start_ms,
+        in_ms: source.0,
+        out_ms: source.1,
+        fade_in_ms: 0,
+        fade_out_ms: 0,
+        fade_curve: FadeCurve::Linear,
+        opacity: Num::from(1),
+        volume: Num::from(1),
+        muted: false,
+        x: Num::from(0),
+        y: Num::from(0),
+        w: Num::from(1),
+        h: Num::from(1),
+        speed: None,
+        rotation: None,
+        frame_shape: None,
+        fit: None,
+        mirror: None,
+        flip_y: None,
+        preserve_pitch: None,
+        group_id: None,
+        crop_zoom: None,
+        crop_x: None,
+        crop_y: None,
+        adjustments: None,
+        card: None,
+        extra: Map::new(),
+    }
+}
+
+/// A finite layout fraction as the document's number. Every input is one of
+/// the constants above or a quotient of two canvas sizes, so it is finite.
+fn fraction(v: f64) -> Num {
+    Num::from_f64(v).unwrap_or_else(|| Num::from(0))
+}
+
+/// The synchronized webcam track (F-22, F26): its asset (marked
+/// `SHARED_CLOCK`, the only place that claim is ever made), its own track
+/// `v2`, and one clip placed as the presenter.
+///
+/// The clip starts at `offset_ms` (pre-flight F35: the plan's real offset
+/// where ADR §4's example shows `0`). A NEGATIVE offset — the device
+/// delivered before the screen's first frame — cannot start before output
+/// 0, so the early head is trimmed off instead (`in_ms = -offset`), keeping
+/// every remaining webcam frame over the screen frame it was recorded with;
+/// a webcam that ENDED before the screen began places no clip at all.
+fn webcam_parts(
+    webcam: &WebcamInput,
+    canvas_width: u32,
+    canvas_height: u32,
+) -> (Asset, Track, Option<Clip>) {
+    let mut extra = Map::new();
+    extra.insert(
+        CAPTURE_SYNC_KEY.to_string(),
+        serde_json::Value::String(SHARED_CLOCK.to_string()),
+    );
+    let asset = Asset {
+        id: WEBCAM_ASSET_ID.to_string(),
+        kind: AssetKind::Video,
+        name: "Webcam".to_string(),
+        duration_ms: webcam.duration_ms,
+        width: Some(Num::from(webcam.width)),
+        height: Some(Num::from(webcam.height)),
+        size: None,
+        builtin: None,
+        media_type: None,
+        linked_asset: None,
+        original_name: Some(webcam.file.clone()),
+        extra,
+    };
+    let start_ms = u64::try_from(webcam.offset_ms).unwrap_or(0);
+    let in_ms = if webcam.offset_ms < 0 {
+        webcam.offset_ms.unsigned_abs()
+    } else {
+        0
+    };
+    let clip = (in_ms < webcam.duration_ms).then(|| Clip {
+        x: fraction(PRESENTER_X),
+        y: fraction(PRESENTER_Y),
+        w: fraction(PRESENTER_W),
+        h: fraction(presenter_height(canvas_width, canvas_height)),
+        frame_shape: Some(PRESENTER_FRAME_SHAPE),
+        fit: Some(PRESENTER_FIT),
+        ..plain_clip(
+            "w1".to_string(),
+            WEBCAM_ASSET_ID,
+            "v2",
+            "Webcam".to_string(),
+            start_ms,
+            (in_ms, webcam.duration_ms),
+        )
+    });
+    (asset, track("v2", TrackKind::Video, "Presenter"), clip)
+}
+
+#[cfg(test)]
+#[path = "migrate_webcam_tests.rs"]
+mod webcam_tests;
 
 #[cfg(test)]
 mod tests {

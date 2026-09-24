@@ -23,9 +23,9 @@
 //! reserved-character mapping (a security boundary — a window title is
 //! whatever the recorded application put in its title bar, and an
 //! unsanitized separator in it escapes the staging directory), the length
-//! bound, and the export-marker disambiguation.
+//! bound, and the owned-suffix (export, webcam, stem) disambiguation.
 
-use crate::staging::EXPORT_PART_INFIX;
+use crate::staging::{ends_with_stem_marker, EXPORT_PART_INFIX, WEBCAM_INFIX};
 
 /// Longest title we will put in a file name. MAX_PATH is 260 by default on
 /// Windows; the staging path, the `YYYY-MM-DD HHmm ` prefix, a possible
@@ -96,7 +96,7 @@ pub fn sanitize_title(raw: &str) -> String {
     let trimmed = trimmed
         .trim_matches(|c: char| c.is_whitespace() || c == '.' || c == '-')
         .to_string();
-    let trimmed = disambiguate_export_marker(trimmed);
+    let trimmed = disambiguate_owned_suffix(trimmed);
 
     if trimmed.is_empty() {
         FALLBACK_TITLE.to_string()
@@ -105,7 +105,15 @@ pub fn sanitize_title(raw: &str) -> String {
     }
 }
 
-/// Keep a sanitized title from ENDING in exactly `EXPORT_PART_INFIX`.
+/// Keep a sanitized title from ENDING in an owned-file marker:
+/// `EXPORT_PART_INFIX`, and since F-22 (F25) `WEBCAM_INFIX` and a stem
+/// marker `.stem-<digits>` too — one rule for all three.
+///
+/// The webcam and stem cases are the export case again: a base ending in
+/// `.webcam` mints a VIDEO named exactly like the webcam file of the base
+/// without it, and its `.part` exactly like that capture's webcam part (the
+/// sweep would attribute it to the wrong capture); a base ending in
+/// `.stem-3` is another capture's stem 3 plus `.m4a`.
 ///
 /// A capture's base is `capture_paths::base_name(..., sanitize_title(title))`,
 /// so the title's tail is the base's tail — and a base ending in `.export`
@@ -124,16 +132,19 @@ pub fn sanitize_title(raw: &str) -> String {
 /// Runs AFTER the truncation and both trims, because either can CREATE the
 /// ending: `.take(MAX_TITLE_CHARS)` can cut a longer title off right at the
 /// marker, and the trailing-separator trim turns `"Build.export..."` into it.
-fn disambiguate_export_marker(title: String) -> String {
-    if !title.ends_with(EXPORT_PART_INFIX) {
+fn disambiguate_owned_suffix(title: String) -> String {
+    let owned = title.ends_with(EXPORT_PART_INFIX)
+        || title.ends_with(WEBCAM_INFIX)
+        || ends_with_stem_marker(&title);
+    if !owned {
         return title;
     }
     let mut out = title;
     if out.chars().count() >= MAX_TITLE_CHARS {
         // Room for the `_` comes out of the title's own tail, so this can
         // never breach the length budget. The character dropped is the
-        // marker's last, leaving a letter — never a dot or space Windows
-        // would strip.
+        // marker's last, and the `_` then ends the title — never a dot or
+        // space Windows would strip.
         out = out.chars().take(MAX_TITLE_CHARS - 1).collect();
     }
     out.push('_');
@@ -268,6 +279,58 @@ mod tests {
             title.chars().count() <= MAX_TITLE_CHARS,
             "disambiguating must not breach the length budget: {title:?}"
         );
+    }
+
+    // F25: the webcam and stem suffixes are owned-file markers exactly as
+    // `.export` is. Capture B's webcam file is `<B>.webcam.mp4` -- byte-
+    // identical to the VIDEO of a capture recorded a minute-mate later from
+    // a window titled "Demo.webcam", and B's stem 3 is that capture's base +
+    // `.m4a` for a window titled "Demo.stem-3". The same rule as `.export`
+    // keeps either from ever being minted.
+    #[test]
+    fn staging_title_disambiguates_webcam_and_stem_suffixed_titles() {
+        use crate::staging::{
+            mp4_file_name, reserve_base, stem_file_name, webcam_file_name, webcam_part_file_name,
+        };
+        let owner = "2026-09-21 1430 Demo";
+        let dir = tempfile::tempdir().unwrap();
+        for title in [
+            "Demo.webcam",
+            "Demo.stem-3",
+            "Demo.webcam.. ",
+            "Demo.stem-3 -",
+        ] {
+            let base = reserve_base(
+                dir.path(),
+                &format!("2026-09-21 1430 {}", sanitize_title(title)),
+            );
+            assert_ne!(
+                mp4_file_name(&base),
+                webcam_file_name(owner),
+                "{title:?}: the new capture's video IS the other capture's webcam file"
+            );
+            assert_ne!(
+                part_file_name(&base),
+                webcam_part_file_name(owner),
+                "{title:?}: the new capture's part IS the other capture's webcam part"
+            );
+            assert_ne!(
+                format!("{base}.m4a"),
+                stem_file_name(owner, 3),
+                "{title:?}: the new capture's name IS the other capture's stem"
+            );
+        }
+        assert_eq!(sanitize_title("Demo.webcam"), "Demo.webcam_");
+        assert_eq!(sanitize_title("Demo.stem-3"), "Demo.stem-3_");
+        // Merely containing either marker is not ending in it.
+        for unchanged in [
+            "Demo.webcams",
+            "Demo.webcam.notes",
+            "Demo.stem-3a",
+            "stem-3",
+        ] {
+            assert_eq!(sanitize_title(unchanged), unchanged, "{unchanged:?}");
+        }
     }
 
     // The other half: the disambiguation must touch ONLY a title ending in

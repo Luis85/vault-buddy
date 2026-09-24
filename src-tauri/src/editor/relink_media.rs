@@ -6,7 +6,8 @@
 //! 1. `check_request` / `targets` — BEFORE the dialog: every id names a
 //!    graph asset whose `sources.json` record is file-backed and really
 //!    missing. A present source is not "reconnected" over; a builtin has no
-//!    file; a staged capture's file belongs to the capture staging folder,
+//!    file; a staged capture's file (and its webcam companion, a
+//!    `StagingFile` source) belongs to the capture staging folder,
 //!    and moving its record into `media\` would cut the project's link to
 //!    that capture (its pin, its `sourceBase`) — refused (GAP-183). One
 //!    such source alone refuses the call; in a batch it is left out and
@@ -143,7 +144,9 @@ fn refusal(
     };
     match record.locator {
         SourceLocator::Builtin => return Some(format!("“{name}” has no file to reconnect.")),
-        SourceLocator::Staging { .. } => {
+        // A capture's companion (its webcam track, F-22) lives in staging
+        // beside it and is excluded for the same reason.
+        SourceLocator::Staging { .. } | SourceLocator::StagingFile { .. } => {
             return Some(format!(
                 "“{name}” is a screen recording kept with your captures, so it cannot be reconnected here."
             ))

@@ -68,6 +68,66 @@ pub fn sidecar_file_name(base: &str) -> String {
     format!("{base}.json")
 }
 
+/// The infix a capture's synchronized WEBCAM file carries (F-22), in both
+/// its published `<base>.webcam.mp4` and its in-progress
+/// `.<base>.webcam.mp4.part` shapes. Shared for the `EXPORT_PART_INFIX`
+/// reason: `screen_recovery::classify` strips exactly this to find the
+/// capture a webcam part belongs to, and `staging_title` refuses a title
+/// ending in it.
+pub const WEBCAM_INFIX: &str = ".webcam";
+
+/// The published webcam file, `<base>.webcam.mp4` — derivable from `base`
+/// alone, since a capture has at most one webcam track.
+pub fn webcam_file_name(base: &str) -> String {
+    mp4_file_name(&format!("{base}{WEBCAM_INFIX}"))
+}
+
+/// The hidden in-progress webcam file, `.<base>.webcam.mp4.part`: the
+/// capture `.part` shape with an infix, exactly as the export temp is, so it
+/// round-trips through `base_from_part` and the recovery sweep sees it.
+pub fn webcam_part_file_name(base: &str) -> String {
+    part_file_name(&format!("{base}{WEBCAM_INFIX}"))
+}
+
+/// The infix an audio STEM carries between its base and its index (Task
+/// 53 mints them; `capture_file_names` and the recovery sweep must already
+/// recognise the shape).
+pub const STEM_INFIX: &str = ".stem-";
+const STEM_SUFFIX: &str = ".m4a";
+
+/// A published stem, `<base>.stem-<index>.m4a`.
+pub fn stem_file_name(base: &str, index: u32) -> String {
+    format!("{base}{STEM_INFIX}{index}{STEM_SUFFIX}")
+}
+
+/// A stem being written, `.<base>.stem-<index>.m4a.part`.
+pub fn stem_part_file_name(base: &str, index: u32) -> String {
+    format!(".{}.part", stem_file_name(base, index))
+}
+
+/// Does `text` END in `.stem-<digits>`? The pattern (`\.stem-\d+$`), not a
+/// list: a sweep has no sidecar to read the real stem count from.
+pub fn ends_with_stem_marker(text: &str) -> bool {
+    text.rsplit_once(STEM_INFIX)
+        .is_some_and(|(_, digits)| is_digit_run(digits))
+}
+
+fn is_digit_run(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// `(base, index)` of a stem PART by pattern (`^\.(.+)\.stem-\d+\.m4a\.part$`),
+/// or `None`. The index stays text: `\d+` admits a run no integer holds,
+/// and a name the sweep cannot parse must still be recognised as ours.
+pub fn stem_part_base(file_name: &str) -> Option<(String, String)> {
+    let stem = file_name
+        .strip_prefix('.')?
+        .strip_suffix(".part")?
+        .strip_suffix(STEM_SUFFIX)?;
+    let (base, index) = stem.rsplit_once(STEM_INFIX)?;
+    (!base.is_empty() && is_digit_run(index)).then(|| (base.to_string(), index.to_string()))
+}
+
 /// Is `name`'s STEM (the text before the first `.`) one of Windows' reserved
 /// device names, case-insensitively?
 ///
@@ -152,6 +212,10 @@ fn disambiguate_reserved_device(base: &str) -> String {
 /// in-progress `.part` still exists, and the two captures would then write
 /// the same file.
 ///
+/// The capture's WEBCAM file and part (F-22) are two more names it owns:
+/// a leftover `<base>.webcam.mp4` would otherwise be adopted as the new
+/// capture's own webcam track.
+///
 /// It also refuses to hand back a base whose stem is a Windows reserved
 /// device name (GAP-108), because this is where a base becomes the name
 /// THREE files are created under — putting the check at any one of those
@@ -162,6 +226,8 @@ pub fn reserve_base(dir: &Path, base: &str) -> String {
         !dir.join(mp4_file_name(candidate)).exists()
             && !dir.join(sidecar_file_name(candidate)).exists()
             && !dir.join(part_file_name(candidate)).exists()
+            && !dir.join(webcam_file_name(candidate)).exists()
+            && !dir.join(webcam_part_file_name(candidate)).exists()
     };
     if free(base) {
         return base.to_string();
@@ -198,6 +264,12 @@ pub struct StagedSidecar {
     /// `None` until the editor touches it.
     #[serde(default)]
     pub timeline: Option<serde_json::Value>,
+    /// The synchronized webcam track recorded beside the screen (F-22), or
+    /// `None` — every sidecar before this build, and every capture made
+    /// without a webcam. Skipped when absent so those sidecars stay
+    /// byte-identical on a rewrite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webcam: Option<WebcamSidecar>,
     /// Every key this build does not declare, carried through verbatim.
     ///
     /// The same forward-compatibility goal `source_kind`'s own doc states,
@@ -208,6 +280,27 @@ pub struct StagedSidecar {
     /// mixed-version sync folder would have this build silently erase a
     /// newer one's fields on the user's next keystroke. Flattening them into
     /// a catch-all makes the rewrite a genuine patch instead.
+    #[serde(flatten, default)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A staged capture's synchronized webcam track (F-22): which staging file
+/// holds it, its pixel size, the device it came from, and where its first
+/// frame sits on the capture's shared clock.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebcamSidecar {
+    /// A staging file NAME (`webcam_file_name(base)`), never a path.
+    pub file: String,
+    pub width: u32,
+    pub height: u32,
+    pub device_label: String,
+    /// Milliseconds on the capture's `CaptureClock` at which the webcam's
+    /// first frame arrived — where migration starts its clip. Signed: a
+    /// device that delivered before the screen's first frame is negative.
+    pub offset_ms: i64,
+    /// Keys a newer build adds to this block, carried through verbatim for
+    /// the same reason `StagedSidecar::extra` exists.
     #[serde(flatten, default)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -296,6 +389,10 @@ pub fn read_sidecar(path: &Path) -> Option<StagedSidecar> {
         .map_err(|e| log::warn!("screen staging: malformed sidecar {}: {e}", path.display()))
         .ok()
 }
+
+#[cfg(test)]
+#[path = "staging_webcam_tests.rs"]
+mod webcam_tests;
 
 #[cfg(test)]
 mod tests {
@@ -484,6 +581,7 @@ mod tests {
             height: 1080,
             recorded_at: "2026-09-18T14:32:00+02:00".into(),
             timeline: None,
+            webcam: None,
             extra: Default::default(),
         };
         let dir = tempfile::tempdir().unwrap();
@@ -507,6 +605,7 @@ mod tests {
             height: 2,
             recorded_at: "r".into(),
             timeline: None,
+            webcam: None,
             extra: Default::default(),
         }
     }
@@ -663,6 +762,7 @@ mod tests {
             height: 2,
             recorded_at: "r".into(),
             timeline: None,
+            webcam: None,
             extra: Default::default(),
         };
         let json = serde_json::to_string(&s).unwrap();

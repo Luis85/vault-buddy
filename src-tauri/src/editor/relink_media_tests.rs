@@ -394,10 +394,21 @@ fn only_a_missing_file_backed_source_can_be_reconnected() {
         },
         ..missing_record()
     });
+    // F-22: a capture's webcam track lives in staging beside it, exactly
+    // like the capture -- reconnecting it here would copy a replacement into
+    // `media\` and cut the project's tie to the capture it was recorded with.
+    let staged_companion = Fixture::new(SourceRecord {
+        locator: SourceLocator::StagingFile {
+            base: "2026-09-23 1000 Talk".into(),
+            file: "2026-09-23 1000 Talk.webcam.mp4".into(),
+        },
+        ..missing_record()
+    });
     for (what, f) in [
         ("present", &present),
         ("builtin", &builtin),
         ("staged", &staged),
+        ("staged companion", &staged_companion),
     ] {
         let job = RelinkJob {
             state: &f.state,
