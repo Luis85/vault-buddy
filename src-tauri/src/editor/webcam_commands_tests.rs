@@ -8,8 +8,9 @@ use std::collections::BTreeSet;
 
 use serde_json::json;
 use tauri::http::{HeaderName, HeaderValue};
-use vault_buddy_core::editor::commands::payloads::InsertClipPayload;
+use vault_buddy_core::editor::commands::payloads::{DeleteClipsPayload, InsertClipPayload};
 use vault_buddy_core::editor::commands::CommandContext;
+use vault_buddy_core::editor::take::MAX_TAKE_CHUNK_BYTES;
 use vault_buddy_core::editor::{
     AssetKind, EditorCommand, EditorSession, ExecuteRequest, Map, Num, Track, TrackKind,
 };
@@ -38,6 +39,16 @@ impl TakeIo for FakeIo {
         std::fs::copy(part, out)
             .map(|_| ())
             .map_err(|e| internal(e.to_string()))
+    }
+
+    fn ready(&self) -> Result<(), EditorError> {
+        if self.no_ffmpeg {
+            return Err(err(
+                EditorErrorCode::EncoderUnavailable,
+                "ffmpeg is not installed",
+            ));
+        }
+        Ok(())
     }
 
     fn probe(&self, _path: &Path) -> Result<ProbeFacts, EditorError> {
@@ -127,6 +138,7 @@ impl Fixture {
             SESSION,
             "video/webm;codecs=vp9,opus",
             None,
+            &FakeIo::default(),
         )
         .unwrap()
         .take_id
@@ -257,6 +269,7 @@ fn begin_is_refused_during_a_screen_capture() {
         SESSION,
         "video/webm",
         Some(CaptureKind::Screen),
+        &FakeIo::default(),
     )
     .unwrap_err();
     assert_eq!(e.code, EditorErrorCode::DeviceUnavailable);
@@ -267,6 +280,7 @@ fn begin_is_refused_during_a_screen_capture() {
         SESSION,
         "video/webm",
         Some(CaptureKind::Audio),
+        &FakeIo::default(),
     )
     .unwrap_err();
     assert_eq!(e.message, "Stop the audio recording first.");
@@ -282,12 +296,67 @@ fn begin_is_refused_during_a_screen_capture() {
     assert_eq!(f.state.takes.open_takes(SESSION), vec![take]);
 }
 
+// Fix round 1 (controller ruling): a take is refused BEFORE recording when
+// ffmpeg cannot be found -- without it the take could only land unindexed
+// with an unknown length, a dead end on the timeline. The raw-keep path in
+// finish remains for ffmpeg vanishing mid-take.
+#[test]
+fn begin_is_refused_without_ffmpeg() {
+    let f = Fixture::new();
+    let e = begin_in(
+        &f.state,
+        f.root.path(),
+        SESSION,
+        "video/webm",
+        None,
+        &FakeIo { no_ffmpeg: true },
+    )
+    .unwrap_err();
+    assert_eq!(e.code, EditorErrorCode::EncoderUnavailable);
+    assert!(e.message.contains("ffmpeg"), "{}", e.message);
+    assert!(!f.takes().exists(), "no take, no folder");
+    assert!(f.state.takes.open_takes(SESSION).is_empty());
+}
+
+// Fix round 1 (review Minor 1): the chunk bound is checked on the BORROWED
+// body, before a byte is copied out of the request.
+#[test]
+fn an_oversized_raw_body_is_refused_before_it_is_copied() {
+    let over = InvokeBody::Raw(vec![7; MAX_TAKE_CHUNK_BYTES as usize + 1]);
+    let e = raw_chunk(&over).unwrap_err();
+    assert_eq!(e.code, EditorErrorCode::InvalidRequest);
+    assert!(e.message.contains("1048577 bytes"), "{}", e.message);
+    let full = InvokeBody::Raw(vec![7; MAX_TAKE_CHUNK_BYTES as usize]);
+    assert_eq!(
+        raw_chunk(&full).unwrap().len(),
+        MAX_TAKE_CHUNK_BYTES as usize
+    );
+    let json = InvokeBody::Json(json!([1, 2]));
+    assert!(raw_chunk(&json).unwrap_err().message.contains("raw bytes"));
+}
+
 #[test]
 fn begin_refuses_other_mime_types_and_unknown_sessions() {
     let f = Fixture::new();
-    let e = begin_in(&f.state, f.root.path(), SESSION, "video/mp4", None).unwrap_err();
+    let e = begin_in(
+        &f.state,
+        f.root.path(),
+        SESSION,
+        "video/mp4",
+        None,
+        &FakeIo::default(),
+    )
+    .unwrap_err();
     assert_eq!(e.code, EditorErrorCode::InvalidRequest);
-    let e = begin_in(&f.state, f.root.path(), "ses-nope", "video/webm", None).unwrap_err();
+    let e = begin_in(
+        &f.state,
+        f.root.path(),
+        "ses-nope",
+        "video/webm",
+        None,
+        &FakeIo::default(),
+    )
+    .unwrap_err();
     assert_eq!(e.code, EditorErrorCode::SessionGone);
     assert!(!f.takes().exists());
 }
@@ -306,6 +375,14 @@ fn finish_without_ffmpeg_keeps_and_registers_the_raw_take() {
     let e = f.finish(&FakeIo { no_ffmpeg: true }, &take, 2).unwrap_err();
     assert_eq!(e.code, EditorErrorCode::EncoderUnavailable);
     assert_eq!(e.retained_asset_ids, Some(vec![take.clone()]));
+    // Unindexed: it plays from its start but cannot be seeked -- the copy
+    // must not promise more (fix round 1).
+    assert!(e.message.contains("from its start"), "{}", e.message);
+    assert!(
+        !e.message.contains("plays in the preview,"),
+        "{}",
+        e.message
+    );
 
     let kept = f.takes().join(format!("{take}.webm"));
     let recorded: Vec<u8> = chunks.concat();
@@ -452,9 +529,76 @@ fn discard_refuses_a_take_in_use() {
         );
     }
     discard_in(&f.state, SESSION, &take).unwrap();
-    assert!(!file.exists());
+    assert!(
+        file.is_file(),
+        "a finished take's file is never deleted: its asset is still registered"
+    );
     let e = discard_in(&f.state, SESSION, &take).unwrap_err();
     assert_eq!(e.code, EditorErrorCode::InvalidRequest, "the take is gone");
+}
+
+// Fix round 1 (review Important 1): the in-use check sees only the CURRENT
+// clips, never the undo history. Place the take, delete its clip, discard
+// the take, Undo: the clip is back -- so the file it plays must still be
+// there. A finished, registered take's file is never deleted by a discard.
+#[test]
+fn discard_of_a_finished_take_keeps_the_file_undo_can_bring_back() {
+    let f = Fixture::new();
+    let take = f.begin();
+    f.append(&take, 0, b"only").unwrap();
+    f.finish(&FakeIo::default(), &take, 0).unwrap();
+    let placed = {
+        let mut sessions = lock_ignoring_poison(&f.state.sessions);
+        let session = sessions.get_mut(SESSION).unwrap();
+        execute(
+            session,
+            "cmd-place",
+            EditorCommand::InsertClip(InsertClipPayload {
+                asset_id: take.clone(),
+                track_id: "v2".into(),
+                start_ms: 0,
+                in_ms: 0,
+                out_ms: 4_200,
+            }),
+        );
+        let clip = session
+            .project()
+            .clips
+            .iter()
+            .find(|c| c.asset_id == take)
+            .unwrap()
+            .id
+            .clone();
+        execute(
+            session,
+            "cmd-delete",
+            EditorCommand::DeleteClips(DeleteClipsPayload {
+                clip_ids: vec![clip.clone()],
+                close_gap: false,
+            }),
+        );
+        clip
+    };
+    discard_in(&f.state, SESSION, &take).unwrap();
+    {
+        let mut sessions = lock_ignoring_poison(&f.state.sessions);
+        execute(
+            sessions.get_mut(SESSION).unwrap(),
+            "cmd-undo",
+            EditorCommand::Undo,
+        );
+    }
+    assert!(
+        f.project().clips.iter().any(|c| c.id == placed),
+        "Undo brought the clip back"
+    );
+    let file = f.takes().join(format!("{take}.webm"));
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        b"only",
+        "and its file is still there"
+    );
+    assert!(f.sources().contains_key(&take));
 }
 
 #[test]
@@ -533,6 +677,11 @@ fn a_real_webm_streamed_in_chunks_lands_indexed() {
         "libvpx",
         "-c:a",
         "libopus",
+        // A LIVE WebM, as MediaRecorder writes it: no duration, no cues.
+        "-f",
+        "webm",
+        "-live",
+        "1",
         webm.to_str().unwrap(),
     ]) {
         eprintln!(
@@ -540,6 +689,11 @@ fn a_real_webm_streamed_in_chunks_lands_indexed() {
         );
         return;
     }
+    let unindexed = FfmpegTakeIo::default().probe(&webm).unwrap();
+    assert_eq!(
+        unindexed.duration_ms, 0,
+        "the fixture must be unindexed, or the remux proves nothing"
+    );
     let bytes = std::fs::read(&webm).unwrap();
     let f = Fixture::new();
     let take = f.begin();
@@ -560,5 +714,10 @@ fn a_real_webm_streamed_in_chunks_lands_indexed() {
     assert_eq!((dto.width, dto.height), (320, 176));
     assert!(dto.has_audio);
     assert!((1_800..=2_300).contains(&dto.duration_ms), "{dto:?}");
-    assert!(f.takes().join(format!("{take}.webm")).is_file());
+    let landed = f.takes().join(format!("{take}.webm"));
+    let indexed = FfmpegTakeIo::default().probe(&landed).unwrap();
+    assert!(
+        (1_800..=2_300).contains(&indexed.duration_ms),
+        "the landed take gained a duration: {indexed:?}"
+    );
 }

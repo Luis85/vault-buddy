@@ -220,18 +220,20 @@ export interface EditorPort {
   openScreenCapture(vaultId: string, path: string): Promise<void>;
   /** `editor_webcam_begin` (Task 49) — starts a take in the project's own
    * `takes\`; refused (`deviceUnavailable`) while a screen or audio
-   * recording runs. The take is recorded as OPEN (`webcamTakes.ts`). */
+   * recording runs, and (`encoderUnavailable`) when ffmpeg cannot be found. The take is recorded as OPEN (`webcamTakes.ts`). */
   webcamBegin(sessionId: string, mimeType: string): Promise<TakeStarted>;
   /** `editor_webcam_append` — one `MediaRecorder` chunk (≤ 1 MiB), sent as
    * a RAW invoke body, never JSON, numbered from 0. Callers send them one
    * at a time, in order: a gap fails the take. */
   webcamAppend(sessionId: string, takeId: string, seq: number, bytes: Uint8Array): Promise<void>;
   /** `editor_webcam_finish` — `lastSeq` is the last chunk sent. The take
-   * becomes its own asset; `encoderUnavailable` (no ffmpeg) still KEPT and
-   * registered it, naming it in `retainedAssetIds`. */
+   * becomes its own asset; `encoderUnavailable` (ffmpeg vanished mid-take)
+   * still KEPT and registered it, unindexed, naming it in
+   * `retainedAssetIds`. */
   webcamFinish(sessionId: string, takeId: string, lastSeq: number): Promise<TakeDto>;
-  /** `editor_webcam_discard` — removes the take's own files; refused while
-   * a clip plays it. */
+  /** `editor_webcam_discard` — removes an unfinished take's `.part`; a
+   * finished take's file is never deleted (only forgotten; refused while a
+   * clip plays it). */
   webcamDiscard(sessionId: string, takeId: string): Promise<void>;
 }
 

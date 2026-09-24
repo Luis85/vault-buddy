@@ -2987,23 +2987,65 @@ each webview's `PermissionRequested` (via `with_webview` and the
 for every label but `editor`; answer the editor's with the default prompt.
 Windows-only, so it lands with a checklist row (R-H1), not a CI test.
 
-### GAP-195 · Low · A discarded FINISHED webcam take leaves its asset in the library, reading as missing media
-`src-tauri/src/editor/webcam_commands.rs` (`discard_in`), Task 49.
-`editor_webcam_finish` registers a take as its own asset through ONE
-`AddAssets` (an undo step) so the review player can play it through
-`editor_media_url`. `editor_webcam_discard` on that take — Task 50's
-**Retake**, say — removes the take's `.webm` (refused while a clip plays
-it), but no command removes an ASSET: the contract's `InternalCommand` set
-is `AddAssets`/`ImportCaptions`/`RestoreSnapshot`/`RelinkAssets`, and there
-is no user-facing "remove from library" yet. So the asset and its
-`sources.json` record stay, and the project reports it as missing media
-(`missing_media` finds the record's file gone) on the next open, offering to
-reconnect a take the user threw away. Undo of the finish step removes the
-asset cleanly while it is still the last edit. **Fix:** a native
-`RemoveAssets{assetIds}` internal command (refusing an asset any clip,
-effect or caption still references) run by the discard of a finished take,
-removing the `sources.json` record in the same save-locked step — a
-contract addition, so an ADR amendment first.
+### GAP-195 · Low (contract-bound) · A Retake after a finished webcam take leaves the earlier take in the library
+`src-tauri/src/editor/webcam_commands.rs` (`discard_in`), Task 49 (fix
+round 1, controller ruling). `editor_webcam_finish` registers a take as its
+own asset through ONE `AddAssets` (an undo step) so the review player can
+play it through `editor_media_url`. From then on `editor_webcam_discard` —
+Task 50's **Retake**, say — NEVER deletes that take's `.webm`: it refuses
+while a clip plays the asset, and otherwise only forgets the pending take,
+keeping the file, its `sources.json` record and the asset. Deleting it would
+be wrong even when no clip plays it now, because the in-use check sees only
+the CURRENT clips and never the undo history: place the take, delete its
+clip, discard, Undo — the clip is back and would play a file the discard
+removed (pinned by `discard_of_a_finished_take_keeps_the_file_undo_can_
+bring_back`). The cost: every take recorded and then re-taken stays in the
+library as a playable "Webcam take N", and its file stays on disk until the
+project is discarded. No `RemoveAssets` exists to take it out — the
+contract's `InternalCommand` list (`AddAssets`/`ImportCaptions`/
+`RestoreSnapshot`/`RelinkAssets`) is fixed — and even one would be an undo
+step, so its file could still not be deleted while history can reach it.
+Undo of the finish step removes the asset from the graph (the file stays).
+**Fix:** a contract addition (ADR amendment first): a native
+`RemoveAssets{assetIds}` for the library, with the file deleted only once no
+history entry and no saved product snapshot references the asset (e.g. a
+sweep of `takes\` on session close against the live graph plus history).
+
+### GAP-196 · Low · A webcam take whose ffmpeg vanished mid-take lands with an unknown length and is never re-probed
+`src-tauri/src/editor/webcam_commands.rs` (`land_raw`), Task 49 (fix round
+1, controller ruling). `editor_webcam_begin` refuses `encoderUnavailable`
+when ffmpeg cannot be resolved, so a take is only recorded when it could be
+indexed. If ffmpeg disappears DURING the take (uninstalled, its path
+override pointing at a removed binary, a network drive dropped), finish
+keeps the raw recording (A09: never lost), registers it with
+`durationMs: 0` and no dimensions, and answers `encoderUnavailable` naming
+the asset. That take plays from its start in the preview but cannot be
+seeked, and `insertClip` can never place it (`outMs` must be > 0). Nothing
+re-probes it when ffmpeg comes back, it cannot be reconnected (its file is
+present, so it is not missing), and it cannot be finished again (the slot is
+`Finished`, and forgotten on close). **Fix:** on open (or when ffmpeg is next
+detected), remux and re-probe every `Takes`-locator asset whose record has
+`durationMs == 0`, updating `sources.json` and the asset through a native
+relink-style step.
+
+### GAP-197 · Medium · A crash mid-take leaves the user's recording as an unswept, unsurfaced `.part`
+`src-tauri/src/editor/webcam_commands.rs`, Task 49. While a webcam take
+records, its bytes live only in `takes\.<takeId>.webm.part` (and, during a
+finish, `takes\.<takeId>.remux.webm`); the take's state is in memory
+(`EditorState::takes`). A crash, a kill or a power loss mid-take therefore
+leaves the user's actual recording — a streamable WebM prefix that plays —
+in a hidden file that nothing sweeps, surfaces or offers back: the next
+session has no slot for it, `sources.json` never names it, and the startup
+sweeps (`screen_recovery`, `recovery::run_startup_repin`) never look in a
+project's `takes\`. This is lost recorded MEDIA, not scratch — unlike
+GAP-189's render/publish leftovers — and the screen-capture side already
+solved the same problem (`screen_recovery` promotes an orphaned `.part` that
+holds footage). A graceful close is covered: the close guard warns first, and
+a closing session removes its own unfinished parts. **Fix:** a startup pass
+over each project's `takes\` (owned names `.<valid take id>.webm.part` only,
+no-follow, staleness-gated like the screen sweep): remux-and-register a part
+that probes as video (or keep it raw, A09), remove a leftover
+`.remux.webm`, and report what it recovered in the next open of that project.
 
 ## 9. Documentation & repo hygiene
 

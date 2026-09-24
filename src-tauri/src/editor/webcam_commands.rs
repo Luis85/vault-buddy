@@ -5,7 +5,9 @@
 //!
 //! - `editor_webcam_begin` refuses while any capture holds `CaptureGuard`
 //!   (F35: R10 only asked for a UI rule; the native refusal backs it), then
-//!   exclusive-creates `takes\.<takeId>.webm.part` and answers `{takeId}`.
+//!   refuses `encoderUnavailable` when ffmpeg cannot be found (a take it
+//!   could not index would be a dead end), then exclusive-creates
+//!   `takes\.<takeId>.webm.part` and answers `{takeId}`.
 //! - `editor_webcam_append` takes a RAW invoke body (`tauri::ipc::Request`;
 //!   a JSON body is refused) with the chunk's session, take and sequence in
 //!   the `x-editor-session` / `x-editor-take` / `x-editor-seq` headers,
@@ -21,8 +23,14 @@
 //!   the timeline edits go through. Without ffmpeg the raw recording is KEPT
 //!   as the `.webm` and registered anyway (A09: a take is never lost), and
 //!   the answer is `encoderUnavailable` carrying its asset id.
-//! - `editor_webcam_discard` removes a take's own files — never while a
-//!   clip plays it.
+//! - `editor_webcam_discard` removes an unfinished take's own `.part`; a
+//!   FINISHED take's `.webm` is never deleted (its asset — or the undo
+//!   history — may still need it), and one a clip plays is refused.
+//!
+//! Which append errors fail the take: everything decided AFTER the take is
+//! identified (a JSON or oversized body, a sequence gap, a size limit, a
+//! write). A missing or malformed header is refused before any take is
+//! known, so it cannot fail one — the headers are what name it.
 //!
 //! **A take does not claim `CaptureGuard`** (it holds no native device;
 //! GAP-193): a screen capture started DURING a take is not refused.
@@ -54,8 +62,8 @@ use vault_buddy_core::editor::commands::payloads::AddAssetsPayload;
 use vault_buddy_core::editor::import_io::copy_hashing;
 use vault_buddy_core::editor::probe::ProbeFacts;
 use vault_buddy_core::editor::take::{
-    asset_in_use, is_take_mime, next_take_ordinal, parse_seq, take_asset, TakeState,
-    TAKE_ID_PREFIX, TAKE_MIME_TYPES,
+    asset_in_use, is_take_mime, next_take_ordinal, parse_seq, take_asset, TakeError, TakeState,
+    MAX_TAKE_CHUNK_BYTES, TAKE_ID_PREFIX, TAKE_MIME_TYPES,
 };
 use vault_buddy_core::editor::{
     is_valid_id, new_entity_id, Asset, EditorError, EditorErrorCode, InternalCommand,
@@ -247,6 +255,7 @@ pub(crate) fn begin_in(
     session_id: &str,
     mime_type: &str,
     capture: Option<CaptureKind>,
+    io: &dyn TakeIo,
 ) -> Result<TakeStarted, EditorError> {
     let project_id = project_id_for(state, session_id)?;
     if !is_take_mime(mime_type) {
@@ -258,6 +267,11 @@ pub(crate) fn begin_in(
     if let Some(kind) = capture {
         return Err(capture_running(kind));
     }
+    // Fix round 1 (controller ruling): without ffmpeg a take could only
+    // land unindexed, with an unknown length — kept, but never placeable.
+    // Refuse before anything is recorded; finish's raw-keep path remains
+    // only for ffmpeg vanishing mid-take (GAP-196).
+    io.ready()?;
     let dir = takes_dir(root, &project_id)?;
     let take_id = new_entity_id(TAKE_ID_PREFIX);
     let slot = TakeSlot {
@@ -298,6 +312,7 @@ pub async fn editor_webcam_begin(
             &session_id,
             &mime_type,
             capture,
+            &FfmpegTakeIo::default(),
         )
     })
     .await
@@ -345,6 +360,18 @@ pub(crate) fn raw_body(body: &InvokeBody) -> Result<&[u8], EditorError> {
             "A webcam chunk must be sent as raw bytes, not JSON.",
         )),
     }
+}
+
+/// The chunk, copied out of the request — but only after its size is
+/// checked on the BORROWED body, so an oversized body is never duplicated
+/// in memory first. (`accept_chunk` checks the same bound again.)
+pub(crate) fn raw_chunk(body: &InvokeBody) -> Result<Vec<u8>, EditorError> {
+    let bytes = raw_body(body)?;
+    let len = bytes.len() as u64;
+    if len > MAX_TAKE_CHUNK_BYTES {
+        return Err(TakeError::ChunkTooLarge { len }.into());
+    }
+    Ok(bytes.to_vec())
 }
 
 /// The `AppHandle`-free half of `editor_webcam_append`. `chunk` is the raw
@@ -409,7 +436,7 @@ pub async fn editor_webcam_append(
 ) -> Result<(), EditorError> {
     require_editor_window(&window)?;
     let at = chunk_headers(request.headers())?;
-    let chunk = raw_body(request.body()).map(<[u8]>::to_vec);
+    let chunk = raw_chunk(request.body());
     blocking(move || {
         append_in(
             &app.state::<EditorState>(),
@@ -428,6 +455,8 @@ pub(crate) trait TakeIo {
     /// ffmpeg is not installed.
     fn remux(&self, part: &Path, out: &Path) -> Result<(), EditorError>;
     fn probe(&self, path: &Path) -> Result<ProbeFacts, EditorError>;
+    /// `Ok` when ffmpeg can be used at all; `encoderUnavailable` otherwise.
+    fn ready(&self) -> Result<(), EditorError>;
 }
 
 /// Production: the user-installed ffmpeg, resolved once per finish.
@@ -444,13 +473,19 @@ impl FfmpegTakeIo {
             .ok_or_else(|| {
                 err(
                     EditorErrorCode::EncoderUnavailable,
-                    "ffmpeg is not installed, so the take cannot be indexed for seeking.",
+                    "ffmpeg is not installed. A webcam take needs it to be given a length and \
+                     placed on the timeline — install ffmpeg (Buddy settings → Integrations) \
+                     and record again.",
                 )
             })
     }
 }
 
 impl TakeIo for FfmpegTakeIo {
+    fn ready(&self) -> Result<(), EditorError> {
+        self.tools().map(|_| ())
+    }
+
     fn remux(&self, part: &Path, out: &Path) -> Result<(), EditorError> {
         use crate::external_tool::{run_capturing, tool_command, Capture};
         let mut cmd = tool_command(&self.tools()?.ffmpeg);
@@ -502,9 +537,9 @@ pub(crate) fn finish_in(
             retained_asset_ids: Some(vec![asset_id]),
             ..err(
                 EditorErrorCode::EncoderUnavailable,
-                "ffmpeg is not installed, so the take was kept exactly as recorded. It plays in \
-                 the preview, but its length is unknown until it can be indexed — install ffmpeg \
-                 (Buddy settings → Integrations) to record takes you can place on the timeline.",
+                "ffmpeg could not be found when the take ended, so it was kept exactly as \
+                 recorded. It plays from its start in the preview but cannot be seeked, and its \
+                 length is unknown, so it cannot be placed on the timeline.",
             )
         }),
     }
@@ -703,11 +738,15 @@ pub async fn editor_webcam_finish(
 
 // ---- discard --------------------------------------------------------------
 
-/// The `AppHandle`-free half of `editor_webcam_discard`: the take's own
-/// `.part` and `.webm`, never while a clip plays it. A finished take's
-/// asset stays in the project (no command removes an asset; GAP-195) and
-/// its `sources.json` record stays with it, so it reads as missing media
-/// rather than vanishing silently.
+/// The `AppHandle`-free half of `editor_webcam_discard`.
+///
+/// An UNFINISHED take: its owned `.part` is removed. A FINISHED take is
+/// already an asset — its `.webm` is NEVER deleted here (fix round 1): the
+/// in-use check sees only the current clips, never the undo history, so a
+/// clip deleted and then brought back by Undo would otherwise play a file
+/// the discard removed. A finished take a clip plays is refused; any other
+/// finished take is only forgotten as a pending take, its file and asset
+/// kept (no command removes an asset — GAP-195).
 pub(crate) fn discard_in(
     state: &EditorState,
     session_id: &str,
@@ -726,15 +765,16 @@ pub(crate) fn discard_in(
             ));
         }
     }
-    remove_owned(&slot.part());
-    remove_owned(&slot.out());
+    if entry.state != TakeState::Finished {
+        remove_owned(&slot.part());
+    }
     entry.state = TakeState::Discarded;
     drop(entry);
     lock_ignoring_poison(&state.takes.0).remove(take_id);
     Ok(())
 }
 
-/// ASYNC: up to two unlinks, off the main thread.
+/// ASYNC: at most one unlink, off the main thread.
 #[tauri::command]
 pub async fn editor_webcam_discard(
     window: WebviewWindow,
