@@ -183,7 +183,7 @@ pub fn resolve_source(
             let dir = staging::staging_dir(root_local_app_data);
             let owned =
                 |stems: &[String]| staging_files::companion_file_names(base, stems).contains(file);
-            if !owned(&[]) && !owned(&listed_stems(&dir, base)) {
+            if !owned(&[]) && !owned(&staging::listed_stems(&dir, base)) {
                 return None;
             }
             join_contained(&dir, file)
@@ -198,15 +198,6 @@ pub fn resolve_source(
         }
         SourceLocator::Builtin => None,
     }
-}
-
-/// The stem files `base`'s own sidecar lists — none when it has no readable
-/// sidecar, or a `base` that would escape staging.
-pub(crate) fn listed_stems(staging_dir: &Path, base: &str) -> Vec<String> {
-    join_contained(staging_dir, &staging::sidecar_file_name(base))
-        .and_then(|path| staging::read_sidecar(&path))
-        .map(|sidecar| sidecar.stem_files())
-        .unwrap_or_default()
 }
 
 /// The sidecar key a tutorial project writes to ADOPT a staged capture by

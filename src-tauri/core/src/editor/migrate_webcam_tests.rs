@@ -36,6 +36,7 @@ fn migrate_cut(webcam: Option<WebcamInput>, legacy: Option<&serde_json::Value>) 
         has_audio: true,
         legacy_timeline: legacy,
         stems: &[],
+        input_count: 0,
         webcam,
     };
     from_staged(&input, "proj-1").project

@@ -3180,16 +3180,26 @@ and LISTS it in `<base>.json` — but when the capture's own part was promoted
 to a ` (N)` name, or the capture is gone, there is no sidecar to list it in,
 and a stem that is not listed is owned by nothing: discard and Clear leave it
 as litter in staging (logged, never deleted). A crash-free capture never
-reaches this path.
+reaches this path. Such a leftover can no longer hurt the NEXT capture:
+`reserve_base` treats any stem file's base as taken (review fix round 1), so
+a new capture never shares a base with one and never has its own complete
+stem's publish collide with it. A stem promoted in a pass where its capture
+was not yet stale is not revisited by later passes (review Minor 4, open).
+(1b) **Fixed in review fix round 1:** migration used to mute the mix whenever ANY
+stem was listed, so a capture with one failed stem migrated with that input
+silent. Stems are now placed all or none — only when every recorded input
+has a registered stem (`StagedInput::input_count`); otherwise the mix stays
+audible and no stem is placed.
 (3) **Migration assumes every stem spans the capture.** A stem's asset length
 is the capture's `durationMs`; that holds because only complete stems are
 published, and the mixed track they mirror runs the capture's length — a
 capture whose audio track ends early (the mux stopped writing audio) would
 place stem clips slightly past their media's end, the GAP-199 class.
-(4) **The clip limit.** Migration places one clip per legacy segment per stem
-(plus the screen's and the webcam's), so a heavily cut legacy timeline with
-several stems can exceed `MAX_CLIPS` (600) and `editor_open_staged` refuses
-it with `invalidProject` rather than opening it without some stems.
+(4) ~~**The clip limit.**~~ **Fixed in review fix round 1.** Migration places
+one clip per legacy segment per stem, so a heavily cut legacy timeline with
+several stems could exceed `MAX_CLIPS` (600) and `editor_open_staged` refused
+it outright. It now degrades like the track limit: the stems are dropped
+(logged), the mix stays audible, and the project validates.
 (5) **A stem is mono.** An input recorded in stereo (a loopback device) is
 downmixed before the mixer and so before the tee; its stem carries that mono
 downmix, exactly what the mix carries of it — never the device's own stereo.

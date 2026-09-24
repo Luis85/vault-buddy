@@ -94,8 +94,8 @@ pub fn webcam_part_file_name(base: &str) -> String {
 // (Task 53, split at this file's 800-line cap); re-exported so every path
 // is unchanged.
 pub use crate::staging_stems::{
-    ends_with_stem_marker, stem_file_name, stem_part_base, stem_part_file_name, StemSidecar,
-    STEM_INFIX,
+    ends_with_stem_marker, listed_stems, stem_file_name, stem_part_base, stem_part_file_name,
+    StemSidecar, STEM_INFIX,
 };
 
 /// Is `name`'s STEM (the text before the first `.`) one of Windows' reserved
@@ -178,7 +178,8 @@ fn disambiguate_reserved_device(base: &str) -> String {
 /// A base is free only when EVERY name it mints a file under is free — the
 /// staged `.mp4`, the `.json` sidecar, the hidden `.mp4.part`, and (F-22)
 /// the webcam file and its part. This is the pairwise reservation the
-/// audio domain uses, widened to five: checking only the `.mp4` would let a
+/// audio domain uses, widened to five plus any stem file (Task 53, by
+/// pattern): checking only the `.mp4` would let a
 /// second capture adopt a base whose in-progress `.part` still exists, and
 /// the two captures would then write the same file; a leftover
 /// `<base>.webcam.mp4` would be adopted as the new capture's own webcam
@@ -190,8 +191,10 @@ fn disambiguate_reserved_device(base: &str) -> String {
 /// of those writes would leave the others.
 pub fn reserve_base(dir: &Path, base: &str) -> String {
     let base = &disambiguate_reserved_device(base);
+    let stems = crate::staging_stems::stem_bases(dir);
     let free = |candidate: &str| {
-        !dir.join(mp4_file_name(candidate)).exists()
+        !stems.contains(candidate)
+            && !dir.join(mp4_file_name(candidate)).exists()
             && !dir.join(sidecar_file_name(candidate)).exists()
             && !dir.join(part_file_name(candidate)).exists()
             && !dir.join(webcam_file_name(candidate)).exists()

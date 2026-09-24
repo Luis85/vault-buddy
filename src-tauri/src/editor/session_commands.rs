@@ -139,6 +139,7 @@ pub(crate) fn open_staged_in(
             has_audio: !sidecar.inputs.is_empty(),
             legacy_timeline: sidecar.timeline.as_ref(),
             stems: &stems,
+            input_count: sidecar.inputs.len(),
             webcam: webcam.as_ref().map(|(input, _)| input.clone()),
         },
         &project_id,
@@ -174,7 +175,12 @@ pub(crate) fn open_staged_in(
     if let Some((_, record)) = webcam {
         sources.insert(migrate::WEBCAM_ASSET_ID.to_string(), record);
     }
-    sources.extend(stem_sources);
+    // Only the stems migration PLACED (all of them, or none).
+    sources.extend(
+        stem_sources
+            .into_iter()
+            .filter(|(id, _)| migration.project.assets.iter().any(|a| &a.id == id)),
+    );
     create_project(root, &migration.project, &sources)
         .map_err(|e| internal(format!("Could not create the project: {e}")))?;
     pin(staging_dir, base, &project_id)?;
@@ -264,19 +270,26 @@ fn staged_webcam(
 /// input, each with the `StagingFile` source record that makes its file
 /// resolvable. The sidecar's list is hand-editable, so an entry is kept only
 /// when its file is one the capture OWNS (`capture_file_names` over that
-/// same list — which admits only this base's own stem shape); a repeated
-/// index is kept once. A stem spans the whole mixed track (only complete
-/// stems are published), so its length is the capture's.
+/// same list — which admits only this base's own stem shape), is the FIRST
+/// entry for its index AND its file, and is a plain file on disk (review fix
+/// round 1: a missing or doubled file must not stand in for an input). A stem
+/// spans the whole mixed track (only complete stems are published), so its
+/// length is the capture's. Migration places them only if they cover every
+/// input; the caller registers only the ones it placed.
 fn staged_stems(
     staging_dir: &Path,
     sidecar: &staging::StagedSidecar,
 ) -> (Vec<migrate::StemInput>, Vec<(String, SourceRecord)>) {
     let owned = staging_files::capture_file_names(&sidecar.base, &sidecar.stem_files());
     let mut seen = BTreeSet::new();
+    let mut seen_files = BTreeSet::new();
     let mut inputs = Vec::new();
     let mut records = Vec::new();
     for stem in &sidecar.stems {
-        if !owned.contains(&stem.file) || !seen.insert(stem.index) {
+        if !owned.contains(&stem.file)
+            || !seen.insert(stem.index)
+            || !seen_files.insert(stem.file.as_str())
+        {
             log::warn!(
                 "editor_open_staged: {:?}'s stem entry {} names {:?}, which it does not own; ignored",
                 sidecar.base,
@@ -285,12 +298,18 @@ fn staged_stems(
             );
             continue;
         }
-        let size = std::fs::metadata(staging_dir.join(&stem.file))
-            .map(|m| m.len())
-            .unwrap_or_else(|e| {
-                log::warn!("editor_open_staged: cannot read stem {:?}: {e}", stem.file);
-                0
-            });
+        // No-follow: a link wearing a stem's name is not the capture's file.
+        let size = match std::fs::symlink_metadata(staging_dir.join(&stem.file)) {
+            Ok(meta) if meta.file_type().is_file() => meta.len(),
+            other => {
+                log::warn!(
+                    "editor_open_staged: stem {:?} is not a file on disk ({:?}); not registered",
+                    stem.file,
+                    other.err().map(|e| e.kind())
+                );
+                continue;
+            }
+        };
         inputs.push(migrate::StemInput {
             index: stem.index,
             input: stem.input.clone(),

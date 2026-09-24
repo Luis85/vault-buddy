@@ -17,21 +17,43 @@ pub fn stem_asset_id(index: u32) -> String {
     format!("stem-{index}")
 }
 
-/// The stems' assets, tracks and clips. `placed` is every screen segment as
-/// `(output start, source start, source end)`; `duration_ms` the capture's.
-/// Stems beyond the track limit are left out rather than producing a project
-/// `validate_project` would refuse.
+/// The stems' assets, tracks and clips — ALL of them or none (review fix
+/// round 1). `placed` is every screen segment as `(output start, source
+/// start, source end)`; `duration_ms` the capture's; `input_count` how many
+/// inputs it recorded; `tracks_so_far`/`clips_so_far` what the project will
+/// already hold (the webcam's share included).
+///
+/// Stems REPLACE the mix (the caller mutes it), so they are placed only when
+/// every input `1..=input_count` has one and they fit the track and clip
+/// limits. Anything less — one stem failed and was never listed, a listed
+/// file was not registered, too many inputs, too many cuts — would mute the
+/// inputs left out, or produce a project `validate_project` refuses. `None`
+/// then: the capture migrates exactly as with stems off (logged).
 pub(super) fn stem_parts(
     stems: &[StemInput],
+    input_count: usize,
     placed: &[(u64, u64, u64)],
     duration_ms: u64,
-    tracks_so_far: usize,
-) -> (Vec<Asset>, Vec<Track>, Vec<Clip>) {
-    let room = limits::MAX_TRACKS.saturating_sub(tracks_so_far);
+    (tracks_so_far, clips_so_far): (usize, usize),
+) -> Option<(Vec<Asset>, Vec<Track>, Vec<Clip>)> {
+    // One stem per input, in input order: the first entry for each index.
+    let covering: Vec<&StemInput> = (1..=input_count)
+        .map(|index| stems.iter().find(|s| usize::try_from(s.index) == Ok(index)))
+        .collect::<Option<_>>()?;
+    let fits = !covering.is_empty()
+        && tracks_so_far + covering.len() <= limits::MAX_TRACKS
+        && clips_so_far + covering.len() * placed.len() <= limits::MAX_CLIPS;
+    if !fits {
+        log::warn!(
+            "migrate: {} stem(s) for {input_count} input(s) not placed (track or clip limit); the mix stays audible",
+            covering.len()
+        );
+        return None;
+    }
     let mut assets = Vec::new();
     let mut tracks = Vec::new();
     let mut clips = Vec::new();
-    for stem in stems.iter().take(room) {
+    for stem in covering {
         let asset_id = stem_asset_id(stem.index);
         let track_id = format!("as{}", stem.index);
         assets.push(Asset {
@@ -65,5 +87,5 @@ pub(super) fn stem_parts(
                 }),
         );
     }
-    (assets, tracks, clips)
+    Some((assets, tracks, clips))
 }

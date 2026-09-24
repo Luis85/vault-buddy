@@ -529,7 +529,12 @@ fn finalize_stopped(
         height: outcome.height,
         recorded_at,
         timeline: None,
-        ..Default::default()
+        // Explicit, never `..Default::default()`: this is the ONE production
+        // construction site, and a new sidecar field must fail to compile
+        // here rather than silently default (review fix round 1).
+        webcam: None,
+        stems: Vec::new(),
+        extra: Default::default(),
     };
     // The measured webcam track (F-22, GAP-199), when one finished.
     if let Some(webcam) = &outcome.webcam {

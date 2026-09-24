@@ -83,6 +83,44 @@ impl StagedSidecar {
     }
 }
 
+/// The stem files `base`'s OWN sidecar in `dir` lists — the ONE reading of
+/// it (review fix round 1) for every `capture_file_names` caller that starts
+/// from a base: discard, the size readout and `resolve_source`. Empty when
+/// there is no readable sidecar, or when `base` would name a file outside
+/// `dir` (a base read from a hand-editable `sources.json`).
+pub fn listed_stems(dir: &std::path::Path, base: &str) -> Vec<String> {
+    let name = crate::staging::sidecar_file_name(base);
+    // One plain component, on every platform: a separator, a `..` or a
+    // drive prefix would move the read out of staging (`write_sidecar`'s
+    // containment rule, applied to a read).
+    if name.contains(['/', '\\', ':']) || dir.join(&name).parent() != Some(dir) {
+        return Vec::new();
+    }
+    crate::staging::read_sidecar(&dir.join(name))
+        .map(|sidecar| sidecar.stem_files())
+        .unwrap_or_default()
+}
+
+/// Every base some stem file in `dir` belongs to, published
+/// (`<base>.stem-<n>.m4a`) or in progress (`.<base>.stem-<n>.m4a.part`), by
+/// PATTERN. `staging::reserve_base` treats these bases as taken.
+pub(crate) fn stem_bases(dir: &std::path::Path) -> std::collections::HashSet<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return std::collections::HashSet::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if let Some((base, _)) = stem_part_base(&name) {
+                return Some(base);
+            }
+            let (base, index) = name.strip_suffix(STEM_SUFFIX)?.rsplit_once(STEM_INFIX)?;
+            (!base.is_empty() && is_digit_run(index)).then(|| base.to_string())
+        })
+        .collect()
+}
+
 /// Does a raw `stems` value read as this build's block? The lenient sidecar
 /// read (`staging::read_sidecar`) parks one that does not in `extra` — a
 /// malformed or future-shaped list costs the capture its stems, never the
@@ -153,6 +191,47 @@ mod tests {
         ];
         expected.sort();
         assert_eq!(names, expected);
+    }
+
+    // Review fix round 1: one reader for "the stems this capture lists",
+    // contained to staging.
+    #[test]
+    fn listed_stems_reads_the_captures_own_sidecar_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            listed_stems(dir.path(), BASE).is_empty(),
+            "no sidecar, no stems"
+        );
+        let written = sidecar(vec![stem(1, "USB Mic"), stem(3, "Line In")]);
+        write_sidecar(dir.path(), BASE, &written).unwrap();
+        assert_eq!(
+            listed_stems(dir.path(), BASE),
+            [stem_file_name(BASE, 1), stem_file_name(BASE, 3)]
+        );
+        for escaping in ["../x", "a/b", "C:evil"] {
+            assert!(listed_stems(dir.path(), escaping).is_empty(), "{escaping}");
+        }
+    }
+
+    // Review fix round 1 (Minor 3): a leftover stem file (published or a
+    // part) under a base makes that base TAKEN. Otherwise a new capture
+    // adopts it, its own stem's publish collides with the leftover, and the
+    // finished stem is removed as "incomplete". By PATTERN, since an
+    // unlisted leftover is exactly the one no sidecar names.
+    #[test]
+    fn reserve_base_treats_a_leftover_stem_as_taking_its_base() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(stem_file_name(BASE, 4)), b"old").unwrap();
+        let second = format!("{BASE} (2)");
+        std::fs::write(dir.path().join(stem_part_file_name(&second, 1)), b"old").unwrap();
+        // Another base's stem, and a stem-LIKE name that is not one, block nothing.
+        std::fs::write(dir.path().join(stem_file_name("Other", 1)), b"x").unwrap();
+        std::fs::write(dir.path().join(format!("{BASE} (3).stem-x.m4a")), b"x").unwrap();
+        assert_eq!(
+            crate::staging::reserve_base(dir.path(), BASE),
+            format!("{BASE} (3)")
+        );
+        assert_eq!(crate::staging::reserve_base(dir.path(), "Fresh"), "Fresh");
     }
 
     // The list is hand-editable: an entry naming anything but this capture's

@@ -112,8 +112,7 @@ describe("ScreenCaptureConfigTab", () => {
     expect(lastSaved(calls)?.screenAudioStems).toBe(false);
   });
 
-
-  it("loads all seven fields from disk", async () => {
+  it("loads all eight fields from disk", async () => {
     const { wrapper } = mountTab({
       screenCaptureFolder: "Recordings/Screen",
       screenCaptureDateFolders: true,
@@ -122,9 +121,14 @@ describe("ScreenCaptureConfigTab", () => {
       screenCreateNote: false,
       screenExtraFrontmatter: "area: Demos",
       screenBodyTemplate: "## Notes",
+      screenAudioStems: true,
     });
     await flushPromises();
 
+    expect(
+      (wrapper.get("[data-testid='screen-audio-stems-toggle']")
+        .element as HTMLInputElement).checked,
+    ).toBe(true);
     expect(
       (wrapper.get("[data-testid='screen-capture-folder-input']")
         .element as HTMLInputElement).value,

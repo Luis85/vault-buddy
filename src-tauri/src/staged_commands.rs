@@ -189,7 +189,7 @@ pub(crate) fn staging_dir_for(app: &AppHandle) -> Result<PathBuf, String> {
 /// property of the function rather than of whoever wrote the directory.
 pub(crate) fn discard_staged_files(dir: &Path, base: &str) -> Result<(), String> {
     let mut targets = Vec::new();
-    let stems = crate::editor::project_store::listed_stems(dir, base);
+    let stems = staging::listed_stems(dir, base);
     for name in staging_files::capture_file_names(base, &stems) {
         let path = dir.join(&name);
         match std::fs::symlink_metadata(&path) {

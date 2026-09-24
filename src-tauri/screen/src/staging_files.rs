@@ -88,10 +88,7 @@ pub struct StagingUsage {
 /// an unreadable or absent sidecar lists none, which under-reports rather
 /// than guessing at stem-shaped files it cannot vouch for.
 pub fn capture_bytes(dir: &Path, base: &str) -> u64 {
-    let stems = staging::read_sidecar(&dir.join(staging::sidecar_file_name(base)))
-        .map(|s| s.stem_files())
-        .unwrap_or_default();
-    capture_file_names(base, &stems)
+    capture_file_names(base, &staging::listed_stems(dir, base))
         .iter()
         .filter_map(|name| std::fs::symlink_metadata(dir.join(name)).ok())
         .filter(|meta| meta.file_type().is_file())

@@ -16,6 +16,14 @@ fn stem(index: u32, input: &str) -> StemInput {
 }
 
 fn migrate(stems: &[StemInput], legacy: Option<&serde_json::Value>) -> Project {
+    migrate_inputs(stems, stems.len(), legacy)
+}
+
+fn migrate_inputs(
+    stems: &[StemInput],
+    input_count: usize,
+    legacy: Option<&serde_json::Value>,
+) -> Project {
     let input = StagedInput {
         base: BASE,
         vault_id: "vault-1",
@@ -26,6 +34,7 @@ fn migrate(stems: &[StemInput], legacy: Option<&serde_json::Value>) -> Project {
         has_audio: true,
         legacy_timeline: legacy,
         stems,
+        input_count,
         webcam: None,
     };
     from_staged(&input, "proj-1").project
@@ -117,4 +126,71 @@ fn migration_creates_one_audio_track_per_stem_and_mutes_the_embedded_mix() {
     assert!(plain.clips.iter().all(|c| !c.muted));
     assert_eq!(plain.assets.len(), 1);
     assert_eq!(plain.tracks.len(), 2);
+}
+
+/// Neither stems nor muting: the capture migrates exactly as it would have
+/// with stems off — the mix is the one audible track.
+fn assert_mix_audible_and_no_stems(project: &Project) {
+    validate_project(project).expect("validates");
+    assert!(
+        project
+            .clips
+            .iter()
+            .filter(|c| c.asset_id == "src")
+            .all(|c| !c.muted),
+        "the mix must stay audible when the stems do not cover every input"
+    );
+    assert!(
+        project.assets.iter().all(|a| !a.id.starts_with("stem-")),
+        "no stem is placed"
+    );
+    assert_eq!(project.tracks.len(), 2, "no stem track");
+}
+
+// Review fix round 1 (Important): only COMPLETE stems are listed, so two
+// inputs with one stem is the ordinary outcome of one stem failing (T43b).
+// Muting the mix then silenced the failed input — the one the warning
+// promised the mix still holds. Stems replace the mix only when EVERY
+// input has one; otherwise the capture migrates as if stems were off.
+#[test]
+fn two_inputs_with_one_stem_keep_the_mix_audible() {
+    assert_mix_audible_and_no_stems(&migrate_inputs(&[stem(2, "Speakers")], 2, None));
+    // A duplicated entry does not stand in for the missing input either.
+    let twice = [stem(2, "Speakers"), stem(2, "Speakers")];
+    assert_mix_audible_and_no_stems(&migrate_inputs(&twice, 2, None));
+    // Every input covered: the stems replace the mix.
+    let both = migrate_inputs(&[stem(1, "USB Mic"), stem(2, "Speakers")], 2, None);
+    assert!(both
+        .clips
+        .iter()
+        .filter(|c| c.asset_id == "src")
+        .all(|c| c.muted));
+}
+
+// Stems past the track limit used to be cut to what fit (`take(room)`), and
+// the mix was muted anyway — silencing the inputs left out. All or nothing.
+#[test]
+fn stems_past_the_track_limit_are_dropped_and_the_mix_stays_audible() {
+    let many: Vec<StemInput> = (1..=40).map(|i| stem(i, &format!("Input {i}"))).collect();
+    assert_mix_audible_and_no_stems(&migrate_inputs(&many, many.len(), None));
+}
+
+// Review fix round 1 (Minor 1): a stem places one clip per legacy segment,
+// so a heavily cut capture with stems exceeded MAX_CLIPS and
+// `editor_open_staged` refused it outright. It now degrades like the track
+// limit: no stems, the mix audible, a project `validate_project` accepts.
+#[test]
+fn stems_past_the_clip_limit_are_dropped_and_the_project_still_validates() {
+    let segments: Vec<serde_json::Value> = (0..250u64)
+        .map(|i| serde_json::json!({ "sourceStartMs": i * 200, "sourceEndMs": i * 200 + 100 }))
+        .collect();
+    let legacy = serde_json::json!({ "segments": segments });
+    let stems = [stem(1, "USB Mic"), stem(2, "Speakers")];
+    let project = migrate_inputs(&stems, 2, Some(&legacy));
+    assert_eq!(
+        project.clips.len(),
+        250,
+        "the screen's own clips all survive"
+    );
+    assert_mix_audible_and_no_stems(&project);
 }

@@ -424,6 +424,7 @@ fn migrated(segments: &serde_json::Value, duration_ms: u64, dims: (u32, u32)) ->
         has_audio: true,
         legacy_timeline: Some(&legacy),
         stems: &[],
+        input_count: 0,
         webcam: None,
     };
     from_staged(&input, "proj-1").project

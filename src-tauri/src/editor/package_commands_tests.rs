@@ -456,6 +456,7 @@ fn staged_stems_are_packaged_or_reported_missing() {
     a.stage();
     let mut sidecar =
         staging::read_sidecar(&a.staging().join(staging::sidecar_file_name(BASE))).unwrap();
+    sidecar.inputs = vec!["USB Mic".into(), "Speakers".into()];
     sidecar.stems = [(1, "USB Mic"), (2, "Speakers")]
         .into_iter()
         .map(|(index, input)| staging::StemSidecar {

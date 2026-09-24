@@ -226,6 +226,57 @@ fn open_staged_registers_a_resolvable_stem_source_per_stem() {
     assert!(missing_media(f.root(), project, &opened.sources).is_empty());
 }
 
+// Review fix round 1 (Minor 4 + Important 1): a listed stem whose file is
+// gone, or two entries naming ONE file, must not stand in for an input.
+// Registering them muted the mix over a stem that cannot play (or played
+// one input twice). Neither is registered, the inputs are then not all
+// covered, so no stem is placed and the mix stays audible.
+#[test]
+fn open_staged_skips_a_missing_or_repeated_stem_file_and_keeps_the_mix() {
+    let stem = |index: u32, file: String| staging::StemSidecar {
+        index,
+        input: format!("input {index}"),
+        file,
+        extra: serde_json::Map::new(),
+    };
+    for (what, stems) in [
+        (
+            "a missing file",
+            vec![
+                stem(1, staging::stem_file_name(BASE, 1)),
+                stem(2, staging::stem_file_name(BASE, 2)),
+            ],
+        ),
+        (
+            "one file twice",
+            vec![
+                stem(1, staging::stem_file_name(BASE, 1)),
+                stem(2, staging::stem_file_name(BASE, 1)),
+            ],
+        ),
+    ] {
+        let f = Fixture::new();
+        let mut s = sidecar(BASE, "vaultA");
+        s.inputs = vec!["USB Mic".into(), "Speakers".into()];
+        s.stems = stems;
+        f.stage(&s);
+        std::fs::write(f.staging().join(staging::stem_file_name(BASE, 1)), b"one").unwrap();
+
+        let opened = open_staged_in(f.root(), &f.staging(), BASE).expect("opens");
+        let keys: Vec<&str> = opened.sources.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [STAGED_ASSET_ID],
+            "{what}: no stem source is registered"
+        );
+        let project = &opened.envelope.project;
+        assert!(
+            project.clips.iter().all(|c| !c.muted),
+            "{what}: the mix stays audible"
+        );
+    }
+}
+
 // GAP-199: a webcam that vanished mid-capture finalized EARLY, and its clip
 // used to run to the capture's end anyway -- a frozen presenter for the rest
 // of the recording, with no error. The MEASURED length in the block wins;
