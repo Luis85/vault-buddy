@@ -3,7 +3,8 @@
  * that owns its own open state to show itself — the mixer's popover, the
  * media library's Reconnect and Webcam dialogs, the compact shell's
  * drawers, the ratio control's focus, the timeline's scroll, the Render
- * dialog. `requestReveal(surface)` bumps a per-surface serial and
+ * dialog, and (Task 57) the preview toolbar's Review, which Ctrl+E asks
+ * for. `requestReveal(surface)` bumps a per-surface serial and
  * `onReveal(surface, fn)` — called from that surface's own setup — runs
  * `fn` once per request it has not handled yet, including one made just
  * before it mounted (the media library mounts only when its tab is chosen,
@@ -17,9 +18,12 @@
  */
 import { reactive, ref, watch } from "vue";
 
-export type RevealSurface = "reconnect" | "webcam" | "mixer" | "ratio" | "timeline" | "library" | "inspector" | "render";
+export type RevealSurface =
+  | "reconnect" | "webcam" | "mixer" | "ratio" | "timeline" | "library" | "inspector" | "render" | "review";
 
-const SURFACES: readonly RevealSurface[] = ["reconnect", "webcam", "mixer", "ratio", "timeline", "library", "inspector", "render"];
+const SURFACES: readonly RevealSurface[] = [
+  "reconnect", "webcam", "mixer", "ratio", "timeline", "library", "inspector", "render", "review",
+];
 
 const requested = reactive(Object.fromEntries(SURFACES.map((s) => [s, 0])) as Record<RevealSurface, number>);
 const handled = Object.fromEntries(SURFACES.map((s) => [s, 0])) as Record<RevealSurface, number>;

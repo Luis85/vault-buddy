@@ -43,9 +43,10 @@
  * field) — bubbling, no capture — and calls `event.stopPropagation()` for
  * every combo it actually handles, so a shortcut this dispatcher claims
  * never reaches the legacy surface's `window` listener at all; an
- * unmatched, currently-disabled, or nothing-to-send combo (Ctrl+S, or F6
- * with the guide closed — `activateEditorAction` returns `false` for
- * those; F1/? and F6 are the guide's, below) is left alone to
+ * unmatched, currently-disabled, or nothing-to-send combo (F6 with the
+ * guide closed, Ctrl+E with nothing on the timeline; F1/? and F6 are the
+ * guide's, and Ctrl+S/Ctrl+E the header's Save and the toolbar's Review —
+ * `onAppKey`, Task 57) is left alone to
  * bubble normally, never swallowed with nothing done. A keystroke whose
  * target sits inside an open `role="menu"`/`role="dialog"` is the menu's
  * (`shouldHandle`'s `menuOwnsKeys`): Delete pressed in the context menu
@@ -88,8 +89,10 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import { baseActionContext } from "../../../editor/actionContext";
 import type { ActionId } from "../../../editor/actionMeta";
+import type { ActionContext } from "../../../editor/actions";
+import { resolveActions } from "../../../editor/actions";
 import { activateEditorAction } from "../../../editor/clipboard";
-import { onReveal } from "../../../editor/revealBus";
+import { onReveal, requestReveal } from "../../../editor/revealBus";
 import { isGuideDismissKey, matchShortcut, shouldHandle } from "../../../editor/shortcuts";
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
 import { useEditorProjectStore } from "../../../stores/editorProject";
@@ -218,6 +221,18 @@ function onGuideKey(event: KeyboardEvent, actionId: ActionId | null): boolean {
   return isGuideDismissKey(event) && (coach.value?.dismiss() ?? false);
 }
 
+/** Ctrl+S and Ctrl+E (Task 57): the two listed keys no wire command
+ * answers. Save is the header's Save — never a second one while a save is
+ * in flight (still claimed: the key's job is already being done); Review
+ * asks the preview toolbar to open its dialog. Only while the action is
+ * enabled; otherwise the key bubbles like any unavailable one. */
+function onAppKey(actionId: ActionId, ctx: ActionContext): boolean {
+  if ((actionId !== "save" && actionId !== "render") || !resolveActions(ctx)[actionId].enabled) return false;
+  if (actionId === "render") requestReveal("review");
+  else if (!editorProject.saving) void editorProject.save();
+  return true;
+}
+
 /** F6 types nothing, so it may leave a text field: the guide's highlighted
  * control can BE one (the fades and layout lessons land in an input), and
  * without this F6 could never return to the card from there. Only an open
@@ -247,7 +262,8 @@ function onShellKeydown(event: KeyboardEvent) {
     selection,
     clip ? { kind: "clip", id: clip.id, timeMs: workspace.playheadMs } : null,
   );
-  if (!activateEditorAction(actionId, ctx, (command) => editorProject.execute(command))) return;
+  const acted = onAppKey(actionId, ctx) || activateEditorAction(actionId, ctx, (command) => editorProject.execute(command));
+  if (!acted) return;
   // Claimed: stop it here so `LegacyCaptureEditor.vue`'s own `window`
   // listener (still mounted -- see the module doc) never double-handles the
   // same keystroke. A disabled/unmatched/nothing-to-send combo returns

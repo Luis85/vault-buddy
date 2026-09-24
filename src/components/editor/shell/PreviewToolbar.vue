@@ -330,6 +330,12 @@ watch(focusableCount, (n) => {
 
 /** Task 54: a `canvasReview` finding points here. After the tick, so the
  * closing Checks dialog's focus restore does not land on top of it. */
+/** Task 57: Ctrl+E (the shell's dispatcher) asks for Review — the same
+ * dialog, under the same rule, as pressing Review here. */
+onReveal("review", () => {
+  if (resolved.value.render.enabled) openReview();
+});
+
 onReveal("ratio", () => {
   const i = visibleItems.value.indexOf("ratio");
   if (i === -1) return;

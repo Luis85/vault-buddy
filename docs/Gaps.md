@@ -6468,7 +6468,13 @@ an accessibility change for Task 58, checked against WCAG AA contrast.
 center.** ONBOARDING.md says "F1 and ? open learning"; Task 56 bound them to
 start/resume the coach and Task 57 was told to keep that behaviour, so the
 learning center is reached through Help → Learning center (or Keyboard
-shortcuts). The shortcut table says what F1 does.
+shortcuts). The shortcut table says what F1 does. **Ruled, not open**
+(controller, Task 57 fix round 1): accepted as a recorded divergence from
+that ONBOARDING line. F1/? → resume is Task 56's shipped, tested and
+checklisted contract (T52, T53 with Narrator); binding F1 to a modal would
+suspend an active coach mid-lesson, the worse default for a keyboard or
+Narrator user; and the learning center, with its own Resume, is one step
+away through Help. A conventional F1 = Help would be its own small task.
 (2) **A restore after a failed READ stays session-only.** When the stored
 progress exists but could not be read (`readFailed`), the store writes
 nothing for the session (so it never overwrites what it could not read) —
@@ -6484,5 +6490,15 @@ corrected words, so a question no lesson teaches (the reference's "Why can't
 I hear my audio?") has no answer of its own; the search still finds the
 audio lesson. Hand-written answers would be a second copy of the app's
 truth to keep correct.
-(5) **The Help menu is Tab-navigated.** Like the Save project menu it has no
-arrow-key roving focus; Escape closes it and returns focus to Help.
+(5) **The Help menu and the learning center's tabs are Tab-navigated.**
+Like the Save project menu, the Help menu has no arrow-key roving focus;
+Escape closes it and returns focus to Help. The learning center's
+Walkthrough / Quick answers / Shortcuts buttons carry `role="tab"` and
+`aria-selected` but no `aria-controls`, no `role="tabpanel"` region and
+no arrow-key roving (deferred from Task 57's review).
+(6) **A progress file naming a retired lesson is mapped, not refused**
+(Task 57 fix round 1): `parse_progress_file` resolves a retired
+`currentStepId` to its chapter's first lesson and drops retired ids from
+`reviewed`/`explored` — the stored file's rule — before the strict gate.
+The shipped retired map is empty, so only the injected-map test exercises
+it today.

@@ -52,7 +52,13 @@ watch(
 );
 
 const total = GUIDE_STEPS.length;
-const resumeLabel = computed(() => (onboarding.progress.currentStepId === null ? "Start walkthrough" : "Resume walkthrough"));
+/** Says what `start()` will do: a finished guide is revisited from lesson
+ * 1, so it is "again", never a resume. */
+const resumeLabel = computed(() => {
+  const p = onboarding.progress;
+  if (p.completed) return "Start walkthrough again";
+  return p.currentStepId === null ? "Start walkthrough" : "Resume walkthrough";
+});
 
 function jump(id: GuideStepId): void {
   onboarding.jumpTo(id);

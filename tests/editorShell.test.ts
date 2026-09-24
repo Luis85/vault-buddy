@@ -322,14 +322,14 @@ describe("EditorShell — dispatcher ownership (Task 21)", () => {
     }
   });
 
-  // The other half of the same rule: an action this dispatcher cannot
-  // perform (save has no wire command here) must NOT be claimed --
-  // preventDefault + stopPropagation with nothing done would swallow Ctrl+S
-  // silently (R20: no control that silently succeeds). Since Task 56 F1/?
-  // are always claimed (they start or resume the guide) and F6 is claimed
-  // only while the guide's coach is showing; with the coach closed F6 still
-  // bubbles untouched.
-  it("an enabled action with nothing to send (Ctrl+S) is left to bubble, not swallowed", async () => {
+  // The other half of the same rule: a key this dispatcher does NOT act on
+  // must not be claimed -- preventDefault + stopPropagation with nothing
+  // done would swallow it silently (R20). Ctrl+S used to be that key; since
+  // Task 57's fix round it runs the header's Save (every key the learning
+  // center lists does something -- tests/editorShortcutsWired.test.ts), so
+  // the pin moved to F6 with the guide's coach closed, which still bubbles
+  // untouched (F1/? are always claimed: they start or resume the guide).
+  it("a listed key with nothing to do right now (F6, no coach) is left to bubble, not swallowed", async () => {
     const store = useEditorProjectStore();
     const executed: unknown[] = [];
     store.setPort(undoablePort(executed));
@@ -339,12 +339,45 @@ describe("EditorShell — dispatcher ownership (Task 21)", () => {
     const onWindowKeydown = (e: KeyboardEvent) => reached.push(e.key);
     window.addEventListener("keydown", onWindowKeydown);
     try {
-      const event = keydown(w.get('[data-testid="editor-shell"]').element, { key: "s", ctrlKey: true });
+      const event = keydown(w.get('[data-testid="editor-shell"]').element, { key: "F6" });
       await flushPromises();
 
       expect(executed).toEqual([]);
       expect(event.defaultPrevented).toBe(false);
-      expect(reached).toEqual(["s"]);
+      expect(reached).toEqual(["F6"]);
+    } finally {
+      window.removeEventListener("keydown", onWindowKeydown);
+    }
+  });
+
+  // Ctrl+S (Task 57 fix round): the header's Save, claimed so WebView2 does
+  // nothing of its own and the legacy surface never sees it.
+  it("Ctrl+S saves the project like the header's Save, and is claimed", async () => {
+    const store = useEditorProjectStore();
+    const executed: unknown[] = [];
+    const saved: number[] = [];
+    store.setPort(
+      fakePort({
+        ...undoablePort(executed),
+        save: (_sessionId, expectedRevision) => {
+          saved.push(expectedRevision);
+          return Promise.resolve({ sessionId: "ses-a", savedRevision: expectedRevision, projectFileId: "p" });
+        },
+      }),
+    );
+    await store.openStaged("cap one");
+    const w = mount(EditorShell, { attachTo: document.body });
+    const reached: string[] = [];
+    const onWindowKeydown = (e: KeyboardEvent) => reached.push(e.key);
+    window.addEventListener("keydown", onWindowKeydown);
+    try {
+      const event = keydown(w.get('[data-testid="editor-shell"]').element, { key: "s", ctrlKey: true });
+      await flushPromises();
+
+      expect(saved).toEqual([store.snapshot?.revision]);
+      expect(executed).toEqual([]);
+      expect(event.defaultPrevented).toBe(true);
+      expect(reached).toEqual([]);
     } finally {
       window.removeEventListener("keydown", onWindowKeydown);
     }

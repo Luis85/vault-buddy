@@ -216,15 +216,51 @@ pub fn validate_for_save(raw: &Value) -> Result<GuideProgress, EditorError> {
 /// JSON, then [`validate_for_save`] itself, so a restored file can hold
 /// exactly what a save may write and nothing else (a project file, an
 /// unknown lesson and a path are all refused, never echoed).
+///
+/// A lesson RETIRED since the file was written is not an unknown one (Task
+/// 57 fix round 1): a progress file exists to outlive builds, so it is
+/// mapped the way the stored file is — `currentStepId` to its chapter's
+/// first lesson, a retired id in `reviewed`/`explored` dropped — BEFORE
+/// the strict gate, which still refuses anything that was never a lesson.
 pub fn parse_progress_file(bytes: &[u8]) -> Result<GuideProgress, EditorError> {
+    parse_progress_file_with(bytes, &content().retired)
+}
+
+fn parse_progress_file_with(
+    bytes: &[u8],
+    retired: &[(String, String)],
+) -> Result<GuideProgress, EditorError> {
     if bytes.len() > MAX_GUIDE_PROGRESS_BYTES {
         return Err(invalid(format!(
             "That file is too large to be guide progress (the limit is {MAX_GUIDE_PROGRESS_BYTES} bytes)."
         )));
     }
-    let raw: Value = serde_json::from_slice(bytes)
+    let mut raw: Value = serde_json::from_slice(bytes)
         .map_err(|_| invalid("That file is not Vault Buddy guide progress."))?;
+    map_retired(&mut raw, retired);
     validate_for_save(&raw)
+}
+
+/// Rewrites retired lesson ids in a raw progress document in place: a
+/// retired `currentStepId` becomes its chapter's first lesson, and retired
+/// ids leave `reviewed`/`explored`. Anything else is left for
+/// `validate_for_save` to judge.
+fn map_retired(raw: &mut Value, retired: &[(String, String)]) {
+    let is_retired = |id: &str| retired.iter().any(|(old, _)| old == id);
+    let Some(doc) = raw.as_object_mut() else {
+        return;
+    };
+    if let Some(Value::String(id)) = doc.get("currentStepId") {
+        if is_retired(id) {
+            let resumed = resolve_step_with(id, retired).to_owned();
+            doc.insert("currentStepId".into(), Value::String(resumed));
+        }
+    }
+    for list in ["reviewed", "explored"] {
+        if let Some(Value::Array(ids)) = doc.get_mut(list) {
+            ids.retain(|v| !v.as_str().is_some_and(is_retired));
+        }
+    }
 }
 
 /// The lenient read of the stored file: `None` when it is oversized or not

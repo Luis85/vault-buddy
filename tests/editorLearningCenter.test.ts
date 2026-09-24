@@ -51,13 +51,16 @@ describe("quick answers", () => {
     expect(searchAnswers("")).toHaveLength(22);
   });
 
-  // GAP-203: the answers come from the coach's corrected copy. Each word
-  // below appears in the raw browser-reference text ONLY inside a sentence
-  // the app overrides, so finding it would mean the untrue text is back.
+  // GAP-203: the answers come from the coach's corrected copy. Each phrase
+  // below — the coach suite's own list (editorGuideCoach.test.ts) —
+  // appears in the raw browser-reference text ONLY inside a sentence the
+  // app overrides, so finding it would mean the untrue text is back.
   it("never finds a word only an untrue original sentence holds", () => {
-    const raw = JSON.stringify(GUIDE_STEPS);
-    for (const word of ["download", "three-minute", "sample"]) {
-      expect(raw.toLowerCase()).toContain(word);
+    const raw = JSON.stringify(GUIDE_STEPS).toLowerCase();
+    const untrue = ["download", "three-minute", "sample", "built-in project", "Open Add track", "Open Project", "Browser"];
+    for (const phrase of untrue) {
+      const word = phrase.toLowerCase();
+      expect(raw).toContain(word);
       expect({ word, found: searchAnswers(word) }).toEqual({ word, found: [] });
     }
   });
@@ -221,6 +224,38 @@ describe("the learning center", () => {
     await openCenter(w);
     expect(w.get('[data-testid="learning-progress"]').text()).toContain("22 / 22");
     expect(w.find('[data-testid="learning-finished"]').exists()).toBe(true);
+  });
+
+  // Fix round 1: the button says what start() will do — a finished guide
+  // is revisited from lesson 1, so it must not promise a resume.
+  it("the walkthrough button names what it does: start, resume, or start again", async () => {
+    const label = async (progress: GuideProgress) => {
+      setActivePinia(createPinia());
+      await install(progress);
+      const w = await mountEditor();
+      await openCenter(w);
+      const text = w.get('[data-testid="learning-resume"]').text();
+      w.unmount();
+      return text;
+    };
+    expect(await label(fresh())).toBe("Start walkthrough");
+    expect(await label(fresh({ currentStepId: "split", reviewed: ["welcome", "split"] }))).toBe("Resume walkthrough");
+    expect(await label(fresh({ currentStepId: "help", reviewed: [...STEP_IDS], completed: true }))).toBe(
+      "Start walkthrough again",
+    );
+  });
+
+  // Fix round 1: "read" is spoken, not only drawn — visually-hidden text in
+  // the lesson button's own name, the check mark hidden from assistive tech.
+  it("a read lesson says so in its accessible name", async () => {
+    await install(fresh({ reviewed: ["welcome"] }));
+    const w = await mountEditor();
+    await openCenter(w);
+
+    const read = w.get('[data-testid="learning-lesson-welcome"]');
+    expect(read.get(".sr-only").text()).toBe("Read:");
+    expect(read.get('[aria-hidden="true"]').text()).toBe("✓");
+    expect(w.get('[data-testid="learning-lesson-media"]').find(".sr-only").exists()).toBe(false);
   });
 
   it("lists every chapter and lesson; a lesson jump starts the coach there", async () => {

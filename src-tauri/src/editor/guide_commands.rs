@@ -292,7 +292,7 @@ fn may_replace(target: &Path, chosen: &Path) -> Result<bool, EditorError> {
     Err(err(
         EditorErrorCode::WriteDenied,
         format!(
-            "{:?} already exists. Choose a new name; only a guide progress file you pick in the dialog is replaced.",
+            "“{}” already exists. Choose a new name; only a guide progress file you pick in the dialog is replaced.",
             file_name_of(target)
         ),
     ))
@@ -334,7 +334,7 @@ fn write_progress_file(target: &Path, json: &str, replace: bool) -> Result<(), E
         return Err(err(
             EditorErrorCode::WriteDenied,
             format!(
-                "{:?} already exists. Choose a new name.",
+                "“{}” already exists. Choose a new name.",
                 file_name_of(target)
             ),
         ));

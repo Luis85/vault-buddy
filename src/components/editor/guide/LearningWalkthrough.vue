@@ -70,8 +70,12 @@ const chapters = computed(() =>
           >
             <span
               class="w-3 text-success"
-              :aria-label="lesson.read ? 'Read' : undefined"
+              aria-hidden="true"
             >{{ lesson.read ? "✓" : "" }}</span>
+            <span
+              v-if="lesson.read"
+              class="sr-only"
+            >Read:</span>
             {{ lesson.title }}
           </button>
         </li>

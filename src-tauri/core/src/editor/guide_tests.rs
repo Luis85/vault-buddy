@@ -216,3 +216,32 @@ fn a_progress_file_is_read_strictly_and_foreign_json_is_refused() {
         assert!(!err.message.contains("Users"), "{}", err.message);
     }
 }
+
+// Task 57 fix round 1: a progress FILE outlives builds (surviving a
+// reinstall is what it is for), so a lesson retired since it was written
+// resumes where the stored file would — its chapter's first lesson — and
+// a retired id in `reviewed`/`explored` is dropped. An id that was never a
+// lesson (retired or live) is still refused.
+#[test]
+fn a_progress_file_naming_a_retired_lesson_resumes_at_its_chapter() {
+    let retired = vec![("trim".to_owned(), "edit".to_owned())];
+    let file = saved(json!({
+        "currentStepId": "trim",
+        "reviewed": ["welcome", "trim"],
+        "explored": ["trim", "preview"]
+    }))
+    .to_string();
+
+    let read = parse_progress_file_with(file.as_bytes(), &retired).unwrap();
+
+    assert_eq!(read.current_step_id.as_deref(), Some("select"));
+    assert_eq!(read.reviewed, ["welcome"]);
+    assert_eq!(read.explored, ["preview"]);
+    for never in [
+        saved(json!({ "currentStepId": "gone" })),
+        saved(json!({ "reviewed": ["welcome", "gone"] })),
+    ] {
+        let err = parse_progress_file_with(never.to_string().as_bytes(), &retired).unwrap_err();
+        assert_eq!(err.code, EditorErrorCode::InvalidRequest);
+    }
+}
