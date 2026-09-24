@@ -167,6 +167,15 @@ pub fn ms_to_ffmpeg_seconds(ms: u64) -> String {
 /// stream on stdout, where `parse_progress_line` reads it, leaving stderr for
 /// the error text a failure reports.
 fn common_prefix(source: &Path) -> Vec<String> {
+    let mut args = runner_flags();
+    args.extend(["-i".into(), source.to_string_lossy().into_owned()]);
+    args
+}
+
+/// Every flag `common_prefix` puts BEFORE the inputs -- shared with the
+/// editor's render (`render::render_args`), which has several inputs rather
+/// than one and still needs `-progress pipe:1` for `ffmpeg_run` to read.
+pub(crate) fn runner_flags() -> Vec<String> {
     vec![
         "-hide_banner".into(),
         "-nostdin".into(),
@@ -175,8 +184,6 @@ fn common_prefix(source: &Path) -> Vec<String> {
         "-nostats".into(),
         "-progress".into(),
         "pipe:1".into(),
-        "-i".into(),
-        source.to_string_lossy().into_owned(),
     ]
 }
 
@@ -266,13 +273,29 @@ pub fn reencode_args(
     if settings.has_audio {
         args.extend(["-map".into(), "[outa]".into()]);
     }
+    args.extend(video_codec_args(settings));
+    if settings.has_audio {
+        args.extend([
+            "-c:a".into(),
+            "aac".into(),
+            "-b:a".into(),
+            AUDIO_BITRATE.into(),
+        ]);
+    }
+    args.extend(output_args(dest));
+    args
+}
+
+/// The H.264 video encode of an edited export -- shared with the editor's
+/// render, so a render and a legacy save encode at the same quality.
+pub(crate) fn video_codec_args(settings: &EncodeSettings) -> Vec<String> {
     let bitrate = bitrate_bps(
         settings.quality,
         settings.width,
         settings.height,
         settings.fps,
     );
-    args.extend(["-c:v".into(), settings.h264_encoder.clone()]);
+    let mut args = vec!["-c:v".into(), settings.h264_encoder.clone()];
     args.extend(preset_args(&settings.h264_encoder));
     args.extend([
         "-b:v".into(),
@@ -283,15 +306,13 @@ pub fn reencode_args(
         "-g".into(),
         settings.fps.to_string(),
     ]);
-    if settings.has_audio {
-        args.extend([
-            "-c:a".into(),
-            "aac".into(),
-            "-b:a".into(),
-            AUDIO_BITRATE.into(),
-        ]);
-    }
-    args.extend(["-movflags".into(), "+faststart".into()]);
+    args
+}
+
+/// faststart, the explicit container (see `OUTPUT_FORMAT`) and the
+/// destination -- the tail every re-encoded output shares.
+pub(crate) fn output_args(dest: &Path) -> Vec<String> {
+    let mut args: Vec<String> = vec!["-movflags".into(), "+faststart".into()];
     args.extend(OUTPUT_FORMAT.map(String::from));
     args.extend(["-y".into(), dest.to_string_lossy().into_owned()]);
     args

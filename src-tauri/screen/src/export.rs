@@ -287,6 +287,33 @@ mod tests {
         );
     }
 
+    // Task 42's extraction, pinned: the export keeps its decisions and
+    // hands its child to the ONE runner the render shares. A spawn, a pipe
+    // drain or a cancel poll growing back here would be a second copy of
+    // the two-pipe discipline to keep in step -- the copy the extraction
+    // exists to prevent. (The behaviour itself is pinned by this suite and
+    // tests/export_roundtrip.rs, both green before and after the move.)
+    #[test]
+    fn extraction_keeps_export_behaviour() {
+        let src = production_src();
+        assert!(
+            src.contains("use crate::ffmpeg_run::run;"),
+            "the export must run its child through ffmpeg_run"
+        );
+        for forbidden in [
+            "std::process",
+            "thread::Builder",
+            "recv_timeout",
+            "fn drain_capped",
+            "fn run(",
+        ] {
+            assert!(
+                !src.contains(forbidden),
+                "export.rs grew its own runner again: {forbidden}"
+            );
+        }
+    }
+
     #[test]
     fn a_cancel_that_arrived_before_the_spawn_never_starts_a_child() {
         let dir = tempfile::tempdir().expect("tempdir");

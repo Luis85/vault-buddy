@@ -51,6 +51,11 @@ pub mod staging_files;
 // correctness lives here, because its cfg(windows) consumer is testable
 // nowhere (docs/Gaps.md GAP-117).
 pub mod region;
+// The editor's render (tutorial-editor Tasks 42-44): the frozen render
+// plan (core::editor::render_plan) turned into ONE ffmpeg filter_complex
+// invocation. PURE -- a function from a plan to an argv list, testable on
+// every platform; ffmpeg_run runs it.
+pub mod render;
 pub mod select;
 pub mod session;
 pub mod sink;

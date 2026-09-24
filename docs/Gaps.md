@@ -2299,7 +2299,24 @@ render produces, and it says so nowhere on screen yet. What it does NOT show:
    drawn into its box), so a zoom on a screen recording also magnifies a
    webcam picture-in-picture here but not in the reference; and (b) whether
    the burned-in cues sit under the zoom as the preview draws them (the
-   reference draws cues under the same camera).
+   reference draws cues under the same camera). **Both are now answered
+   (controller ruling, tutorial-editor Task 42): the render follows the
+   preview.** It zooms the WHOLE composed stage (a), and its filter order is
+   composed layers -> pre-zoom hook `[vcomp]` (Task 43's teaching cues and
+   card text, zoomed with the media) -> the zoom -> post-zoom hook
+   `[vzoomed]` (Task 43's burned captions, which stay unzoomed on the frame,
+   as the preview keeps them) (b). So the reference's per-clip `camera` is
+   the one this codebase deliberately diverges from. **The ramp now has ONE
+   definition in TWO languages** -- `cueGeometry.ts`' `zoomAmount`/
+   `zoomTransform` and `screen::render::video_graph::zoom_edge`'s ffmpeg
+   expression (last active zoom wins, smoothstep, `easing` 600 ms default
+   capped at half the cue's ORIGINAL span, centre clamped to
+   `[1/(2s), 1-1/(2s)]`). They are held together by golden strings on the
+   Rust side and a real-ffmpeg pixel round trip
+   (`screen/tests/render_graph_roundtrip.rs`), NOT by a shared fixture
+   table: the Rust half is an expression string evaluated inside ffmpeg,
+   so a shared table would need an ffmpeg-expression evaluator in the test
+   suite -- not cheap, so deferred until a disagreement is suspected.
 3. **Layout and colour.** Rotation, mirror/flip, crop (`crop_zoom`/
    `crop_x`/`crop_y`), fit and frame shape ARE applied (tutorial-editor
    Task 31): each visual layer sits in a clipping frame at its box, rounded
@@ -2326,6 +2343,39 @@ render produces, and it says so nowhere on screen yet. What it does NOT show:
    not the render's `atempo`.
 5. **More than 8 simultaneous layers** — the pool cap (`MAX_ELEMENTS`)
    shows the top-most 8 and logs once per overflow episode.
+6. **The render's own approximations** (tutorial-editor Task 42,
+   `screen::render`). The render is the output, so these are places where
+   the EXPORTED file differs from what the preview shows, recorded rather
+   than claimed away:
+   - **Video fades are linear.** ffmpeg's video `fade` (applied to ALPHA,
+     `alpha=1`) has no curve option, so a `smooth` or `equal-power` clip
+     fade renders linear in the picture, while the preview multiplies
+     opacity by `fadeCurves.gainAt`'s curve. The curve is honoured on the
+     audio side only (Task 44's `afade`).
+   - **`eq` brightness is additive** (`b - 1`) where CSS `brightness()`
+     multiplies; contrast and saturation are close, sepia and grayscale use
+     the W3C matrices CSS itself is defined by (via `colorchannelmixer`,
+     blended by amount -- not `hue=s=0`, which cannot be blended in one
+     filter).
+   - **Transitions:** both kinds render as the same picture dissolve
+     (`xfade=transition=fade`); equal-power is an audio curve. A render
+     RANGE that cuts through a transition's overlap dissolves over the part
+     left in the range starting from zero, because `xfade` cannot start
+     part-way (the whole-project render, where no overlap is cut, is exact).
+   - **The crop anchor at 1x.** Under `cover` the preview honours
+     `crop_x`/`crop_y` even at crop zoom 1 whenever the source and the box
+     aspects differ (`previewTransform.drawnRect`), but the render plan
+     (`render_plan::crop_of`, Task 41) drops the anchor unless the zoom is
+     above 1x, so the render centres that window.
+   - **The zoom's clock is `perspective`'s frame counter** `in` (ffmpeg's
+     `crop` evaluates its size once, where `t` is NaN, so it cannot ramp).
+     `in` was measured 1-based on ffmpeg 9.0.1, including on frames
+     `enable` skips; a build that numbered from 0 would shift every ramp by
+     one frame (33 ms). The warp samples bilinearly between pixels, close to
+     the preview's CSS transform but not identical.
+   - **Cards are colour only** until Task 43 draws their text into the
+     pre-zoom ASS hook, and a render maps VIDEO only until Task 44 adds the
+     audio graph -- neither has a production caller yet.
 
 **Why accepted now:** the plan's P04 lands the preview surface before the
 effect/caption/transition/cards tasks that give those features a preview at
