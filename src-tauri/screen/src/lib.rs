@@ -28,6 +28,12 @@ pub mod export;
 // ffmpeg moved the export's correctness out of untestable COM calls and into
 // this module, which is a plain function from an edit plan to an argv list.
 pub mod ffmpeg_args;
+// ONE ffmpeg child, run: spawn, the -progress pipe, the bounded stderr
+// drain, the timed cancel poll, kill+reap and truncated-output removal.
+// Extracted from `export` (tutorial-editor Task 42) so the export and the
+// editor's render share one runner instead of two copies of the two-pipe
+// discipline.
+pub mod ffmpeg_run;
 // The WGC frame callback. Windows-only: it exists solely to feed
 // `session`'s mux, and everything it decides is decided by a pure function
 // in `session::pacing`.
