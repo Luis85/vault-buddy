@@ -89,6 +89,13 @@ pub(crate) fn map_write_error(e: io::Error) -> EditorError {
             EditorErrorCode::DiskFull,
             format!("Not enough disk space to save the project: {e}"),
         )
+    } else if e.kind() == io::ErrorKind::FileTooLarge {
+        // `store_io::commit_project`'s refusal of a file `load_project`
+        // could not read back (fix round 1): typed, and nothing written.
+        EditorError::new(
+            EditorErrorCode::InvalidProject,
+            format!("The project is too large to save: {e}"),
+        )
     } else if e.kind() == io::ErrorKind::PermissionDenied {
         EditorError::new(
             EditorErrorCode::WriteDenied,
@@ -261,7 +268,19 @@ pub(crate) fn save_project_with(
     // LEDGER, which each render commits on its own. A damaged ledger
     // refuses the save (read under this same save lock a render publishes
     // under) rather than writing a project whose products were dropped.
-    let products = super::render_jobs::read_ledger(root, &project_id)?;
+    //
+    // WITHOUT their snapshots (fix round 1): each snapshot is a whole
+    // project, so copying them made `project.json` grow with every render
+    // until it passed the load bound and the saved project could not be
+    // reopened. The schema makes `snapshot` optional and the ledger keeps
+    // every one; a package export still carries them (A17's collector).
+    let products = super::render_jobs::read_ledger(root, &project_id)?
+        .into_iter()
+        .map(|mut p| {
+            p.snapshot = None;
+            p
+        })
+        .collect();
 
     let envelope = WorkspaceEnvelope {
         schema: editor::WORKSPACE_SCHEMA.to_string(),

@@ -2873,7 +2873,7 @@ find them. **Fix:** package each ledger product whose file exists as
 `products/<productId>.mp4` (`package::PackageProduct`, which the import
 already extracts and verifies), counted against `MAX_PACKAGE_MEDIA_BYTES`.
 
-### GAP-189 · Low · A crash mid-render leaves the render's `jobs\<jobId>\` scratch directory behind
+### GAP-189 · Low · A crash mid-render leaves the render's `jobs\<jobId>\` scratch directory behind, and a crash mid-publish an unrecorded product file
 `src-tauri/src/editor/render_jobs.rs`, Task 46. A render writes
 `jobs\<jobId>\out.mp4.part` (and its `cues.ass`/`captions.ass`) and removes
 the whole directory itself on success, cancel and failure — every exit a
@@ -2882,9 +2882,14 @@ loss) leaves the directory and a truncated `.part` behind: nothing sweeps
 `jobs\`, and the next render mints a fresh job id, so the leftover is never
 reused either. It is never listed as a product (only the ledger names
 products, and it was never recorded) — wasted disk only, removed with the
-project on a discard. **Fix:** Task 37's startup sweep
+project on a discard. The same holds one step later: a crash between the
+move into `products\` and the ledger commit (or a failed `remove_file` after
+a failed ledger write) leaves `products\<productId>.mp4` with no ledger
+record -- never listed or served (the ledger is the authority), never swept
+(review of Task 46, Minor 2). **Fix:** Task 37's startup sweep
 (`recovery::run_startup_repin`'s thread) removes `jobs\<valid id>\`
-directories older than an hour, owned names only, no-follow
+directories older than an hour, and `products\<valid id>.mp4` files the
+ledger does not name, owned names only, no-follow
 (`store_io::remove_dir_no_follow`), the `sweep_stale_imports` posture.
 
 ### GAP-190 · Low · Alt+F4 re-opens its own close every 5 s while a cancelled export will not unwind

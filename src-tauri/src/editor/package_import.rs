@@ -442,13 +442,17 @@ fn import_file(
         )
     })?;
     write_json(&build.dir, SOURCES_FILE, &sources)?;
-    write_json(&build.dir, PROJECT_FILE, &envelope)?;
-    write_json(&build.dir, WORKSPACE_FILE, &workspace)?;
     // The ledger is the products' authority (Task 46, R5): an imported
-    // project lists its retained products before any save.
+    // project lists its retained products before any save. `project.json`
+    // keeps them WITHOUT their snapshots, as a save does (fix round 1).
     if !envelope.record.products.is_empty() {
         write_json(&build.dir, PRODUCTS_FILE, &envelope.record.products)?;
+        for product in &mut envelope.record.products {
+            product.snapshot = None;
+        }
     }
+    write_json(&build.dir, PROJECT_FILE, &envelope)?;
+    write_json(&build.dir, WORKSPACE_FILE, &workspace)?;
     build.install(root, &id)?;
 
     let projection = register_session(state, envelope.project, envelope.record.revision);

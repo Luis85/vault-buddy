@@ -12,8 +12,9 @@
 //!   with a separate ffmpeg child process that nothing on the way out
 //!   would otherwise stop;
 //! - `editor::render_jobs::blocks_shutdown` (Task 46, ADR R12) — an editor
-//!   RENDER in `rendering` or `publishing`: an ffmpeg child writing a
-//!   product into the project store, or a finished one being moved into
+//!   RENDER not yet ended (queued and preparing too, since fix round 1): an
+//!   ffmpeg child writing a product into the project store, or about to
+//!   start one, or a finished one being moved into
 //!   `products\` and recorded. Like the export it has a child and needs no
 //!   indicator, so hide-to-tray does not gate on it either.
 //!
@@ -82,7 +83,8 @@ impl ShutdownBlocker {
                  or cancel it in the editor, then install the update."
             }
             ShutdownBlocker::Render => {
-                "A video is being rendered in the editor. Wait for the render to finish, or                  cancel it in the editor, then install the update."
+                "A video is being rendered in the editor. Wait for the render to finish, or \
+                 cancel it in the editor, then install the update."
             }
         }
         .to_string()
@@ -144,6 +146,12 @@ mod tests {
             assert!(
                 msg.contains("Stop the") || msg.contains("cancel it"),
                 "{blocker:?}: the refusal must name the action that clears it: {msg:?}"
+            );
+            // Fix round 1: a lost line continuation once left a run of
+            // spaces in the middle of the render refusal.
+            assert!(
+                !msg.contains("  "),
+                "{blocker:?}: a run of spaces in the refusal: {msg:?}"
             );
         }
         let refusals: std::collections::BTreeSet<String> =

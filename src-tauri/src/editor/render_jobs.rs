@@ -43,8 +43,9 @@
 //! no project to land in.
 //!
 //! **Shutdown (R12).** `blocks_shutdown` is the fourth term of
-//! `shutdown_gate::shutdown_blocker`: true while a render is `rendering` or
-//! `publishing`. Both quit workers call `cancel_all_bounded` first, beside
+//! `shutdown_gate::shutdown_blocker`: true while a render job has not ended
+//! (fix round 1 widened the ADR's `rendering`/`publishing` to every
+//! non-terminal phase, so the gate and the quit's cancel read one set). Both quit workers call `cancel_all_bounded` first, beside
 //! `export_shutdown::cancel_if_exporting`. A wedged render must not make
 //! the app unquittable: after the bound expires, the gate stops counting
 //! renders (`RENDERS_ABANDONED`), so Alt+F4's re-triggered close cannot loop.
@@ -244,7 +245,11 @@ pub(crate) fn read_ledger(root: &Path, project_id: &str) -> Result<Vec<Product>,
     let foreign = products
         .iter()
         .find(|p| !has_canonical_file_name(p) || p.project_id != project_id);
-    if products.len() > limits::MAX_PRODUCTS || foreign.is_some() {
+    // Duplicate ids are refused as `validate_envelope` refuses them: a save
+    // would otherwise copy them into a `project.json` load then rejects.
+    let mut ids = std::collections::HashSet::new();
+    let duplicate = products.iter().any(|p| !ids.insert(p.id.as_str()));
+    if products.len() > limits::MAX_PRODUCTS || foreign.is_some() || duplicate {
         return Err(err(
             EditorErrorCode::InvalidProject,
             "The product ledger lists a product this project cannot own.",
@@ -438,15 +443,21 @@ fn plan_with_inputs(
     Ok((plan, inputs))
 }
 
+/// The one refusal a render past the product cap gets -- up front and,
+/// again, under the save lock at publish (GAP-187: there is no removal UI).
+pub(crate) fn too_many_products() -> EditorError {
+    err(
+        EditorErrorCode::InvalidRequest,
+        format!(
+            "This project already has {} rendered products. Remove an older product first.",
+            limits::MAX_PRODUCTS
+        ),
+    )
+}
+
 fn check_capacity(root: &Path, project_id: &str) -> Result<(), EditorError> {
     if read_ledger(root, project_id)?.len() >= limits::MAX_PRODUCTS {
-        return Err(err(
-            EditorErrorCode::InvalidRequest,
-            format!(
-                "This project already has {} rendered products. Remove an older product first.",
-                limits::MAX_PRODUCTS
-            ),
-        ));
+        return Err(too_many_products());
     }
     Ok(())
 }
@@ -562,11 +573,7 @@ fn publish(
     }
     let mut ledger = read_ledger(&job.root, &job.project_id)?;
     if ledger.len() >= limits::MAX_PRODUCTS {
-        return Err(err(
-            EditorErrorCode::InvalidRequest,
-            "This project already has the most rendered products it can keep. Remove an older \
-             product first.",
-        ));
+        return Err(too_many_products());
     }
     let products = project_dir(&job.root, &job.project_id)
         .ok_or_else(|| internal("Not a valid project id."))?
@@ -661,7 +668,16 @@ pub(crate) fn run_render_job(
         JobKind::Render,
     );
     reporter.progress(JobPhase::Preparing, 0.0);
-    let outcome = render_and_publish(state, &job, runner, &mut reporter);
+    // A panic on this thread must still END the job (fix round 1): a record
+    // left `rendering` forever would refuse every later render in the
+    // session and the updater until a restart.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        render_and_publish(state, &job, runner, &mut reporter)
+    }))
+    .unwrap_or_else(|_| {
+        log::error!("editor render {}: the render thread panicked", job.job_id);
+        Err(internal("The render stopped unexpectedly."))
+    });
     remove_job_dir(&job);
     match outcome {
         Ok(product_id) => reporter.finish(
@@ -691,9 +707,14 @@ pub(crate) fn run_render_job(
 
 // ---- the shutdown gate (R12) ----
 
-/// Is a render in a phase a process exit would destroy?
+/// Is a RENDER job not yet ended? The same set `cancel_all_in` cancels and
+/// waits for (fix round 1): by KIND, so another job in `publishing` (Task
+/// 48's publish) is neither reported as a render nor left outside the
+/// cancel to loop the gate; and every non-terminal phase, because a queued
+/// or preparing render is seconds away from starting an ffmpeg child that
+/// would otherwise outlive the process.
 pub(crate) fn render_blocks_shutdown(state: &EditorState) -> bool {
-    lock_ignoring_poison(&state.jobs).blocks_shutdown()
+    lock_ignoring_poison(&state.jobs).any_running(JobKind::Render)
 }
 
 /// Cancel every render and wait, at most `limit`, for all of them to end;

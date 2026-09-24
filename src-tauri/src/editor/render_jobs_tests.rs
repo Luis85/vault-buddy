@@ -41,6 +41,8 @@ pub(super) enum Behaviour {
     Fails,
     /// Reports success but produced nothing at all.
     ClaimsWithoutOutput,
+    /// Panics mid-render, as a bug in the render path would.
+    Panics,
 }
 
 pub(super) struct FakeRunner {
@@ -114,6 +116,7 @@ impl RenderRunner for FakeRunner {
                 Err(ScreenError::Sink("ffmpeg exited with status 1".into()))
             }
             Behaviour::ClaimsWithoutOutput => Ok(work.plan.duration_ms),
+            Behaviour::Panics => panic!("a bug in the render path"),
         };
         self.finished.store(true, Ordering::SeqCst);
         result
@@ -623,9 +626,12 @@ fn shutdown_is_blocked_while_rendering() {
     assert!(!render_blocks_shutdown(&state));
     let (runner, started) = FakeRunner::signalling(Behaviour::UntilCancelled);
     let (job, runner) = begin(&state, root.path(), runner).unwrap();
+    // Fix round 1 (review Minor 6): a queued or preparing render is seconds
+    // from a child, so the quit path must cancel and wait for it too -- the
+    // gate and the cancel read the SAME set (every non-terminal render).
     assert!(
-        !render_blocks_shutdown(&state),
-        "a queued render has nothing to lose yet"
+        render_blocks_shutdown(&state),
+        "a queued render is on its way to a child"
     );
     let sink = CollectingSink::default();
     std::thread::scope(|scope| {
@@ -651,6 +657,47 @@ fn shutdown_is_blocked_while_rendering() {
         Duration::from_millis(40),
         Duration::from_millis(5)
     ));
+}
+
+// Fix round 1 (review Minor 3): the gate and the quit's cancel agree BY
+// KIND. Another kind in `publishing` (Task 48's publish job will use it) is
+// not a render: counting it would report it as "a video is being rendered"
+// and, since the render cancel never ends it, re-open GAP-190's loop.
+#[test]
+fn only_render_jobs_count_for_the_render_gate() {
+    let state = EditorState::default();
+    let sink = CollectingSink::default();
+    let (other, _) = lock_ignoring_poison(&state.jobs).register(SESSION, JobKind::Import);
+    JobReporter::new(&state.jobs, &sink, SESSION, &other, JobKind::Import)
+        .progress(JobPhase::Publishing, 0.5);
+    assert!(!render_blocks_shutdown(&state));
+    assert!(cancel_all_in(
+        &state,
+        Duration::from_millis(40),
+        Duration::from_millis(5)
+    ));
+}
+
+// Fix round 1 (review Minor 7): a panic on the render thread still ends
+// the job -- `failed`, with its directory gone -- rather than leaving it
+// `rendering` forever, refusing every later render and the updater.
+#[test]
+fn a_panicking_render_ends_the_job_as_failed() {
+    let root = tempfile::tempdir().unwrap();
+    let state = EditorState::default();
+    let dir = opened(root.path(), &state);
+    let (job, runner) = begin(&state, root.path(), FakeRunner::new(Behaviour::Panics)).unwrap();
+    let job_id = job.job_id.clone();
+    let sink = CollectingSink::default();
+    run_render_job(&state, job, &runner, &sink);
+    let last = terminal(&sink);
+    assert_eq!(last.phase, JobPhase::Failed);
+    assert_eq!(
+        last.terminal.unwrap().error.map(|e| e.code),
+        Some(EditorErrorCode::Internal)
+    );
+    assert!(!render_blocks_shutdown(&state));
+    assert!(!dir.join(JOBS_DIR).join(&job_id).exists());
 }
 
 // A discard removes the project directory the render is writing into, so

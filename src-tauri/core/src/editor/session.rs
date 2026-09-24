@@ -150,23 +150,8 @@ impl EditorSession {
                 "sessionId does not match this session",
             ));
         }
-        if !is_valid_id(&req.command_id) {
-            return Err(EditorError::new(
-                EditorErrorCode::InvalidRequest,
-                "commandId is not a valid entity id",
-            ));
-        }
-        if self.recent.iter().any(|(id, _)| id == &req.command_id) {
-            return Ok(self.snapshot());
-        }
-        if req.expected_revision != self.revision {
-            return Err(EditorError::new(
-                EditorErrorCode::RevisionConflict,
-                format!(
-                    "expected revision {} but the session is at {}",
-                    req.expected_revision, self.revision
-                ),
-            ));
+        if let Some(replayed) = self.admit(&req.command_id, req.expected_revision)? {
+            return Ok(replayed);
         }
 
         match &req.command {
@@ -230,6 +215,25 @@ impl EditorSession {
         command_id: &str,
         cmd: &InternalCommand,
     ) -> Result<EditorSnapshot, EditorError> {
+        if let Some(replayed) = self.admit(command_id, expected_revision)? {
+            return Ok(replayed);
+        }
+        let snapshot = self.execute_internal(cmd)?;
+        self.record_command(command_id.to_string());
+        Ok(snapshot)
+    }
+
+    /// The request admission `execute` and `execute_internal_as` share, in
+    /// the module doc's order: an invalid `command_id` is `invalidRequest`;
+    /// a REPLAYED one is `Some(current snapshot)`, a no-op (checked before
+    /// the revision, since a retry's `expectedRevision` is stale by
+    /// construction); a stale `expected_revision` is `revisionConflict`;
+    /// `None` admits the command.
+    fn admit(
+        &self,
+        command_id: &str,
+        expected_revision: u64,
+    ) -> Result<Option<EditorSnapshot>, EditorError> {
         if !is_valid_id(command_id) {
             return Err(EditorError::new(
                 EditorErrorCode::InvalidRequest,
@@ -237,7 +241,7 @@ impl EditorSession {
             ));
         }
         if self.recent.iter().any(|(id, _)| id == command_id) {
-            return Ok(self.snapshot());
+            return Ok(Some(self.snapshot()));
         }
         if expected_revision != self.revision {
             return Err(EditorError::new(
@@ -248,9 +252,7 @@ impl EditorSession {
                 ),
             ));
         }
-        let snapshot = self.execute_internal(cmd)?;
-        self.record_command(command_id.to_string());
-        Ok(snapshot)
+        Ok(None)
     }
 
     fn record_command(&mut self, command_id: String) {

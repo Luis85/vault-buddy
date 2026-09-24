@@ -60,6 +60,11 @@ fn the_forty_first_render_is_refused() {
     ));
     assert_eq!(e.code, EditorErrorCode::InvalidRequest);
     assert!(e.message.contains("Remove an older product first"));
+    assert_eq!(
+        e.message,
+        too_many_products().message,
+        "one wording for both refusals"
+    );
 }
 
 // R5's departure from the bundle: the ledger is committed WITH the product,
@@ -148,14 +153,22 @@ fn save_and_export_assemble_record_products_from_the_ledger() {
         .map(|p| p.id.as_str())
         .collect();
     assert_eq!(ids, [product_id.as_str()]);
-    assert_eq!(
-        saved.record.products,
-        read_ledger(root.path(), PROJECT).unwrap()
-    );
+    let ledger = read_ledger(root.path(), PROJECT).unwrap();
+    let without_snapshots: Vec<_> = ledger
+        .iter()
+        .cloned()
+        .map(|mut p| {
+            p.snapshot = None;
+            p
+        })
+        .collect();
+    assert_eq!(saved.record.products, without_snapshots);
+    // A package carries the lineage WITH its snapshots (A17's collector
+    // reads them); only `project.json` leaves them to the ledger.
     let exported =
         crate::editor::package_commands::export_envelope(&state, root.path(), SESSION, rev)
             .unwrap();
-    assert_eq!(exported.record.products, saved.record.products);
+    assert_eq!(exported.record.products, ledger);
 
     let project_json = std::fs::read(dir.join("project.json")).unwrap();
     std::fs::write(dir.join(PRODUCTS_FILE), b"{ not a ledger").unwrap();
@@ -166,4 +179,103 @@ fn save_and_export_assemble_record_products_from_the_ledger() {
         std::fs::read(dir.join("project.json")).unwrap(),
         project_json
     );
+}
+
+/// Replace the live session's project with one carrying `pad` bytes of
+/// round-tripping `extra`, at the same revision; the padded project.
+fn padded(state: &EditorState, pad: usize) -> vault_buddy_core::editor::Project {
+    let mut sessions = lock_ignoring_poison(&state.sessions);
+    let session = &sessions[SESSION];
+    let revision = session.snapshot().revision;
+    let mut project = session.project().clone();
+    project
+        .extra
+        .insert("pad".into(), serde_json::Value::String("x".repeat(pad)));
+    sessions.insert(
+        SESSION.to_string(),
+        vault_buddy_core::editor::EditorSession::resume(SESSION, project.clone(), revision),
+    );
+    project
+}
+
+// Fix round 1 (review Important 1, data loss): `load_project` refuses a
+// `project.json` over `MAX_PROJECT_JSON_BYTES`, and every product embeds a
+// whole snapshot, so a save that copied the ledger verbatim wrote a file
+// that could not be reopened once enough products existed. The schema
+// makes `snapshot` optional, so `project.json` carries the products WITHOUT
+// their snapshots (the ledger keeps them) -- 30 products whose snapshots
+// total ~9 MiB still save into a file that reopens.
+#[test]
+fn many_products_never_make_a_saved_project_unopenable() {
+    let root = tempfile::tempdir().unwrap();
+    let state = EditorState::default();
+    opened(root.path(), &state);
+    let project = padded(&state, 300_000);
+    let products: Vec<_> = (0..30)
+        .map(|i| {
+            let id = format!("prod-{i}");
+            new_product(
+                &project,
+                1,
+                &id,
+                "big",
+                &product_file_name(&id),
+                10,
+                None,
+                "t",
+            )
+        })
+        .collect();
+    write_ledger(root.path(), PROJECT, &products).unwrap();
+    let ledger = project_dir(root.path(), PROJECT)
+        .unwrap()
+        .join(PRODUCTS_FILE);
+    assert!(
+        std::fs::metadata(ledger).unwrap().len() > limits::MAX_PROJECT_JSON_BYTES,
+        "the fixture must exceed the load bound"
+    );
+
+    let rev = snapshot_revision(&state);
+    crate::editor::save_commands::save_project_in(&state, root.path(), SESSION, rev).unwrap();
+    let (saved, _) = load_project(root.path(), PROJECT).expect("the saved project reopens");
+    assert_eq!(saved.record.products.len(), 30);
+    assert!(saved.record.products.iter().all(|p| p.snapshot.is_none()));
+    assert!(read_ledger(root.path(), PROJECT).unwrap()[0]
+        .snapshot
+        .is_some());
+}
+
+// And whatever the cause, a save whose encoded project would exceed the
+// load bound is REFUSED with a typed error, leaving the last good
+// `project.json` byte-identical -- never written and then unloadable.
+#[test]
+fn a_save_over_the_load_bound_is_refused_and_leaves_the_last_good_file() {
+    let root = tempfile::tempdir().unwrap();
+    let state = EditorState::default();
+    let dir = opened(root.path(), &state);
+    let before = std::fs::read(dir.join("project.json")).unwrap();
+    padded(&state, limits::MAX_PROJECT_JSON_BYTES as usize + 1);
+    let rev = snapshot_revision(&state);
+    let e = crate::editor::save_commands::save_project_in(&state, root.path(), SESSION, rev)
+        .unwrap_err();
+    assert_eq!(e.code, EditorErrorCode::InvalidProject, "{}", e.message);
+    assert!(e.message.contains("too large"), "{}", e.message);
+    assert_eq!(std::fs::read(dir.join("project.json")).unwrap(), before);
+}
+
+// Fix round 1 (review Minor 5): the ledger refuses a duplicate product id,
+// as `validate_envelope` does -- a save would otherwise copy it into a
+// `project.json` that load then refuses.
+#[test]
+fn a_ledger_with_a_duplicate_product_id_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let state = EditorState::default();
+    opened(root.path(), &state);
+    let project = lock_ignoring_poison(&state.sessions)[SESSION]
+        .project()
+        .clone();
+    let one = new_product(&project, 1, "prod-a", "a", "prod-a.mp4", 10, None, "t");
+    write_ledger(root.path(), PROJECT, &[one.clone(), one]).unwrap();
+    let e = products_in(&state, root.path(), SESSION).unwrap_err();
+    assert_eq!(e.code, EditorErrorCode::InvalidProject);
 }

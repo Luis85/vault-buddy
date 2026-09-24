@@ -21,7 +21,7 @@
 //! `editor_get_jobs`, which reads it. Every message updates the record
 //! BEFORE it is delivered, so a reconcile can never be older than the event
 //! stream it replaces. Render (Task 46, `render_jobs`) and the shutdown gate
-//! reuse this registry: `blocks_shutdown` is the gate's question.
+//! reuse this registry: `any_running(JobKind::Render)` is the gate's question.
 //!
 //! **Bounded (GAP-174, Task 46).** A session keeps at most
 //! `MAX_TERMINAL_RECORDS` terminal records -- the most recent ones, so a
@@ -114,12 +114,6 @@ pub enum JobPhase {
 impl JobPhase {
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Complete | Self::Cancelled | Self::Failed)
-    }
-
-    /// The phases a process exit would destroy work in (ADR R12): a child
-    /// writing a product, or a product being moved into place and recorded.
-    pub fn blocks_shutdown(self) -> bool {
-        matches!(self, Self::Rendering | Self::Publishing)
     }
 }
 
@@ -284,12 +278,6 @@ impl JobRegistry {
         self.jobs
             .values()
             .any(|r| r.session_id == session_id && r.kind == kind && !r.phase.is_terminal())
-    }
-
-    /// Is any job, of any session, in a phase a process exit would destroy
-    /// (`JobPhase::blocks_shutdown`)? The shutdown gate's question (R12).
-    pub fn blocks_shutdown(&self) -> bool {
-        self.jobs.values().any(|r| r.phase.blocks_shutdown())
     }
 
     /// Stop every job of `kind`, in every session -- a quit's render cancel.

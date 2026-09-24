@@ -150,7 +150,21 @@ pub fn commit_project(
     envelope: &WorkspaceEnvelope,
 ) -> io::Result<()> {
     let dir = project_dir(root, id).ok_or_else(|| invalid_id(id))?;
-    write_json_with(writer, &dir.join(PROJECT_FILE), envelope)
+    let json = serde_json::to_string_pretty(envelope)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    // Never write a `project.json` that `load_project` would refuse to read
+    // back (fix round 1): the last good file stays where it is instead.
+    if json.len() as u64 > limits::MAX_PROJECT_JSON_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            format!(
+                "it would be {} bytes, past the {} byte limit a project can be reopened at",
+                json.len(),
+                limits::MAX_PROJECT_JSON_BYTES
+            ),
+        ));
+    }
+    writer.write(&dir.join(PROJECT_FILE), &json)
 }
 
 pub(crate) fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, EditorError> {

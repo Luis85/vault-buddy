@@ -90,8 +90,8 @@ use vault_buddy_core::editor::EditorSession;
 ///
 /// `jobs` (Task 25) is every background job this process started — the
 /// authoritative record `editor_get_jobs` answers from, and the registry the
-/// shutdown gate asks `blocks_shutdown` (Task 46: a render in `rendering`
-/// or `publishing`), bounded per session (GAP-174). A LEAF lock like `save_locks`'
+/// shutdown gate asks whether a render is still running (Task 46), bounded
+/// per session (GAP-174). A LEAF lock like `save_locks`'
 /// map: never held across I/O, a channel send, or while taking another
 /// lock (`media_jobs.rs`' own doc).
 ///
