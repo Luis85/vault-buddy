@@ -35,9 +35,15 @@
  *
  * **Webcam… (Task 50)** opens `WebcamDialog` — opening it touches no
  * device; the dialog's own *Enable camera* is the first thing that does.
+ *
+ * **Both open on a before-you-share finding too (Task 54):** a missing
+ * original's "Reconnect media" and an open take's "Open Webcam"
+ * (`checkReveal.onReveal`), after the same reveal switched the library to
+ * this tab.
  */
 import { computed, onMounted, ref } from "vue";
 
+import { onReveal } from "../../../editor/revealBus";
 import { firstAcceptingTrack } from "../../../editor/trackCompat";
 import type { Asset, Track } from "../../../editorTypes";
 import { useEditorJobsStore } from "../../../stores/editorJobs";
@@ -136,6 +142,10 @@ function startImport(): void {
 onMounted(() => {
   void jobs.reconcile();
 });
+onReveal("reconnect", () => {
+  reconnectOpen.value = true;
+});
+onReveal("webcam", openWebcam);
 </script>
 
 <template>

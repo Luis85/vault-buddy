@@ -5,10 +5,15 @@
  * checks summary and the originals statement. Presentational — every
  * choice is a `v-model` the dialog owns; nothing here starts anything.
  *
- * The checks summary is a placeholder list until Task 54 builds the
- * pre-render checks, and says so rather than implying a pass (R20).
+ * The checks (Task 54): the "N blockers · M review warnings" summary and
+ * every blocking finding by name — the ones that keep Render disabled —
+ * with "Review all checks" for the rest. A read that failed says so
+ * rather than implying a pass (R20).
  */
-import type { RenderQuality } from "../../../editorTypes";
+import type { CheckFinding, RenderQuality } from "../../../editorTypes";
+
+defineProps<{ checksSummary: string; checksError: string | null; blocking: CheckFinding[] }>();
+const emit = defineEmits<{ (e: "review-checks"): void }>();
 
 const name = defineModel<string>("name", { required: true });
 const quality = defineModel<RenderQuality>("quality", { required: true });
@@ -21,10 +26,6 @@ const QUALITIES: { id: RenderQuality; label: string; hint: string }[] = [
   { id: "low", label: "Low", hint: "Smallest file, fastest render." },
   { id: "balanced", label: "Balanced", hint: "Good quality at a moderate size." },
   { id: "high", label: "High", hint: "Best quality, largest file." },
-];
-const CHECKS_PLACEHOLDER = [
-  "Pre-render checks arrive in a later update.",
-  "Until then, review crop, captions and audio in the preview before rendering.",
 ];
 const FIELD = "rounded-control border border-line bg-raised px-2 py-1 text-sm text-fg";
 </script>
@@ -115,19 +116,39 @@ const FIELD = "rounded-control border border-line bg-raised px-2 py-1 text-sm te
     </div>
   </fieldset>
 
-  <section class="rounded-control border border-line p-2">
-    <h3 class="text-xs font-semibold text-fg-secondary">
-      Checks
-    </h3>
+  <section class="flex flex-col gap-1 rounded-control border border-line p-2">
+    <div class="flex items-center justify-between gap-2">
+      <h3 class="text-xs font-semibold text-fg-secondary">
+        Checks
+      </h3>
+      <button
+        type="button"
+        data-testid="render-dialog-open-checks"
+        class="cursor-pointer rounded px-1 text-micro text-fg-secondary underline hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+        @click="emit('review-checks')"
+      >
+        Review all checks
+      </button>
+    </div>
+    <p
+      data-testid="render-dialog-checks-summary"
+      class="text-xs text-fg"
+    >
+      {{ checksError ? `Checks could not be read. ${checksError}` : checksSummary }}
+    </p>
     <ul
       data-testid="render-dialog-checks"
       class="list-disc pl-4 text-xs text-fg-muted"
     >
       <li
-        v-for="line in CHECKS_PLACEHOLDER"
-        :key="line"
+        v-for="finding in blocking"
+        :key="finding.id"
+        class="text-danger-fg"
       >
-        {{ line }}
+        {{ finding.message }}
+      </li>
+      <li v-if="blocking.length === 0 && !checksError">
+        Nothing blocks this render.
       </li>
     </ul>
   </section>

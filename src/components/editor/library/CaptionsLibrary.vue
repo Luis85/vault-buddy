@@ -19,7 +19,7 @@
  * The list is windowed (`useVirtualRows`): a project may hold 2000
  * captions, each row an editable text box and two time fields.
  */
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 
 import { useVirtualRows } from "../../../composables/useVirtualRows";
 import { clipSpanOf, lockedTrackName } from "../../../editor/actionTargets";
@@ -136,6 +136,13 @@ function remove(row: CaptionRow): void {
 function changeSettings(patch: CaptionSettingsPatch): void {
   void project.execute({ kind: "setCaptionSettings", ...patch });
 }
+
+/** Task 54: a caption finding opens this tab with its cue already
+ * selected (`checkReveal.ts`) — scroll the cue into the list. */
+onMounted(() => {
+  const i = rows.value.findIndex((row) => row.cue.id === selectedId.value);
+  if (i !== -1) scrollToIndex(i);
+});
 
 /** "Select cue": select it, move the playhead onto it, scroll it in. */
 function selectCue(row: CaptionRow): void {

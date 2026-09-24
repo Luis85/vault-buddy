@@ -9,11 +9,13 @@
  * nothing to render. The dialog's range default is the selected clips'
  * output span (the one in/out range this editor has), frozen the moment the
  * dialog opens. A render's errors stay inside the dialog and never reach
- * the header's save status (Task 46's carry).
+ * the header's save status (Task 46's carry). The Checks dialog's
+ * "Continue to render" opens it too (`onReveal("render")`, Task 54).
  */
 import { computed, ref } from "vue";
 
 import { selectionRange } from "../../../editor/renderRanges";
+import { onReveal } from "../../../editor/revealBus";
 import type { RenderRange } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -38,6 +40,9 @@ function onRender(): void {
   initialRange.value = selectionRange(editorProject.project, workspace.selectionClipIds, editorProject.durationMs);
   open.value = true;
 }
+
+/** Task 54: the Checks dialog's "Continue to render". */
+onReveal("render", onRender);
 </script>
 
 <template>

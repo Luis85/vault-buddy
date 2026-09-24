@@ -50,6 +50,7 @@ const ALL_COMMANDS: &[&str] = &[
     "editor_execute",
     "editor_export_package",
     "editor_export_subtitles",
+    "editor_get_checks",
     "editor_get_jobs",
     "editor_get_products",
     "editor_get_snapshot",

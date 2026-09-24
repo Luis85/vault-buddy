@@ -28,6 +28,7 @@
  */
 import { computed, ref } from "vue";
 
+import { onReveal } from "../../../editor/revealBus";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import MixerPeakMeter from "./MixerPeakMeter.vue";
@@ -59,6 +60,11 @@ function close(): void {
   open.value = false;
   triggerRef.value?.focus();
 }
+
+/** Task 54: a muted-or-clipping finding's "Open the mixer". */
+onReveal("mixer", () => {
+  open.value = true;
+});
 function onKeydown(event: KeyboardEvent): void {
   if (event.key !== "Escape") return;
   event.stopPropagation();

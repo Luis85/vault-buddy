@@ -13,6 +13,7 @@
 //! this file.
 
 pub mod captions_io;
+pub mod checks;
 pub mod commands;
 pub mod error;
 pub mod fingerprint;

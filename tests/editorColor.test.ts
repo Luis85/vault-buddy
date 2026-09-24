@@ -298,7 +298,7 @@ describe("PreviewToolbar — ratio control", () => {
     expect(w.get('[data-testid="preview-toolbar-ratio"]').attributes("disabled")).toBeDefined();
   });
 
-  it("a second pick before the first toast expires restarts its TTL rather than stacking a second toast", async () => {
+  it("a second pick before the first toast expires replaces it rather than stacking a second toast", async () => {
     await open(project([clip("c1")]));
     const notifications = useNotificationsStore();
     const w = mount(PreviewToolbar, { props: { overflowCount: 0 } });
@@ -315,11 +315,12 @@ describe("PreviewToolbar — ratio control", () => {
       { kind: "setCanvas", width: 720, height: 1280 },
       { kind: "setCanvas", width: 720, height: 720 },
     ]);
-    // The message is the SAME constant string both times, so the store's
-    // own dedupe (notifications.ts's isRepeat) reuses the one notification
-    // and restarts its TTL, rather than pushing a second toast.
+    // Task 54: the toast now carries "Open Checks", and the store never
+    // dedupes an actionable toast -- so the toolbar itself dismisses the
+    // first before raising the second: still one toast, never a stack.
     expect(notifications.items).toHaveLength(1);
-    expect(notifications.items[0]!.id).toBe(firstId);
+    expect(notifications.items[0]!.id).not.toBe(firstId);
+    expect(notifications.items[0]!.action?.label).toBe("Open Checks");
   });
 
   it("reaching the ratio control via ArrowRight focuses its native select", async () => {

@@ -39,10 +39,12 @@ import { baseActionContext } from "../../../editor/actionContext";
 import type { ActionId } from "../../../editor/actionMeta";
 import type { PointerTarget } from "../../../editor/actions";
 import { activateEditorAction } from "../../../editor/clipboard";
+import { onReveal, revealedTimelineMs } from "../../../editor/revealBus";
 import {
   fitZoom,
   LANE_HEIGHT_PX,
   pxPerMs,
+  revealScrollLeft,
   snapTargets,
   TRACK_LABEL_WIDTH_PX,
   visibleClips,
@@ -99,6 +101,18 @@ function onScroll(event: Event) {
   scrollLeftPx.value = el.scrollLeft;
   workspace.setTimelineScroll(el.scrollLeft, el.scrollTop);
 }
+
+/** Task 54: a before-you-share finding's "Show it" scrolls its object in. */
+onReveal("timeline", () => {
+  const el = scrollRef.value;
+  const left = el
+    ? revealScrollLeft(revealedTimelineMs(), workspace.timelineZoom, el.scrollLeft, effectiveViewportWidth.value)
+    : null;
+  if (!el || left === null) return;
+  el.scrollLeft = left;
+  scrollLeftPx.value = left;
+  workspace.setTimelineScroll(left, el.scrollTop);
+});
 
 // ---- content geometry ----------------------------------------------------
 

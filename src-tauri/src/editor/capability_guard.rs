@@ -59,8 +59,8 @@ use std::path::{Path, PathBuf};
 use crate::structural_scan::code_only;
 
 /// The `editor_*` session, save/list/reopen, workspace, media and job commands —
-/// twenty-nine as of Task 49 (`editor_webcam_begin`/`_append`/`_finish`/
-/// `_discard`). Add a new one here in the same commit that adds it to
+/// thirty as of Task 54 (`editor_get_checks`, after Task 49's
+/// `editor_webcam_begin`/`_append`/`_finish`/`_discard`). Add a new one here in the same commit that adds it to
 /// `generate_handler!` (`lib.rs`), `build.rs`'s `ALL_COMMANDS`, and
 /// `capabilities/editor.json`'s `permissions` — never to
 /// `capabilities/default.json`.
@@ -70,6 +70,7 @@ const EXPECTED_EDITOR: &[&str] = &[
     "editor_execute",
     "editor_export_package",
     "editor_export_subtitles",
+    "editor_get_checks",
     "editor_get_jobs",
     "editor_get_products",
     "editor_get_snapshot",

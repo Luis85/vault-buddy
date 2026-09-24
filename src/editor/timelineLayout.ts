@@ -185,3 +185,16 @@ export function tickIntervalMs(zoom: number): number {
   }
   return NICE_TICK_INTERVALS_MS[NICE_TICK_INTERVALS_MS.length - 1];
 }
+
+/**
+ * Task 54: the scroll position that brings output instant `ms` into view,
+ * or `null` when it already is. Scroll coordinates include the label
+ * column (the lanes scroll it along, see `TimelineView`), so the instant
+ * sits at `TRACK_LABEL_WIDTH_PX + msToX(ms)`; out of view, it lands a
+ * third of the way in rather than flush against an edge.
+ */
+export function revealScrollLeft(ms: number, zoom: number, scrollLeft: number, viewportPx: number): number | null {
+  const x = TRACK_LABEL_WIDTH_PX + msToX(ms, zoom);
+  if (x >= scrollLeft + TRACK_LABEL_WIDTH_PX && x <= scrollLeft + viewportPx) return null;
+  return Math.max(0, Math.round(x - TRACK_LABEL_WIDTH_PX - (viewportPx - TRACK_LABEL_WIDTH_PX) / 3));
+}

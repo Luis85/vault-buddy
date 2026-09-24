@@ -5,6 +5,8 @@
  * render the whole project or an output-time range (defaulting to the
  * in/out range the caller hands in, when there is one), read the checks
  * summary and the originals statement (`RenderSettingsForm`), then start —
+ * unless a BLOCKING check stands (Task 54, `editorChecks.blockedReason`:
+ * only blocking findings block, a warning never does) —
  * Rust freezes the revision on screen and renders it on its own thread
  * (`editor_start_render`).
  *
@@ -29,7 +31,9 @@ import { computed, ref, watch } from "vue";
 import { useRenderJob } from "../../../composables/useRenderJob";
 import { isComplete } from "../../../editor/renderProgress";
 import { msFromSeconds, secondsText } from "../../../editor/renderRanges";
+import { openChecks } from "../../../editor/revealBus";
 import type { RenderQuality, RenderRange } from "../../../editorTypes";
+import { useEditorChecksStore } from "../../../stores/editorChecks";
 import { useEditorJobsStore } from "../../../stores/editorJobs";
 import { useEditorProductsStore } from "../../../stores/editorProducts";
 import { useEditorProjectStore } from "../../../stores/editorProject";
@@ -45,6 +49,7 @@ const emit = defineEmits<{ (e: "close"): void }>();
 const editorProject = useEditorProjectStore();
 const jobs = useEditorJobsStore();
 const products = useEditorProductsStore();
+const checks = useEditorChecksStore();
 
 const nameDraft = ref<string | null>(null);
 const quality = ref<RenderQuality>("balanced");
@@ -98,6 +103,7 @@ watch(
     if (!open) return;
     reset();
     void products.refresh();
+    void checks.refresh();
   },
   { immediate: true },
 );
@@ -115,6 +121,7 @@ const startReason = computed<string | null>(() => {
   if (!editorProject.sessionId) return "No project is open.";
   if (starting.value) return "Starting the render…";
   if (durationMs.value === 0) return "There is nothing to render yet. Place a clip on the timeline first.";
+  if (checks.blockedReason) return checks.blockedReason;
   if (editorProject.pending.size > 0) return "Wait for the last edit to finish.";
   if (!name.value.trim()) return "Name the rendered video.";
   if (scope.value === "range" && !chosenRange.value) {
@@ -159,6 +166,13 @@ function cancel(): void {
 function close(): void {
   if (!busy.value) emit("close");
 }
+
+/** Task 54: the whole list lives in the Checks dialog; this one steps
+ * aside so a revealed object is not hidden behind it. */
+function reviewChecks(): void {
+  close();
+  openChecks();
+}
 </script>
 
 <template>
@@ -199,6 +213,10 @@ function close(): void {
           v-model:scope="scope"
           v-model:start="startText"
           v-model:end="endText"
+          :checks-summary="checks.summary"
+          :checks-error="checks.currentError?.message ?? null"
+          :blocking="checks.blocking"
+          @review-checks="reviewChecks"
         />
         <div class="flex items-center justify-end gap-2">
           <span

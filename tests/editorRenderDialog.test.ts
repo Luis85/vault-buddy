@@ -57,8 +57,9 @@ describe("RenderDialog — the form", () => {
     expect(w.get('[data-testid="render-dialog-originals"]').text()).toContain(
       "Your originals and this project are not changed",
     );
-    // Task 54 fills the checks; until then the summary says so honestly.
-    expect(w.get('[data-testid="render-dialog-checks"]').findAll("li").length).toBeGreaterThan(0);
+    // Task 54: the real checks — none here, and the list says so.
+    expect(w.get('[data-testid="render-dialog-checks-summary"]').text()).toBe("0 blockers · 0 review warnings");
+    expect(w.get('[data-testid="render-dialog-checks"]').text()).toBe("Nothing blocks this render.");
     await start(w);
     expect(requests).toEqual([
       { sessionId: SESSION, expectedRevision: 7, name: "Walkthrough v2", range: null, quality: "balanced" },

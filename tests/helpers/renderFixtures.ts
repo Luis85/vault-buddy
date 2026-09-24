@@ -129,6 +129,8 @@ export async function openWithRenders(extra: Partial<EditorPort> = {}) {
   });
   const port = fakeEditorPort({
     openStaged: () => Promise.resolve(openResult()),
+    // Task 54: the Render dialog reads the checks; none unless a suite says.
+    getChecks: () => Promise.resolve([]),
     startRender,
     ...extra,
   });

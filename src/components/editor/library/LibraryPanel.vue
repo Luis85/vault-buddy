@@ -16,20 +16,22 @@
  * (`InspectorPanel.vue`'s own copy of the same handler was extracted into
  * it once `check:quality`'s clone-group gate caught the two as duplicates).
  *
- * **Which tab is open is local, unpersisted view state** — unlike
- * `InspectorPanel`'s `propertyTab` (a `editorWorkspace` field saved to
- * `workspace.json`), nothing else in the app reads or needs to restore
- * which library tab was last open, so there is no store field to add for
- * it.
+ * **Which tab is open is `editorWorkspace.libraryTab`** (the persisted
+ * `library_tab` field, like `InspectorPanel`'s `propertyTab`) — Task 54
+ * moved it there from a local ref because a before-you-share finding must
+ * be able to OPEN a tab (Reconnect and Webcam live on Media, caption
+ * findings on Captions: `checkReveal.ts`). An unset or unknown stored
+ * value falls back to Media.
  *
  * **Products (Task 47)** is the fifth tab: `ProductLibrary`, the project's
  * Rendered Products (the guide's `library.products` target) — mounted here
  * so a render's output is reachable from the running editor, not only from
  * the Render dialog that made it.
  */
-import { ref } from "vue";
+import { computed } from "vue";
 
 import { useRovingTablist } from "../../../composables/useRovingTablist";
+import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import CaptionsLibrary from "./CaptionsLibrary.vue";
 import ChaptersLibrary from "./ChaptersLibrary.vue";
 import MediaLibrary from "./MediaLibrary.vue";
@@ -46,14 +48,19 @@ const TABS: { id: LibraryTab; label: string }[] = [
   { id: "products", label: "Products" },
 ];
 
-const activeTab = ref<LibraryTab>("media");
+const workspace = useEditorWorkspaceStore();
+const activeTab = computed<LibraryTab>(() => {
+  const saved = workspace.libraryTab;
+  return TABS.some((t) => t.id === saved) ? (saved as LibraryTab) : "media";
+});
+function choose(tab: LibraryTab): void {
+  workspace.setLibraryTab(tab);
+}
 
 const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
   () => TABS.length,
   () => TABS.findIndex((t) => t.id === activeTab.value),
-  (i) => {
-    activeTab.value = TABS[i].id;
-  },
+  (i) => choose(TABS[i].id),
 );
 </script>
 
@@ -82,7 +89,7 @@ const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
         :tabindex="tab.id === activeTab ? 0 : -1"
         class="cursor-pointer rounded px-1.5 py-0.5 text-micro transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         :class="tab.id === activeTab ? 'bg-accent/20 text-accent-fg' : 'text-fg-subtle'"
-        @click="activeTab = tab.id"
+        @click="choose(tab.id)"
       >
         {{ tab.label }}
       </button>

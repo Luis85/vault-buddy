@@ -22,6 +22,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 
 import type {
   CaptionImportResult,
+  CheckFinding,
   CloseDisposition,
   EditorError,
   EditorOpenResult,
@@ -65,6 +66,7 @@ import {
   decodeWorkspace,
   isEditorError,
 } from "./decode";
+import { decodeCheckFindings } from "./decodeChecks";
 import { decodeRelinkReport } from "./decodeRelink";
 import {
   decodeNullableFileName,
@@ -213,6 +215,9 @@ export interface EditorPort {
    * the timeline's captions in output time; the file name, or `null` when
    * the dialog was dismissed. */
   exportSubtitles(sessionId: string, format: SubtitleFormat): Promise<string | null>;
+  /** `editor_get_checks` (Task 54) — the before-you-share findings for
+   * the session as it stands; read-only. */
+  getChecks(sessionId: string): Promise<CheckFinding[]>;
   /** `list_vaults` — the vaults a publish can go into. */
   listVaults(): Promise<VaultChoice[]>;
   /** `open_screen_capture` — open a PUBLISHED file in Obsidian (Rust
@@ -356,6 +361,9 @@ export function createTauriEditorPort(): EditorPort {
     },
     exportSubtitles(sessionId, format) {
       return call("editor_export_subtitles", { sessionId, format }, decodeNullableFileName);
+    },
+    getChecks(sessionId) {
+      return call("editor_get_checks", { sessionId }, decodeCheckFindings);
     },
     listVaults() {
       return call("list_vaults", undefined, decodeVaultChoices);

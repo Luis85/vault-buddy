@@ -546,6 +546,7 @@ export interface JobStarted {
 // caller still imports it from here.
 export type { EditorCommand } from "./editor/editorCommandTypes";
 // The render/product wire types (Task 46), split out for the same cap.
+export type { CheckAction, CheckFinding, CheckSeverity, CheckTarget } from "./editor/editorCheckTypes";
 export type { ProductDto, PublishDestination, PublishReceipt, RenderQuality } from "./editor/editorRenderTypes";
 export type { RenderRange, RenderRequest, RenderStarted, SubtitleFormat, VaultChoice } from "./editor/editorRenderTypes";
 export type { TakeDto, TakeStarted } from "./editor/editorTakeTypes";

@@ -66,6 +66,7 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 // Imported so the editor commands register as two-segment paths, like
 // every other command (the handler count's one-liner counts exactly those).
 use editor::caption_commands;
+use editor::checks_commands;
 use editor::media_commands;
 use editor::package_commands;
 use editor::prefs_commands;
@@ -527,6 +528,7 @@ pub fn run() {
             media_commands::editor_cancel_job,
             media_commands::editor_get_jobs,
             caption_commands::editor_import_captions,
+            checks_commands::editor_get_checks,
             package_commands::editor_export_package,
             package_commands::editor_import_package,
             relink_commands::editor_relink_media,

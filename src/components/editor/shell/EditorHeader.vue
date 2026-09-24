@@ -33,6 +33,7 @@ import AppButton from "../../ui/AppButton.vue";
 import IconButton from "../../ui/IconButton.vue";
 import SaveProjectDialog from "../dialogs/SaveProjectDialog.vue";
 import SaveProjectMenu from "../menus/SaveProjectMenu.vue";
+import ChecksButton from "./ChecksButton.vue";
 import RenderVideoButton from "./RenderVideoButton.vue";
 
 const props = defineProps<{
@@ -188,13 +189,7 @@ function onSaveMenu(item: "save" | "portable" | "lightweight" | "open") {
       >
         Help
       </AppButton>
-      <AppButton
-        variant="ghost"
-        size="sm"
-        data-testid="editor-header-checks"
-      >
-        Checks
-      </AppButton>
+      <ChecksButton />
       <IconButton
         :label="props.theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'"
         data-testid="editor-header-theme-toggle"

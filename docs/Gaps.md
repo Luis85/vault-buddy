@@ -3204,6 +3204,41 @@ it outright. It now degrades like the track limit: the stems are dropped
 downmixed before the mixer and so before the tee; its stem carries that mono
 downmix, exactly what the mix carries of it — never the device's own stereo.
 
+### GAP-202 · Low · Before-you-share checks are heuristics with recorded limits
+`src-tauri/core/src/editor/checks.rs` + `checks_layout.rs`,
+`src/editor/checkReveal.ts`, Task 54 (F-45, F-33, F-38). The checks are
+honest about being editorial heuristics — the dialog says they inspect the
+edit, not the tutorial, and nothing is a score — but these limits are known
+and recorded rather than guessed at:
+(1) **"May clip" is a sum of linear gains at clip starts.** Clip volume x
+track volume x master, summed over the audible sound clips playing where one
+starts; fades, fade curves and the sources' own levels are not modelled, a
+pair joined by a transition is excluded as a crossfade, and a third clip
+starting inside a crossfade counts both sides at full gain. It never measures
+loudness, and a quiet recording at unity can be flagged.
+(2) **Sound is `sources.json`'s `hasAudio`.** A project from an older build or
+another editor without source facts reads its videos as silent (GAP-182), so
+neither `allMuted` nor `clipping` can see their sound.
+(3) **The geometry is estimated, not measured.** The step pill and the caption
+box mirror `src/editor/cueShapes.ts` and `CaptionOverlay.vue` (glyph width
+0.55 of the font size, a 1.25 line height, the 86 % line width); a real
+font's metrics differ, so a caption near the limit can fit when flagged or
+overflow when not. A text cue's box is its stored `x/y/w/h`, not the text
+actually drawn in it. T47 is where a real render is compared.
+(4) **A source's aspect is the asset's recorded `width`/`height`.** An asset
+with no dimensions in the project graph (a legacy placeholder, a builtin
+card) is never checked; only a FULL-FRAME clip (at least 0.98 of the canvas
+each way, the render's own picture-in-picture line) is, once per source, on
+its earliest such clip.
+(5) **`gap` reads the top populated visible video track alone** and does not
+know whether a lower track fills the hole, which is why it is a note. A
+trailing gap (the top track ends before a longer lower one) is not reported.
+(6) **Reveal requests outlive an unmounted surface.** A request made while
+its surface is not mounted is answered the next time that surface mounts
+(the design that lets the media library open Reconnect just after its tab
+is chosen); every surface a reveal targets today is mounted whenever the
+editor shell is, except the media library, whose tab the same reveal opens.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md

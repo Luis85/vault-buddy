@@ -73,6 +73,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import { baseActionContext } from "../../../editor/actionContext";
 import { activateEditorAction } from "../../../editor/clipboard";
+import { onReveal } from "../../../editor/revealBus";
 import { matchShortcut, shouldHandle } from "../../../editor/shortcuts";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -108,6 +109,14 @@ const inspectorOpen = ref(false);
  * drawer's own open state. */
 const showLibrary = computed(() => !isCompact.value || libraryOpen.value);
 const showInspector = computed(() => !isCompact.value || inspectorOpen.value);
+/** Task 54: a finding revealed in a closed drawer opens that drawer (at
+ * full width both columns already show). */
+onReveal("library", () => {
+  if (isCompact.value) libraryOpen.value = true;
+});
+onReveal("inspector", () => {
+  if (isCompact.value) inspectorOpen.value = true;
+});
 
 /**
  * Theme: Task 16 kept this as a local ref seeded from

@@ -172,9 +172,9 @@ impl TakeRegistry {
     }
 
     /// The ids of `session_id`'s takes that are still recording — what the
-    /// close guard would lose. Test-facing today; never locks an entry for
-    /// longer than one read.
-    #[cfg(test)]
+    /// close guard would lose, and what Checks counts as unfinished (Task
+    /// 54, `checks_commands`). Never locks an entry for longer than one
+    /// read.
     pub(crate) fn open_takes(&self, session_id: &str) -> Vec<String> {
         let slots: Vec<Arc<TakeSlot>> = lock_ignoring_poison(&self.0)
             .values()

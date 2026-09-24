@@ -56,11 +56,12 @@
  * warnings prompt a review") naming Checks — through the SAME shared
  * mechanism `ActionPanel.vue` already uses, `useNotificationsStore().info()`
  * + `NotificationHost.vue` (mounted once in `EditorShell.vue`, fix round 1),
- * rather than a second hand-rolled timer/dismiss here. The store's own
- * dedupe (`notifications.ts`'s `isRepeat`) is what gives "one-time" its
- * exact meaning: a repeat of the SAME message text restarts that toast's
- * TTL instead of stacking a second one, which is why the message below is
- * one constant string regardless of which ratio was picked.
+ * rather than a second hand-rolled timer/dismiss here. Since Task 54 the
+ * toast carries an **Open Checks** action (`checkReveal.openChecks`), where
+ * the `canvasReview` finding names each source, text cue and caption the
+ * new canvas no longer fits. An actionable toast is never deduped by the
+ * store, so "one-time" is kept here instead: a second pick dismisses the
+ * first toast before raising its replacement.
  *
  * **Review (Task 47; F-42, F18)** is the registry's `render` action: it
  * opens `ReviewDialog` over the selection's output span, or 5 s either side
@@ -78,6 +79,7 @@ import { commandFor, resolveActions } from "../../../editor/actions";
 import { addedEffectId } from "../../../editor/cueActions";
 import type { AddEffectCommand } from "../../../editor/editorCommandTypes";
 import { reviewRange } from "../../../editor/renderRanges";
+import { onReveal, openChecks } from "../../../editor/revealBus";
 import type { RenderRange } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -194,6 +196,12 @@ const canvasValue = computed(() => {
  * equality, so a second pick before the first toast's TTL expires must send
  * this SAME string to restart it rather than push a second toast). */
 const CANVAS_TOAST_MESSAGE = "Canvas changed. Review crop, text and caption placement in Checks.";
+/** Long enough to reach the action, never sticky: the change is already
+ * made and nothing waits on the answer. */
+const CANVAS_TOAST_MS = 8_000;
+
+/** The live canvas toast, so a second pick replaces it (see the module doc). */
+let canvasToast: number | null = null;
 
 /** `RatioSelect`'s own `change` handler — bypasses `commandFor`/`BUILDERS`
  * entirely (see the module doc): `ratio` needs the CHOSEN pair, which
@@ -202,7 +210,12 @@ async function onRatioChange(value: string): Promise<void> {
   const [width, height] = value.split("x").map(Number);
   closeMore();
   const ok = await editorProject.execute({ kind: "setCanvas", width, height });
-  if (ok) notifications.info(CANVAS_TOAST_MESSAGE);
+  if (!ok) return;
+  if (canvasToast !== null) notifications.dismiss(canvasToast);
+  canvasToast = notifications.notify("info", CANVAS_TOAST_MESSAGE, {
+    ttlMs: CANVAS_TOAST_MS,
+    action: { label: "Open Checks", run: openChecks },
+  });
 }
 
 // ---- activation + roving tabindex over the visible row ----------------------
@@ -297,6 +310,15 @@ const focusableCount = computed(() => visibleItems.value.length + (overflowCount
  */
 watch(focusableCount, (n) => {
   if (activeIndex.value > n - 1) activeIndex.value = Math.max(0, n - 1);
+});
+
+/** Task 54: a `canvasReview` finding points here. After the tick, so the
+ * closing Checks dialog's focus restore does not land on top of it. */
+onReveal("ratio", () => {
+  const i = visibleItems.value.indexOf("ratio");
+  if (i === -1) return;
+  activeIndex.value = i;
+  void nextTick(() => itemEls.value[i]?.focus());
 });
 
 async function onRowKeydown(event: KeyboardEvent) {
