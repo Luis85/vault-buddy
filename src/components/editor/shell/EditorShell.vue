@@ -79,7 +79,8 @@
  * section, so nothing the guide draws can sit inside what a render mirrors
  * (A26). The dispatcher below answers the guide's keys itself: F1/?
  * (`help`) start or resume the walkthrough, F6 (`guideFocus`) moves focus
- * between the card and its control, and an Escape nothing else answered
+ * between the card and its control — even out of a text field, since the
+ * control can be one and F6 types nothing — and an Escape nothing else answered
  * pauses it once no menu is open. A pending progress save is flushed when
  * the window hides and when the shell unmounts.
  */
@@ -217,9 +218,20 @@ function onGuideKey(event: KeyboardEvent, actionId: ActionId | null): boolean {
   return isGuideDismissKey(event) && (coach.value?.dismiss() ?? false);
 }
 
+/** F6 types nothing, so it may leave a text field: the guide's highlighted
+ * control can BE one (the fades and layout lessons land in an input), and
+ * without this F6 could never return to the card from there. Only an open
+ * menu or dialog still owns it; every other key keeps `shouldHandle`'s
+ * text-field rule. */
+function gateAllows(event: KeyboardEvent, actionId: ActionId | null): boolean {
+  const ownsKeys = menuOwnsKeys(event);
+  if (actionId === "guideFocus") return !ownsKeys;
+  return shouldHandle(event, { menuOwnsKeys: ownsKeys });
+}
+
 function onShellKeydown(event: KeyboardEvent) {
-  if (!shouldHandle(event, { menuOwnsKeys: menuOwnsKeys(event) })) return;
   const actionId = matchShortcut(event);
+  if (!gateAllows(event, actionId)) return;
   if (onGuideKey(event, actionId)) {
     event.preventDefault();
     event.stopPropagation();

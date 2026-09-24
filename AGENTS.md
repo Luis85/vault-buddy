@@ -3483,7 +3483,9 @@ registry, and `stopPropagation()`s only a keystroke it actually acted on — so
 a claimed Ctrl+Z never reaches the legacy surface's `window` listener, while
 a disabled or nothing-to-send combo (Ctrl+S; F6 with the guide closed)
 bubbles on untouched. F1/? (start or resume the guide) and F6 (the guide's
-card ↔ control focus, Task 56) are answered by the same dispatcher.
+card ↔ control focus, Task 56) are answered by the same dispatcher — F6
+alone skips the text-field rule (it types nothing, and a lesson's control
+can be an input), still yielding to an open menu or dialog.
 Its clipboard (`src/editor/clipboard.ts`) is window-local, in-memory state,
 never sent to Rust and never persisted.
 **`RegionRoot` and `RegionIndicatorRoot` install no store** — the two roots

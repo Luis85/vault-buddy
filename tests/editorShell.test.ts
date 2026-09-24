@@ -323,10 +323,12 @@ describe("EditorShell — dispatcher ownership (Task 21)", () => {
   });
 
   // The other half of the same rule: an action this dispatcher cannot
-  // perform (save/help/focus-preview have no wire command here) must NOT be
-  // claimed -- preventDefault + stopPropagation with nothing done would
-  // swallow Ctrl+S / F1 / F6 silently (R20: no control that silently
-  // succeeds).
+  // perform (save has no wire command here) must NOT be claimed --
+  // preventDefault + stopPropagation with nothing done would swallow Ctrl+S
+  // silently (R20: no control that silently succeeds). Since Task 56 F1/?
+  // are always claimed (they start or resume the guide) and F6 is claimed
+  // only while the guide's coach is showing; with the coach closed F6 still
+  // bubbles untouched.
   it("an enabled action with nothing to send (Ctrl+S) is left to bubble, not swallowed", async () => {
     const store = useEditorProjectStore();
     const executed: unknown[] = [];

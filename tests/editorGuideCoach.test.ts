@@ -203,8 +203,19 @@ beforeEach(async () => {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(120, 90, 200, 40));
   await install();
 });
+/** Put back an own property a test overrode (or remove the override so
+ * the prototype's shows through again), whatever the test's outcome. */
+function restoreOwn(target: object, key: string, original: PropertyDescriptor | undefined): void {
+  if (original) Object.defineProperty(target, key, original);
+  else Reflect.deleteProperty(target, key);
+}
+const ORIGINAL_MEDIA_DEVICES = Object.getOwnPropertyDescriptor(navigator, "mediaDevices");
+const ORIGINAL_VISIBILITY = Object.getOwnPropertyDescriptor(document, "visibilityState");
+
 afterEach(() => {
   vi.restoreAllMocks();
+  restoreOwn(navigator, "mediaDevices", ORIGINAL_MEDIA_DEVICES);
+  restoreOwn(document, "visibilityState", ORIGINAL_VISIBILITY);
 });
 
 describe("the invitation", () => {
@@ -348,6 +359,35 @@ describe("the coach", () => {
     expect(card.contains(document.activeElement)).toBe(true);
   });
 
+  // Review I-1: on the fades (and layout) lesson F6 lands in a TEXT FIELD
+  // (the section's first focusable is "Fade in (ms)"). F6 types nothing,
+  // so it must still come back to the card from there — while every other
+  // shortcut keeps leaving text fields alone.
+  it("F6 returns to the card from a lesson control that is a text field", async () => {
+    const w = await mountEditor();
+    await click(w, "guide-invitation-start");
+    await goTo(w, "fades");
+    const card = coach(w).element;
+    (w.get('[data-testid="guide-coach-title"]').element as HTMLElement).focus();
+
+    keydown(document.activeElement as Element, "F6");
+    await flushPromises();
+    expect(document.activeElement?.tagName).toBe("INPUT");
+    expect(w.get('[data-testid="fades-section"]').element.contains(document.activeElement)).toBe(true);
+
+    keydown(document.activeElement as Element, "F6");
+    await flushPromises();
+    expect(card.contains(document.activeElement)).toBe(true);
+
+    // The text-field rule still holds for everything else: "?" typed in the
+    // field neither opens nor moves the guide.
+    const field = w.get('[data-testid="fades-section-fade-in"]').element as HTMLElement;
+    field.focus();
+    const typed = keydown(field, "?");
+    expect(typed.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(field);
+  });
+
   it("exploring the highlighted control records it and never advances the lesson", async () => {
     const w = await mountEditor();
     await click(w, "guide-invitation-start");
@@ -431,7 +471,6 @@ describe("the coach", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     await flushPromises();
     expect(saved).toMatchObject({ currentStepId: "media", active: true });
-    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
     w.unmount();
   });
 

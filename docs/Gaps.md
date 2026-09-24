@@ -6423,6 +6423,17 @@ the shortcut list, the dimming/motion preference controls and the progress
 file export/import do not exist yet; Help and F1/? start or resume the
 walkthrough, and the `help` lesson's copy is overridden to say only that
 (GAP-203).
+(6) **Revisiting a finished guide clears `completed`.** `start()` on a
+completed guide opens lesson 1 and sets `completed` back to `false` (what
+was read stays in `reviewed`), so a paused revisit resumes where it paused
+instead of jumping to lesson 1 again. The cost: `completed` means "finished
+and not reopened since", not "has ever finished" — the moment a person
+revisits, nothing records that they once completed it. Task 57's learning
+center must not read `completed` as "has finished the guide" (for a badge
+or a "you've done this" state); derive that from `reviewed` covering all
+22 lessons, or add a field in a `CONTENT_REVISION`-bumped change. Its
+per-lesson jump should go through `show()`-style navigation after
+`start()`, which already clears the flag.
 
 ### GAP-206 · Medium · The tutorial editor's light theme leaves the shared text tokens dark-only
 `src/style.css` (`[data-theme="light"]`), every editor surface. The light

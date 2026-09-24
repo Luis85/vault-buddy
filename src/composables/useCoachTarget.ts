@@ -14,7 +14,7 @@
  * and the coach says so instead of drawing a ring around nothing.
  */
 import type { ShallowRef } from "vue";
-import { onBeforeUnmount, onMounted, shallowRef, watch } from "vue";
+import { onBeforeUnmount, shallowRef, watch } from "vue";
 
 import type { Rect, Size } from "../editor/guide/position";
 import type { GuideTargetKey, ResolvedGuideTarget } from "../editor/guide/targets";
@@ -72,30 +72,30 @@ export function useCoachTarget(key: () => GuideTargetKey | null, live: () => boo
     return rect.value ? found.value.revealed : "hidden";
   }
 
+  // Poll and listeners share ONE switch: nothing is measured, on any
+  // scroll or resize, while the coach is not showing.
   let timer: ReturnType<typeof setInterval> | null = null;
-  function stopPolling(): void {
+  function stop(): void {
     if (timer !== null) clearInterval(timer);
     timer = null;
+    window.removeEventListener("resize", measure);
+    window.removeEventListener("scroll", measure, true);
+  }
+  function start(): void {
+    timer = setInterval(measure, POLL_MS);
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
   }
   watch(
     live,
     (on) => {
-      stopPolling();
-      if (on) timer = setInterval(measure, POLL_MS);
+      stop();
+      if (on) start();
       measure();
     },
     { immediate: true },
   );
-
-  onMounted(() => {
-    window.addEventListener("resize", measure);
-    window.addEventListener("scroll", measure, true);
-  });
-  onBeforeUnmount(() => {
-    stopPolling();
-    window.removeEventListener("resize", measure);
-    window.removeEventListener("scroll", measure, true);
-  });
+  onBeforeUnmount(stop);
 
   return { found, rect, viewport, state, measure };
 }

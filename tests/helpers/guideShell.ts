@@ -18,7 +18,7 @@ import type { EditorPort } from "../../src/editor/port";
 import type { Clip, EditorOpenResult, Project } from "../../src/editorTypes";
 import { fakeEditorPort } from "./fakeEditorPort";
 
-export function clip(id: string, overrides: Partial<Clip> = {}): Clip {
+function clip(id: string, overrides: Partial<Clip> = {}): Clip {
   return {
     id, asset_id: "capture", track_id: "v1", name: id, start_ms: 0, in_ms: 0, out_ms: 3_000,
     fade_in_ms: 0, fade_out_ms: 0, fade_curve: "linear", opacity: 1, volume: 1, muted: false,
@@ -26,7 +26,7 @@ export function clip(id: string, overrides: Partial<Clip> = {}): Clip {
   };
 }
 
-export const PROJECT: Project = {
+const PROJECT: Project = {
   schema: "vault-buddy-video-project/3",
   id: "project-a",
   title: "Tutorial",
@@ -45,7 +45,7 @@ export const PROJECT: Project = {
   destination: { vault: "vault-a", folder: "", dated: false },
 };
 
-export const OPENED: EditorOpenResult = {
+const OPENED: EditorOpenResult = {
   snapshot: {
     sessionId: "ses-a", projectId: "project-a", revision: 1, persistedRevision: 1, title: "Tutorial",
     durationMs: 7_000, canUndo: false, canRedo: false, undoLabel: null, redoLabel: null,
