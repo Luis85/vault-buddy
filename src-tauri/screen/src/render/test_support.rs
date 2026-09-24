@@ -1,4 +1,4 @@
-//! Hand-built render plans for the graph tests (Task 42).
+//! Hand-built render plans for the graph tests (Task 42, extended Task 44).
 //!
 //! Built directly rather than through `render_plan::plan` so each test
 //! states exactly the one layer property it is about; the plan's own
@@ -12,7 +12,7 @@ use serde_json::json;
 use vault_buddy_core::editor::model::{Canvas, Card, FadeCurve, Fit, FrameShape, Rotation};
 use vault_buddy_core::editor::model_cues::{Effect, EffectKind};
 use vault_buddy_core::editor::render_plan::{
-    Cut, PixelBox, PlanInput, PlannedCard, PlannedCue, RenderPlan, VideoLayer,
+    AudioContribution, Cut, PixelBox, PlanInput, PlannedCard, PlannedCue, RenderPlan, VideoLayer,
 };
 
 pub const CANVAS_W: u32 = 1280;
@@ -108,6 +108,42 @@ pub fn plan(duration_ms: u64, layers: Vec<VideoLayer>) -> RenderPlan {
         cards: Vec::new(),
         master_gain: 1.0,
     }
+}
+
+/// A plain, unfaded, unsped contribution of `input`'s audio, `[start,end)`
+/// output ms -- source starts at 1 s like `layer`'s fixture, so a trim that
+/// ignored `source_in` fails here too (Task 44).
+pub fn audio(input: usize, track_index: usize, start: u64, end: u64) -> AudioContribution {
+    AudioContribution {
+        clip_id: format!("aclip-{input}-{start}"),
+        track_index,
+        input,
+        output_start: start,
+        output_end: end,
+        source_in: 1_000,
+        source_out: 1_000 + (end - start),
+        speed: 1.0,
+        preserve_pitch: true,
+        gain: 1.0,
+        fade_in: 0,
+        fade_out: 0,
+        curve: FadeCurve::Linear,
+        crossfade_in: None,
+        crossfade_out: None,
+        cut: Cut::default(),
+    }
+}
+
+/// An audio-only plan (Task 44): no video layers, `audio` contributions,
+/// one input per distinct `input` index they reference.
+pub fn audio_plan(duration_ms: u64, audio: Vec<AudioContribution>) -> RenderPlan {
+    let mut p = plan(duration_ms, Vec::new());
+    let mut indices: Vec<usize> = audio.iter().map(|a| a.input).collect();
+    indices.sort_unstable();
+    indices.dedup();
+    p.inputs = indices.into_iter().map(|i| input(i, false)).collect();
+    p.audio = audio;
+    p
 }
 
 pub fn card(track_index: usize, start: u64, end: u64, background: &str) -> PlannedCard {

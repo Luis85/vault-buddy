@@ -24,7 +24,7 @@ use vault_buddy_core::editor::model::{
 };
 use vault_buddy_core::editor::model_cues::{Effect, EffectKind, TransitionKind};
 use vault_buddy_core::editor::render_plan::{
-    Cut, PixelBox, PlanInput, PlannedCard, PlannedCue, RenderPlan, VideoLayer,
+    AudioContribution, Cut, PixelBox, PlanInput, PlannedCard, PlannedCue, RenderPlan, VideoLayer,
 };
 use vault_buddy_core::screen_capture_config::ScreenQuality;
 use vault_buddy_screen::ffmpeg_args::EncodeSettings;
@@ -118,6 +118,31 @@ fn green(ffmpeg: &Path, dir: &Path) -> PathBuf {
         "green.mp4",
         "color=c=0x00ff00:s=400x300:r=30:d=3",
     )
+}
+
+/// A 3 s clip like `make_clip`, but carrying a real 440 Hz tone alongside
+/// its black video -- the one fixture the audio round trip below needs a
+/// probeable signal in (Task 44).
+fn tone(ffmpeg: &Path, dir: &Path) -> PathBuf {
+    let path = dir.join("tone.mp4");
+    let mut args = argv(&[
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=640x360:r=30:d=3",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=48000:duration=3",
+    ]);
+    args.extend(argv(&[
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-y",
+    ]));
+    args.push(path.to_string_lossy().into_owned());
+    ffmpeg_stdout(ffmpeg, &args);
+    path
 }
 
 fn settings() -> EncodeSettings {
@@ -472,5 +497,72 @@ fn a_burned_mask_cue_is_a_real_opaque_rectangle() {
         600,
         MAGENTA,
         "the mask covers the right half where the base was blue",
+    );
+}
+
+/// The audio path end to end (Task 44): `adelay` really positions a
+/// clip's sound in the rendered file, not just in the golden `filter_
+/// complex` string `src/render/audio_graph_tests.rs` pins. A tone placed
+/// 1 s into the plan renders SILENCE up to about 1 s and the tone after
+/// it; `silencedetect` on the rendered file's own audio stream is the
+/// cheapest real proof that ffmpeg actually accepted the graph (`amix`,
+/// `alimiter`, `aresample`, `aformat` included) and produced the timing
+/// it claims, which no golden string can prove by itself.
+#[test]
+fn a_clips_audio_lands_at_its_planned_delay() {
+    let ffmpeg = ffmpeg_or_skip!();
+    let dir = tempfile::tempdir().expect("tempdir");
+    // `plan()` always reserves two file inputs (its own fixture shape); the
+    // second is unused by this test's one layer and one contribution.
+    let inputs = [tone(&ffmpeg, dir.path()), green(&ffmpeg, dir.path())];
+
+    let base = layer(0, 0, 0, 3_000, FULL);
+    let mut p = plan(vec![base]);
+    p.audio = vec![AudioContribution {
+        clip_id: "c0-0".into(),
+        track_index: 0,
+        input: 0,
+        output_start: 1_000,
+        output_end: 3_000,
+        source_in: 0,
+        source_out: 2_000,
+        speed: 1.0,
+        preserve_pitch: true,
+        gain: 1.0,
+        fade_in: 0,
+        fade_out: 0,
+        curve: FadeCurve::Linear,
+        crossfade_in: None,
+        crossfade_out: None,
+        cut: Cut::default(),
+    }];
+    let out = render(&ffmpeg, dir.path(), &p, &inputs);
+
+    let mut args = argv(&["-v", "info", "-i"]);
+    args.push(out.to_string_lossy().into_owned());
+    args.extend(argv(&[
+        "-af",
+        "silencedetect=noise=-30dB:d=0.1",
+        "-f",
+        "null",
+        "-",
+    ]));
+    let result = Command::new(&ffmpeg)
+        .args(&args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("ffmpeg ran");
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    let silence_end: f64 = stderr
+        .lines()
+        .find_map(|line| {
+            let after = line.split_once("silence_end: ")?.1;
+            after.split_whitespace().next()
+        })
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("no silence_end reported by silencedetect: {stderr}"));
+    assert!(
+        (silence_end - 1.0).abs() < 0.15,
+        "the tone should start about 1.0 s in (adelay=1000), not {silence_end}: {stderr}"
     );
 }

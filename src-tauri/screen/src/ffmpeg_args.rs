@@ -309,6 +309,21 @@ pub(crate) fn video_codec_args(settings: &EncodeSettings) -> Vec<String> {
     args
 }
 
+/// The AAC encode every re-encoded output's sound carries -- shared with
+/// the editor's render (Task 44), so a render and a legacy save encode
+/// audio at the same bitrate. The render always names it: unlike the
+/// legacy export's `has_audio` gate, `render::audio_graph` never omits an
+/// audio stream (a silent project still gets `anullsrc`), so its caller
+/// never needs the conditional this crate's other callers do.
+pub(crate) fn audio_codec_args() -> Vec<String> {
+    vec![
+        "-c:a".into(),
+        "aac".into(),
+        "-b:a".into(),
+        AUDIO_BITRATE.into(),
+    ]
+}
+
 /// faststart, the explicit container (see `OUTPUT_FORMAT`) and the
 /// destination -- the tail every re-encoded output shares.
 pub(crate) fn output_args(dest: &Path) -> Vec<String> {

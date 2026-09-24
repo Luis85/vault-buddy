@@ -247,8 +247,12 @@ vault-buddy/
 │   │                           #     ffmpeg runner: spawn/-progress/stderr drain/cancel,
 │   │                           #     shared by export and render), render/ (PURE: the
 │   │                           #     tutorial editor's RenderPlan -> filter_complex
-│   │                           #     argv; tests/render_graph_roundtrip.rs reads pixels
-│   │                           #     back), disk (free space,
+│   │                           #     argv, video AND audio (Task 44 folded the mixed,
+│   │                           #     delayed, limited audio part into the SAME
+│   │                           #     filter_complex the video graph builds);
+│   │                           #     tests/render_graph_roundtrip.rs reads pixels back
+│   │                           #     and probes audio timing with silencedetect), disk
+│   │                           #     (free space,
 │   │                           #     Option not Result), mp4_boxes (the .part footage sniff)
 │   └── transcribe/src/         # STT: decode (Symphonia), model (download+verify),
 │                               #   engine (whisper-rs FFI), lib (orchestration)

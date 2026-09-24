@@ -2269,13 +2269,19 @@ render produces, and it says so nowhere on screen yet. What it does NOT show:
    both languages hold to one shared fixture table
    (`tests/fixtures/editor-fade-cases.json`). But the CURVE SHAPE itself is
    still only an approximation for `smooth`: this preview evaluates its own
-   smoothstep polynomial (`3u²−2u³`) directly, while the render (a later
-   task) hands the curve NAME to ffmpeg's `afade` filter (`smooth` →
-   `hsin`), which computes its own half-sine-based envelope. `linear`↔`tri`
-   and `equal-power`↔`qsin` are exact matches (both sides evaluate the same
-   closed form); only `hsin` is a close but not bit-identical stand-in for
-   smoothstep, so a fade drawn in the timeline/preview can cross very
-   slightly differently than the exported file's actual gain curve.
+   smoothstep polynomial (`3u²−2u³`) directly, while the render
+   (tutorial-editor Task 44, `screen::render::audio_graph::curve_name`)
+   hands the curve NAME to ffmpeg's `afade`/`acrossfade` filters (`smooth`
+   → `hsin`), which compute their own half-sine-based envelope. `linear`↔
+   `tri` and `equal-power`↔`qsin` are exact matches (both sides evaluate the
+   same closed form); only `hsin` is a close but not bit-identical stand-in
+   for smoothstep, so a fade drawn in the timeline/preview can cross very
+   slightly differently than the exported file's actual gain curve. The
+   same mapping now also carries a `Transition`'s `kind` into a crossfade's
+   `c1`/`c2` (`transition_curve`: `Dissolve` → `tri`, `EqualPower` →
+   `qsin`, no `smooth` transition kind exists so `hsin` never appears
+   there) — this residual is therefore an `afade`-only one, not an
+   `acrossfade` one.
 2. **Effects, captions, markers and cards** — captions and markers are
    not drawn; a `card` (and every other `builtin` asset) has no file and is
    not laid out as media. **Teaching cues ARE drawn** (tutorial-editor
@@ -2775,6 +2781,33 @@ either give the Checks panel (Task 54) a blocking finding that names these
 placeholders as "not renderable — replace or delete" so the refusal is
 explained before Render, or map each placeholder to a documented synthetic
 source.
+
+### GAP-186 · Low · A render range that cuts through a crossfade's overlap loses the true blend on the surviving half
+`src-tauri/screen/src/render/audio_graph.rs` (`groups`/`emit_group`/
+`orphan_fade`), found by Task 44. `render_plan::plan` plans a transition's
+two audio halves independently per clip (Task 41: `crossfade_out` on the
+`from` clip, `crossfade_in` on the `to` clip), and a requested render range
+can drop one of the two clips out of the plan entirely while keeping the
+other (`place` filters each clip against the window on its own). `acrossfade`
+needs both streams, so a surviving half whose partner is gone cannot be
+blended for real; `audio_graph` falls back to a plain `afade` at that edge,
+using the transition's own duration and curve (`Dissolve` → `tri`,
+`EqualPower` → `qsin`) rather than panicking or silently dropping the
+envelope. This is the audio side's version of `video_graph`'s own recorded
+approximation for the identical shape (GAP-173's video-graph module doc:
+"a range that cuts THROUGH an overlap dissolves over the part of it left in
+the range") — a plain fade is not a true dissolve against another clip's
+audio, but it is closer to the intended crossfade than either silence or an
+abrupt cut, and it is Cut-aware like an ordinary fade (a range that ALSO ate
+the remainder of the envelope emits nothing). Filed Low because a render
+RANGE narrower than the full project is not the common export path, and
+because the alternative (refusing the render, or holding the clip out of
+range entirely) is a worse outcome for a feature whose whole point is
+previewing a sub-range. **Fix (only if it confuses users):** surface a
+Checks-panel finding (Task 54) naming the affected clip when a requested
+range would orphan a crossfade half, so the approximation is disclosed
+before Render rather than only discoverable by listening closely to the
+result.
 
 ## 9. Documentation & repo hygiene
 

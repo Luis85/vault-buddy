@@ -8,13 +8,20 @@
 //! - `video_layers` -- one visual item's chain;
 //! - `video_graph` -- the composed stage, the zoom and the two hooks;
 //! - `ass` -- the two ASS documents (Task 43) `render_args` burns at those
-//!   hooks.
+//!   hooks;
+//! - `audio_graph` -- the mixed, delayed, limited audio part (Task 44).
 //!
-//! **Video only, for now.** Task 44 adds the audio graph; until then a
-//! render maps the video label alone. No production caller exists yet
-//! (the render job is a later task), so no user can reach a silent render.
+//! **One `filter_complex`, two maps.** `render_args` joins the video part
+//! and the audio part with a single `;` into ONE `-filter_complex` string
+//! -- ffmpeg parses a graph as one document however many independent
+//! chains it holds -- then maps `[vout]` and `audio_graph::OUT_LABEL`
+//! (`[aout]`) separately. The audio side is unconditional: unlike the
+//! legacy export's `has_audio`-gated map, `audio_graph::build_audio_graph`
+//! never omits a stream (a silent project still gets `anullsrc`), so a
+//! render's output always carries sound, even none.
 
 pub mod ass;
+pub mod audio_graph;
 pub mod expr;
 pub mod video_graph;
 pub mod video_layers;
@@ -23,7 +30,10 @@ use std::path::{Path, PathBuf};
 
 use vault_buddy_core::editor::render_plan::RenderPlan;
 
-use crate::ffmpeg_args::{output_args, remux_args, runner_flags, video_codec_args, EncodeSettings};
+use crate::ffmpeg_args::{
+    audio_codec_args, output_args, remux_args, runner_flags, video_codec_args, EncodeSettings,
+};
+use audio_graph::build_audio_graph;
 use expr::{escape_filter_value, seconds};
 use video_graph::{build_video_graph_with_hooks, file_input_count};
 
@@ -99,8 +109,9 @@ pub fn render_args(
     }
     let pre_zoom = ass.cues.map(|p| ass_hook(p, ass.fontsdir));
     let post_zoom = ass.captions.map(|p| ass_hook(p, ass.fontsdir));
-    let (extra, graph, out) =
+    let (extra, video_graph, video_out) =
         build_video_graph_with_hooks(plan, pre_zoom.as_deref(), post_zoom.as_deref());
+    let audio_graph_text = build_audio_graph(plan);
     let mut args = runner_flags();
     for (index, path) in inputs.iter().enumerate() {
         if let Some(loop_ms) = image_loop_ms(plan, index) {
@@ -116,8 +127,16 @@ pub fn render_args(
         args.extend(["-i".into(), path.to_string_lossy().into_owned()]);
     }
     args.extend(extra);
-    args.extend(["-filter_complex".into(), graph, "-map".into(), out]);
+    args.extend([
+        "-filter_complex".into(),
+        format!("{video_graph};{audio_graph_text}"),
+        "-map".into(),
+        video_out,
+        "-map".into(),
+        audio_graph::OUT_LABEL.into(),
+    ]);
     args.extend(video_codec_args(settings));
+    args.extend(audio_codec_args());
     args.extend(output_args(dest));
     args
 }
@@ -139,6 +158,9 @@ fn image_loop_ms(plan: &RenderPlan, index: usize) -> Option<u64> {
     Some(furthest.unwrap_or(input.duration_ms))
 }
 
+#[cfg(test)]
+#[path = "audio_graph_tests.rs"]
+mod audio_graph_tests;
 #[cfg(test)]
 #[path = "render_args_tests.rs"]
 mod render_args_tests;
