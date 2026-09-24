@@ -257,6 +257,12 @@ pub(crate) fn save_project_with(
         serde_json::json!({})
     });
 
+    // Task 46 (ADR R5): `record.products` is assembled from the product
+    // LEDGER, which each render commits on its own. A damaged ledger
+    // refuses the save (read under this same save lock a render publishes
+    // under) rather than writing a project whose products were dropped.
+    let products = super::render_jobs::read_ledger(root, &project_id)?;
+
     let envelope = WorkspaceEnvelope {
         schema: editor::WORKSPACE_SCHEMA.to_string(),
         project,
@@ -266,9 +272,7 @@ pub(crate) fn save_project_with(
             revision,
             created_at,
             updated_at: now.clone(),
-            // Products arrive in Task 46 (render/publish); nothing before
-            // it can populate this array, so every save writes it empty.
-            products: Vec::new(),
+            products,
             extra: Map::new(),
         },
         saved_at: now,

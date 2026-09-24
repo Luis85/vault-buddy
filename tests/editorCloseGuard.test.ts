@@ -28,6 +28,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import CloseGuardDialog from "../src/components/editor/dialogs/CloseGuardDialog.vue";
+import { decodeJobRecords } from "../src/editor/decode";
 import type { EditorPort } from "../src/editor/port";
 import { EditorPortError } from "../src/editor/port";
 import type { EditorOpenResult, EditorSnapshot, JobRecordDto } from "../src/editorTypes";
@@ -129,6 +130,19 @@ describe("CloseGuardDialog", () => {
     expect(hideWindow).toHaveBeenCalledTimes(1);
     w.unmount();
     expect(cancelJob).not.toHaveBeenCalled();
+  });
+
+  // Task 46: the PAIR. Rust serializes a render job's kind as "render"
+  // (`media_jobs.rs`' `job_progress_wire_shape_is_pinned`); a registry row
+  // in that literal spelling, through the real decoder, is what flips the
+  // close copy — in either phase a render blocks shutdown in.
+  it("a render row in Rust's own spelling flips the close copy", async () => {
+    for (const phase of ["rendering", "publishing"]) {
+      const jobs = decodeJobRecords([{ jobId: "job-r", kind: "render", phase, fraction: 1, terminal: null }]);
+      const { w } = await setup({ revision: 3, persisted: 3, jobs });
+      expect(w.get('[data-testid="close-guard"]').text()).toContain("A render is running");
+      w.unmount();
+    }
   });
 
   it("a publish job is a render for the close copy too", async () => {

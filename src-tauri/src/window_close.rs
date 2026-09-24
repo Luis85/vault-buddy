@@ -106,16 +106,22 @@ fn handle_main_close(window: &Window, api: &CloseRequestApi) {
                 // FIRST: bounded at a few seconds and it kills a child
                 // process, where the two finalizes below are unbounded.
                 crate::export_shutdown::cancel_if_exporting(&app);
+                // Task 46 (R12): the renders too, bounded, beside the export.
+                // On expiry the gate stops counting renders, so this
+                // re-triggered close cannot loop on a wedged one.
+                crate::editor::render_jobs::cancel_all_bounded(
+                    &app,
+                    std::time::Duration::from_secs(5),
+                );
                 crate::capture_commands::finalize_if_recording(&app);
                 crate::screen_commands::finalize_if_capturing(&app);
-                // All three are dealt with, so every predicate in the gate
-                // above is now false and the re-triggered CloseRequested
-                // takes the else branch below (pass through to destruction)
-                // — no loop. The export's is false either because the cancel
-                // unwound or because its bounded wait expired, which is why
-                // `cancel_if_exporting` proceeds on expiry rather than
-                // looping: an Alt+F4 that never closes is worse than an
-                // export abandoned after its bound.
+                // All four are dealt with, so the gate above normally reads
+                // false and the re-triggered CloseRequested takes the else
+                // branch below (pass through to destruction). A render that
+                // outlived its bound stops counting (`RENDERS_ABANDONED`);
+                // an EXPORT that did does not — `cancel_if_exporting` only
+                // logs on expiry, so a wedged export re-enters this worker
+                // every 5 s until it ends (docs/Gaps.md GAP-190).
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.close();
                 }

@@ -31,6 +31,9 @@ export function fakeEditorPort(overrides: Partial<EditorPort> = {}): EditorPort 
     exportPackage: unimplemented("exportPackage"),
     importPackage: unimplemented("importPackage"),
     relinkMedia: unimplemented("relinkMedia"),
+    startRender: unimplemented("startRender"),
+    getProducts: unimplemented("getProducts"),
+    restoreProduct: unimplemented("restoreProduct"),
     ...overrides,
   };
 }

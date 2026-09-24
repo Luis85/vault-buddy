@@ -492,8 +492,9 @@ export interface EditorError {
 }
 
 /** A background job's kind/phase (Contract reference `JobProgressDto`).
- * Emitted by `media_jobs.rs` since Task 25 (import); the Rust enum grows
- * `render`/`peaks`/`publish` with the tasks that start those jobs. */
+ * Emitted by `media_jobs.rs`: `import` (Task 25), `peaks` (Task 28) and
+ * `render` (Task 46, with its `rendering`/`publishing` phases); `publish`
+ * joins with Task 48. */
 export type JobKind = "import" | "render" | "peaks" | "publish";
 export type JobPhase =
   | "queued"
@@ -543,3 +544,5 @@ export interface JobStarted {
 // one does not grow toward the 500-line cap as later tasks add arms; every
 // caller still imports it from here.
 export type { EditorCommand } from "./editor/editorCommandTypes";
+// The render/product wire types (Task 46), split out for the same cap.
+export type { ProductDto, RenderRange, RenderRequest, RenderStarted } from "./editor/editorRenderTypes";

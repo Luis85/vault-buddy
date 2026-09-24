@@ -11,8 +11,9 @@
 //!   `linked_asset` root's entry, Task 27), resolved through
 //!   `project_store::resolve_source` (so a hand-edited `file` that tries to
 //!   escape its directory resolves to nothing);
-//! - a product must be in the project's saved `record.products`, and its
-//!   `filename` must be one ordinary path component under `products\`.
+//! - a product must be in the project's product LEDGER (`products.json`,
+//!   Task 46), whose every record is named exactly `<productId>.mp4` under
+//!   `products\` (`render_jobs::read_ledger` refuses any other).
 //!
 //! Anything else — an unknown id, a builtin asset with no file, an escaping
 //! name, a symlink wearing one of our names — is `unauthorizedSource`; a
@@ -50,7 +51,8 @@ use super::media_jobs::{
 };
 use super::prefs_commands::{blocking, local_data, project_id_for};
 use super::project_store::{join_contained, project_dir, resolve_source, SourceRecord};
-use super::store_io::{load_project, load_sources};
+use super::render_jobs::read_ledger;
+use super::store_io::load_sources;
 use super::EditorState;
 
 /// Which registered entity the caller wants a path for. The wire shape is
@@ -175,12 +177,12 @@ pub(crate) fn resolve_asset(
     })
 }
 
+/// A product's file, from the LEDGER (Task 46: `products.json` is committed
+/// with the render, so an unsaved project's products resolve too). The
+/// ledger read refuses any record not named exactly `<productId>.mp4`.
 fn product_path(root: &Path, project_id: &str, product_id: &str) -> Result<PathBuf, EditorError> {
-    let (envelope, _) = load_project(root, project_id)?;
-    let product = envelope
-        .record
-        .products
-        .iter()
+    let product = read_ledger(root, project_id)?
+        .into_iter()
         .find(|p| p.id == product_id)
         .ok_or_else(|| unregistered("product", product_id))?;
     let dir = project_dir(root, project_id)
@@ -208,7 +210,7 @@ pub(crate) fn media_path_in(
     }
 }
 
-/// ASYNC: reads `sources.json` (or `project.json`) and stats one file, off
+/// ASYNC: reads `sources.json` (or `products.json`) and stats one file, off
 /// the main thread. `ref` is the ADR's own parameter name (`r#ref` —
 /// Tauri's command macro unraws it, so the IPC key is `ref`).
 #[tauri::command]
@@ -448,7 +450,8 @@ mod tests {
     use crate::editor::project_store::{
         minimal_project, SourceLocator, SourceMediaKind, SourceRecord,
     };
-    use crate::editor::store_io::{commit_project, create_project, RealWriter};
+    use crate::editor::render_jobs::write_ledger;
+    use crate::editor::store_io::create_project;
 
     fn asset(id: &str) -> Asset {
         Asset {
@@ -678,13 +681,17 @@ mod tests {
         assert_eq!(path, file);
     }
 
+    // Task 46: a product is resolved from the LEDGER (`products.json`,
+    // committed with the render), never from `project.json`'s record -- an
+    // unsaved project's products must play -- and only as
+    // `products\<productId>.mp4`: a ledger naming any other file is refused
+    // whole, even when that file exists.
     #[test]
     fn media_url_resolves_a_registered_product_and_refuses_an_unknown_one() {
         let root = tempfile::tempdir().unwrap();
         let state = EditorState::default();
         let session = opened(root.path(), &state, &[], BTreeMap::new());
-        let (mut envelope, _) = load_project(root.path(), "proj1").unwrap();
-        envelope.record.products.push(Product {
+        let product = Product {
             id: "prod1".into(),
             project_id: "proj1".into(),
             name: "Review".into(),
@@ -697,8 +704,8 @@ mod tests {
             snapshot: None,
             render_range: None,
             extra: Map::new(),
-        });
-        commit_project(&RealWriter, root.path(), "proj1", &envelope).unwrap();
+        };
+        write_ledger(root.path(), "proj1", std::slice::from_ref(&product)).unwrap();
 
         let e = media_path_in(
             &state,
@@ -729,6 +736,21 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(e.code, EditorErrorCode::UnauthorizedSource);
+
+        std::fs::write(dir.join("evil.mp4"), b"mp4").unwrap();
+        let foreign = Product {
+            filename: "evil.mp4".into(),
+            ..product
+        };
+        write_ledger(root.path(), "proj1", &[foreign]).unwrap();
+        let e = media_path_in(
+            &state,
+            root.path(),
+            &session,
+            &MediaRef::Product("prod1".into()),
+        )
+        .unwrap_err();
+        assert_eq!(e.code, EditorErrorCode::InvalidProject, "not <id>.mp4");
     }
 
     #[test]

@@ -33,8 +33,11 @@ import type {
   MediaRef,
   PackageFormat,
   PackageReceipt,
+  ProductDto,
   ProjectSummaryDto,
   RelinkReport,
+  RenderRequest,
+  RenderStarted,
   SaveReceipt,
   Workspace,
 } from "../editorTypes";
@@ -57,6 +60,7 @@ import {
   isEditorError,
 } from "./decode";
 import { decodeRelinkReport } from "./decodeRelink";
+import { decodeProducts, decodeRenderStarted } from "./decodeRender";
 
 /** Thrown by every `EditorPort` method on a rejected invoke — `error` is
  * the decoded `EditorError`, so a caller reads `err.error.code` rather
@@ -171,6 +175,22 @@ export interface EditorPort {
    * only unique matches; `confirmReplace` (one asset) accepts a file that
    * is not the original. `null` when the dialog was dismissed. */
   relinkMedia(sessionId: string, assetIds: string[], confirmReplace: boolean): Promise<RelinkReport | null>;
+  /** `editor_start_render` (Task 46) — Rust freezes `expectedRevision`
+   * (`revisionConflict` for a pending edit), refuses what it cannot render
+   * and answers `{ jobId, revision }` at once; every decoded progress
+   * message reaches `onProgress` on the job's own Channel, the terminal
+   * one carrying `productId`. One render per session. */
+  startRender(request: RenderRequest, onProgress: (message: JobProgressDto) => void): Promise<RenderStarted>;
+  /** `editor_get_products` — the project's product ledger. */
+  getProducts(sessionId: string): Promise<ProductDto[]>;
+  /** `editor_restore_product` — the product's frozen edit becomes the live
+   * one: a new revision, one undo step; the product is never touched. */
+  restoreProduct(
+    sessionId: string,
+    expectedRevision: number,
+    productId: string,
+    commandId: string,
+  ): Promise<EditorProjection>;
 }
 
 /** The per-job Channel (Tauri's ordered, subscriber-scoped delivery) —
@@ -264,6 +284,20 @@ export function createTauriEditorPort(): EditorPort {
     },
     relinkMedia(sessionId, assetIds, confirmReplace) {
       return call("editor_relink_media", { sessionId, assetIds, confirmReplace }, decodeRelinkReport);
+    },
+    startRender(request, onProgress) {
+      const onProgressChannel = progressChannel(onProgress);
+      return call("editor_start_render", { request, onProgress: onProgressChannel }, decodeRenderStarted);
+    },
+    getProducts(sessionId) {
+      return call("editor_get_products", { sessionId }, decodeProducts);
+    },
+    restoreProduct(sessionId, expectedRevision, productId, commandId) {
+      return call(
+        "editor_restore_product",
+        { sessionId, expectedRevision, productId, commandId },
+        decodeProjection,
+      );
     },
   };
 }

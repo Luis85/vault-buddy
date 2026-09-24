@@ -402,7 +402,13 @@ fn drop_session(state: &EditorState, session_id: &str) {
     // A running import (Task 25) of a closing session stops before its next
     // file; its results would have no session to land in. Its peaks decodes
     // are jobs too; its thumbnail renders are not (Task 28).
-    lock_ignoring_poison(&state.jobs).cancel_session(session_id);
+    // Its finished records go too (GAP-174): nothing can ask for them once
+    // the session is gone; a render still running keeps its record until
+    // its terminal lands (Task 46).
+    let mut jobs = lock_ignoring_poison(&state.jobs);
+    jobs.cancel_session(session_id);
+    jobs.forget_terminal(session_id);
+    drop(jobs);
     super::media_derive::cancel_session_thumbnails(state, session_id);
 }
 

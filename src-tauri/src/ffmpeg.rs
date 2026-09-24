@@ -345,7 +345,6 @@ pub(crate) fn resolve_working_ffmpeg() -> Option<FfmpegTools> {
 /// alphabetical tail -- `xfade` among it -- so it is logged and marked
 /// incomplete (`capabilities_from_listings`), and a filter it does not show
 /// is then unknown, never missing (fix round 1).
-#[allow(dead_code)] // First production reader: the render job (Task 46).
 pub(crate) fn probe_capabilities(tools: &FfmpegTools) -> FfmpegCapabilities {
     let listing = |flag: &str| {
         let mut cmd = tool_command(&tools.ffmpeg);

@@ -1,8 +1,8 @@
 //! The one composition of "something is running that a process exit would
 //! destroy".
 //!
-//! Three domains can be mid-write when the app is asked to go away, and an
-//! exit path has to consult all three:
+//! Four domains can be mid-write when the app is asked to go away, and an
+//! exit path has to consult all four:
 //!
 //! - `capture_commands::recording_blocks_shutdown` — an audio recording,
 //!   whose `.mp3.part` is stranded by an exit;
@@ -10,7 +10,12 @@
 //! - `export_shutdown::export_blocks_shutdown` — a screen-capture EXPORT,
 //!   the only one of the three mid-write INTO A VAULT, and the only one
 //!   with a separate ffmpeg child process that nothing on the way out
-//!   would otherwise stop.
+//!   would otherwise stop;
+//! - `editor::render_jobs::blocks_shutdown` (Task 46, ADR R12) — an editor
+//!   RENDER in `rendering` or `publishing`: an ffmpeg child writing a
+//!   product into the project store, or a finished one being moved into
+//!   `products\` and recorded. Like the export it has a child and needs no
+//!   indicator, so hide-to-tray does not gate on it either.
 //!
 //! GAP-160 is why the disjunction lives in one place instead of being
 //! spelled at each door. `tray::quit` and `window_close::handle_main_close`
@@ -32,8 +37,8 @@
 //! only one of them.
 //!
 //! What a caller does with the answer is its own business, and the three
-//! doors differ: the two quit paths park a worker that finalizes the
-//! captures and cancels the export, then exit. The updater REFUSES — it is
+//! doors differ: the two quit paths park a worker that cancels the export
+//! and the renders (bounded), finalizes the captures, then exits. The updater REFUSES — it is
 //! a synchronous command that must stay on the main thread (see
 //! `commands::prepare_update_install`), so it cannot sleep-wait for
 //! anything; and unlike a tray quit the user is right there, having just
@@ -50,6 +55,9 @@ pub enum ShutdownBlocker {
     Recording,
     ScreenCapture,
     Export,
+    /// An editor render (Task 46, R12): an ffmpeg child writing a product,
+    /// or a finished one being moved into place and recorded.
+    Render,
 }
 
 impl ShutdownBlocker {
@@ -73,6 +81,9 @@ impl ShutdownBlocker {
                 "A screen capture is being saved into a vault. Wait for the save to finish, \
                  or cancel it in the editor, then install the update."
             }
+            ShutdownBlocker::Render => {
+                "A video is being rendered in the editor. Wait for the render to finish, or                  cancel it in the editor, then install the update."
+            }
         }
         .to_string()
     }
@@ -89,13 +100,15 @@ pub fn shutdown_blocker(app: &AppHandle) -> Option<ShutdownBlocker> {
         Some(ShutdownBlocker::ScreenCapture)
     } else if crate::export_shutdown::export_blocks_shutdown(app) {
         Some(ShutdownBlocker::Export)
+    } else if crate::editor::render_jobs::blocks_shutdown(app) {
+        Some(ShutdownBlocker::Render)
     } else {
         None
     }
 }
 
 /// True while anything above is running. The form the two quit paths want:
-/// they deal with all three regardless of which answered, so they never
+/// they deal with all four regardless of which answered, so they never
 /// need to know which one did.
 pub fn shutdown_is_blocked(app: &AppHandle) -> bool {
     shutdown_blocker(app).is_some()
@@ -106,10 +119,11 @@ mod tests {
     use super::*;
     use crate::structural_scan::{fn_body, offset_of, shell_file};
 
-    const ALL: [ShutdownBlocker; 3] = [
+    const ALL: [ShutdownBlocker; 4] = [
         ShutdownBlocker::Recording,
         ShutdownBlocker::ScreenCapture,
         ShutdownBlocker::Export,
+        ShutdownBlocker::Render,
     ];
 
     // ---- GAP-160: the refusal has to be actionable ----
@@ -132,12 +146,14 @@ mod tests {
                 "{blocker:?}: the refusal must name the action that clears it: {msg:?}"
             );
         }
-        let recording = ShutdownBlocker::Recording.install_refusal();
-        let capture = ShutdownBlocker::ScreenCapture.install_refusal();
+        let refusals: std::collections::BTreeSet<String> =
+            ALL.iter().map(|b| b.install_refusal()).collect();
+        assert_eq!(refusals.len(), ALL.len(), "four distinguishable refusals");
         let export = ShutdownBlocker::Export.install_refusal();
-        assert_ne!(recording, capture);
-        assert_ne!(capture, export);
-        assert_ne!(recording, export);
+        assert!(
+            ShutdownBlocker::Render.install_refusal().contains("render"),
+            "the render refusal names the render (Task 46)"
+        );
         assert!(
             export.contains("vault"),
             "the export is the one mid-write into a vault, and the refusal \
@@ -171,13 +187,15 @@ mod tests {
     // for it, and no caller can tell — which is precisely how the updater
     // came to consult none of the three.
     #[test]
-    fn the_gate_composes_all_three_domain_predicates() {
+    fn the_gate_composes_all_four_domain_predicates() {
         let src = shell_file("shutdown_gate.rs");
         let body = fn_body(&src, "pub fn shutdown_blocker(");
         for needle in [
             "recording_blocks_shutdown",
             "capture_blocks_shutdown",
             "export_blocks_shutdown",
+            // Task 46 (R12): an editor render.
+            "render_jobs::blocks_shutdown(",
         ] {
             assert!(
                 body.contains(needle),

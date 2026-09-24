@@ -20,8 +20,14 @@
 //! (a webview reload, a listener disposed mid-job) is recovered by
 //! `editor_get_jobs`, which reads it. Every message updates the record
 //! BEFORE it is delivered, so a reconcile can never be older than the event
-//! stream it replaces. Render (Task 46) and the shutdown gate reuse this
-//! registry: `has_running` is the question a later `blocks_shutdown` asks.
+//! stream it replaces. Render (Task 46, `render_jobs`) and the shutdown gate
+//! reuse this registry: `blocks_shutdown` is the gate's question.
+//!
+//! **Bounded (GAP-174, Task 46).** A session keeps at most
+//! `MAX_TERMINAL_RECORDS` terminal records -- the most recent ones, so a
+//! reconcile still sees a job that just finished -- and a closing session's
+//! terminal records go with it (`forget_terminal`). A running job is never
+//! pruned: its terminal message still has to land somewhere.
 //!
 //! **Lock order:** `EditorState::jobs` is a LEAF lock — taken only to read
 //! or update one record, never held across I/O, a send, or while taking any
@@ -40,14 +46,24 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use super::authz::require_session;
 use super::EditorState;
 
+/// How many TERMINAL records one session keeps (GAP-174): enough for a
+/// reconcile after a reload to see what just finished, few enough that a
+/// long session rendering and decoding waveforms does not grow the
+/// registry without bound.
+pub(crate) const MAX_TERMINAL_RECORDS: usize = 8;
+
 /// `JobProgressDto.kind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum JobKind {
-    // `render`/`publish` join with the tasks that start those jobs (46,
-    // 48) — a variant nothing constructs is dead code, and the wire
-    // spelling of each is already pinned by the frontend's decoder.
+    // `publish` joins with Task 48 -- a variant nothing constructs is dead
+    // code, and its wire spelling is already pinned by the frontend's
+    // decoder.
     Import,
+    /// An editor render (Task 46, `render_jobs`). Exclusive: one per
+    /// session. Its wire spelling, `"render"`, is what the close guard
+    /// (`useEditorCloseGuard`) matches on.
+    Render,
     /// A waveform decode (Task 28, `media_derive`). Not exclusive: several
     /// may be registered at once (one per visible asset); `media_derive`'s
     /// own gate runs them one at a time.
@@ -60,7 +76,21 @@ impl JobKind {
     /// peaks decode is not — the timeline asks for every visible asset's
     /// waveform at once, and refusing all but one would draw one waveform.
     fn exclusive(self) -> bool {
-        matches!(self, Self::Import)
+        matches!(self, Self::Import | Self::Render)
+    }
+
+    /// The refusal a second exclusive job of this kind gets.
+    fn busy_message(self) -> &'static str {
+        match self {
+            Self::Render => {
+                "A render is already running in this editing session. Wait for it to finish \
+                 or cancel it."
+            }
+            _ => {
+                "An import is already running in this editing session. Wait for it to finish \
+                 or cancel it."
+            }
+        }
     }
 }
 
@@ -71,8 +101,11 @@ impl JobKind {
 pub enum JobPhase {
     Queued,
     Preparing,
-    // `rendering`/`publishing` join with render (Task 46) and publish
-    // (Task 48), for the same reason as `JobKind`'s later variants.
+    /// A render's ffmpeg child is running (Task 46).
+    Rendering,
+    /// A render's output is being moved into `products\` and recorded in
+    /// the ledger (Task 46); Task 48's publication uses it too.
+    Publishing,
     Complete,
     Cancelled,
     Failed,
@@ -81,6 +114,12 @@ pub enum JobPhase {
 impl JobPhase {
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Complete | Self::Cancelled | Self::Failed)
+    }
+
+    /// The phases a process exit would destroy work in (ADR R12): a child
+    /// writing a product, or a product being moved into place and recorded.
+    pub fn blocks_shutdown(self) -> bool {
+        matches!(self, Self::Rendering | Self::Publishing)
     }
 }
 
@@ -247,11 +286,51 @@ impl JobRegistry {
             .any(|r| r.session_id == session_id && r.kind == kind && !r.phase.is_terminal())
     }
 
-    /// Is any job, of any session, still running? The question a later
-    /// shutdown gate asks before letting the app exit mid-write.
-    #[allow(dead_code)] // First production reader: the shutdown gate (Task 46).
-    pub fn has_running(&self) -> bool {
-        self.jobs.values().any(|r| !r.phase.is_terminal())
+    /// Is any job, of any session, in a phase a process exit would destroy
+    /// (`JobPhase::blocks_shutdown`)? The shutdown gate's question (R12).
+    pub fn blocks_shutdown(&self) -> bool {
+        self.jobs.values().any(|r| r.phase.blocks_shutdown())
+    }
+
+    /// Stop every job of `kind`, in every session -- a quit's render cancel.
+    pub(crate) fn cancel_kind(&self, kind: JobKind) {
+        for record in self.jobs.values().filter(|r| r.kind == kind) {
+            record.cancel.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Is a job of `kind` still running in ANY session?
+    pub(crate) fn any_running(&self, kind: JobKind) -> bool {
+        self.jobs
+            .values()
+            .any(|r| r.kind == kind && !r.phase.is_terminal())
+    }
+
+    /// Drop a closing session's TERMINAL records (GAP-174): nobody can ask
+    /// for them any more (`editor_get_jobs` needs a live session). A job
+    /// still running keeps its record until its terminal lands.
+    pub(crate) fn forget_terminal(&mut self, session_id: &str) {
+        self.jobs
+            .retain(|_, r| r.session_id != session_id || !r.phase.is_terminal());
+    }
+
+    /// Keep `session_id`'s most recent `MAX_TERMINAL_RECORDS` terminal
+    /// records, dropping older ones (GAP-174).
+    fn prune_terminal(&mut self, session_id: &str) {
+        let mut terminal: Vec<(u64, String)> = self
+            .jobs
+            .iter()
+            .filter(|(_, r)| r.session_id == session_id && r.phase.is_terminal())
+            .map(|(id, r)| (r.started, id.clone()))
+            .collect();
+        if terminal.len() <= MAX_TERMINAL_RECORDS {
+            return;
+        }
+        terminal.sort_unstable();
+        let excess = terminal.len() - MAX_TERMINAL_RECORDS;
+        for (_, id) in terminal.into_iter().take(excess) {
+            self.jobs.remove(&id);
+        }
     }
 
     /// Drop a finished job's record. Only for a job whose result travels
@@ -267,6 +346,9 @@ impl JobRegistry {
             record.phase = message.phase;
             record.fraction = message.fraction;
             record.terminal = message.terminal.clone();
+        }
+        if message.phase.is_terminal() {
+            self.prune_terminal(&message.session_id);
         }
     }
 }
@@ -288,7 +370,7 @@ pub(crate) fn start_job_in(
     if kind.exclusive() && jobs.is_running(session_id, kind) {
         return Err(EditorError::new(
             EditorErrorCode::InvalidRequest,
-            "An import is already running in this editing session. Wait for it to finish or cancel it.",
+            kind.busy_message(),
         ));
     }
     Ok(jobs.register(session_id, kind))
@@ -503,6 +585,17 @@ pub(crate) mod tests {
             serde_json::to_value(JobKind::Peaks).unwrap(),
             json!("peaks")
         );
+        // Task 46: the close guard matches render jobs by THIS spelling
+        // (`useEditorCloseGuard`'s `liveRenderJobIds`, whose test decodes
+        // the same literal), and the two phases a render adds.
+        assert_eq!(
+            serde_json::to_value(JobKind::Render).unwrap(),
+            json!("render")
+        );
+        assert_eq!(
+            serde_json::to_value([JobPhase::Rendering, JobPhase::Publishing]).unwrap(),
+            json!(["rendering", "publishing"])
+        );
         assert_eq!(
             serde_json::to_value(JobStarted {
                 job_id: "job-b".into()
@@ -537,7 +630,7 @@ pub(crate) mod tests {
         let sink = CollectingSink::default();
         let mut reporter = JobReporter::new(&jobs, &sink, "ses-a", &first, JobKind::Import);
         reporter.progress(JobPhase::Preparing, 0.5);
-        assert!(lock_ignoring_poison(&jobs).has_running());
+        assert!(lock_ignoring_poison(&jobs).is_running("ses-a", JobKind::Import));
         reporter.finish(JobPhase::Complete, JobTerminal::default());
 
         let rows = lock_ignoring_poison(&jobs).records_for("ses-a");
@@ -654,5 +747,44 @@ pub(crate) mod tests {
             messages.iter().map(|m| m.sequence).collect::<Vec<_>>(),
             [1, 2]
         );
+    }
+    // GAP-174 (Task 46): render jobs would grow the registry faster than
+    // imports ever did. A session keeps only its most recent
+    // MAX_TERMINAL_RECORDS terminal records -- the newest, so a reconcile
+    // still sees what just finished -- never prunes a RUNNING job, never
+    // touches another session's, and a closing session's terminal records
+    // go with it.
+    #[test]
+    fn terminal_records_beyond_the_bound_are_pruned_oldest_first() {
+        let jobs = Mutex::new(JobRegistry::default());
+        let sink = CollectingSink::default();
+        let (running, _) = lock_ignoring_poison(&jobs).register("ses-a", JobKind::Import);
+        let (other, _) = lock_ignoring_poison(&jobs).register("ses-b", JobKind::Peaks);
+        JobReporter::new(&jobs, &sink, "ses-b", &other, JobKind::Peaks)
+            .finish(JobPhase::Complete, JobTerminal::default());
+        let mut finished = Vec::new();
+        for _ in 0..MAX_TERMINAL_RECORDS + 3 {
+            let (id, _) = lock_ignoring_poison(&jobs).register("ses-a", JobKind::Peaks);
+            JobReporter::new(&jobs, &sink, "ses-a", &id, JobKind::Peaks)
+                .finish(JobPhase::Complete, JobTerminal::default());
+            finished.push(id);
+        }
+        let ids: Vec<String> = lock_ignoring_poison(&jobs)
+            .records_for("ses-a")
+            .into_iter()
+            .map(|r| r.job_id)
+            .collect();
+        let mut expected = vec![running.clone()];
+        expected.extend(finished[3..].iter().cloned());
+        assert_eq!(ids, expected, "the three OLDEST terminal records went");
+        assert_eq!(lock_ignoring_poison(&jobs).records_for("ses-b").len(), 1);
+
+        lock_ignoring_poison(&jobs).forget_terminal("ses-a");
+        let left: Vec<String> = lock_ignoring_poison(&jobs)
+            .records_for("ses-a")
+            .into_iter()
+            .map(|r| r.job_id)
+            .collect();
+        assert_eq!(left, [running], "a running job keeps its record");
     }
 }

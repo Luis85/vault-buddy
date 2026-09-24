@@ -104,6 +104,13 @@ pub fn quit(app: &AppHandle) {
                 // export left running behind them would go on writing into
                 // the vault for as long as they take.
                 crate::export_shutdown::cancel_if_exporting(&app);
+                // The editor's renders, for the same reasons (Task 46,
+                // R12): a child process, bounded, and cancel-not-finish
+                // because a render is repeatable and its project is kept.
+                crate::editor::render_jobs::cancel_all_bounded(
+                    &app,
+                    std::time::Duration::from_secs(5),
+                );
                 crate::capture_commands::finalize_if_recording(&app);
                 crate::screen_commands::finalize_if_capturing(&app);
                 finish_quit(&app);

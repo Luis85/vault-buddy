@@ -2,7 +2,8 @@
 //! disk (`project_store`, `store_io`, Task 9), pin-aware staging
 //! integration, the `editor_*` session commands (`session_commands`, Task
 //! 10) and the durable save/list/reopen commands (`save_commands`, Task 12)
-//! behind R8's caller-window check (`authz`).
+//! behind R8's caller-window check (`authz`), and — among the later ones —
+//! the render jobs and their product ledger (`render_jobs`, Task 46).
 //!
 //! Every `#[tauri::command]` in ANY file under this directory must take
 //! `window: WebviewWindow` and call `authz::require_editor_window(&window)`
@@ -29,6 +30,8 @@ pub mod project_store;
 pub mod recovery;
 pub mod relink_commands;
 pub mod relink_media;
+pub mod render_commands;
+pub mod render_jobs;
 pub mod save_commands;
 pub mod session_commands;
 pub mod store_io;
@@ -86,8 +89,9 @@ use vault_buddy_core::editor::EditorSession;
 /// nothing would ever prune.
 ///
 /// `jobs` (Task 25) is every background job this process started — the
-/// authoritative record `editor_get_jobs` answers from, and the registry a
-/// later shutdown gate asks `has_running`. A LEAF lock like `save_locks`'
+/// authoritative record `editor_get_jobs` answers from, and the registry the
+/// shutdown gate asks `blocks_shutdown` (Task 46: a render in `rendering`
+/// or `publishing`), bounded per session (GAP-174). A LEAF lock like `save_locks`'
 /// map: never held across I/O, a channel send, or while taking another
 /// lock (`media_jobs.rs`' own doc).
 ///

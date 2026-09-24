@@ -11,6 +11,7 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use crate::editor::package_commands::export_envelope;
 use crate::editor::package_test_support::*;
 use crate::editor::project_store::{project_dir, SourceLocator, SourceMediaKind};
+use crate::editor::render_jobs::{products_in, read_ledger};
 use crate::editor::session_commands::open_staged_session;
 use crate::editor::store_io::{list_projects, load_project, load_sources};
 
@@ -85,12 +86,14 @@ fn failed_import_installs_nothing() {
     assert!(list_projects(b.root()).is_empty());
 }
 
-// A retained product travels with its record: its file lands in
-// `products\` under the record's own file name (where `media_commands`
-// resolves it), and a file name that cannot be a plain file refuses the
-// whole import rather than landing somewhere else.
+// A retained product travels with its record: its file lands at
+// `products\<productId>.mp4` (Task 46's one product path, where
+// `media_commands` resolves it) and the record lands in the LEDGER
+// (`products.json`), so the imported project lists it before any save. A
+// record naming any other file -- here a plausible `take-one.mp4` -- refuses
+// the whole import rather than landing somewhere else.
 #[test]
-fn a_retained_product_is_installed_under_its_record_file_name() {
+fn a_retained_product_is_installed_as_its_id_and_recorded_in_the_ledger() {
     let (a, session_id, project_id) = machine_a();
     let mut envelope =
         export_envelope(&a.state, a.root(), &session_id, a.revision(&session_id)).unwrap();
@@ -109,38 +112,28 @@ fn a_retained_product_is_installed_under_its_record_file_name() {
         packed("img1", "media/img1.png", IMAGE_BYTES),
         packed("src", "media/src.mp4", SCREEN_BYTES),
     ];
+    let product = [packed("prod1", "products/prod1.mp4", rendered)];
     let out = tempfile::tempdir().unwrap();
+    let bad = out.path().join("Foreign.vbproject.zip");
+    write_test_package(&bad, &envelope, &media, &product);
+    envelope.record.products[0].filename = "prod1.mp4".to_string();
     let good = out.path().join("Product.vbproject.zip");
-    write_test_package(
-        &good,
-        &envelope,
-        &media,
-        &[packed("prod1", "products/prod1.mp4", rendered)],
-    );
-    envelope.record.products[0].filename = "CON.mp4".to_string();
-    let bad = out.path().join("Device.vbproject.zip");
-    write_test_package(
-        &bad,
-        &envelope,
-        &media,
-        &[packed("prod1", "products/prod1.mp4", rendered)],
-    );
+    write_test_package(&good, &envelope, &media, &product);
 
     let b = Machine::new();
-    let err = import(&b, bad).expect_err("a device file name is refused");
-    assert!(err.message.contains("CON.mp4"), "{}", err.message);
+    let err = import(&b, bad).expect_err("a foreign product file name is refused");
+    assert!(err.message.contains("take-one.mp4"), "{}", err.message);
     assert_eq!(b.store_entries(), Vec::<String>::new());
 
     let opened = import(&b, good).unwrap().unwrap();
     assert_eq!(opened.snapshot.project_id, project_id);
     let products = project_dir(b.root(), &project_id).unwrap().join("products");
-    assert_eq!(
-        std::fs::read(products.join("take-one.mp4")).unwrap(),
-        rendered
-    );
-    let (saved, _) = load_project(b.root(), &project_id).unwrap();
-    assert_eq!(saved.record.products.len(), 1);
-    assert_eq!(saved.record.products[0].filename, "take-one.mp4");
+    assert_eq!(std::fs::read(products.join("prod1.mp4")).unwrap(), rendered);
+    let ledger = read_ledger(b.root(), &project_id).unwrap();
+    assert_eq!(ledger.len(), 1);
+    assert_eq!(ledger[0].filename, "prod1.mp4");
+    let listed = products_in(&b.state, b.root(), &opened.snapshot.session_id).unwrap();
+    assert!(listed[0].available, "the imported product plays");
 }
 
 #[test]

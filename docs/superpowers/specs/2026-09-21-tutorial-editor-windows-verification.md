@@ -44,7 +44,7 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **26 rows** today (T1–T26), of which **0** carry a result. An
+This file carries **27 rows** today (T1–T27), of which **0** carry a result. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -284,3 +284,18 @@ leave the Result empty.
 | T24 | **libass finds a font on a real Windows install** | With the product from T23 open, look at the text cue, the caption and (if one exists) a title card's text. **Record**: whether every text appears at all, and whether it is Segoe UI (compare the lowercase `g`/`y` with the editor preview, which uses Segoe UI) or a fallback face; and whether `vault-buddy.log` or the render's failure text mentions `fontselect` or a missing font. The render passes no `fontsdir` yet, so this is libass's own font discovery on Windows. | |
 | T25 | **A non-libx264 encoder and a build missing a filter** | In Buddy settings → Integrations → ffmpeg, note the reported H.264 encoder. Point the ffmpeg path at a build whose encoder is `h264_mf`, `h264_nvenc`, `h264_qsv` or `h264_amf` (e.g. an LGPL "essentials"/"shared" build without libx264) and Recheck. (a) Render a project with a dissolve and a zoom. **Record**: the encoder the settings card shows; whether the render is refused BEFORE it starts with a message naming each missing filter and the feature that needs it (the zoom, a dissolve, ...), with "4.3" only for `xfade`, or runs; write down WHICH filters the build lacked (this is the only place that gets measured); if it runs, whether the product plays and its duration matches. (b) Render a plain trimmed clip (no zoom, no colour grade, no rounded/circle frame, no cue) with the same build. **Record**: whether it renders with the hardware/MF encoder and plays. | |
 | T26 | **Render an UNTOUCHED real staged capture (the R1 remux)** | Record a 20–60 s screen capture WITH audio (a microphone or system sound) and include a few seconds of a completely still screen near the end (the still-screen heartbeat, GAP-112, and the unclocked audio, GAP-113, are what move the container's length away from the sidecar's). Open it in the editor and render it WITHOUT any edit. **Record**: the sidecar's `durationMs` (`%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures\<base>.json`) and the staged `.mp4`'s own length (file properties, or `ffprobe -v error -show_entries format=duration -of csv=p=0 <file>`); whether the render finishes and is kept (not refused as "the render is X ms long where Y ms were planned"); that it was fast (a stream copy, seconds not minutes); and the product's length against the staged `.mp4`'s. | |
+
+## Render jobs and the shutdown gate (Task 46)
+
+`render_jobs_tests.rs` drives the job over a FAKE runner, so the cancel, the
+discard and the quit are proven against the job's own bookkeeping, and
+`quit_cancels_a_render_before_finalizing_captures` only reads the quit
+workers' SOURCE. What no automated test reaches: a real ffmpeg child killed
+by a quit, by Alt+F4 or by a discard on Windows (a file an ffmpeg still holds
+open is exactly what Windows refuses to delete), and the updater refusing a
+render in the real panel. **Runnable once the Render control exists (Task 47
+onward)**; until then leave the Result empty.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T27 | **Quit, Alt+F4, Install & restart and Discard while a render runs** | Open a project with at least 60 s of edited footage (a dissolve or a zoom, so it re-encodes) and start a render. (a) While it is rendering, choose **Quit** from the tray. **Record**: how long the app took to exit (the render's cancel is bounded at 5 s); that no `ffmpeg.exe` is left in Task Manager; and that `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\jobs\` holds no `<jobId>` folder and `products\` no new file. (b) Relaunch, start a render again and press **Alt+F4** on the buddy: **Record** the same three things, and that the app exited once (it did not keep re-opening a close). (c) Start a render and use Settings → Updates → **Install & restart** (with an update available, or record that none was): **Record** the refusal text ("A video is being rendered in the editor…") and that the render kept running. (d) Start a render and choose **Discard** for the project in the editor's close dialog: **Record** that `ffmpeg.exe` ended, that the project folder is gone, and that the staged capture is still listed in Record Screen. (e) Let one render finish, close the editor WITHOUT saving, reopen the project from the project list: **Record** that the product is listed and plays. | |

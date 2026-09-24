@@ -2442,7 +2442,7 @@ Required media fixtures), so parity is measured rather than asserted; the
 Review render (a real file, `cache\review-<jobId>.mp4`) remains the only
 thing that shows the exported result.
 
-### GAP-174 · Low · A crash mid-import leaves unreferenced media in the project, and the editor's job registry is never pruned
+### GAP-174 · Low · A crash mid-import leaves unreferenced media in the project (the job registry half FIXED 2026-09-24, Task 46)
 `src-tauri/src/editor/media_import.rs` + `src-tauri/src/editor/media_jobs.rs`
 (tutorial-editor Task 25). Two crash windows and one retention gap, all
 disk- or memory-only — no edit is lost and nothing wrong is shown:
@@ -2461,22 +2461,25 @@ disk- or memory-only — no edit is lost and nothing wrong is shown:
    (the staging sweep, `screen_recovery`, covers only the staging
    directory), and every later import mints a fresh asset id, so the part
    is never reused either.
-3. **`JobRegistry` is never pruned.** `EditorState::jobs` keeps every job's
-   record for the life of the process — terminal ones included, so
-   `editor_get_jobs` can answer a reconcile after a reload. Records are
-   small and imports are user-paced, so this is bounded in practice, but
-   render (Task 46) and the shutdown gate REUSE this registry and will add
-   records at a higher rate. Task 28's `peaks` jobs do NOT add to it: their
-   result travels in the command's own reply, so `JobRegistry::forget`
-   drops each record the moment the decode ends.
+3. ~~**`JobRegistry` is never pruned.**~~ **FIXED 2026-09-24 (Task 46)**,
+   before render jobs could make it grow faster. A session now keeps at
+   most `media_jobs::MAX_TERMINAL_RECORDS` (8) TERMINAL records — the most
+   recent, so a reconcile after a reload still sees a job that just
+   finished; the oldest go the moment a newer job ends (`prune_terminal`,
+   run on every terminal message). A RUNNING job is never pruned (its
+   terminal still has to land), and a closing session's terminal records go
+   with it (`drop_session` → `forget_terminal`). Pinned by
+   `media_jobs::tests::terminal_records_beyond_the_bound_are_pruned_oldest_first`.
+   What remains: a job still running when its session closes keeps its one
+   record after its terminal lands (nothing can ask for it — a bounded
+   leak of one record per such job). Task 28's `peaks` jobs never added to
+   it: `JobRegistry::forget` drops each the moment the decode ends.
 
 **Fix:** a project-store sweep on project open (Task 37's recovery is the
 natural home): delete owned `media\.*.part` files, and drop `media\` files
 plus `sources.json` records whose asset id the project graph does not hold —
-no-follow, owned names only (`<assetId>.<ext>` with a valid entity id). For
-the registry, prune a session's TERMINAL records when the session closes
-(`drop_session`), keeping running ones until their terminal lands; Task 46
-should decide this before it adds render jobs.
+no-follow, owned names only (`<assetId>.<ext>` with a valid entity id). (The
+registry half is done — item 3.)
 
 ### GAP-175 · ~~Medium~~ FIXED 2026-09-23 · The preview skips a migrated staged capture's own video, because migration marks its asset `builtin: screen`
 `src/editor/previewLayers.ts` (tutorial-editor Task 22) +
@@ -2837,6 +2840,68 @@ Checks-panel finding (Task 54) naming the affected clip when a requested
 range would orphan a crossfade half, so the approximation is disclosed
 before Render rather than only discoverable by listening closely to the
 result.
+
+### GAP-187 · Low (by design, until a removal UI exists) · A project's 41st render is refused instead of offering to delete an older product
+`src-tauri/src/editor/render_jobs.rs` (`check_capacity`, and the same check
+under the save lock in `publish`), tutorial-editor Task 46. The product
+ledger (`products.json`) is capped at `limits::MAX_PRODUCTS` (40, the
+interchange schema's own bound — `validate_envelope` refuses a record with
+more), and products are IMMUTABLE: nothing in this build removes one. So the
+41st `editor_start_render` is refused up front with `invalidRequest` "This
+project already has 40 rendered products. Remove an older product first." —
+and there is no control anywhere that removes one. The user's only way out
+is to discard the whole project or hand-edit the store. Removal is a later
+product decision (which products may go, whether a published one may, what
+happens to a product a package references), deliberately not invented here.
+**Fix:** a "Remove product" action in the product library (Task 47's
+`ProductLibrary.vue`) behind a confirm, deleting `products\<productId>.mp4`
+and its ledger record under the session's save lock, owned-file and
+no-follow; then the 41st render can offer it instead of refusing.
+
+### GAP-188 · Low · A portable project file carries its products' records but not their video files
+`src-tauri/src/editor/package_commands.rs` (`write_portable`), found by Task
+46. Since Task 46 a package export's envelope carries `record.products`
+assembled from the ledger (ADR R5), so a product's lineage, snapshot and
+name travel — and the snapshot's assets are collected (A17). But
+`write_portable` still writes `manifest.products: []`: the rendered
+`products\<productId>.mp4` files themselves are never packaged. On import the
+ledger lists them (`package_import` writes `products.json`), each reading
+`available: false`, and "restore" still works (the snapshot is in the
+record). Nothing is lost or misrepresented — an unavailable product says so
+— but a user who expects a portable file to include their renders will not
+find them. **Fix:** package each ledger product whose file exists as
+`products/<productId>.mp4` (`package::PackageProduct`, which the import
+already extracts and verifies), counted against `MAX_PACKAGE_MEDIA_BYTES`.
+
+### GAP-189 · Low · A crash mid-render leaves the render's `jobs\<jobId>\` scratch directory behind
+`src-tauri/src/editor/render_jobs.rs`, Task 46. A render writes
+`jobs\<jobId>\out.mp4.part` (and its `cues.ass`/`captions.ass`) and removes
+the whole directory itself on success, cancel and failure — every exit a
+running process takes. A process that DIES mid-render (a crash, a kill, power
+loss) leaves the directory and a truncated `.part` behind: nothing sweeps
+`jobs\`, and the next render mints a fresh job id, so the leftover is never
+reused either. It is never listed as a product (only the ledger names
+products, and it was never recorded) — wasted disk only, removed with the
+project on a discard. **Fix:** Task 37's startup sweep
+(`recovery::run_startup_repin`'s thread) removes `jobs\<valid id>\`
+directories older than an hour, owned names only, no-follow
+(`store_io::remove_dir_no_follow`), the `sweep_stale_imports` posture.
+
+### GAP-190 · Low · Alt+F4 re-opens its own close every 5 s while a cancelled export will not unwind
+`src-tauri/src/window_close.rs` (`handle_main_close`), found by Task 46
+while wiring the render term beside it. The close-finalize worker cancels an
+export bounded at 5 s and then re-triggers the close, and its comment says
+the export's predicate "is false either because the cancel unwound or because
+its bounded wait expired". The second half is not true:
+`export_shutdown::cancel_if_exporting` only LOGS on expiry, so a wedged
+export keeps its `ExportState` reservation, `export_blocks_shutdown` stays
+true, and the re-triggered `CloseRequested` spawns the worker again — a
+5-second loop for as long as the export stays wedged (the tray's Quit does
+not loop: it calls `finish_quit` directly). The render term added in Task 46
+does NOT have this problem: `render_jobs::cancel_all_bounded` latches
+`RENDERS_ABANDONED` on expiry and the gate stops counting renders. **Fix:**
+the same latch for the export (or have the worker exit through `finish_quit`
+rather than re-triggering the close).
 
 ## 9. Documentation & repo hygiene
 

@@ -218,6 +218,41 @@ impl EditorSession {
         Ok(self.snapshot())
     }
 
+    /// `execute_internal` for a native command that arrives through an IPC
+    /// REQUEST (Task 46's `editor_restore_product`): the same `commandId`
+    /// and `expectedRevision` bookkeeping `execute` applies -- an invalid id
+    /// is `invalidRequest`, a replayed one returns the current snapshot
+    /// unchanged (checked first, as in `execute`), a stale revision is
+    /// `revisionConflict` -- then the native apply.
+    pub fn execute_internal_as(
+        &mut self,
+        expected_revision: u64,
+        command_id: &str,
+        cmd: &InternalCommand,
+    ) -> Result<EditorSnapshot, EditorError> {
+        if !is_valid_id(command_id) {
+            return Err(EditorError::new(
+                EditorErrorCode::InvalidRequest,
+                "commandId is not a valid entity id",
+            ));
+        }
+        if self.recent.iter().any(|(id, _)| id == command_id) {
+            return Ok(self.snapshot());
+        }
+        if expected_revision != self.revision {
+            return Err(EditorError::new(
+                EditorErrorCode::RevisionConflict,
+                format!(
+                    "expected revision {expected_revision} but the session is at {}",
+                    self.revision
+                ),
+            ));
+        }
+        let snapshot = self.execute_internal(cmd)?;
+        self.record_command(command_id.to_string());
+        Ok(snapshot)
+    }
+
     fn record_command(&mut self, command_id: String) {
         self.recent.push_back((command_id, self.revision));
         while self.recent.len() > MAX_RECENT_COMMANDS {
@@ -656,6 +691,61 @@ mod tests {
                 "undoLabel": "Rename",
                 "redoLabel": null,
             })
+        );
+    }
+    // Task 46: a native command that arrives as a REQUEST (a product
+    // restore) is held to `execute`'s own bookkeeping -- a stale revision
+    // applies nothing, a replayed commandId is a no-op, and the restore is
+    // ONE undo step back to the pre-restore graph.
+    #[test]
+    fn an_internal_request_checks_revision_and_replay_and_undoes_in_one_step() {
+        use crate::editor::commands::payloads::RestoreSnapshotPayload;
+
+        let mut session = new_session();
+        session
+            .execute(&rename_request("s1", 1, "cmd-1", "Edited"), &no_context())
+            .unwrap();
+        let edited = session.project.clone();
+        let mut frozen = minimal_project();
+        frozen.title = "Frozen".to_string();
+        let restore = InternalCommand::RestoreSnapshot(Box::new(RestoreSnapshotPayload {
+            product_id: "prod-1".to_string(),
+            project: frozen.clone(),
+        }));
+
+        let e = session
+            .execute_internal_as(1, "cmd-2", &restore)
+            .unwrap_err();
+        assert_eq!(e.code, EditorErrorCode::RevisionConflict);
+        assert_eq!(session.project, edited, "a stale restore applies nothing");
+        assert_eq!(
+            session
+                .execute_internal_as(2, "bad id!", &restore)
+                .unwrap_err()
+                .code,
+            EditorErrorCode::InvalidRequest
+        );
+
+        let snap = session.execute_internal_as(2, "cmd-2", &restore).unwrap();
+        assert_eq!(snap.revision, 3);
+        assert_eq!(session.project, frozen);
+        let replay = session.execute_internal_as(2, "cmd-2", &restore).unwrap();
+        assert_eq!(replay.revision, 3, "a replayed restore is a no-op");
+
+        session
+            .execute(
+                &ExecuteRequest {
+                    session_id: "s1".into(),
+                    expected_revision: 3,
+                    command_id: "cmd-3".into(),
+                    command: EditorCommand::Undo,
+                },
+                &no_context(),
+            )
+            .unwrap();
+        assert_eq!(
+            session.project, edited,
+            "undo returns to the pre-restore graph"
         );
     }
 }

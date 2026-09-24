@@ -85,9 +85,9 @@ fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
 /// "Freeze revision": the project is cloned under the sessions lock at the
 /// revision the caller saw, so an edit landing while the dialog is open
 /// never changes what is written. `record.createdAt` comes from the last
-/// saved envelope when there is one; `record.products` is empty because no
-/// product ledger exists yet (`products.json` arrives with Task 46, and
-/// `editor_save_project` writes the same empty list for the same reason).
+/// saved envelope when there is one; `record.products` is the product
+/// LEDGER (`products.json`, Task 46), exactly as `editor_save_project`
+/// assembles it.
 pub(crate) fn export_envelope(
     state: &EditorState,
     root: &Path,
@@ -129,7 +129,7 @@ pub(crate) fn export_envelope(
             revision,
             created_at,
             updated_at: now.clone(),
-            products: Vec::new(),
+            products: super::render_jobs::read_ledger(root, &project.id)?,
             extra: Map::new(),
         },
         project,

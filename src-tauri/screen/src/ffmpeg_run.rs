@@ -83,6 +83,53 @@ fn percent_from_out_time_us(out_time_us: u64, total_output_ms: u64) -> u64 {
     progress_percent(out_time_us / 1_000, total_output_ms)
 }
 
+/// What one run's two reader threads and its log lines are called, so a
+/// crash record or a log line names the JOB that spawned the child -- the
+/// export and the editor's render share this runner (Task 42), and a render
+/// that died on a thread named `screen-export-*` would send a reader to the
+/// wrong feature (tutorial-editor Task 46).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunnerNames {
+    pub progress_thread: &'static str,
+    pub stderr_thread: &'static str,
+    pub log_prefix: &'static str,
+}
+
+/// The phase-5 export's names -- unchanged from before the runner took any.
+pub const EXPORT_RUNNER: RunnerNames = RunnerNames {
+    progress_thread: "screen-export-progress",
+    stderr_thread: "screen-export-stderr",
+    log_prefix: "screen export",
+};
+
+/// The editor render's names: its job thread is `editor-render`, and the
+/// readers are named after it.
+pub const RENDER_RUNNER: RunnerNames = RunnerNames {
+    progress_thread: "editor-render-progress",
+    stderr_thread: "editor-render-stderr",
+    log_prefix: "editor render",
+};
+
+/// `run_named` under the export's names (`EXPORT_RUNNER`).
+pub fn run(
+    ffmpeg: &Path,
+    args: &[String],
+    dest: &Path,
+    total_output_ms: u64,
+    cancel: &AtomicBool,
+    on_progress: &mut dyn FnMut(u64),
+) -> Result<(), ScreenError> {
+    run_named(
+        EXPORT_RUNNER,
+        ffmpeg,
+        args,
+        dest,
+        total_output_ms,
+        cancel,
+        on_progress,
+    )
+}
+
 /// Run `ffmpeg args`, reporting whole-percent progress of `total_output_ms`
 /// and honouring `cancel`.
 ///
@@ -90,7 +137,8 @@ fn percent_from_out_time_us(out_time_us: u64, total_output_ms: u64) -> u64 {
 /// successful run -- ffmpeg's own last tick lands a little short of the end
 /// (its final `out_time_us` is the last packet's, not the file's), and a
 /// remux is over so fast that it may emit only two ticks in total.
-pub fn run(
+pub fn run_named(
+    names: RunnerNames,
     ffmpeg: &Path,
     args: &[String],
     dest: &Path,
@@ -146,7 +194,7 @@ pub fn run(
 
     let (tx, rx) = mpsc::channel::<ProgressTick>();
     let progress_reader = std::thread::Builder::new()
-        .name("screen-export-progress".into())
+        .name(names.progress_thread.into())
         .spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 if let Some(tick) = parse_progress_line(&line) {
@@ -158,11 +206,21 @@ pub fn run(
                 }
             }
         })
-        .map_err(|e| ScreenError::Io(format!("could not start the export progress reader: {e}")))?;
+        .map_err(|e| {
+            ScreenError::Io(format!(
+                "{}: could not start the progress reader: {e}",
+                names.log_prefix
+            ))
+        })?;
     let stderr_reader = std::thread::Builder::new()
-        .name("screen-export-stderr".into())
+        .name(names.stderr_thread.into())
         .spawn(move || drain_capped(stderr))
-        .map_err(|e| ScreenError::Io(format!("could not start the export error reader: {e}")))?;
+        .map_err(|e| {
+            ScreenError::Io(format!(
+                "{}: could not start the error reader: {e}",
+                names.log_prefix
+            ))
+        })?;
 
     let mut throttle = EmitThrottle::new(PROGRESS_MIN_DELTA);
     let mut last_emitted: Option<u64> = None;
@@ -199,7 +257,7 @@ pub fn run(
         // The other half of a cancel. A killed ffmpeg leaves a truncated
         // file; leaving it on disk would offer the user a broken export as
         // though it were a saved one.
-        remove_output(dest);
+        remove_output(dest, names.log_prefix);
         return Err(ScreenError::Cancelled);
     }
 
@@ -209,7 +267,7 @@ pub fn run(
     let _ = progress_reader.join();
     let errors = stderr_reader.join().unwrap_or_default();
     if !status.success() {
-        remove_output(dest);
+        remove_output(dest, names.log_prefix);
         return Err(ScreenError::Sink(failure_message(
             status.code(),
             errors.trim(),
@@ -252,12 +310,12 @@ fn drain_capped<R: Read>(reader: R) -> String {
     kept
 }
 
-fn remove_output(dest: &Path) {
+fn remove_output(dest: &Path, log_prefix: &str) {
     match std::fs::remove_file(dest) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => log::warn!(
-            "screen export: could not remove the abandoned output {}: {e}",
+            "{log_prefix}: could not remove the abandoned output {}: {e}",
             dest.display()
         ),
     }
@@ -392,5 +450,40 @@ pub(crate) mod tests {
         );
         assert!(!kept.is_empty(), "and it is not simply dropped");
         assert_eq!(drain_capped("one\ntwo\n".as_bytes()), "one\ntwo\n");
+    }
+    // Task 46: the runner's threads and log lines carry the JOB's name. The
+    // export and the render share this runner, and a render that died on a
+    // thread named `screen-export-*` would send whoever reads the crash
+    // record to the wrong feature. So the spawn sites read the names they
+    // were given (no export name hard-wired into the shared body), and the
+    // render hands in its own.
+    #[test]
+    fn each_job_runs_its_child_under_its_own_thread_names() {
+        let body = production_src()
+            .split_once(
+                "
+pub fn run_named(",
+            )
+            .expect("the shared runner")
+            .1;
+        assert!(body.contains(".name(names.progress_thread.into())"));
+        assert!(body.contains(".name(names.stderr_thread.into())"));
+        assert!(
+            !body.contains("\"screen-export-") && !body.contains("\"screen export"),
+            "the shared runner must not hard-wire the export's names"
+        );
+        assert_ne!(EXPORT_RUNNER, RENDER_RUNNER);
+        for name in [RENDER_RUNNER.progress_thread, RENDER_RUNNER.stderr_thread] {
+            assert!(name.starts_with("editor-render-"), "{name}");
+        }
+        let render = include_str!("render/run.rs");
+        let render = render.split("#[cfg(test)]").next().unwrap_or(render);
+        assert!(
+            render.contains(
+                "run_named(
+        RENDER_RUNNER,"
+            ),
+            "the render must run the child under RENDER_RUNNER"
+        );
     }
 }

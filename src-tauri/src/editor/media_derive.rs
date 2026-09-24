@@ -43,7 +43,9 @@
 //! ffmpeg still writing cannot hold a file open inside a project being
 //! removed. A discard first STOPS the session's derived work
 //! (`stop_session_derivations`: peaks jobs cancelled, thumbnail renders
-//! killed through `EditorState::thumbnails`) and waits a bounded time for it
+//! killed through `EditorState::thumbnails`, and -- Task 46 -- editor
+//! renders cancelled, which kill their ffmpeg and delete their part) and
+//! waits a bounded time for it
 //! to end; a closing session cancels both too (`drop_session`).
 //!
 //! **Lock order:** `PEAKS_GATE`/`THUMBNAIL_GATE` are outermost — never
@@ -563,17 +565,27 @@ pub(crate) fn cancel_session_thumbnails(state: &EditorState, session_id: &str) {
 }
 
 fn derivations_running(state: &EditorState, session_id: &str) -> bool {
-    lock_ignoring_poison(&state.jobs).is_running(session_id, JobKind::Peaks)
+    let jobs = lock_ignoring_poison(&state.jobs);
+    let running =
+        jobs.is_running(session_id, JobKind::Peaks) || jobs.is_running(session_id, JobKind::Render);
+    drop(jobs);
+    running
         || lock_ignoring_poison(&state.thumbnails)
             .iter()
             .any(|(s, _)| s == session_id)
 }
 
-/// Cancel `session_id`'s peaks decodes and thumbnail renders and wait (at
-/// most `STOP_WAIT`) for them to end — a discard's first step, taken BEFORE
-/// it holds the session's save lock (their final cache write needs it).
+/// Cancel `session_id`'s peaks decodes, thumbnail renders AND editor
+/// renders (Task 46) and wait (at most `STOP_WAIT`) for them to end — a
+/// discard's first step, taken BEFORE it holds the session's save lock
+/// (their final cache write, and a render's publish, need it). A render is
+/// killed and its part and job directory deleted before its terminal
+/// lands, so the discard never removes the project under a live ffmpeg.
 pub(crate) fn stop_session_derivations(state: &EditorState, session_id: &str) {
-    lock_ignoring_poison(&state.jobs).cancel_session_kind(session_id, JobKind::Peaks);
+    let jobs = lock_ignoring_poison(&state.jobs);
+    jobs.cancel_session_kind(session_id, JobKind::Peaks);
+    jobs.cancel_session_kind(session_id, JobKind::Render);
+    drop(jobs);
     cancel_session_thumbnails(state, session_id);
     let started = std::time::Instant::now();
     while derivations_running(state, session_id) {

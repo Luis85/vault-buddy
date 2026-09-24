@@ -60,7 +60,8 @@ use vault_buddy_core::editor::package_plan::{
     rekey_envelope, take_source_facts, FactsMediaKind, PackageFormat, SourceFacts,
 };
 use vault_buddy_core::editor::{
-    is_valid_id, limits, new_project_id, sanitize, validate_envelope, Asset, AssetKind,
+    has_canonical_file_name, is_valid_id, limits, new_project_id,
+    product_file_name as product_canonical_name, sanitize, validate_envelope, Asset, AssetKind,
     EditorError, EditorErrorCode, EditorOpenResult, MediaType, WorkspaceEnvelope,
 };
 use vault_buddy_core::sync_util::lock_ignoring_poison;
@@ -70,6 +71,7 @@ use super::prefs_commands::WORKSPACE_FILE;
 use super::project_store::{
     join_contained, project_dir, store_dir, SourceLocator, SourceMediaKind, SourceRecord,
 };
+use super::render_jobs::PRODUCTS_FILE;
 use super::save_commands::map_write_error;
 use super::session_commands::{missing_media, register_session};
 use super::store_io::{read_bounded, remove_dir_no_follow, PROJECT_FILE, SOURCES_FILE};
@@ -232,7 +234,8 @@ fn extract_one(
 }
 
 /// A retained product's file name, as `media_commands` resolves it under
-/// `products\`: one plain, non-device component, unique ignoring case.
+/// `products\`: `<productId>.mp4` (checked up front, `import_file`), one
+/// plain, non-device component, unique ignoring case.
 fn product_file_name<'a>(
     env: &'a WorkspaceEnvelope,
     product_id: &str,
@@ -402,6 +405,22 @@ fn import_file(
     let mut envelope = incoming.envelope;
     // Transport only: taken OUT of the envelope before anything is stored.
     let facts = take_source_facts(&mut envelope).map_err(invalid)?;
+    // Task 46: a product's file is `products\<productId>.mp4` and nothing
+    // else -- refused here, before anything is built, like every other
+    // name this file carries.
+    if let Some(p) = envelope
+        .record
+        .products
+        .iter()
+        .find(|p| !has_canonical_file_name(p))
+    {
+        return Err(invalid(format!(
+            "product {}'s file name {:?} is not {}",
+            p.id,
+            p.filename,
+            product_canonical_name(&p.id)
+        )));
+    }
     let id = choose_id(root, &envelope.project.id);
     if id != envelope.project.id {
         rekey_envelope(&mut envelope, &id);
@@ -425,6 +444,11 @@ fn import_file(
     write_json(&build.dir, SOURCES_FILE, &sources)?;
     write_json(&build.dir, PROJECT_FILE, &envelope)?;
     write_json(&build.dir, WORKSPACE_FILE, &workspace)?;
+    // The ledger is the products' authority (Task 46, R5): an imported
+    // project lists its retained products before any save.
+    if !envelope.record.products.is_empty() {
+        write_json(&build.dir, PRODUCTS_FILE, &envelope.record.products)?;
+    }
     build.install(root, &id)?;
 
     let projection = register_session(state, envelope.project, envelope.record.revision);

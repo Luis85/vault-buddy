@@ -50,8 +50,8 @@
 //! more: the "not available yet" fallback went with the last eight kinds,
 //! so a NEW `EditorCommand` variant now fails to compile until it gets an
 //! arm (the exhaustiveness the old shrinking table only approximated).
-//! `not_yet` survives for `apply_internal`'s two still-unimplemented
-//! native-only kinds.
+//! `apply_internal` lost its own `not_yet` fallback with Task 46's
+//! `RestoreSnapshot`, the last native-only kind to land.
 //!
 //! **The frontend kept its own copy of this table, and nothing enforced
 //! they agreed.** `src/editor/actionMeta.ts`'s `UNIMPLEMENTED_KINDS`
@@ -190,13 +190,6 @@ pub struct CommandContext<'a> {
     pub assets_with_audio: &'a BTreeSet<String>,
 }
 
-fn not_yet(kind: &str) -> EditorError {
-    EditorError::new(
-        EditorErrorCode::InvalidRequest,
-        format!("{kind} is not available yet"),
-    )
-}
-
 /// Applies one `EditorCommand` to `project`, returning a candidate project
 /// plus a human-readable undo label. This function NEVER installs the
 /// candidate itself -- `EditorSession::execute` runs `validate_project` on
@@ -272,7 +265,7 @@ pub fn apply_internal(
     match cmd {
         InternalCommand::AddAssets(p) => meta::add_assets(project, p),
         InternalCommand::ImportCaptions(p) => captions::import_captions(project, p),
-        InternalCommand::RestoreSnapshot(_) => Err(not_yet("restoreSnapshot")),
+        InternalCommand::RestoreSnapshot(p) => meta::restore_snapshot(project, p),
         InternalCommand::RelinkAssets(p) => meta::relink_assets(project, p),
     }
 }
@@ -540,7 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_internal_dispatches_add_assets_and_stubs_the_rest() {
+    fn apply_internal_dispatches_every_native_kind() {
         use crate::editor::model::{Asset, AssetKind};
 
         let project = minimal_project();
@@ -568,15 +561,16 @@ mod tests {
         assert_eq!(candidate.assets.len(), 1);
         assert_eq!(label, "Add assets");
 
-        let err = apply_internal(
-            &project,
+        // Task 46: the last native kind reaches its real arm.
+        let (restored, label) = apply_internal(
+            &candidate,
             &InternalCommand::RestoreSnapshot(Box::new(RestoreSnapshotPayload {
                 product_id: "prod-1".to_string(),
                 project: minimal_project(),
             })),
         )
-        .unwrap_err();
-        assert_eq!(err.code, EditorErrorCode::InvalidRequest);
-        assert!(err.message.contains("is not available yet"));
+        .unwrap();
+        assert!(restored.assets.is_empty(), "the frozen graph replaced it");
+        assert_eq!(label, "Restore render");
     }
 }

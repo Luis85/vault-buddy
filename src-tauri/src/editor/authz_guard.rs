@@ -34,6 +34,7 @@ const EXPECTED: &[&str] = &[
     "editor_execute",
     "editor_export_package",
     "editor_get_jobs",
+    "editor_get_products",
     "editor_get_snapshot",
     "editor_get_workspace",
     "editor_hide_window",
@@ -47,8 +48,10 @@ const EXPECTED: &[&str] = &[
     "editor_open_project",
     "editor_open_staged",
     "editor_relink_media",
+    "editor_restore_product",
     "editor_save_project",
     "editor_save_workspace",
+    "editor_start_render",
 ];
 
 /// One `#[tauri::command]` found in `src`: its name, and what is wrong with

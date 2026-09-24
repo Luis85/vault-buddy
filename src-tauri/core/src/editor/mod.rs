@@ -42,7 +42,10 @@ pub mod workspace;
 
 pub use commands::{EditorCommand, InternalCommand};
 pub use error::{EditorError, EditorErrorCode};
-pub use fingerprint::{assets_referenced, canonical_json, edit_fingerprint, new_product};
+pub use fingerprint::{
+    assets_referenced, canonical_json, edit_fingerprint, has_canonical_file_name, new_product,
+    product_file_name,
+};
 pub use history::History;
 pub use ids::{is_valid_id, new_entity_id, new_project_id};
 pub use model::*;

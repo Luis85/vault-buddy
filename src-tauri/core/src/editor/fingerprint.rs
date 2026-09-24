@@ -142,6 +142,20 @@ pub fn new_product(
     }
 }
 
+/// The one file name a product may have under its project's `products\`
+/// directory (Task 46's controller ruling): exactly `<productId>.mp4`. The
+/// ledger records it in `Product::filename`, and every reader (the media
+/// resolver, a package import) refuses any other value -- so a hand-edited
+/// or foreign record can never point a lookup at some other file.
+pub fn product_file_name(product_id: &str) -> String {
+    format!("{product_id}.mp4")
+}
+
+/// Does `product` carry a valid id AND exactly `product_file_name(id)`?
+pub fn has_canonical_file_name(product: &Product) -> bool {
+    super::is_valid_id(&product.id) && product.filename == product_file_name(&product.id)
+}
+
 /// The union of every asset id the CURRENT project graph depends on and
 /// every asset id each `products` entry's own frozen snapshot depended on
 /// (A17: "package collector includes snapshot-only assets" -- an asset a
@@ -374,5 +388,35 @@ mod tests {
             referenced.contains("audio-1"),
             "linked_asset must be followed even though no clip references it directly: {referenced:?}"
         );
+    }
+    // Task 46: a product's file is `products\<productId>.mp4` and nothing
+    // else -- a record naming another file, or carrying an id that could
+    // not be a file name at all, is not canonical.
+    #[test]
+    fn only_product_id_dot_mp4_is_a_canonical_product_file_name() {
+        let project = test_support::minimal_project();
+        let good = new_product(
+            &project,
+            2,
+            "prod-a1",
+            "Demo",
+            "prod-a1.mp4",
+            1_000,
+            None,
+            "t",
+        );
+        assert_eq!(product_file_name("prod-a1"), "prod-a1.mp4");
+        assert!(has_canonical_file_name(&good));
+        for (id, filename) in [
+            ("prod-a1", "prod-b2.mp4"),
+            ("prod-a1", "prod-a1.MP4"),
+            ("prod-a1", "../prod-a1.mp4"),
+            ("prod a1", "prod a1.mp4"),
+        ] {
+            let mut bad = good.clone();
+            bad.id = id.to_string();
+            bad.filename = filename.to_string();
+            assert!(!has_canonical_file_name(&bad), "{id} / {filename}");
+        }
     }
 }

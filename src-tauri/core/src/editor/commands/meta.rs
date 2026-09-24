@@ -2,13 +2,15 @@
 //! `setDestination`, and the native `AddAssets` -- the ones Task 6 itself
 //! delivered (`commands/mod.rs`'s module doc explains the "not available
 //! yet" fallback that shrank task by task) -- plus Task 40's native
-//! `RelinkAssets`, which leaves the graph as it is.
+//! `RelinkAssets`, which leaves the graph as it is, and Task 46's native
+//! `RestoreSnapshot`, which replaces it with a product's frozen snapshot.
 
 use std::collections::HashSet;
 use std::path::Path;
 
 use super::payloads::{
-    AddAssetsPayload, RelinkAssetsPayload, RenamePayload, SetDestinationPayload,
+    AddAssetsPayload, RelinkAssetsPayload, RenamePayload, RestoreSnapshotPayload,
+    SetDestinationPayload,
 };
 use crate::capture_paths::safe_recording_root;
 use crate::editor::error::{EditorError, EditorErrorCode};
@@ -135,6 +137,28 @@ pub(super) fn relink_assets(
         }
     }
     Ok((project.clone(), "Reconnect media".to_string()))
+}
+
+/// `RestoreSnapshot{productId, project}` (Task 46, F-42): a rendered
+/// product's frozen graph becomes the live one -- ONE undo step back to the
+/// graph it replaced, and the product itself is never touched (its snapshot
+/// is cloned, not moved). Only a snapshot of THIS project: a foreign id is
+/// refused rather than silently re-keying the live session to another
+/// project. The candidate is still `validate_project`-ed by the session.
+pub(super) fn restore_snapshot(
+    project: &Project,
+    payload: &RestoreSnapshotPayload,
+) -> Result<(Project, String), EditorError> {
+    if payload.project.id != project.id {
+        return Err(EditorError::new(
+            EditorErrorCode::InvalidProject,
+            format!(
+                "product {}: its snapshot belongs to project {}, not {}",
+                payload.product_id, payload.project.id, project.id
+            ),
+        ));
+    }
+    Ok((payload.project.clone(), "Restore render".to_string()))
 }
 
 #[cfg(test)]
@@ -389,5 +413,34 @@ mod tests {
         .unwrap();
         assert_eq!(candidate.assets.len(), 2);
         assert_eq!(label, "Add assets");
+    }
+    // Task 46: restoring a product installs its frozen graph whole -- and
+    // only a snapshot of THIS project; a foreign one is refused rather than
+    // silently re-keying the live session to another project's id.
+    #[test]
+    fn restore_snapshot_installs_the_frozen_graph_of_this_project_only() {
+        let live = minimal_project();
+        let mut frozen = minimal_project();
+        frozen.title = "Frozen at render".to_string();
+        frozen.assets.push(asset("a-frozen"));
+        let payload = RestoreSnapshotPayload {
+            product_id: "prod-1".to_string(),
+            project: frozen.clone(),
+        };
+        let (candidate, label) = restore_snapshot(&live, &payload).unwrap();
+        assert_eq!(candidate, frozen);
+        assert_eq!(label, "Restore render");
+
+        let mut foreign = frozen;
+        foreign.id = "someone-else".to_string();
+        let e = restore_snapshot(
+            &live,
+            &RestoreSnapshotPayload {
+                product_id: "prod-1".to_string(),
+                project: foreign,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(e.code, EditorErrorCode::InvalidProject);
     }
 }

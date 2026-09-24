@@ -2,7 +2,8 @@
 //! F-04, F-41, F-42): refuse what the installed ffmpeg cannot do, write
 //! the ASS documents into the job directory, build the argv
 //! (`render_args`), run it through the SAME runner the phase-5 export uses
-//! (`ffmpeg_run::run`), then VERIFY the file with ffprobe before calling it
+//! (`ffmpeg_run::run_named`, under the render's own `RENDER_RUNNER` thread
+//! names -- Task 46), then VERIFY the file with ffprobe before calling it
 //! a product.
 //!
 //! **The refusal comes first, and it is a refusal.** `render_refusal`
@@ -63,7 +64,7 @@ use super::video_graph::file_input_count;
 use super::video_layers::adjustments;
 use super::{render_args, AssHooks, FfmpegCapabilities};
 use crate::ffmpeg_args::EncodeSettings;
-use crate::ffmpeg_run::run;
+use crate::ffmpeg_run::{run_named, RENDER_RUNNER};
 use crate::ScreenError;
 
 /// The oldest ffmpeg whose filter set can run every render feature
@@ -455,7 +456,7 @@ fn probe_output(ffprobe: &Path, path: &Path) -> Result<OutputProbe, ScreenError>
 }
 
 /// Renders `req.plan` to `req.dest` (see the module doc), reporting
-/// whole-percent progress and honouring `cancel` (`ffmpeg_run::run`).
+/// whole-percent progress and honouring `cancel` (`ffmpeg_run::run_named`).
 pub fn render(
     req: RenderRequestNative<'_>,
     cancel: &AtomicBool,
@@ -484,7 +485,10 @@ pub fn render(
         fontsdir: req.fontsdir,
     };
     let args = render_args(plan, inputs, req.dest, hooks, &req.settings);
-    run(
+    // Under the render's own thread names (Task 46): a crash record then
+    // names the render, not the phase-5 export this runner also serves.
+    run_named(
+        RENDER_RUNNER,
         req.ffmpeg,
         &args,
         req.dest,

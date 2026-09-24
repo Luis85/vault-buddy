@@ -59,7 +59,8 @@ use std::path::{Path, PathBuf};
 use crate::structural_scan::code_only;
 
 /// The `editor_*` session, save/list/reopen, workspace, media and job commands —
-/// twenty as of Task 40 (`editor_relink_media`). Add a new one here in the same commit that adds it to
+/// twenty-three as of Task 46 (`editor_start_render`, `editor_get_products`,
+/// `editor_restore_product`). Add a new one here in the same commit that adds it to
 /// `generate_handler!` (`lib.rs`), `build.rs`'s `ALL_COMMANDS`, and
 /// `capabilities/editor.json`'s `permissions` — never to
 /// `capabilities/default.json`.
@@ -69,6 +70,7 @@ const EXPECTED_EDITOR: &[&str] = &[
     "editor_execute",
     "editor_export_package",
     "editor_get_jobs",
+    "editor_get_products",
     "editor_get_snapshot",
     "editor_get_workspace",
     "editor_hide_window",
@@ -82,8 +84,10 @@ const EXPECTED_EDITOR: &[&str] = &[
     "editor_open_project",
     "editor_open_staged",
     "editor_relink_media",
+    "editor_restore_product",
     "editor_save_project",
     "editor_save_workspace",
+    "editor_start_render",
 ];
 
 fn manifest_dir() -> PathBuf {
