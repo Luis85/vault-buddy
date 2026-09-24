@@ -32,6 +32,9 @@
  *
  * **Reconnect… (Task 40)** appears while any original is missing and opens
  * `ReconnectDialog`; like Import, it never sends a path.
+ *
+ * **Webcam… (Task 50)** opens `WebcamDialog` — opening it touches no
+ * device; the dialog's own *Enable camera* is the first thing that does.
  */
 import { computed, onMounted, ref } from "vue";
 
@@ -42,6 +45,7 @@ import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import { formatDuration } from "../../../utils/formatDuration";
 import ReconnectDialog from "../dialogs/ReconnectDialog.vue";
+import WebcamDialog from "../dialogs/WebcamDialog.vue";
 import ImportStatus from "./ImportStatus.vue";
 import LibraryAssetCard from "./LibraryAssetCard.vue";
 
@@ -51,6 +55,7 @@ const jobs = useEditorJobsStore();
 
 const query = ref("");
 const reconnectOpen = ref(false);
+const webcamOpen = ref(false);
 
 interface AssetRow {
   asset: Asset;
@@ -117,6 +122,13 @@ const importRefusal = computed<string | null>(() => {
 });
 const importTitle = computed(() => importRefusal.value ?? "Import video, audio or images");
 
+const webcamRefusal = computed<string | null>(() => (project.sessionId ? null : "Open a project first."));
+const webcamTitle = computed(() => webcamRefusal.value ?? "Record a webcam take");
+
+function openWebcam(): void {
+  if (webcamRefusal.value === null) webcamOpen.value = true;
+}
+
 function startImport(): void {
   if (importRefusal.value === null) void jobs.importMedia();
 }
@@ -150,7 +162,21 @@ onMounted(() => {
       >
         Import…
       </button>
+      <button
+        type="button"
+        data-testid="library-webcam"
+        :aria-disabled="webcamRefusal !== null"
+        :title="webcamTitle"
+        class="shrink-0 rounded border border-line px-2 py-0.5 text-fg hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+        @click="openWebcam"
+      >
+        Webcam…
+      </button>
     </div>
+    <WebcamDialog
+      :open="webcamOpen"
+      @close="webcamOpen = false"
+    />
 
     <button
       v-if="project.missing.length > 0"

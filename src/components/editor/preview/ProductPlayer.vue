@@ -17,7 +17,11 @@ import { ref, watch } from "vue";
 import type { MediaRef } from "../../../editorTypes";
 import { toEditorError, useEditorProjectStore } from "../../../stores/editorProject";
 
-const props = defineProps<{ media: MediaRef; label: string }>();
+/** `subject` names the file in the status copy — a webcam take (Task 50)
+ * is played here too, and is not a "rendered file". */
+const props = withDefaults(defineProps<{ media: MediaRef; label: string; subject?: string }>(), {
+  subject: "rendered file",
+});
 
 const editorProject = useEditorProjectStore();
 const src = ref<string | null>(null);
@@ -39,7 +43,7 @@ async function resolve(media: MediaRef): Promise<void> {
     const error = toEditorError(e);
     if (key(media) !== key(props.media)) return;
     problem.value =
-      error.code === "sourceMissing" ? "The rendered file is no longer on disk." : error.message;
+      error.code === "sourceMissing" ? `The ${props.subject} is no longer on disk.` : error.message;
   }
 }
 
@@ -76,7 +80,7 @@ watch(
       v-else
       class="text-xs text-fg-subtle"
     >
-      Finding the rendered file…
+      Finding the {{ subject }}…
     </p>
   </div>
 </template>

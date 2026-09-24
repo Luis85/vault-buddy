@@ -193,3 +193,20 @@ export function resizeFromHandle(box: NormBox, handle: Handle, dx: number, dy: n
   const free = { x: left, y: top, w: right - left, h: bottom - top };
   return clampBox(keepAspect ? keepRatio(box, free, handle) : free);
 }
+
+/**
+ * The presenter's placement (Task 50; F-21; pre-flight F35): the ADR's OWN
+ * constant — the §4 staged-capture migration's webcam clip and the
+ * reference workspace both put a presenter at `(0.775, 0.06)`, `0.19` wide,
+ * a circle filled `cover`. Defined ONCE, here, and passed explicitly by the
+ * webcam dialog: `cornerPreset("tr", …)` would compute `CORNER_MARGIN`'s
+ * generic `(0.785, 0.025)` for the same width, a different place.
+ */
+export const PRESENTER_CORNER = { x: 0.775, y: 0.06, w: 0.19, frameShape: "circle", fit: "cover" } as const;
+
+/** `PRESENTER_CORNER` as a box on `canvas`: a circle, so its height keeps
+ * it square in PIXELS (`0.3378` on 1280×720 — the ADR's own figure). */
+export function presenterBox(canvas: Size): NormBox {
+  const { x, y, w } = PRESENTER_CORNER;
+  return roundBox({ x, y, w, h: aspectHeight(w, canvas, 1) });
+}
