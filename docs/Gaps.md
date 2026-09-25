@@ -6800,7 +6800,7 @@ the old value is the user's file and is left alone (a vault write never
 rewrites an existing note), so the fix note should say that old notes keep
 `vault-buddy`. Not done in Task 60 because that task changes no behaviour.
 
-### GAP-214 · Low (item 7 CLOSED 2026-09-25, hardening Task 2) · What the final review's damaged-project fixes still cannot reach
+### GAP-214 · Low (items 5–6 CLOSED 2026-09-25, hardening Task 3; item 7 CLOSED 2026-09-25, hardening Task 2) · What the final review's damaged-project fixes still cannot reach
 `src-tauri/src/editor/project_discard.rs`, `session_commands.rs`
 (`open_staged_in`), `store_io.rs` (`remove_project`, `list_projects`),
 `recovery.rs` (`run_startup_repin`), `discard.rs` (final whole-branch review
@@ -6825,23 +6825,48 @@ editor's "could not be opened" line for an `invalidProject` project) and
    re-pins around a damaged project. Harmless now that the capture's own
    Edit re-migrates, but the log keeps naming it on every start.
 4. **A discard refuses while a webcam take is finishing, an import copying
-   or a reconnect running** (after cancelling what can be cancelled and
-   waiting 5 s): a take's `-c copy` remux can legitimately run for minutes,
-   and the user is asked to wait for it and discard again rather than
-   having it killed mid-write. Deliberate — a finish that was killed would
-   lose the take's indexed copy — but it is a refusal the user can meet.
-5. **A refused discard is not side-effect free** (final re-review N1).
+   or a reconnect running** (after waiting up to 5 s for each, cancelling
+   nothing — item 5): a take's `-c copy` remux can legitimately run for
+   minutes, and the user is asked to wait for it and discard again rather
+   than having it killed mid-write. Deliberate — a finish that was killed
+   would lose the take's indexed copy — but it is a refusal the user can
+   meet. Since hardening Task 3 an import is waited for too rather than cut
+   short, so a long import refuses the discard until it ends (or the user
+   cancels it from the job row).
+5. ~~**A refused discard is not side-effect free** (final re-review N1).
    `discard.rs` cancels renders, publishes and an import BEFORE it waits
    for takes and reconnects, so a discard refused because a take is still
    saving has already stopped the render and cut the import short; and
    `media_derive::stop_session_derivations` only LOGS when derived media
    outlives its wait, after which the discard proceeds. Fix: check the
-   take/reconnect waits first, and cancel only once the discard is certain.
-6. **A take chunk refused while the session is closing fails the take for
+   take/reconnect waits first, and cancel only once the discard is certain.~~
+   **CLOSED 2026-09-25 (hardening Task 3).** A refused discard cancels
+   nothing: every wait runs before any cancel. `discard::quiesce` now waits,
+   uncancelled, for a take's write or finish, a reconnect and an import,
+   and refuses on any of them before it touches anything; only then does
+   `stop_session_derivations` cancel derived media, renders and publishes —
+   and derived media that outlives its 5 s wait now REFUSES the discard
+   (`invalidRequest`, "Media is still being prepared. Try discarding again
+   in a moment."), project untouched, instead of being logged and removed
+   underneath. That last refusal is the one that follows a cancel (nothing
+   else stops a render), and a cancelled render is repeatable. Pinned by
+   `discard::tests::a_discard_refused_for_a_take_leaves_a_running_render_running`,
+   `…::a_discard_refuses_when_derived_media_does_not_stop_in_time`,
+   `…::a_discard_refuses_while_an_import_is_running_and_cancels_nothing` and
+   `…::a_discard_waits_for_an_import_that_finishes_then_removes_the_project`.
+6. ~~**A take chunk refused while the session is closing fails the take for
    good** (N2, `webcam_commands.rs` append): if that discard is then
    refused, the take has stopped recording for nothing. Fix: refuse the
    chunk without marking the take failed, or refuse the discard before the
-   closing mark while a take is recording.
+   closing mark while a take is recording.~~ **CLOSED 2026-09-25 (hardening
+   Task 3).** `append_in` checks the closing mark BEFORE the write's error
+   path (still under the take's entry lock), so the refusal returns without
+   marking the take failed, and once the discard is over the SAME chunk is
+   accepted and the take finishes. Pinned by
+   `webcam_commands::tests::a_chunk_refused_while_the_session_closes_does_not_fail_the_take`.
+   (The webview's recorder does not retry a refused chunk — it ends the
+   take — but the webcam dialog is modal, so the project menu's Discard is
+   out of reach while it records; the fix is Rust's half of the contract.)
 7. ~~**`remove_project` still deletes `sources.json` before `project.json`**
    (N3, `store_io.rs`), and the session discard reads `sources.json` first
    to unpin — a removal that fails after `sources.json` is gone makes every

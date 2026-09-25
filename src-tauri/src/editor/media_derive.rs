@@ -93,8 +93,8 @@ const MAX_PEAKS_CACHE_BYTES: u64 = 1024 * 1024;
 const MAX_THUMBNAIL_BYTES: u64 = 1024 * 1024;
 /// How long a discard waits for the session's derived work to stop. A
 /// cancelled child is killed within `external_stream`'s 50 ms poll, so
-/// this is only ever reached by a wedged one; the discard then proceeds,
-/// still protected by `with_live_project`.
+/// this is only ever reached by a wedged one; the discard is then refused
+/// (GAP-214 item 5), never carried on under it.
 const STOP_WAIT: Duration = Duration::from_secs(5);
 
 const NO_FFMPEG_WAVEFORM: &str = "Install ffmpeg to see waveforms.";
@@ -589,7 +589,11 @@ fn derivations_running(state: &EditorState, session_id: &str) -> bool {
 /// (their final cache write, and a render's publish, need it). A render is
 /// killed and its part and job directory deleted before its terminal
 /// lands, so the discard never removes the project under a live ffmpeg.
-pub(crate) fn stop_session_derivations(state: &EditorState, session_id: &str) {
+/// Work still running after `STOP_WAIT` REFUSES the discard.
+pub(crate) fn stop_session_derivations(
+    state: &EditorState,
+    session_id: &str,
+) -> Result<(), EditorError> {
     let jobs = lock_ignoring_poison(&state.jobs);
     jobs.cancel_session_kind(session_id, JobKind::Peaks);
     jobs.cancel_session_kind(session_id, JobKind::Render);
@@ -602,10 +606,14 @@ pub(crate) fn stop_session_derivations(state: &EditorState, session_id: &str) {
     while derivations_running(state, session_id) {
         if started.elapsed() >= STOP_WAIT {
             log::warn!("editor: derived media of session {session_id} did not stop in time");
-            return;
+            return Err(err(
+                EditorErrorCode::InvalidRequest,
+                "Media is still being prepared. Try discarding again in a moment.",
+            ));
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+    Ok(())
 }
 
 fn remove_quietly(path: &Path) {

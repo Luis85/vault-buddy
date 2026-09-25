@@ -134,21 +134,19 @@ fn wait_until(done: impl Fn() -> bool) -> bool {
 /// AFTER `mark_closing` and BEFORE the save lock is taken (a finish, a
 /// render's publish and a derived-media commit all need that lock to end).
 ///
-/// Derived media, renders and publishes are cancelled and waited for
-/// (`stop_session_derivations`); an import is cancelled (it stops before
-/// its next file) and waited for; a reconnect and a take's write or finish
-/// cannot be interrupted, so they are waited for. Whatever is still running
-/// when the wait ends REFUSES the discard, in words that say what to wait
-/// for, and nothing has been touched.
+/// **Every wait runs before any cancel** (GAP-214 item 5), so a refused
+/// discard cancels nothing: an import (which stops only between files), a
+/// reconnect and a take's write or finish are waited for, UNCANCELLED, and
+/// whatever is still running when the wait ends refuses the discard in
+/// words that say what to wait for. Only once all three have ended are
+/// derived media, renders and publishes cancelled and waited for
+/// (`stop_session_derivations`) — the one refusal that can follow a cancel,
+/// because nothing else stops them, and a render cancelled on its way to a
+/// refused discard is repeatable. Nothing is REMOVED on any refusal.
 pub(crate) fn quiesce(state: &EditorState, session_id: &str) -> Result<(), EditorError> {
-    super::media_derive::stop_session_derivations(state, session_id);
-    lock_ignoring_poison(&state.jobs).cancel_session_kind(session_id, JobKind::Import);
-    let import_stopped =
-        wait_until(|| !lock_ignoring_poison(&state.jobs).is_running(session_id, JobKind::Import));
-    if !import_stopped {
+    if !state.takes.wait_idle(session_id, QUIESCE_WAIT) {
         return Err(refusal(
-            "Media is still being copied into this project. Wait for the import to finish, then \
-             discard the project.",
+            "A webcam take is still being saved. Wait for it to finish, then discard the project.",
         ));
     }
     if !wait_until(|| !lock_ignoring_poison(&state.relinks).contains(session_id)) {
@@ -157,12 +155,13 @@ pub(crate) fn quiesce(state: &EditorState, session_id: &str) -> Result<(), Edito
              project.",
         ));
     }
-    if !state.takes.wait_idle(session_id, QUIESCE_WAIT) {
+    if !wait_until(|| !lock_ignoring_poison(&state.jobs).is_running(session_id, JobKind::Import)) {
         return Err(refusal(
-            "A webcam take is still being saved. Wait for it to finish, then discard the project.",
+            "Media is still being copied into this project. Wait for the import to finish, then \
+             discard the project.",
         ));
     }
-    Ok(())
+    super::media_derive::stop_session_derivations(state, session_id)
 }
 
 #[cfg(test)]

@@ -305,10 +305,12 @@ pub(crate) fn append_in(
             "This webcam take stopped recording ({reason}). Finish or discard it."
         )));
     }
+    // Under the entry lock (final review C2): a discard's quiesce waits for
+    // a write already here; a later one refuses — BEFORE the error path
+    // below, so the refusal never fails the take (GAP-214 item 6): the
+    // discard may yet be refused, and the same chunk is then retried.
+    super::discard::refuse_if_closing(state, &at.session_id)?;
     let result = chunk.and_then(|bytes| {
-        // Under the entry lock (final review C2): a discard's quiesce
-        // waits for a write already here; a later one refuses.
-        super::discard::refuse_if_closing(state, &at.session_id)?;
         let mut next = entry.state.clone();
         next.accept_chunk(at.seq, bytes.len() as u64)?;
         let before = entry.state.bytes().unwrap_or(0);

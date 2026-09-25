@@ -206,35 +206,41 @@ fn a_discard_refuses_while_a_take_is_finishing_and_succeeds_after() {
     assert_eq!(f.pinned(), None);
 }
 
-// I1: an import copying a large file stops only between files. A discard
-// cancels it, waits, and refuses when it has not stopped — never removing
-// the project under the copy.
+// I1 + GAP-214 item 5: an import copying a large file stops only between
+// files, so a discard cannot know in advance whether a cancel would land in
+// time. It therefore WAITS for the import without cancelling it, and
+// refuses when it is still running — a refused discard cancels nothing and
+// never removes the project under the copy.
 #[test]
-fn a_discard_refuses_while_an_import_it_cannot_stop_is_running() {
+fn a_discard_refuses_while_an_import_is_running_and_cancels_nothing() {
     let f = Fixture::new();
     let (_job, cancel) = start_job_in(&f.state, &f.session, JobKind::Import).unwrap();
-    let refused = f.discard().expect_err("the import has not stopped");
+    let refused = f.discard().expect_err("the import has not finished");
     assert_eq!(
         refused.message,
         "Media is still being copied into this project. Wait for the import to finish, then \
          discard the project."
     );
     assert!(
-        cancel.load(std::sync::atomic::Ordering::SeqCst),
-        "asked to stop"
+        !cancel.load(std::sync::atomic::Ordering::SeqCst),
+        "a refused discard cancelled the import"
     );
+    assert!(lock_ignoring_poison(&f.state.jobs).is_running(&f.session, JobKind::Import));
     f.assert_untouched();
 }
 
 #[test]
-fn a_discard_waits_for_an_import_that_stops_then_removes_the_project() {
+fn a_discard_waits_for_an_import_that_finishes_then_removes_the_project() {
     let f = Fixture::new();
     let (job, cancel) = start_job_in(&f.state, &f.session, JobKind::Import).unwrap();
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            while !cancel.load(std::sync::atomic::Ordering::SeqCst) {
+    let cancelled_at_finish = std::thread::scope(|scope| {
+        let importing = scope.spawn(|| {
+            // A handshake, not a sleep: the import ends once the discard
+            // has marked the session — i.e. while it waits, or just before.
+            while !is_closing(&f.state, &f.session) {
                 std::thread::yield_now();
             }
+            let cancelled = cancel.load(std::sync::atomic::Ordering::SeqCst);
             JobReporter::new(
                 &f.state.jobs,
                 &NoSubscriber,
@@ -242,11 +248,63 @@ fn a_discard_waits_for_an_import_that_stops_then_removes_the_project() {
                 &job,
                 JobKind::Import,
             )
-            .finish(JobPhase::Cancelled, JobTerminal::default());
+            .finish(JobPhase::Complete, JobTerminal::default());
+            cancelled
         });
-        f.discard().expect("the import stopped in time");
+        f.discard().expect("the import finished in time");
+        importing.join().unwrap()
     });
+    assert!(!cancelled_at_finish, "the discard cancelled the import");
     assert!(!f.project_dir().exists());
+}
+
+// GAP-214 item 5: the quiesce used to cancel renders, publishes, derived
+// media and imports FIRST and only then wait for what it cannot cancel — so
+// a discard refused for a take mid-finish had already killed a render the
+// user never asked to stop. Every wait now runs before any cancel.
+#[test]
+fn a_discard_refused_for_a_take_leaves_a_running_render_running() {
+    let f = Fixture::new();
+    let take = f.take_with_a_chunk();
+    let (_job, cancel) = start_job_in(&f.state, &f.session, JobKind::Render).unwrap();
+    let slot = f.state.takes.get(&f.session, &take).unwrap();
+    // A take mid-finish: its entry lock held, as `finish_in` holds it
+    // across the remux.
+    let finishing = lock_ignoring_poison(&slot.entry);
+    let refused = f.discard().expect_err("a take is still being saved");
+    drop(finishing);
+    assert_eq!(refused.code, EditorErrorCode::InvalidRequest);
+    assert_eq!(
+        refused.message,
+        "A webcam take is still being saved. Wait for it to finish, then discard the project."
+    );
+    assert!(
+        !cancel.load(std::sync::atomic::Ordering::SeqCst),
+        "a refused discard cancelled the render"
+    );
+    assert!(lock_ignoring_poison(&f.state.jobs).is_running(&f.session, JobKind::Render));
+    f.assert_untouched();
+}
+
+// GAP-214 item 5: derived media that did not stop within its bound used to
+// be LOGGED and the discard went on to remove the directory under it. It
+// is now a refusal, and the project is left as it was.
+#[test]
+fn a_discard_refuses_when_derived_media_does_not_stop_in_time() {
+    let f = Fixture::new();
+    // A render whose job never ends — a wedged ffmpeg.
+    let (_job, cancel) = start_job_in(&f.state, &f.session, JobKind::Render).unwrap();
+    let refused = f.discard().expect_err("the render never stopped");
+    assert_eq!(refused.code, EditorErrorCode::InvalidRequest);
+    assert_eq!(
+        refused.message,
+        "Media is still being prepared. Try discarding again in a moment."
+    );
+    assert!(
+        cancel.load(std::sync::atomic::Ordering::SeqCst),
+        "asked to stop"
+    );
+    f.assert_untouched();
 }
 
 // C2: between the mark and the save lock, nothing new may start writing

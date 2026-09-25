@@ -492,6 +492,31 @@ fn a_refused_finish_or_chunk_keeps_the_part_for_a_later_finish() {
     );
 }
 
+// GAP-214 item 6: a chunk refused because the session is being discarded
+// is not a broken take — the discard may yet be refused, and the recording
+// must then go on. The refusal ran inside the write's own error path and
+// marked the take failed, so it could never be finished.
+#[test]
+fn a_chunk_refused_while_the_session_closes_does_not_fail_the_take() {
+    let f = Fixture::new();
+    let take = f.begin();
+    f.append(&take, 0, b"aa").unwrap();
+    let closing = crate::editor::discard::mark_closing(&f.state, SESSION).unwrap();
+    let e = f.append(&take, 1, b"bb").unwrap_err();
+    assert_eq!(
+        e.message,
+        "This project is being discarded, so nothing new can start in it."
+    );
+    drop(closing);
+    f.append(&take, 1, b"bb")
+        .expect("the same chunk is accepted once the discard is over");
+    f.finish(&FakeIo::default(), &take, 1).unwrap();
+    assert_eq!(
+        std::fs::read(f.takes().join(format!("{take}.webm"))).unwrap(),
+        b"aabb"
+    );
+}
+
 // A take a clip plays cannot be discarded (its file would vanish from under
 // the timeline); once no clip uses it, discard removes its own file.
 #[test]
