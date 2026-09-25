@@ -28,11 +28,13 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use super::authz::{require_editor_window, require_session};
 use super::prefs_commands::read_workspace;
 use super::recovery::load_journal;
-use super::session_commands::{missing_media, register_session, register_session_with};
+use super::session_commands::{missing_media, register_session_with};
 use super::store_io::{
     self, commit_project, load_project, project_file_exists, source_base_of, ProjectSummaryDto,
     ProjectWriter, RealWriter,
 };
+use super::webcam_finish::{FfmpegTakeIo, TakeIo};
+use super::webcam_recover::recover_after_open;
 use super::EditorState;
 
 fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
@@ -385,12 +387,25 @@ pub(crate) fn open_project_session(
     project_file_id: &str,
     use_recovery: bool,
 ) -> Result<EditorOpenResult, EditorError> {
+    let io = FfmpegTakeIo::default();
+    open_project_session_with(state, root, project_file_id, use_recovery, &io)
+}
+
+/// `open_project_session` with the ffmpeg seam an interrupted webcam take's
+/// recovery uses (`webcam_recover`, GAP-197) supplied — the tests' fake.
+pub(crate) fn open_project_session_with(
+    state: &EditorState,
+    root: &Path,
+    project_file_id: &str,
+    use_recovery: bool,
+    io: &dyn TakeIo,
+) -> Result<EditorOpenResult, EditorError> {
     let _open = lock_ignoring_poison(&state.open);
     super::discard::refuse_if_project_closing(state, project_file_id)?;
     let (envelope, sources) = load_project(root, project_file_id)?;
     let workspace = sanitize(&envelope.workspace);
     let committed = envelope.record.revision;
-    let (projection, recovered) = if use_recovery {
+    let (projection, minted, recovered) = if use_recovery {
         // Task 37: the journal is the working copy; the store's committed
         // revision stays the persisted one, so the session opens DIRTY. The
         // working revision never falls to or below the committed one (a
@@ -398,12 +413,17 @@ pub(crate) fn open_project_session(
         // backwards, the Task 12 monotonic-revision ruling).
         let journal = load_journal(root, project_file_id)?;
         let revision = journal.session_revision.max(committed + 1);
-        register_session_with(state, journal.project, |id, project| {
+        let (projection, minted) = register_session_with(state, journal.project, |id, project| {
             EditorSession::resume_recovered(id, project, revision, committed)
-        })
+        });
+        (projection, minted, minted)
     } else {
-        (register_session(state, envelope.project, committed), false)
+        let (projection, minted) = register_session_with(state, envelope.project, |id, p| {
+            EditorSession::resume(id, p, committed)
+        });
+        (projection, minted, false)
     };
+    let projection = recover_after_open(state, root, projection, minted, io);
     let missing = missing_media(root, &projection.project, &sources);
     Ok(EditorOpenResult {
         snapshot: projection.snapshot,

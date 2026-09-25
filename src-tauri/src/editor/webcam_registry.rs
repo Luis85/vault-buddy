@@ -39,6 +39,11 @@ pub(crate) struct TakeSlot {
     pub(crate) project_id: String,
     pub(crate) dir: PathBuf,
     pub(crate) take_id: String,
+    /// A take a crash interrupted, being recovered on its project's next
+    /// open (`webcam_recover`, GAP-197): registered as "Webcam take N
+    /// (recovered)", and its `.part` — the user's recording — is never
+    /// removed by `forget_session`.
+    pub(crate) recovered: bool,
     pub(crate) entry: Mutex<TakeEntry>,
 }
 
@@ -141,7 +146,9 @@ impl TakeRegistry {
     }
 
     /// A closing session's takes: forgotten, and every unfinished take's
-    /// `.part` removed (nothing could ever finish it now). Runs under the
+    /// `.part` removed (nothing could ever finish it now) — except a
+    /// RECOVERED take's, which is a crash's leftover recording that the
+    /// next open offers back again. Runs under the
     /// session's save lock (`drop_session`), so it NEVER locks an entry —
     /// a finish holds its entry while it takes the save lock. A finished
     /// take has no `.part`, so its `.webm` is untouched.
@@ -155,7 +162,7 @@ impl TakeRegistry {
                 .collect();
             ids.iter().filter_map(|id| map.remove(id)).collect()
         };
-        for slot in gone {
+        for slot in gone.iter().filter(|s| !s.recovered) {
             remove_owned(&slot.part());
         }
     }
@@ -197,6 +204,7 @@ mod tests {
             project_id: "proj-a".into(),
             dir: PathBuf::from("unused"),
             take_id: "take-a".into(),
+            recovered: false,
             entry: Mutex::new(TakeEntry {
                 state: TakeState::new(),
                 failed: None,
@@ -216,5 +224,33 @@ mod tests {
             vec!["take-a".to_string()],
             "a take being finished is not finished yet"
         );
+    }
+
+    // GAP-197: a closing session forgets its takes and removes their parts
+    // — nothing could finish them now. A RECOVERED take's part is a crash's
+    // leftover recording the next open offers back: never removed here.
+    #[test]
+    fn forgetting_a_session_never_removes_a_recovered_takes_part() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = TakeRegistry::default();
+        for (take_id, recovered) in [("take-live", false), ("take-back", true)] {
+            let slot = Arc::new(TakeSlot {
+                session_id: "ses-a".into(),
+                project_id: "proj-a".into(),
+                dir: dir.path().to_path_buf(),
+                take_id: take_id.into(),
+                recovered,
+                entry: Mutex::new(TakeEntry {
+                    state: TakeState::new(),
+                    failed: None,
+                }),
+            });
+            std::fs::write(slot.part(), b"frames").unwrap();
+            lock_ignoring_poison(&registry.0).insert(take_id.into(), slot);
+        }
+        registry.forget_session("ses-a");
+        assert!(!dir.path().join(".take-live.webm.part").exists());
+        assert!(dir.path().join(".take-back.webm.part").is_file());
+        assert!(lock_ignoring_poison(&registry.0).is_empty());
     }
 }

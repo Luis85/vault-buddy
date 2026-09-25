@@ -44,10 +44,11 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **68 rows** today (T1–T68), of which **0** carry a result
+This file carries **69 rows** today (T1–T69), of which **0** carry a result
 (T7 is obsolete since Task 59, which retired the legacy strip it guarded).
 Task 60 added T64–T66 and the residual-gate map; the final whole-branch
-review added T67–T68 at the end of the file. An
+review added T67–T68 at the end of the file, and the hardening pass's
+Task 9 T69 after them. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -545,3 +546,15 @@ admitting a new command from the editor window.
 | --- | --- | --- | --- |
 | T67 | **Discard project while a webcam take is being saved (I1)** | Open a capture in the editor, record a webcam take of a minute or more, stop it, and while **Finish** is still saving it choose **Discard project** from the project menu and confirm. **Expected**: the discard is refused in plain words ("A webcam take is still being saved. Wait for it to finish, then discard the project."), the editor stays open on the project, nothing in the project folder has gone. When the take has landed, **Discard project** again. **Expected**: it succeeds, the window hides, the project folder under `editor-projects` is gone, and the capture is back in the Record Screen list with **Discard** offered. Also try **Discard project** with an import of a large file still copying: refused with the import's own sentence, and fine once it ends. | |
 | T68 | **A project too damaged to open can be discarded (I3)** | Open a capture in the editor, close the editor, quit Vault Buddy, and replace that project's `sources.json` (under `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<id>\`) with `{`. Start the app. (a) **Edit** on the capture. **Expected**: the editor opens the capture in a FRESH project (a second folder appears under `editor-projects`; the damaged one is untouched). (b) **Resume** the damaged project from the panel's Tutorial projects list. **Expected**: "This could not be opened." with **Discard this project…**; confirm **Discard for good**. **Expected**: "The project was discarded…", its folder is gone, no capture names it any more, and the call was admitted by the live ACL from the editor window (GAP-170's live half, for the thirty-sixth `editor_*` command). | |
+
+## Hardening pass
+
+What a hardening task changed that only the real app can show.
+`editor::webcam_recover::tests` drives the recovery through both open
+paths with a fake remux; what none of them has is a REAL `MediaRecorder`
+part cut off mid-cluster by a killed process, a real ffmpeg indexing it,
+and WebView2 playing and seeking the result.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T69 | **A webcam take a crash interrupted comes back as recovered (GAP-197, hardening Task 9)** | Open a capture in the editor, **Enable camera** and start a webcam take; after about 20 s, while it is still recording, end the Vault Buddy process in Task Manager (**End task**). (a) Wait at least a minute, start the app and open the same capture's **Edit** (or the project from the list). **Record**: the media library shows "Webcam take N (recovered)" (N one past the project's other takes); it plays in the preview AND seeks; its length is roughly the 20 s recorded; the project reads unsaved; under `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<id>\takes\` the `.<takeId>.webm.part` is gone and `<takeId>.webm` is there. Close the editor with **Keep for later** and reopen: no second copy appears. (b) Repeat, but reopen WITHIN a minute of the kill: **Record** that nothing is recovered yet and the `.part` is still there; reopen once more after a minute (after **Keep for later**) and record that it is recovered then. (c) With ffmpeg removed (Buddy settings → Integrations), repeat (a): **Record** that the take appears as "(recovered)" with length 0:00, plays from its start, and cannot be placed. | |

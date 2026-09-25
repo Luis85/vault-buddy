@@ -14,7 +14,14 @@
 //!
 //! A take is an INDEPENDENT asset (A08): `take_asset` builds a new video
 //! asset; nothing here touches the staged capture's own asset or clips.
+//!
+//! A take a crash interrupted (GAP-197, hardening Task 9) is RECOVERED on the
+//! project's next open: its `.part` has no sequence anyone remembers, so it
+//! enters as `TakeState::Recovered` and leaves only through
+//! `finish_recovered`, as a `recovered_take_asset` ("Webcam take N
+//! (recovered)").
 
+use super::ids::is_valid_id;
 use super::model::{Asset, Project};
 use super::probe::{asset_from_probe, ImportKind, ProbeFacts};
 use super::{EditorError, EditorErrorCode};
@@ -49,6 +56,11 @@ pub enum TakeState {
         next_seq: u64,
         bytes: u64,
     },
+    /// A `.part` a crash left behind (GAP-197), `bytes` long on disk: it
+    /// takes no chunk and no `finish(last_seq)` — only `finish_recovered`.
+    Recovered {
+        bytes: u64,
+    },
     Finished,
     Discarded,
 }
@@ -75,6 +87,8 @@ pub enum TakeError {
     },
     /// The take is already finished or discarded.
     NotRecording,
+    /// An interrupted take's `.part` is empty: nothing was recorded.
+    NothingRecorded,
 }
 
 impl TakeError {
@@ -100,6 +114,7 @@ impl TakeError {
                 got,
             } => format!("The take has no chunks yet, so it cannot end at chunk {got}."),
             TakeError::NotRecording => "This take is no longer recording.".to_string(),
+            TakeError::NothingRecorded => "The interrupted take recorded nothing.".to_string(),
         }
     }
 }
@@ -167,6 +182,30 @@ impl TakeState {
         Ok(())
     }
 
+    /// An interrupted take's `.part`, `bytes` long, to be recovered: refused
+    /// when it is empty (nothing was recorded) or larger than any take may
+    /// grow (not one of ours).
+    pub fn recovered(bytes: u64) -> Result<Self, TakeError> {
+        if bytes == 0 {
+            return Err(TakeError::NothingRecorded);
+        }
+        if bytes > MAX_TAKE_BYTES {
+            return Err(TakeError::TakeTooLarge { total: bytes });
+        }
+        Ok(TakeState::Recovered { bytes })
+    }
+
+    /// End a RECOVERED take — the only finish it has, since no one knows
+    /// its last sequence. Any other state is refused: a live take is ended
+    /// by `finish(last_seq)`, never recovered.
+    pub fn finish_recovered(&mut self) -> Result<(), TakeError> {
+        let TakeState::Recovered { .. } = self else {
+            return Err(TakeError::NotRecording);
+        };
+        *self = TakeState::Finished;
+        Ok(())
+    }
+
     /// The bytes accepted so far — `None` once the take is not recording.
     pub fn bytes(&self) -> Option<u64> {
         match self {
@@ -209,6 +248,28 @@ pub fn take_asset(asset_id: String, ordinal: usize, facts: ProbeFacts, size: u64
     );
     asset.size = Some(size);
     asset
+}
+
+/// A take a crash interrupted, registered on the next open (GAP-197; the
+/// user's decision D4): `take_asset`, named "Webcam take N (recovered)".
+pub fn recovered_take_asset(
+    asset_id: String,
+    ordinal: usize,
+    facts: ProbeFacts,
+    size: u64,
+) -> Asset {
+    let mut asset = take_asset(asset_id, ordinal, facts, size);
+    asset.name = format!("Webcam take {ordinal} (recovered)");
+    asset
+}
+
+/// The take id a `takes\` entry named `name` would be the `.part` of —
+/// `.<take id>.webm.part`, the id a valid `take-…` entity id — or `None`
+/// for anything else (the landed `.webm`, a remux temp, a stranger's file).
+pub fn recoverable_part_take_id(name: &str) -> Option<&str> {
+    let id = name.strip_prefix('.')?.strip_suffix(".webm.part")?;
+    let rest = id.strip_prefix(TAKE_ID_PREFIX)?.strip_prefix('-')?;
+    (!rest.is_empty() && is_valid_id(id)).then_some(id)
 }
 
 /// Does any clip play `asset_id`? A take in use cannot be discarded.

@@ -51,6 +51,7 @@ pub mod subtitle_commands;
 pub(crate) mod vault_dir;
 pub mod webcam_commands;
 pub mod webcam_finish;
+pub mod webcam_recover;
 pub mod webcam_registry;
 
 use std::collections::{HashMap, HashSet};

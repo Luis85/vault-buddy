@@ -204,3 +204,94 @@ fn take_becomes_an_independent_asset_not_part_of_the_screen_clip() {
     assert!(asset_in_use(after, "src"));
     assert_eq!(next_take_ordinal(after), 2, "the next take is number 2");
 }
+
+// GAP-197 (hardening Task 9): a `.part` a crash left behind has no sequence
+// anyone remembers, so it cannot be finished through `finish(last_seq)` —
+// it is RECOVERED instead: its size is checked against the take bound, it
+// takes no chunk and no sequence-checked finish, and `finish_recovered`
+// is the only way out. An empty part recorded nothing and is not a take.
+#[test]
+fn a_recovered_take_bypasses_the_sequence_finish() {
+    let mut take = TakeState::recovered(4_096).unwrap();
+    assert_eq!(take, TakeState::Recovered { bytes: 4_096 });
+    assert_eq!(take.accept_chunk(0, 10), Err(TakeError::NotRecording));
+    assert_eq!(take.finish(0), Err(TakeError::NotRecording));
+    assert_eq!(take, TakeState::Recovered { bytes: 4_096 }, "unchanged");
+    take.finish_recovered().unwrap();
+    assert_eq!(take, TakeState::Finished);
+    assert_eq!(take.finish_recovered(), Err(TakeError::NotRecording));
+
+    let mut live = TakeState::new();
+    assert_eq!(
+        live.finish_recovered(),
+        Err(TakeError::NotRecording),
+        "a live take is finished by its last sequence, never recovered"
+    );
+    assert_eq!(live, TakeState::new());
+
+    assert_eq!(
+        TakeState::recovered(0),
+        Err(TakeError::NothingRecorded),
+        "an empty part holds no recording"
+    );
+    assert_eq!(
+        TakeState::recovered(MAX_TAKE_BYTES + 1),
+        Err(TakeError::TakeTooLarge {
+            total: MAX_TAKE_BYTES + 1
+        })
+    );
+    assert!(TakeState::recovered(MAX_TAKE_BYTES).is_ok());
+    assert_eq!(
+        TakeError::NothingRecorded.message(),
+        "The interrupted take recorded nothing."
+    );
+}
+
+// D4 (the user's decision): an interrupted take comes back named for what
+// it is, numbered by the same rule as every other take.
+#[test]
+fn a_recovered_take_is_named_as_recovered() {
+    let facts = ProbeFacts {
+        duration_ms: 0,
+        width: None,
+        height: None,
+        has_video: true,
+        has_audio: false,
+    };
+    let take = recovered_take_asset("take-a1b2c3d4e5".to_string(), 3, facts, 42);
+    assert_eq!(take.name, "Webcam take 3 (recovered)");
+    assert_eq!(take.id, "take-a1b2c3d4e5");
+    assert_eq!(take.kind, AssetKind::Video);
+    assert_eq!(take.size, Some(42));
+    assert_eq!(
+        take_asset("take-a1b2c3d4e5".to_string(), 3, facts, 42).name,
+        "Webcam take 3",
+        "a finished take keeps its plain name"
+    );
+}
+
+// Only a take's OWN part name is recovered: `.<take id>.webm.part` where the
+// id is a valid `take-…` entity id. Anything else in `takes\` — the landed
+// `.webm`, a remux temp, a stranger's file, an id that could name a path —
+// is not a take to recover.
+#[test]
+fn only_a_takes_own_part_name_is_a_recoverable_take() {
+    assert_eq!(
+        recoverable_part_take_id(".take-a1b2c3d4e5.webm.part"),
+        Some("take-a1b2c3d4e5")
+    );
+    for foreign in [
+        "take-a1b2c3d4e5.webm",
+        ".take-a1b2c3d4e5.remux.webm",
+        ".take-a1b2c3d4e5.webm.part.bak",
+        "take-a1b2c3d4e5.webm.part",
+        ".clip-a1b2c3d4e5.webm.part",
+        ".take-.webm.part",
+        ".take-a b.webm.part",
+        ".take-a.b.webm.part",
+        ".take-..webm.part",
+        ".webm.part",
+    ] {
+        assert_eq!(recoverable_part_take_id(foreign), None, "{foreign}");
+    }
+}

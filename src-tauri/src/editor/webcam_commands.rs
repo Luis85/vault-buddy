@@ -155,6 +155,7 @@ pub(crate) fn begin_in(
             .join("takes"),
         project_id,
         take_id: take_id.clone(),
+        recovered: false,
         entry: Mutex::new(TakeEntry {
             state: TakeState::new(),
             failed: None,

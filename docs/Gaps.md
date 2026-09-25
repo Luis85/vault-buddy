@@ -3090,7 +3090,7 @@ detected), remux and re-probe every `Takes`-locator asset whose record has
 `durationMs == 0`, updating `sources.json` and the asset through a native
 relink-style step.
 
-### GAP-197 · Medium · A crash mid-take leaves the user's recording as an unswept, unsurfaced `.part`
+### GAP-197 · ~~Medium~~ CLOSED 2026-09-25 (hardening Task 9) · A crash mid-take leaves the user's recording as an unswept, unsurfaced `.part`
 `src-tauri/src/editor/webcam_commands.rs`, Task 49. While a webcam take
 records, its bytes live only in `takes\.<takeId>.webm.part` (and, during a
 finish, `takes\.<takeId>.remux.webm`); the take's state is in memory
@@ -3113,6 +3113,46 @@ over each project's `takes\` (owned names `.<valid take id>.webm.part` only,
 no-follow, staleness-gated like the screen sweep): remux-and-register a part
 that probes as video (or keep it raw, A09), remove a leftover
 `.remux.webm`, and report what it recovered in the next open of that project.
+
+> **2026-09-25 — CLOSED by hardening Task 9** (the user's decision D4:
+> register it as recovered). Not a startup sweep but the project's next
+> OPEN: when `editor_open_staged` or `editor_open_project` MINTS a session
+> (a reused live session recovers nothing), `webcam_recover::recover_after_open`
+> finishes every stale part of ours in that project's `takes\` through the
+> finish's own `webcam_finish::land` + register — so it lands in the session
+> it is registered into, which a startup pass has none of. A candidate is a
+> PLAIN `.<valid take id>.webm.part` (`core::editor::take::recoverable_part_take_id`)
+> in a plain `takes\` folder, unwritten for 60 s (`STALE_AFTER`, the screen
+> sweep's window), that no take of this process holds; it enters as
+> `TakeState::Recovered { bytes }` (refused when empty or over 4 GiB), leaves
+> only through `finish_recovered` (never `finish(last_seq)`), and lands as
+> "Webcam take N (recovered)" (`recovered_take_asset`, N by the take rule,
+> oldest part first) — remuxed and indexed, or, without ffmpeg, the raw
+> bytes kept with length 0 (A09, GAP-196's limits). A leftover
+> `.<take id>.remux.webm` is removed first; an EMPTY stale part is removed
+> (it recorded nothing). The open answers the session AFTER the recovery,
+> so the webview's first edit meets the right revision; the project reads
+> unsaved until saved. `EditorOpenResult` is not widened: the take is simply
+> in the library. Left alone, each pinned by `webcam_recover_tests.rs`: a
+> fresh part, a symlink wearing a part name (skipped visibly on a host that
+> cannot make one), a directory link wearing one, a `takes` that is itself a
+> link, a part whose `<takeId>.webm` already landed, and one whose take id a
+> `sources.json` record or graph asset already carries (its record is never
+> clobbered). `forget_session` never removes a recovering take's part
+> (`TakeSlot::recovered`). **Bounds and residuals:** it runs on the open's
+> blocking thread under `open` (a discard waits for it), at most
+> `MAX_RECOVERED_PER_OPEN` (4) takes per open, each remux bounded by the
+> finish's 15-minute timeout — so an open over a large interrupted take waits
+> for its `-c copy`; the rest wait for the next new session. A part that
+> cannot be landed (ffmpeg cannot read it, it has no picture) is LEFT and
+> retried on every later new session — never deleted for failing to remux —
+> and costs one ffmpeg run each time; only the log says why. Discarding the
+> unsaved changes afterwards (the close guard's Discard changes, or the
+> recovery dialog's Discard) drops the recovered asset exactly as it drops a
+> just-finished take's: its `.webm` and `sources.json` record stay on disk,
+> reached by no asset — the posture every take already has. Nothing
+> recovers a project no one reopens. Checklist row T69 is the real-app
+> proof, unrun.
 
 ### GAP-198 · Low (path 1 CLOSED 2026-09-25, Task 59; path 4 CLOSED 2026-09-25, hardening Task 8) · A capture's webcam file can outlive its capture as untracked staging litter
 `src-tauri/src/screen_recovery/mod.rs` (paths 2–4),

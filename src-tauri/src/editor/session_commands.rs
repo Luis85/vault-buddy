@@ -37,6 +37,8 @@ use super::project_store::{
 use super::recovery;
 use super::redact::redact_name;
 use super::store_io::{create_project, list_projects, load_project, load_sources};
+use super::webcam_finish::{FfmpegTakeIo, TakeIo};
+use super::webcam_recover::recover_after_open;
 use super::EditorState;
 use crate::editor_commands::{is_safe_base, unsafe_base_reason};
 
@@ -474,6 +476,18 @@ pub(crate) fn open_staged_session(
     staging_dir: &Path,
     base: &str,
 ) -> Result<EditorOpenResult, EditorError> {
+    open_staged_session_with(state, root, staging_dir, base, &FfmpegTakeIo::default())
+}
+
+/// `open_staged_session` with the ffmpeg seam an interrupted webcam take's
+/// recovery uses (`webcam_recover`, GAP-197) supplied — the tests' fake.
+pub(crate) fn open_staged_session_with(
+    state: &EditorState,
+    root: &Path,
+    staging_dir: &Path,
+    base: &str,
+    io: &dyn TakeIo,
+) -> Result<EditorOpenResult, EditorError> {
     // Held until the session is registered: the open lock (outermost; see
     // `EditorState`) serializes find-or-mint + pin + register.
     let _open = lock_ignoring_poison(&state.open);
@@ -481,7 +495,11 @@ pub(crate) fn open_staged_session(
     super::discard::refuse_if_project_closing(state, &opened.envelope.project.id)?;
     let workspace = sanitize(&opened.envelope.workspace);
     let revision = opened.envelope.record.revision;
-    let projection = register_session(state, opened.envelope.project, revision);
+    let (projection, minted) =
+        register_session_with(state, opened.envelope.project, |id, project| {
+            EditorSession::resume(id, project, revision)
+        });
+    let projection = recover_after_open(state, root, projection, minted, io);
     let missing = missing_media(root, &projection.project, &opened.sources);
     Ok(EditorOpenResult {
         snapshot: projection.snapshot,

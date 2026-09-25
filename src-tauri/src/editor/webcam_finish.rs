@@ -18,7 +18,7 @@ use vault_buddy_core::capture_paths::rename_noreplace;
 use vault_buddy_core::editor::commands::payloads::AddAssetsPayload;
 use vault_buddy_core::editor::import_io::copy_hashing;
 use vault_buddy_core::editor::probe::ProbeFacts;
-use vault_buddy_core::editor::take::{next_take_ordinal, take_asset};
+use vault_buddy_core::editor::take::{next_take_ordinal, recovered_take_asset, take_asset};
 use vault_buddy_core::editor::{Asset, EditorError, EditorErrorCode, InternalCommand};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
@@ -149,13 +149,19 @@ pub(crate) fn finish_in(
     }
 }
 
-enum Landed {
+/// How a take landed.
+pub(crate) enum Landed {
     Indexed(TakeDto),
     /// No ffmpeg: the raw recording was kept and registered as this asset.
     Raw(String),
 }
 
-fn land(
+/// Land `slot`'s `.part` as `takes\<takeId>.webm` and register it — the
+/// remux-probe-hash-rename, or without ffmpeg the raw keep (A09). Shared by
+/// a finish and by crash recovery (`webcam_recover`, whose slot is marked
+/// `recovered` so `register` names it "Webcam take N (recovered)"). The
+/// caller holds the slot's entry lock.
+pub(crate) fn land(
     state: &EditorState,
     root: &Path,
     io: &dyn TakeIo,
@@ -281,7 +287,11 @@ fn register(
             .get_mut(&slot.session_id)
             .ok_or_else(|| internal("session vanished under its own lock"))?;
         let ordinal = next_take_ordinal(session.project());
-        let asset = take_asset(asset_id.clone(), ordinal, facts, size);
+        let asset = if slot.recovered {
+            recovered_take_asset(asset_id.clone(), ordinal, facts, size)
+        } else {
+            take_asset(asset_id.clone(), ordinal, facts, size)
+        };
         session.execute_internal(&InternalCommand::AddAssets(AddAssetsPayload {
             assets: vec![asset.clone()],
         }))?;
