@@ -494,10 +494,15 @@ fn every_manifest_defect_is_rejected() {
         "not a product",
     );
 
-    rejected(&assembled(b"{", &env, &b1, &[]), "manifest:");
+    let err = rejected(&assembled(b"{", &env, &b1, &[]), "manifest");
+    assert_eq!(err.message, "the project package's manifest is not valid");
+    // Carried from hardening Task 5: serde's own message QUOTES what it
+    // choked on -- here an unknown field's name, the package author's text
+    // with a bidi control in it -- so the refusal is fixed wording.
     let mut unknown = serde_json::to_value(&good).unwrap();
-    unknown["future"] = serde_json::json!(1);
-    rejected(&assembled(&json(&unknown), &env, &b1, &[]), "unknown field");
+    unknown["fu\u{202E}ture"] = serde_json::json!(1);
+    let err = rejected(&assembled(&json(&unknown), &env, &b1, &[]), "manifest");
+    assert_eq!(err.message, "the project package's manifest is not valid");
     // Sanity: the unmodified base really is valid, so each case above
     // failed for its own defect and nothing else.
     assert!(inspect(&assembled(&json(&good), &env, &b1, &[])).is_ok());
@@ -723,3 +728,28 @@ fn extracting_an_absent_entry_is_refused() {
 // nested (the validate_transitions_tests.rs precedent) at the 800-line cap.
 #[path = "package_rules_tests.rs"]
 mod rules;
+
+// Carried from hardening Task 5: a `workspace.json` that does not parse is
+// refused in fixed wording -- serde would quote the author's value (here a
+// string, with a bidi control, where a revision number belongs).
+#[test]
+fn an_unparsable_workspace_is_refused_without_echoing_it() {
+    let (env, b1, manifest) = base();
+    let mut raw = serde_json::to_value(&env).unwrap();
+    raw["record"]["revision"] = serde_json::json!("evil\u{202E}txt");
+    let workspace = json(&raw);
+    let bytes = raw_zip(&[
+        (
+            MANIFEST_NAME,
+            &json(&manifest)[..],
+            CompressionMethod::Deflated,
+        ),
+        (WORKSPACE_NAME, &workspace[..], CompressionMethod::Deflated),
+        (A1, &b1[..], CompressionMethod::Stored),
+    ]);
+    let err = rejected(&bytes, "workspace.json");
+    assert_eq!(
+        err.message,
+        "the project package's workspace.json is not valid"
+    );
+}

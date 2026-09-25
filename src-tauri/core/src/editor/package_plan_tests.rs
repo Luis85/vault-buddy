@@ -277,11 +277,18 @@ fn malformed_source_facts_are_refused() {
         serde_json::json!("not a map"),
         serde_json::json!({"live": {"hasAudio": "yes", "hasVideo": true, "mediaKind": "video", "size": 1, "durationMs": 1}}),
         serde_json::json!({"live": {"hasAudio": true, "hasVideo": true, "mediaKind": "video", "size": 1, "durationMs": 1, "path": "C:/x"}}),
+        serde_json::json!({"live": {"hasAudio": true, "hasVideo": true, "mediaKind": "vi\u{202E}deo", "size": 1, "durationMs": 1}}),
     ] {
         let mut env = mixed();
         env.record
             .extra
             .insert(SOURCE_FACTS_KEY.to_string(), bad.clone());
-        assert!(take_source_facts(&mut env).is_err(), "{bad}");
+        // Fixed wording (hardening Task 5's carry): serde's message would
+        // quote the author's field name or value, a bidi control included.
+        assert_eq!(
+            take_source_facts(&mut env),
+            Err("The project file's source facts are not valid.".to_string()),
+            "{bad}"
+        );
     }
 }

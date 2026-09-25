@@ -255,7 +255,13 @@ fn write_package_refuses_a_manifest_listing_a_path_twice() {
 // something else than it holds. Such a name is refused outright too.
 #[test]
 fn a_bidi_control_in_an_entry_name_is_refused_without_echoing_it() {
-    for c in ['\u{202A}', '\u{202D}', '\u{202E}', '\u{2066}', '\u{2069}'] {
+    // U+200E/U+200F/U+061C (LRM, RLM, ALM) are the implicit marks: they
+    // reorder neutral characters around them just as surely (carried from
+    // hardening Task 5).
+    for c in [
+        '\u{202A}', '\u{202D}', '\u{202E}', '\u{2066}', '\u{2069}', '\u{200E}', '\u{200F}',
+        '\u{061C}',
+    ] {
         refused_name(&format!("media/a{c}1.mp4"), "bidirectional control");
     }
     let (env, b1, manifest) = base();

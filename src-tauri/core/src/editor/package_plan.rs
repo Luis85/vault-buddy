@@ -252,14 +252,17 @@ pub fn attach_source_facts(env: &mut WorkspaceEnvelope, facts: &BTreeMap<String,
 /// Take the facts back OUT of an untrusted envelope: absent is an empty map
 /// (a lightweight file from a build before this, or another editor); a
 /// present value that is not exactly `{assetId: SourceFacts}` is an `Err`
-/// naming why, which the import refuses.
+/// in fixed wording (serde's own text would quote the author's), which the
+/// import refuses.
 pub fn take_source_facts(
     env: &mut WorkspaceEnvelope,
 ) -> Result<BTreeMap<String, SourceFacts>, String> {
     match env.record.extra.remove(SOURCE_FACTS_KEY) {
         None => Ok(BTreeMap::new()),
-        Some(value) => serde_json::from_value(value)
-            .map_err(|e| format!("The project file's source facts are not valid: {e}")),
+        Some(value) => serde_json::from_value(value).map_err(|e| {
+            super::package::refuse_unparsable("The project file's source facts are not valid.", &e)
+                .message
+        }),
     }
 }
 

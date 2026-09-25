@@ -236,9 +236,11 @@ fn a_cancelled_dialog_writes_nothing_and_answers_null() {
         export(&a, &session_id, &chooser, PackageFormat::Portable).unwrap(),
         None
     );
-    assert!(import_package_in(&a.state, a.root(), &chooser)
-        .unwrap()
-        .is_none());
+    assert!(
+        import_package_in(&a.state, a.root(), &chooser, &FakeProber::absent())
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(chooser.asked.get(), 2);
 }
 

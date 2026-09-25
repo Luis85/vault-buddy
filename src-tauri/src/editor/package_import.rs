@@ -51,7 +51,10 @@
 //! for each record, so Task 27's detach-audio guard survives a round trip.
 //! A file without them (an older build's, another editor's) gets its facts
 //! from the asset, and a video's `hasAudio` is then FALSE: sound is never
-//! invented (docs/Gaps.md GAP-182).
+//! invented (docs/Gaps.md GAP-182). Either way they are only a CLAIM: a
+//! file the package carries is re-probed once extracted (`Prober`: ffprobe,
+//! or the native sniff for an image) and its probe wins (GAP-215); only a
+//! placeholder, or an import with no ffmpeg, keeps the claim.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -60,18 +63,23 @@ use std::path::{Path, PathBuf};
 
 use vault_buddy_core::capture_note::write_atomic_replacing;
 use vault_buddy_core::device_names::is_reserved_device_name;
-use vault_buddy_core::editor::package::{inspect_archive, validate_entry_name, PackageManifest};
+use vault_buddy_core::editor::import_io::settle_av_import;
+use vault_buddy_core::editor::package::{
+    inspect_archive, refuse_unparsable, validate_entry_name, PackageManifest,
+};
 use vault_buddy_core::editor::package_extract::{PackageExtractor, ValidatedArchive};
 use vault_buddy_core::editor::package_plan::{
     asset_definitions, asset_id_problem, file_backed_asset_ids, placeholder_file_name,
     rekey_envelope, take_source_facts, FactsMediaKind, PackageFormat, SourceFacts,
 };
+use vault_buddy_core::editor::probe::{ImportKind, ProbeFacts};
 use vault_buddy_core::editor::{
     has_canonical_file_name, is_valid_id, limits, new_project_id, sanitize, validate_envelope,
     Asset, AssetKind, EditorError, EditorErrorCode, EditorOpenResult, MediaType, WorkspaceEnvelope,
 };
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
+use super::media_import::{sniff_copy, FfprobeImportIo, ImportIo};
 use super::package_commands::PathChooser;
 use super::prefs_commands::WORKSPACE_FILE;
 use super::project_store::{
@@ -83,6 +91,51 @@ use super::save_commands::map_write_error;
 use super::session_commands::{missing_media, register_session};
 use super::store_io::{read_bounded, remove_dir_no_follow, PROJECT_FILE, SOURCES_FILE};
 use super::EditorState;
+
+/// The re-probe of a file the package CARRIED (GAP-215): what the extracted
+/// bytes are, asked of ffprobe (or, for an image, of the native sniff) as
+/// the kind the project's graph gives the asset. `None` when it cannot say
+/// -- no ffmpeg, or a file it cannot read -- and the carried facts then
+/// stand. A seam, like `ImportIo`/`TakeIo`, so a test answers it.
+pub(crate) trait Prober {
+    fn probe(&self, path: &Path, kind: ImportKind) -> Option<ProbeFacts>;
+}
+
+/// The production prober: the media import's own `FfprobeImportIo` (the
+/// user's ffmpeg, resolved once on first need, and `probe_media`) and its
+/// image sniff.
+#[derive(Default)]
+pub(crate) struct FfprobeProber {
+    io: FfprobeImportIo,
+}
+
+impl Prober for FfprobeProber {
+    fn probe(&self, path: &Path, kind: ImportKind) -> Option<ProbeFacts> {
+        let probed = if kind == ImportKind::Image {
+            sniff_copy(path).map(|(w, h)| ProbeFacts {
+                duration_ms: 0,
+                width: Some(w),
+                height: Some(h),
+                has_video: true,
+                has_audio: false,
+            })
+        } else {
+            // No ffmpeg: nothing to ask, and the carried facts stand
+            // (today's behaviour, GAP-215).
+            self.io.av_ready().ok()?;
+            self.io.probe_av(path, kind)
+        };
+        probed
+            .map_err(|e| {
+                log::warn!(
+                    "editor import: packaged media {} could not be probed ({:?}); its carried facts are kept",
+                    redact_path(path),
+                    e.code
+                );
+            })
+            .ok()
+    }
+}
 
 /// The suffix of an import's build directory, `.<projectId>.importing`.
 const IMPORTING_SUFFIX: &str = ".importing";
@@ -135,7 +188,7 @@ fn read_incoming<'f>(
         PackageFormat::Lightweight => {
             let bytes = read_bounded(path, limits::MAX_PROJECT_JSON_BYTES)?;
             let envelope: WorkspaceEnvelope = serde_json::from_slice(&bytes)
-                .map_err(|e| invalid(format!("The project file is not valid: {e}")))?;
+                .map_err(|e| refuse_unparsable("The project file is not valid.", &e))?;
             validate_envelope(&envelope)?;
             Incoming {
                 envelope,
@@ -212,6 +265,8 @@ impl Drop for ImportDir {
 
 /// One file taken out of the package and proven to be the manifest's.
 struct Extracted {
+    /// Where it was extracted, in the build directory (what is re-probed).
+    path: PathBuf,
     file: String,
     size: u64,
     sha256: String,
@@ -253,6 +308,7 @@ fn extract_one(
     }
     out.sync_all().map_err(map_write_error)?;
     Ok(Extracted {
+        path: dest,
         file: name.to_string(),
         size,
         sha256: got.sha256,
@@ -327,8 +383,6 @@ fn dimension(value: Option<&serde_json::Number>) -> Option<u32> {
         .and_then(|v| u32::try_from(v).ok())
 }
 
-/// A `sources.json` record for a file-backed asset: the extracted file when
-/// the package carried it, a placeholder otherwise (module doc).
 /// The facts a source record needs when the file carried none for it (a
 /// build before fix round 1, or another editor): read off the asset, and
 /// `hasAudio` only for an AUDIO asset. A video's sound is never invented,
@@ -351,16 +405,67 @@ fn facts_from_asset(asset: &Asset) -> SourceFacts {
     }
 }
 
+/// The kind the project's GRAPH gives an asset -- what a re-probe is asked
+/// to confirm, and what the record must agree with.
+fn asset_import_kind(asset: &Asset) -> ImportKind {
+    match (asset.media_type == Some(MediaType::Image), asset.kind) {
+        (true, _) => ImportKind::Image,
+        (false, AssetKind::Audio) => ImportKind::Audio,
+        (false, AssetKind::Video) => ImportKind::Video,
+    }
+}
+
+/// GAP-215: the facts of a file the package CARRIED are what its extracted
+/// bytes probe as, never the author's claim -- `hasAudio` decides
+/// `detachAudio` and the render's audio map, and width/height/kind decide
+/// the untouched-capture fast path (R1). A video or audio file goes through
+/// the media import's own rule (`settle_av_import`: a "video" holding only
+/// sound is audio); an image keeps its assigned length. A probe that cannot
+/// say (`None`: no ffmpeg, an unreadable file) or that the rule refuses
+/// leaves the carried facts standing -- today's behaviour, never a refusal.
+fn reprobed(prober: &dyn Prober, path: &Path, asset: &Asset, carried: SourceFacts) -> SourceFacts {
+    let kind = asset_import_kind(asset);
+    let Some(probed) = prober.probe(path, kind) else {
+        return carried;
+    };
+    if kind == ImportKind::Image {
+        return SourceFacts {
+            has_audio: false,
+            has_video: true,
+            width: probed.width,
+            height: probed.height,
+            media_kind: FactsMediaKind::Image,
+            ..carried
+        };
+    }
+    match settle_av_import(kind, probed) {
+        Ok((settled, facts)) => SourceFacts {
+            has_audio: facts.has_audio,
+            has_video: facts.has_video,
+            width: facts.width,
+            height: facts.height,
+            media_kind: if settled == ImportKind::Audio {
+                FactsMediaKind::Audio
+            } else {
+                FactsMediaKind::Video
+            },
+            size: carried.size,
+            duration_ms: facts.duration_ms,
+        },
+        Err(why) => {
+            log::warn!(
+                "editor import: packaged media {} probed unusably ({why}); its carried facts are kept",
+                redact_path(path)
+            );
+            carried
+        }
+    }
+}
+
 /// A `sources.json` record for a file-backed asset: the extracted file when
-/// the package carried it, a placeholder otherwise; its facts are the
-/// exporting machine's when the file carried them (`SOURCE_FACTS_KEY`),
-/// else `facts_from_asset`.
-fn source_record(
-    asset: &Asset,
-    extracted: Option<&Extracted>,
-    carried: Option<&SourceFacts>,
-) -> SourceRecord {
-    let facts = carried.cloned().unwrap_or_else(|| facts_from_asset(asset));
+/// the package carried it, a placeholder otherwise (module doc), with
+/// `facts` (`build_sources` chooses them).
+fn source_record(asset: &Asset, extracted: Option<&Extracted>, facts: SourceFacts) -> SourceRecord {
     let (file, size, sha256) = match extracted {
         Some(x) => (x.file.clone(), x.size, Some(x.sha256.clone())),
         None => (placeholder_file_name(asset), facts.size, None),
@@ -383,18 +488,34 @@ fn source_record(
     }
 }
 
+/// Every file-backed asset's record. Its facts are the exporting machine's
+/// when the file carried them (`SOURCE_FACTS_KEY`), else `facts_from_asset`
+/// -- and, for a file the package CARRIED, what its bytes probe as
+/// (`reprobed`). A placeholder's media is not here to probe, so it keeps
+/// what the file said until a reconnect re-probes it (Task 40).
 fn build_sources(
     env: &WorkspaceEnvelope,
     extracted: &BTreeMap<String, Extracted>,
     facts: &BTreeMap<String, SourceFacts>,
+    prober: &dyn Prober,
 ) -> BTreeMap<String, SourceRecord> {
     let defs = asset_definitions(env);
     file_backed_asset_ids(env)
         .into_iter()
         .filter_map(|id| {
             let asset = *defs.get(id.as_str())?.first()?;
-            let record = source_record(asset, extracted.get(&id), facts.get(&id));
-            Some((id, record))
+            let carried = facts
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| facts_from_asset(asset));
+            let got = extracted.get(&id);
+            // MUTATION CHECK (`a_carried_file_is_reprobed_and_the_probe_outranks_its_carried_facts`,
+            // `a_placeholder_is_never_probed_and_keeps_its_carried_facts`).
+            let facts = match got {
+                Some(x) => reprobed(prober, &x.path, asset, carried),
+                None => carried,
+            };
+            Some((id, source_record(asset, got, facts)))
         })
         .collect()
 }
@@ -454,6 +575,7 @@ fn import_file(
     state: &EditorState,
     root: &Path,
     path: &Path,
+    prober: &dyn Prober,
 ) -> Result<EditorOpenResult, EditorError> {
     let format = path
         .file_name()
@@ -524,7 +646,7 @@ fn import_file(
         Some((manifest, archive)) => extract_all(archive, &manifest, &envelope, &build)?,
         None => BTreeMap::new(),
     };
-    let sources = build_sources(&envelope, &extracted, &facts);
+    let sources = build_sources(&envelope, &extracted, &facts, prober);
     write_json(&build.dir, SOURCES_FILE, &sources)?;
     if let Some(ledger) = &ledger {
         write_text(&build.dir, PRODUCTS_FILE, ledger)?;
@@ -551,11 +673,12 @@ pub(crate) fn import_package_in(
     state: &EditorState,
     root: &Path,
     chooser: &dyn PathChooser,
+    prober: &dyn Prober,
 ) -> Result<Option<EditorOpenResult>, EditorError> {
     let Some(path) = chooser.package_to_open() else {
         return Ok(None);
     };
-    import_file(state, root, &path).map(Some)
+    import_file(state, root, &path, prober).map(Some)
 }
 
 #[cfg(test)]

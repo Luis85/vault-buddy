@@ -10,7 +10,7 @@
 //! builtin, no file) — three assets, three different packaging rules, each
 //! with its own byte length.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
@@ -18,6 +18,7 @@ use vault_buddy_core::editor::package::{
     write_package, PackageManifest, PackageMedia, PackageProduct, WORKSPACE_NAME,
 };
 use vault_buddy_core::editor::package_plan::PackageFormat;
+use vault_buddy_core::editor::probe::{ImportKind, ProbeFacts};
 use vault_buddy_core::editor::{
     AssetKind, EditorCommand, EditorError, EditorOpenResult, ExecuteRequest, InternalCommand,
     MediaType, WorkspaceEnvelope, PACKAGE_SCHEMA,
@@ -26,7 +27,7 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_screen::staging::{self, StagedSidecar};
 
 use super::package_commands::{export_package_in, PackageReceipt, PathChooser};
-use super::package_import::import_package_in;
+use super::package_import::{import_package_in, Prober};
 use super::project_store::{project_dir, store_dir, SourceLocator, SourceMediaKind, SourceRecord};
 use super::session_commands::{execute_in, open_staged_session};
 use super::store_io::load_sources;
@@ -234,8 +235,47 @@ pub(crate) fn export(
     export_package_in(&m.state, m.root(), chooser, session_id, revision, format)
 }
 
+/// Imports with no ffmpeg (`FakeProber::absent`): every carried fact
+/// stands, so a suite about what a FILE says is not a suite about ffprobe.
 pub(crate) fn import(m: &Machine, path: PathBuf) -> Result<Option<EditorOpenResult>, EditorError> {
-    import_package_in(&m.state, m.root(), &FakeChooser::opening(path))
+    import_probed(m, path, &FakeProber::absent())
+}
+
+pub(crate) fn import_probed(
+    m: &Machine,
+    path: PathBuf,
+    prober: &FakeProber,
+) -> Result<Option<EditorOpenResult>, EditorError> {
+    import_package_in(&m.state, m.root(), &FakeChooser::opening(path), prober)
+}
+
+/// The re-probe (GAP-215), answered by the test: `answer` for every file,
+/// and every call recorded as (kind, the bytes at the probed path) -- so a
+/// test sees WHICH file was asked about, as what.
+pub(crate) struct FakeProber {
+    pub(crate) answer: Option<ProbeFacts>,
+    pub(crate) calls: RefCell<Vec<(ImportKind, Vec<u8>)>>,
+}
+
+impl FakeProber {
+    /// No ffmpeg on this machine.
+    pub(crate) fn absent() -> Self {
+        Self::answering(None)
+    }
+    pub(crate) fn answering(answer: Option<ProbeFacts>) -> Self {
+        Self {
+            answer,
+            calls: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl Prober for FakeProber {
+    fn probe(&self, path: &Path, kind: ImportKind) -> Option<ProbeFacts> {
+        let bytes = std::fs::read(path).unwrap_or_default();
+        self.calls.borrow_mut().push((kind, bytes));
+        self.answer
+    }
 }
 
 pub(crate) fn sorted_missing(result: &EditorOpenResult) -> Vec<String> {

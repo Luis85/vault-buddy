@@ -404,7 +404,7 @@ pub(crate) fn describe(
     Ok((asset, record))
 }
 
-fn sniff_copy(dest: &Path) -> Result<(u32, u32), EditorError> {
+pub(super) fn sniff_copy(dest: &Path) -> Result<(u32, u32), EditorError> {
     let mut head = Vec::new();
     File::open(dest)
         .and_then(|f| f.take(IMAGE_SNIFF_BYTES).read_to_end(&mut head))

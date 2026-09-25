@@ -151,6 +151,21 @@ fn invalid(message: impl Into<String>) -> EditorError {
     EditorError::new(EditorErrorCode::InvalidProject, message)
 }
 
+/// A JSON document a package author wrote that does not parse, refused as
+/// `message` -- never serde's own text, which QUOTES what it choked on (an
+/// unknown field's name, a string where a number belongs), bidi controls
+/// included (hardening Task 5's carry, S-11). Only the category and
+/// position reach the log.
+pub fn refuse_unparsable(message: &str, e: &serde_json::Error) -> EditorError {
+    log::warn!(
+        "editor package: a JSON document did not parse ({:?} at line {}, column {}): {message}",
+        e.classify(),
+        e.line(),
+        e.column()
+    );
+    invalid(message)
+}
+
 fn unreadable(e: impl std::fmt::Display) -> EditorError {
     invalid(format!(
         "the project package is not a readable archive: {e}"
@@ -188,7 +203,8 @@ fn zip_write_failed(e: ZipError) -> EditorError {
 /// last segment whose stem is a Windows device (`media/CON.mp4`: `CON` is a
 /// valid asset id) is refused, because extracting it would open the device
 /// (`crate::device_names`). A bidirectional control (U+202A-202E,
-/// U+2066-2069) is refused too (S-11): `cod\u{202E}4pm.exe` DISPLAYS as
+/// U+2066-2069, and the implicit marks U+200E, U+200F, U+061C) is refused
+/// too (S-11): `cod\u{202E}4pm.exe` DISPLAYS as
 /// `codexe.mp4`, so such a name misleads every dialog, log and archive
 /// tool that shows it.
 pub fn validate_entry_name(name: &str) -> Result<(), String> {
@@ -235,7 +251,10 @@ pub fn validate_entry_name(name: &str) -> Result<(), String> {
 }
 
 fn is_bidi_control(c: char) -> bool {
-    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+    matches!(
+        c,
+        '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}' | '\u{061C}'
+    )
 }
 
 /// The facts the per-entry scan keeps: every name's declared size, and the
@@ -565,8 +584,8 @@ pub fn inspect_archive<R: Read + Seek + Clone>(
         )));
     }
     let raw = read_json_entry(&mut archive, &scan, MANIFEST_NAME, MAX_MANIFEST_BYTES)?;
-    let manifest: PackageManifest =
-        serde_json::from_slice(&raw).map_err(|e| invalid(format!("manifest: {e}")))?;
+    let manifest: PackageManifest = serde_json::from_slice(&raw)
+        .map_err(|e| refuse_unparsable("the project package's manifest is not valid", &e))?;
     check_manifest(&manifest, &scan)?;
     let raw = read_json_entry(
         &mut archive,
@@ -574,8 +593,12 @@ pub fn inspect_archive<R: Read + Seek + Clone>(
         WORKSPACE_NAME,
         limits::MAX_PROJECT_JSON_BYTES,
     )?;
-    let envelope: WorkspaceEnvelope =
-        serde_json::from_slice(&raw).map_err(|e| invalid(format!("{WORKSPACE_NAME}: {e}")))?;
+    let envelope: WorkspaceEnvelope = serde_json::from_slice(&raw).map_err(|e| {
+        refuse_unparsable(
+            &format!("the project package's {WORKSPACE_NAME} is not valid"),
+            &e,
+        )
+    })?;
     validate_envelope(&envelope)?;
     let missing = cross_check(&manifest, &envelope)?;
     Ok(InspectedPackage {

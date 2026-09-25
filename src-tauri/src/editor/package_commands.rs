@@ -44,6 +44,7 @@ use vault_buddy_core::editor::{
 
 use super::authz::{require_editor_window, require_session};
 pub(crate) use super::package_import::import_package_in;
+use super::package_import::FfprobeProber;
 use super::prefs_commands::{blocking, local_data, read_workspace};
 use super::project_store::{resolve_source, SourceMediaKind, SourceRecord};
 use super::save_commands::map_write_error;
@@ -610,7 +611,8 @@ pub async fn editor_import_package(
                 app: &app,
                 window: &window,
             };
-            import_package_in(&app.state::<EditorState>(), &root, &chooser)
+            let prober = FfprobeProber::default();
+            import_package_in(&app.state::<EditorState>(), &root, &chooser, &prober)
         })
     })
     .await

@@ -115,9 +115,11 @@ pub fn extract_verified_entry<R: Read + Seek, S: Read + Seek, W: Write>(
 /// cloned from the same handle (S-3, post-merge review): extraction reads
 /// through this very `ZipArchive` -- the directory those checks passed --
 /// instead of parsing the archive a second time without
-/// `package_archive`'s raw pre-checks. Opaque, so the shell never names a
-/// `zip` type (the crate is `core`'s dependency alone, ADR R9) and only
-/// `inspect_archive` can make one.
+/// `package_archive`'s raw pre-checks. Opaque to the shell, which never
+/// names a `zip` type (the crate is `core`'s dependency alone, ADR R9) and
+/// cannot build one. Its fields are `pub(super)`, so any `core::editor`
+/// module COULD; in production only `inspect_archive` does, and a new
+/// constructor anywhere else would skip every check this type stands for.
 pub struct ValidatedArchive<R> {
     pub(super) raw: R,
     pub(super) archive: ZipArchive<R>,

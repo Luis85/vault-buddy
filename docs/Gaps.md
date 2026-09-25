@@ -2740,13 +2740,19 @@ file this build writes:** the export now carries each source's
 anything is stored), and a portable export hashes the bytes it actually
 writes and fails if a source changed after the manifest was computed.
 What remains:
-- A file WITHOUT those facts (written before fix round 1, or by another
+- ~~A file WITHOUT those facts (written before fix round 1, or by another
   editor) gets them from its asset, and never invents audio: a video's
   `hasAudio` is false. Such a video with a real sound track therefore cannot
   detach its audio (or draw a waveform) until it is reconnected (Task 40)
-  and re-probed. The refusal is honest, and nothing is lost. Task 40 does
-  this: a reconnected record is rewritten from the chosen file's OWN probe
-  and hash, so its `hasAudio` is then the truth.
+  and re-probed.~~ **CLOSED 2026-09-25 (hardening Task 6) for media the
+  file CARRIES:** an extracted file is re-probed and its real sound track
+  recorded (GAP-215; test
+  `a_carried_file_without_facts_takes_its_probed_sound`). Still true for a
+  PLACEHOLDER (a lightweight file's media, or a portable one's missing
+  original) and for any import with no ffmpeg: such a video reads as silent
+  until it is reconnected (Task 40), which rewrites the record from the
+  chosen file's OWN probe and hash. The refusal is honest, and nothing is
+  lost.
 - A lightweight placeholder's expected size is 0 when the file carried no
   facts and the asset recorded no size. Task 40's match never uses a name,
   and an unhashed record needs size AND length AND kind to agree, so a zero
@@ -2762,9 +2768,9 @@ What remains:
   `<name>.part-<rand>` file in the user's chosen folder. Nothing sweeps user
   folders.
 
-**Fix:** re-probe extracted media with ffprobe when it is installed; decide
-whether unplaced library media belongs in a portable file (a cross-check
-change).
+**Fix:** ~~re-probe extracted media with ffprobe when it is installed~~
+(done, hardening Task 6); decide whether unplaced library media belongs in a
+portable file (a cross-check change).
 
 ### GAP-183 · Low · Some missing originals cannot be reconnected from the editor: a staged capture, and one only a retained snapshot uses
 `src-tauri/src/editor/relink_media.rs` (`targets`), found by Task 40.
@@ -6963,7 +6969,7 @@ list that names what the store holds but cannot read, with the same
 confirmed discard, and a raw-bytes ownership proof (a `"project":{"id":…}`
 prefix match) for a file that is no longer JSON.
 
-### GAP-215 · Low · A project file's carried source facts are trusted, never re-probed
+### GAP-215 · ~~Low~~ CLOSED 2026-09-25 (hardening Task 6) · A project file's carried source facts are trusted, never re-probed
 `src-tauri/core/src/editor/package_plan.rs` (`SourceFacts`),
 `src-tauri/src/editor/package_import.rs` (final whole-branch review M9;
 recorded here rather than fixed — the implementer's call). A package carries
@@ -6982,7 +6988,39 @@ refuses a detach. **Fix:** re-probe every EXTRACTED file with ffprobe when
 ffmpeg is available and take the probe's facts over the carried ones
 (carried facts only for placeholders, whose media is not in the file); an
 import without ffmpeg keeps today's behaviour. Beside GAP-182, which is the
-older-file half of the same record.
+older-file half of the same record. **Addendum (hardening review):** the
+same carried `width`/`height`/`mediaKind` (and `hasVideo`/`hasAudio`) are
+what the render's untouched-capture fast path reads (R1's identity plan,
+`render_plan::source_fits_canvas`/`sound_is_untouched` over
+`render_jobs::plan_source`), so a lying package could also CHOOSE that
+path — a lossless `-c copy` remux of a source that does not fit the canvas.
+
+**CLOSED 2026-09-25 (hardening Task 6).** `package_import::build_sources`
+re-probes every file the package CARRIED once it is extracted, through a
+`Prober` seam (`FfprobeProber` in production: the media import's own
+`FfprobeImportIo` — `resolve_working_ffmpeg` + `probe_media` — and its
+native image sniff), asked as the kind the project's graph gives the asset,
+and the probe's `hasAudio`/`hasVideo`/width/height/kind/duration replace the
+carried ones (a video or audio file through the media import's own
+`settle_av_import`, so a "video" holding only sound is recorded as audio; an
+image keeps its assigned length). A lying package can therefore no longer
+get Detach audio accepted for a silent file, nor choose the R1 fast path,
+for EXTRACTED media. What stays as it was, deliberately: a PLACEHOLDER (its
+media is not in the file) keeps its carried facts until a reconnect re-probes
+it (Task 40), and so does every file when the probe cannot say — no ffmpeg
+(an image is still re-sniffed), a file ffprobe cannot read, or a probe
+`settle_av_import` refuses (no measurable length, past the length limit),
+each logged with the path redacted. The import is never refused for it.
+Tests: `package_import_tests.rs`
+`a_carried_file_is_reprobed_and_the_probe_outranks_its_carried_facts`,
+`without_a_probe_the_carried_facts_stand`,
+`a_placeholder_is_never_probed_and_keeps_its_carried_facts`,
+`a_probe_is_settled_by_the_media_import_rule` (fakes) and
+`the_production_prober_measures_a_real_silent_video` (a real ffprobe; skips
+visibly without ffmpeg). The probes run under the editor's `open` lock, like
+the extraction before them, so a portable import with many files holds other
+opens a little longer (one ffprobe per carried file, each bounded by
+`PROBE_TIMEOUT`).
 
 ### GAP-216 · Low (tech debt) · The editor shell repeats its small helpers
 `src-tauri/src/editor/*.rs`, `src/composables/useTimelineDrag.ts`
@@ -7020,4 +7058,10 @@ product list, renders reordered text; nothing escapes the project and no
 file is named after the id (a portable file's product entries are
 `is_valid_id`-checked by the manifest). **Fix:** `validate_envelope` checks
 every product id with `is_valid_id` (the app's own `new_product` ids
-already pass), after which its messages are safe to keep.
+already pass), after which its messages are safe to keep. *(Narrowed by
+hardening Task 6: the refusals that echoed serde's own text — a manifest,
+`workspace.json`, a lightweight project file or its carried source facts
+that does not PARSE — now say so in fixed wording
+(`package::refuse_unparsable`, the serde category and position only in the
+log), so what remains here is `validate_envelope`'s own product-id
+messages.)*
