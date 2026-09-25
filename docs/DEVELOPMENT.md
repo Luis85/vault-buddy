@@ -92,9 +92,21 @@ cargo fmt --check
 cargo clippy -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp --all-targets -- -D warnings
 cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp
 cargo test -p vault_buddy_transcribe --features whisper   # the only place the whisper FFI tests run
+cargo test -p vault_buddy_screen   # the screen/render crate — its ffmpeg round trips need ffmpeg (below)
+cargo test -p vault_buddy_screen --test render_roundtrip -- --nocapture   # shows any SKIP line
 ```
 
-The Rust workspace is split into four member crates plus the shell.
+**The render round trips need ffmpeg, with libass.** `src-tauri/screen/tests/render_roundtrip.rs`
+and `render_graph_roundtrip.rs` render real tutorial projects through the
+`ffmpeg`/`ffprobe` on PATH and decode the result; the tutorial editor's
+cues, cards and burned-in captions go through ffmpeg's `ass` filter, so the
+build must be compiled with libass (the usual Windows "full" builds and
+distro packages are; `ffmpeg -filters | grep ass` shows it). Without ffmpeg
+those tests — and the shell's `*_round_trip_through_real_ffmpeg` waveform
+and thumbnail tests — print `SKIP:` and pass, which proves nothing: read the
+output. CI's `rust-core` job installs ffmpeg explicitly so they run.
+
+The Rust workspace is split into five member crates plus the shell.
 `src-tauri/core/` (`vault_buddy_core`) is a pure crate with all Obsidian
 logic (config parsing, daily-note resolution, URI building) and no GUI or
 audio dependencies — it tests on any machine, including CI containers.
@@ -106,7 +118,11 @@ build: `sudo apt-get install -y libasound2-dev`. `src-tauri/transcribe/`
 decode + whisper.cpp behind the `whisper` feature); its FFI regression
 tests run on Linux under `--features whisper`. `src-tauri/mcp/`
 (`vault_buddy_mcp`) is the Tauri-free embedded MCP server; its unit and
-real-socket integration tests run on Linux too. `src-tauri/` itself is the
+real-socket integration tests run on Linux too. `src-tauri/screen/`
+(`vault_buddy_screen`) is the screen-capture engine and the tutorial
+editor's render (the RenderPlan → ffmpeg argv, and the runner); its pure
+modules and ffmpeg round trips test on Linux, while its Media Foundation
+capture code is Windows-only and runs in no automated test. `src-tauri/` itself is the
 thin Tauri shell (window, tray, command wrappers) and needs platform
 WebView libraries to compile — on Windows that works out of the box; on
 Linux it needs the WebView/GTK/tray system libraries (see the compile-gate
@@ -543,6 +559,37 @@ by Buddy settings → *Integrations — Transcription — GPU*:
   context init). Toggle applies from the next transcription job (the worker
   reloads the cached model; no restart needed). Omitted when `true` (the
   default), written only when `false` — the hand-editable file stays minimal.
+
+## Tutorial editor project store
+
+The tutorial editor keeps everything it writes outside every vault, under
+the app's local data folder `%LOCALAPPDATA%\com.vaultbuddy.desktop\`
+(AGENTS.md § "Where state lives on disk" has the full contract):
+
+```
+editor-projects\<projectId>\
+  project.json      the project envelope (schema vault-buddy-video-project/3), written by Save project
+  sources.json      asset id -> where its bytes live (a staged capture is referenced, never moved)
+  workspace.json    view preferences (selection, playhead, panels, theme); never part of Undo
+  recovery.json     the unsaved-edit journal of a dirty session (Resume / Discard on next open)
+  products.json     the immutable product ledger, committed when a render lands
+  media\            imported originals, copied in as <assetId>.<ext>
+  takes\            webcam takes (<takeId>.webm; .part while recording)
+  products\         rendered videos, <productId>.mp4
+  cache\            derived and deletable: waveforms, thumbnails, the latest Review render
+  jobs\<jobId>\     a render's scratch or a publish's journal, removed when the job ends
+editor-prefs\guide-progress.json   the guided walkthrough's app-wide progress
+```
+
+A staged capture a project uses is **pinned**: its sidecar in
+`screen-captures\` carries `editorProjectId`, and it cannot be discarded or
+cleared until the project is discarded (the editor's **Discard project…**).
+To start from a clean slate while developing, quit the app and delete
+`editor-projects\` and `editor-prefs\`; a staged capture whose sidecar still
+names a deleted project is re-adopted or migrated afresh the next time it is
+opened in the editor (`editor_open_staged` logs "pinned to missing project").
+Nothing here is ever written into a vault; only **Publish to
+vault…** copies a product (and its note) into one.
 
 ## MCP server configuration
 

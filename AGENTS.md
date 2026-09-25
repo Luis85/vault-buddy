@@ -21,6 +21,7 @@ here documents a failure mode somebody already hit.
 - [The window system (most invariant-heavy area)](#the-window-system-most-invariant-heavy-area)
 - [The vault domain](#the-vault-domain-core-crate--vaults-store)
 - [The capture domain](#the-capture-domain-src-tauricapture--capture_commandsrs--capture-store)
+- [The tutorial editor domain](#the-tutorial-editor-domain-coresrceditor--src-taurisrceditor--srccomponentseditor--editorroot)
 - [The document-import domain](#the-document-import-domain-coresrcdocument_importrs--src-taurisrcdocument_commandsrs--documentimportsettingsvue--importvaultpickervue)
 - [The transcription & recordings domains](#the-transcription--recordings-domains-src-tauritranscribe--coresrctranscriptrecordingsrs--transcriptionrs)
 - [The tasks domain](#the-tasks-domain-coresrctasks--task_commandsrs--tasksvue)
@@ -42,7 +43,7 @@ shell (Rust) hosting a Vue 3 + Pinia + Tailwind 4 frontend. A tiny
 always-on-top transparent window shows an animated buddy character;
 clicking it opens a panel that lists the user's Obsidian vaults and opens
 them (or today's daily note) via `obsidian://` URIs. On top of that base
-the app has grown six vertical domains:
+the app has grown seven vertical domains:
 
 - **Capture** — one-click meeting/voice-note recording (cpal + WASAPI
   loopback → streaming LAME MP3) saved into a vault folder with an optional
@@ -66,6 +67,13 @@ the app has grown six vertical domains:
   explicitly-out-of-scope list (screen captures in the RECORDINGS browser,
   GAP-143). Spec §10's resume-or-discard surface is `StagedCaptureList`,
   shipped in Phase 5.
+- **Tutorial editor** — a Rust-backed multi-track video editor in its own
+  window: a staged screen capture (or imported media, or webcam Takes) is
+  cut, layered, faded, annotated with Teaching Cues, captioned and chaptered
+  as a Tutorial Project kept OUTSIDE every vault; **Render video** makes an
+  immutable Product through the user's ffmpeg, and **Publish to vault…**
+  copies one into a vault with a companion note (the tenth vault write). See
+  [the tutorial editor domain](#the-tutorial-editor-domain-coresrceditor--src-taurisrceditor--srccomponentseditor--editorroot).
 - **Transcription** — opt-in, fully local speech-to-text (whisper.cpp via
   `whisper-rs`) run after a recording, writing a transcript sidecar the
   note embeds; plus a read-only recordings browser.
@@ -91,7 +99,7 @@ here is deliberately only the shipped increments.
 | [README.md](README.md) | What the product does, install, usage — user-facing |
 | [AGENTS.md](AGENTS.md) (this file) | Agent operating guide — keep it (not CLAUDE.md) up to date when the repo changes |
 | [CLAUDE.md](CLAUDE.md) | Thin pointer at this file for Claude Code |
-| [CONTEXT.md](CONTEXT.md) | The domain glossary / ubiquitous language (Vault, Buddy, Capture, Staged Capture vs Export vs Discard, Task vs Todo vs Task Tag, Runtime, Capability…). Use these terms in code, docs, and commits; keep it current via the `domain-modeling` skill |
+| [CONTEXT.md](CONTEXT.md) | The domain glossary / ubiquitous language (Vault, Buddy, Capture, Staged Capture vs Render vs Publish vs Discard, Tutorial Project, Track, Clip, Teaching Cue, Take, Rendered Product, Task vs Todo vs Task Tag, Runtime, Capability…). Use these terms in code, docs, and commits; keep it current via the `domain-modeling` skill |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Contributor setup, build prerequisites, CI/release pipelines, logs & crash reporting, capture config reference |
 | [docs/PRD.md](docs/PRD.md) | Vision, principles, capability roadmap |
 | [docs/prds/](docs/prds/) | Per-domain PRDs (knowledge intake, task management, …) |
@@ -99,7 +107,8 @@ here is deliberately only the shipped increments.
 | [docs/superpowers/specs/](docs/superpowers/specs/) | Dated design specs — the *why* behind each increment's shape |
 | [docs/superpowers/plans/](docs/superpowers/plans/) | Dated implementation plans that executed those specs |
 | [docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md](docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md) | The screen-capture feature's manual Windows checklist — a RUNNING document across phases, not one phase's gate. It carries **57 rows** today — 1–55 plus 27a and 27b — of which **23** carry a result; the count is measured on the tree, not incremented (it has been wrong before from incrementing, which is why the one-liner to re-measure it lives in the file's own header). An empty Result column means unrun, which is not the same as failed. **The deferral is LIFTED**: the user began running it on 2026-09-21, batch by batch. Rows 1–13, 16, 17, 29 and 37–43 carry results (11 and 12 are DEFERRED by the author's decision to after the remaining Phase 3 work, not passed; 16, 17 and 43 passed on the GAP-166 fix build and re-run on the next installer); 14, 15, 18–28, 30–36, 44–52 **and 53–55** are still unrun — 34 rows. **Rows 44–52 are the region-capture indicator's own verification** (GAP-165), added when it landed and not run since: row 44 is the GATE, re-testing GAP-166's exact symptom against the SIXTH excluded window, and a failure there costs the indicator its capture exclusion and the feature with it. Row 49 is expected BLOCKED on the single-monitor verification machine, like row 13. **Rows 41–43 were added BY that pass**, each for something it found: GAP-164 (fixed), GAP-165 (an approved design never implemented) and GAP-166 (Vault Buddy breaking File Explorer's toolbar, unlocalised). Row 13 is BLOCKED — the verification machine has one monitor, so the mixed-DPI case its own module doc calls most likely to fail cannot be reached at all. **Rows 53–55** were added by the gap close-out: 53 records a window titled `CON` (the only thing that can test GAP-108's close-out against the Win32 name resolver rather than against reasoning), and 54–55 collect the evidence GAP-122's first-frame rework needs before anyone attempts it — the declared-vs-delivered sizes across window styles, and a window resized mid-capture, which is the one case where the prediction is known to go stale. **Task 59 superseded 15 rows** (19, 20, 21, 27, 27a, 27b, 28, 29, 30, 31, 32, 33, 36, 37, 38 — plus row 34's editor half) when it retired the phase-4 editor and the phase-5 export they tested: each now opens with **SUPERSEDED** and names the tutorial-editor row that replaces it; none was deleted, and 12 of the 34 unrun rows are among them, so 22 unrun rows still test something that exists (the file's header carries the one-liner) |
-| [docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md](docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md) | The tutorial-editor increment's manual Windows checklist — created by Task 15, a RUNNING document across that increment's own tasks (the screen-capture checklist's own precedent). Carries **63 rows** today (T1–T63), **0** with a result (T7 is obsolete since Task 59 retired the legacy strip it guarded): T1–T3 verify Task 15's own `editor_open_staged` open paths (from the capture bar, from the staged list, and that a second open of the same capture reuses the session); T4–T5 close GAP-170 (the app-wide IPC ACL exhaustiveness gap Task 11 opened); T6–T7 are Task 21's timeline interactions in real WebView2 (pointer-captured drag/trim/Escape, and the shell's shortcut dispatcher not double-handling the legacy strip's Ctrl+Z); T8–T10 are Task 22's preview (audible playback through `editor_media_url` and Web Audio, local monitor mute/rate, and the widened asset scope still refusing `project.json`, `jobs` and vault paths); T11 is Task 25's media import (a mixed batch with one corrupt file, through the native dialog and a real ffprobe); T12–T13 are Task 27's detached audio and mixer (a detached clip audible once and in sync, a silent video refused, solo, the monitoring-only mute and the preview peak); T14 is Task 28's waveforms and thumbnails (a real long recording's waveform off the UI thread, a poster frame through the asset protocol from `cache\`, the cache surviving a reopen, and the no-ffmpeg hint); T15 is Task 31's picture-in-picture handles, transforms and speed (a real mouse dragging the handles over a playing picture, a circular/rotated/mirrored/cropped frame in WebView2, and `preservesPitch` at 2×); T16 is Task 32's canvas ratio and colour presets (letterboxing at each ratio, the one-time Checks toast, CSS colour filters on a playing picture); T17 is Task 35's teaching cues (the SVG overlay pinned over the playing picture, an arrow endpoint dragged as one Undo step, a zoom that never shows the letterbox, the privacy cover's permanent notice, and a cue reachable through a full-frame layout box); T18 is Task 36's captions and chapters (the native subtitle dialog with a real CRLF/WebVTT file, the skipped-cue report, the preview caption layer's position/size/off, captions re-timed by a 2× speed, and a chapter following a trim); T19–T20 are Task 37's recovery and close guard (a process killed mid-edit resuming its last acknowledged edit, Discard leaving `project.json` byte-identical, and Keep for later surviving a reopen with no recovery prompt); T21–T22 are Task 39's project files and Task 40's reconnect; T23–T26 are Task 45's real-ffmpeg renders (a real staged capture with cues, libass's fonts, a non-libx264 build, the untouched-capture remux); T27 is Task 46's render job under a quit, Alt+F4, the updater and a discard; T28 is Task 47's Render dialog, product library (Watch, Restore, a missing file) and Review played back in WebView2; T29–T31 are Task 48's publish into a vault (a same-name collision and the subtitle export, a full disk, and a quit/updater/crash mid-copy); T32–T36 are Task 50's webcam takes on a real camera (no prompt before Enable camera, a blocked or busy camera and a missing ffmpeg leaving the project alone, a real take reviewed and retaken, Add to timeline's presenter placement rendered as a circle, and the camera's light going off on every way out); T37–T41 are Task 52's synchronized webcam beside a screen capture (ten-minute A/V drift across claps, an unplugged webcam finalizing early while the screen continues, a webcam another app holds refusing the start, pause/resume keeping both aligned, and no webcam = the unchanged capture); T42–T44 are Task 53's per-input audio stems (two inputs as two stems that match the mix at both ends, pause and a stem that cannot be written, and stems off = the unchanged capture); T45–T47 are Task 54's before-you-share checks (every finding's button revealing its object in real WebView2 — selection, output-time seek, scroll, the mixer/Webcam/Layout surfaces and focus on the ratio control; a real missing file blocking Render while warnings do not; and the canvas toast's Open Checks, the destination picker and the dialog read by Narrator); T48–T50 are Task 55's guide progress and targets (the progress file landing in the app-wide `editor-prefs` folder and in no project, a malformed file read as fresh while an unreadable one shows "Session only", and the new timeline **Edit actions** menu opening at its button); T51–T55 are Task 56's guided walkthrough (every lesson's control found and never covered in a real window at both sizes, resume after a hide, a reopen and a quit, F6/Escape/F1/? with Narrator, a modal dialog suspending the coach with no camera prompt, and no guide pixel in a rendered file plus a contrast theme and animations off); T56–T57 are Task 57's progress file through Windows' own dialogs (Save progress file writes lesson progress only and never replaces a file that is not guide progress; Restore installs it paused, with no coach, no camera prompt and no project change, and refuses a foreign file); T58–T61 are Task 58's (the keyboard journey with Narrator and then NVDA, a Windows contrast theme at 150 % and at 200 % with the light editor theme's contrast, and Export diagnostics through Windows' own dialog holding only counts and codes, plus redacted log lines); T62–T63 are Task 59's (an untouched capture rendered and published end to end, lossless by md5, the successor of the retired phase-5 Save; and Discard project unpinning a capture the Record Screen list can then discard, with a refused discard's message free of any redaction handle) — re-measure with the file's own one-liner, never increment |
+| [docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md](docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md) | The tutorial-editor increment's manual Windows checklist — created by Task 15, a RUNNING document across that increment's own tasks (the screen-capture checklist's own precedent). Carries **66 rows** today (T1–T66), **0** with a result (T7 is obsolete since Task 59 retired the legacy strip it guarded): T1–T3 verify Task 15's own `editor_open_staged` open paths (from the capture bar, from the staged list, and that a second open of the same capture reuses the session); T4–T5 close GAP-170 (the app-wide IPC ACL exhaustiveness gap Task 11 opened); T6–T7 are Task 21's timeline interactions in real WebView2 (pointer-captured drag/trim/Escape, and the shell's shortcut dispatcher not double-handling the legacy strip's Ctrl+Z); T8–T10 are Task 22's preview (audible playback through `editor_media_url` and Web Audio, local monitor mute/rate, and the widened asset scope still refusing `project.json`, `jobs` and vault paths); T11 is Task 25's media import (a mixed batch with one corrupt file, through the native dialog and a real ffprobe); T12–T13 are Task 27's detached audio and mixer (a detached clip audible once and in sync, a silent video refused, solo, the monitoring-only mute and the preview peak); T14 is Task 28's waveforms and thumbnails (a real long recording's waveform off the UI thread, a poster frame through the asset protocol from `cache\`, the cache surviving a reopen, and the no-ffmpeg hint); T15 is Task 31's picture-in-picture handles, transforms and speed (a real mouse dragging the handles over a playing picture, a circular/rotated/mirrored/cropped frame in WebView2, and `preservesPitch` at 2×); T16 is Task 32's canvas ratio and colour presets (letterboxing at each ratio, the one-time Checks toast, CSS colour filters on a playing picture); T17 is Task 35's teaching cues (the SVG overlay pinned over the playing picture, an arrow endpoint dragged as one Undo step, a zoom that never shows the letterbox, the privacy cover's permanent notice, and a cue reachable through a full-frame layout box); T18 is Task 36's captions and chapters (the native subtitle dialog with a real CRLF/WebVTT file, the skipped-cue report, the preview caption layer's position/size/off, captions re-timed by a 2× speed, and a chapter following a trim); T19–T20 are Task 37's recovery and close guard (a process killed mid-edit resuming its last acknowledged edit, Discard leaving `project.json` byte-identical, and Keep for later surviving a reopen with no recovery prompt); T21–T22 are Task 39's project files and Task 40's reconnect; T23–T26 are Task 45's real-ffmpeg renders (a real staged capture with cues, libass's fonts, a non-libx264 build, the untouched-capture remux); T27 is Task 46's render job under a quit, Alt+F4, the updater and a discard; T28 is Task 47's Render dialog, product library (Watch, Restore, a missing file) and Review played back in WebView2; T29–T31 are Task 48's publish into a vault (a same-name collision and the subtitle export, a full disk, and a quit/updater/crash mid-copy); T32–T36 are Task 50's webcam takes on a real camera (no prompt before Enable camera, a blocked or busy camera and a missing ffmpeg leaving the project alone, a real take reviewed and retaken, Add to timeline's presenter placement rendered as a circle, and the camera's light going off on every way out); T37–T41 are Task 52's synchronized webcam beside a screen capture (ten-minute A/V drift across claps, an unplugged webcam finalizing early while the screen continues, a webcam another app holds refusing the start, pause/resume keeping both aligned, and no webcam = the unchanged capture); T42–T44 are Task 53's per-input audio stems (two inputs as two stems that match the mix at both ends, pause and a stem that cannot be written, and stems off = the unchanged capture); T45–T47 are Task 54's before-you-share checks (every finding's button revealing its object in real WebView2 — selection, output-time seek, scroll, the mixer/Webcam/Layout surfaces and focus on the ratio control; a real missing file blocking Render while warnings do not; and the canvas toast's Open Checks, the destination picker and the dialog read by Narrator); T48–T50 are Task 55's guide progress and targets (the progress file landing in the app-wide `editor-prefs` folder and in no project, a malformed file read as fresh while an unreadable one shows "Session only", and the new timeline **Edit actions** menu opening at its button); T51–T55 are Task 56's guided walkthrough (every lesson's control found and never covered in a real window at both sizes, resume after a hide, a reopen and a quit, F6/Escape/F1/? with Narrator, a modal dialog suspending the coach with no camera prompt, and no guide pixel in a rendered file plus a contrast theme and animations off); T56–T57 are Task 57's progress file through Windows' own dialogs (Save progress file writes lesson progress only and never replaces a file that is not guide progress; Restore installs it paused, with no coach, no camera prompt and no project change, and refuses a foreign file); T58–T61 are Task 58's (the keyboard journey with Narrator and then NVDA, a Windows contrast theme at 150 % and at 200 % with the light editor theme's contrast, and Export diagnostics through Windows' own dialog holding only counts and codes, plus redacted log lines); T62–T63 are Task 59's (an untouched capture rendered and published end to end, lossless by md5, the successor of the retired phase-5 Save; and Discard project unpinning a capture the Record Screen list can then discard, with a refused discard's message free of any redaction handle); T64–T66 are Task 60's (the concept bundle's final representative journey, walked by a person — never claimed by an agent; disk full during Save project and during a render, R-H5's other two halves; and R-M1's memory measurement on a named machine), and the file ends with Task 60's map of every residual gate (R-H1–R-H5, R-A1, R-A2, R-M1 and the two product decisions R-P1/R-P2) to its rows — all OPEN — re-measure with the file's own one-liner, never increment |
+| [docs/superpowers/specs/2026-09-21-tutorial-editor-acceptance-evidence.md](docs/superpowers/specs/2026-09-21-tutorial-editor-acceptance-evidence.md) | The tutorial editor's release evidence (Task 60): one row per concept-bundle F-ID (all 50) naming the tests that prove it as `path#test name` and the checklist rows that still have to, the ADR's GAP-N1..N5 placeholders mapped to real Gaps entries, the residual gates (all open) and the branch-completeness and baseline checks. **`tests/editorEvidence.test.ts` checks it**: a row naming a test file or test that no longer exists turns CI red |
 | [docs/Gaps.md](docs/Gaps.md) | The audited backlog of known issues, weaknesses, tech debt, and untested paths — check it before "discovering" a known problem, extend it when you find a new one |
 
 ## Repository map
@@ -491,7 +500,7 @@ after Task 52's `list_capture_webcams`; 129 after Task 54's `editor_get_checks`;
 133 after Task 57's `editor_export_guide_progress`/`editor_import_guide_progress`;
 134 after Task 58's `editor_export_diagnostics`; 130 after Task 59 retired
 `load_staged_capture`/`save_capture_timeline`/`export_and_save_capture`/
-`cancel_export`):
+`cancel_export`; re-measured unchanged at 130 by Task 60):
 
 ```bash
 awk '/generate_handler!\[/,/\]\)/' src-tauri/src/lib.rs | grep -cE '^\s+[a-z_]+::[a-z_]+,$'
@@ -513,7 +522,7 @@ them, not just the ones a given task is scoping. So a new command needs:
    way as the count above, never incremented.
 3. A grant in EXACTLY ONE capability file's `permissions` array:
    `capabilities/editor.json` (as `allow-<kebab-case>`) if and only if the
-   command is one of the `editor_*` commands (thirty-five as of Task 58, measured in `editor.json`), otherwise
+   command is one of the `editor_*` commands (thirty-five as of Task 58, re-measured unchanged at Task 60, in `editor.json`), otherwise
    `capabilities/default.json`. `src-tauri/src/editor/capability_guard.rs`
    (test-only) is the enforcing test: it fails naming any command missing
    step 2 or 3, granted in the wrong file, or granted in both, and a third
@@ -742,11 +751,15 @@ and the rules below say so where they differ:
     exactly ONCE per process — which is why `editor:open` exists (see the
     Events table), the editor's counterpart to `region:begin`.
   - Since tutorial-editor Task 15 it is no longer the store-free root the
-    "Frontend state" section used to describe — `EditorRoot.vue` installs
-    `editorProject` (`src/stores/editorProject.ts`, Task 14) and drives it
-    through `editor_open_staged` on every drained base. See "Frontend state"
-    below for what that store owns and why `RegionRoot`/
-    `RegionIndicatorRoot` remain the store-free pair.
+    "Frontend state" section used to describe — `EditorRoot.vue` itself uses
+    FOUR stores (`editorProject`, `editorWorkspace`, `editorOnboarding` and
+    the shared `notifications`; measured on the tree at Task 60, not the
+    plan's guess) and drives `editorProject` through `editor_open_staged` /
+    `editor_open_project` on every drained request; the shell it renders
+    adds `editorJobs`, `editorProducts` and `editorChecks` (six editor
+    stores in all) and, in the webcam dialog, `ffmpeg`. See "Frontend state"
+    below for what they own and why `RegionRoot`/`RegionIndicatorRoot`
+    remain the store-free pair.
 
 `panel`, `bubble` and `overlay` are *positioned while hidden, then shown* — a
 moved-only window has no stale-frame flash. (The overlay is also RESIZED while
@@ -1804,6 +1817,116 @@ Publish dialog's Open).
     is safe precisely because it fires only for the capture that genuinely no
     longer exists — and it deliberately does NOT bump `seq`, because it is not
     a capture-state transition and must not invalidate one.
+
+## The tutorial editor domain (`core/src/editor/` + `src-tauri/src/editor/` + `src/components/editor/` + `EditorRoot`)
+
+The tutorial editor turns a staged screen capture (and imported media and
+webcam Takes) into a Tutorial Project — Tracks of Clips, Teaching Cues,
+captions, chapters — then Renders immutable Products and Publishes one into
+a vault. It is the successor of the phase-4 editor and the phase-5 export,
+both retired by Task 59. Binding design:
+`docs/superpowers/specs/2026-09-21-tutorial-editor-integration-design.md`
+(the ADR; its §9 records where the shipped code amended it); plan:
+`docs/superpowers/plans/2026-09-21-tutorial-editor.md`; release evidence
+per F-ID: `docs/superpowers/specs/2026-09-21-tutorial-editor-acceptance-evidence.md`;
+manual gate: `docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md`.
+The per-command detail lives in the IPC table above (the `editor/*` rows),
+the on-disk layout in "Where state lives on disk", the window in the
+`editor` bullet of the window system, the stores in "Frontend state"; this
+section is the map between them.
+
+**Where each concern lives.**
+
+- `core::editor` (pure, tested on Linux) — the model (`model*.rs`, the
+  interchange spelling verbatim, R3), every edit command
+  (`commands/`), validation (`validate*.rs`), `session.rs`/`history.rs` (the
+  serial per-session queue: revision check, `commandId` replay, apply on a
+  clone, validate, install — all or nothing; 100 undo snapshots), time
+  mapping (`time.rs`, integer ms), staged-capture migration (`migrate*.rs`),
+  the render plan (`render_plan*.rs`), the before-you-share checks
+  (`checks*.rs`), the companion note (`note.rs`), the portable package
+  (`package*.rs`, the crate's one `zip` use), captions I/O, relink matching,
+  the take state machine and guide progress.
+- `screen::render` — the RenderPlan → one `filter_complex` argv (video, ASS
+  cues and captions, audio), and `render::run`, the one non-pure module
+  (capability refusal, run, verify). `screen::session` carries the optional
+  synchronized webcam producer and per-input stems (both `cfg(windows)`,
+  hardware-gated).
+- `src-tauri/src/editor/` (the shell) — the `editor_*` commands, the job
+  registry and its one `JobReporter`, the project store I/O (`store_io.rs`,
+  `project_store.rs`), recovery (`recovery.rs`: the journal and the startup
+  re-pin sweep), render jobs and the product ledger, publish (the tenth
+  write), webcam takes, diagnostics and `redact`, plus three structural test
+  modules: `authz_guard.rs`, `capability_guard.rs`, `redact_guard.rs`.
+- The webview — `src/editor/port.ts` is the ONLY place that calls `invoke`
+  for an `editor_*` command (decoders beside it; `EditorRoot`'s drain of
+  `take_editor_request`, a non-editor command, is the one other `invoke` in
+  the window); `src/editor/actions.ts` is the
+  one action registry every toolbar, menu and shortcut reads (a disabled
+  action always carries a reason); `src/editor/guide/` is the onboarding
+  content; the six editor stores are `editorProject`, `editorWorkspace`,
+  `editorJobs`, `editorProducts`, `editorChecks`, `editorOnboarding`.
+
+**The invariants (ADR §8), as shipped, with what pins each:**
+
+1. Rust (`core::editor`) is the only authority for committed edits. The
+   webview never applies an edit locally except as a transient drag/trim
+   preview that pointer-up turns into ONE `editor_execute` and Escape
+   discards; a reply is installed only if its session matches and its
+   revision advanced (`editorProject`).
+2. Every `editor_*` command takes `window: WebviewWindow`, calls
+   `require_editor_window` first and resolves its session
+   (`authz_guard.rs`), and is granted ONLY in `capabilities/editor.json`
+   (`capability_guard.rs`). The two panel-callable openers,
+   `list_tutorial_projects` and `open_project_editor`, are the documented
+   exception.
+3. The asset-protocol scope is R7's enumerated list — staging plus each
+   project's `media`, `takes`, `products`, `cache` — pinned exactly by
+   `tray.rs`; `jobs\`, the JSON files and every vault stay out.
+4. Project files are written only through `write_atomic_replacing` (store
+   files) or an owned same-directory temp + `rename_noreplace` (exports and
+   landed media); never `std::fs::write`, never `std::fs::rename` for a
+   first write; removal is owned-file-only and no-follow.
+5. Products are immutable: nothing opens a product file for writing after
+   `products.json` records it; Publish copies it, Restore reads its snapshot.
+6. A staged capture pinned by a project (`editorProjectId` in its sidecar)
+   is never discarded or cleared; discarding a project unpins it and never
+   deletes the recording.
+7. Job progress travels only on the caller's per-job `Channel`, emitted only
+   by `JobReporter` (strictly increasing `sequence`, exactly one terminal,
+   last); no `app.emit` for editor jobs. The editor's only events are
+   `editor:open` and `editor:closeRequested`, both `emit_to("editor")`.
+8. The render fast path keys on `RenderPlan::is_identity` (an untouched
+   capture remuxes losslessly), never on a field's absence.
+9. `tests/fixtures/editor-time-cases.json` holds the TS time mapping to
+   Rust's, size-guarded in both languages (with the fade, arrow and
+   presenter-placement tables beside it).
+10. Guide actions never execute editor commands: walking all 22 lessons
+    sends zero `editor_execute` calls (`tests/editorGuideCoach.test.ts`).
+
+**The shutdown gate after this domain** is four terms, composed once in
+`shutdown_gate.rs` and read by quit, Alt+F4 and the updater's prepare step:
+an audio recording, a screen capture, a RENDER job not yet ended
+(`render_jobs::blocks_shutdown`) and a PUBLISH job
+(`publish::blocks_shutdown`). The quit workers cancel renders, then
+publishes (each bounded at 5 s, with its own abandon latch), then finalize
+the captures. Unsaved edits never block a quit — the recovery journal is the
+durability mechanism. `tray::hide_buddy` gates on none of the editor's
+terms.
+
+**Vault writes.** The domain has exactly one: Publish, the tenth numbered
+write (see the vault domain). Everything else it writes — projects, media
+copies, takes, products, reviews, guide progress, project files, subtitle
+and diagnostics exports — lands outside every vault.
+
+**Verification status.** The automated evidence for all 50 F-IDs is listed
+in the acceptance-evidence file and checked by `tests/editorEvidence.test.ts`.
+What no gate can observe is the Windows checklist — 66 rows, none run — and
+the ADR's residual gates (R-H1–R-H5, R-A1, R-A2, R-M1, R-P1, R-P2), all
+OPEN; the concept bundle's final representative journey is checklist row
+T64, unwalked. Known limits: docs/Gaps.md GAP-170 (the ACL never run in a
+live app), GAP-173 (the preview approximates the render) and GAP-172
+through GAP-213 in general, each naming its task.
 
 ## The document-import domain (`core/src/document_import.rs` + `src-tauri/src/document_commands.rs` + `DocumentImportSettings.vue` / `ImportVaultPicker.vue`)
 

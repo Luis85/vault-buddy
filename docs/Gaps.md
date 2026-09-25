@@ -2981,6 +2981,14 @@ finish/discard/session close — which needs its own keyed release site
 (`clear_active_screen`'s single-release pin is per kind) and a rule for a
 webview that dies mid-take without releasing.
 
+> **2026-09-25 — Task 60 (ADR amendment).** This is the ADR's "GAP-N1". ADR
+> R10 now states the native refusal too, and states that the two directions
+> are intentionally NOT the same scope: a take refuses to BEGIN while a
+> capture runs (a native check, `begin_is_refused_during_a_screen_capture`
+> in `src-tauri/src/editor/webcam_commands_tests.rs`), but a capture never
+> refuses to start while a take runs (no claim to arbitrate). What this entry
+> tracks is only that second direction.
+
 ### GAP-194 · Low · No native WebView2 permission handler restricts the camera and microphone to the editor window
 `src-tauri/src/lib.rs` (window setup), Task 49 (ADR R10, R8). The webcam
 take asks WebView2 for the camera through `getUserMedia`, and WebView2
@@ -6230,6 +6238,18 @@ alone. A performance claim asserted on a shared machine's wall clock is
 load-sensitive by construction. Low; worth either a generous ratio or
 measuring CPU time, whenever that file is next touched.
 
+> **2026-09-25 — Task 60 measurement.** The `%TEMP%` theory (Task 40's note:
+> 16/16 passes with `TMP` outside `%TEMP%`) does not hold on this host today.
+> Six back-to-back `cargo test -p vault_buddy_core tasks::disk` runs with the
+> default `TMP`: 5 of 6 red (one or two of the 16 tests each, always
+> "Zugriff verweigert (os error 5)" from `Cannot save task`). Six more with
+> `TMP`/`TEMP` = `C:\Projects\vbtmp-t60`: 2 of 6 red, same error. Moving the
+> temp directory lowers the rate; it does not remove it, so the cause is not
+> (only) a scanner watching `%TEMP%`. The whole `vault_buddy_core` suite still
+> passes on a rerun (1283/1283). The second flake above is gone with its
+> file: `screen/tests/export_roundtrip.rs` was deleted by Task 59 (commit
+> `1f3428f`) along with the phase-5 export it tested.
+
 ### GAP-170 · High (unverified) · The app-wide ACL that now gates ALL 104 commands has never run inside a live app — if it resolves differently than the generated-artifact replica models, every IPC command from every window is refused, not just the editor ones
 Task 11 (tutorial editor, R8's app-manifest half) made `build.rs`'s
 `AppManifest::commands(ALL_COMMANDS)` list EVERY command in
@@ -6707,3 +6727,45 @@ retires paths rather than adding a new read to the Publish dialog.
 > own date choice and a note. The tab's hints say "Publish's default for
 > this vault". Pinned by `tests/editorPublishDialog.test.ts` (a vault with
 > notes off gets no note by default; a vault change re-reads).
+
+### GAP-212 · Low (by design, R13) · A published product occupies the disk twice until its project is discarded
+`src-tauri/src/editor/publish.rs`, `src-tauri/core/src/editor/publish_io.rs`
+(`copy_into_vault`), `src-tauri/src/editor/render_jobs.rs` (the
+`products.json` ledger), Task 48 (ADR R13, where it was planned as
+"GAP-N4"; the plan's own GAP-N4 wording became GAP-192, so this is the ADR's
+half, recorded by Task 60). Publishing COPIES an immutable product from the
+project's `products\<productId>.mp4` into the vault and deletes nothing
+afterwards — deliberately: the product stays playable in its project (Watch,
+Restore, a second publish into another vault) and a vault file the user
+later edits or deletes can never take the project's lineage with it. The
+cost is disk: every published product exists twice, once in
+`%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\products\`
+and once in the vault, and nothing in the app frees the first copy short of
+**Discard project…** (`editor_close_session{discardProject}`, which removes
+the whole project directory) — there is no per-product removal (GAP-187).
+**Failure scenario:** a user renders and publishes a 1.5 GB hour-long
+tutorial three times while iterating; about 4.5 GB stays under
+`%LOCALAPPDATA%` after the vault copies are the only ones they care about,
+invisible to the staging size readout (which measures captures, not
+projects) and to any settings card. **Fix:** a Products-tab "Remove file"
+that deletes a product's video but keeps its ledger record (lineage, Restore
+of its snapshot) and marks it unavailable — the ledger already models an
+unavailable file — plus a per-project size readout in the tutorial projects
+list. Not a data-safety issue: nothing is ever lost, only kept twice.
+
+### GAP-213 · Low · The tutorial companion note says `created-by: vault-buddy`; every other Vault Buddy note says `created-by: Vault Buddy`
+`src-tauri/core/src/editor/note.rs` (`render_tutorial_note`, pinned by its
+own `the_managed_frontmatter_the_embed_and_nothing_else` test) versus
+`src-tauri/core/src/capture_note.rs`, `src-tauri/core/src/transcript.rs` and
+`src-tauri/core/src/document_import.rs` (all `created-by: Vault Buddy`).
+Found by Task 48's review, carried to and recorded by Task 60 (a docs-only
+task, so not fixed there). The tenth sanctioned vault write spells the
+provenance key's VALUE differently from the first, second and eighth.
+**Failure scenario:** a user's Dataview query or saved Obsidian search for
+`created-by: "Vault Buddy"` — the value every recording, transcript and
+imported document carries — silently omits every published tutorial note,
+with no error. **Fix:** make the tutorial note write `created-by: Vault
+Buddy` and update its test in the same commit; a note already published with
+the old value is the user's file and is left alone (a vault write never
+rewrites an existing note), so the fix note should say that old notes keep
+`vault-buddy`. Not done in Task 60 because that task changes no behaviour.

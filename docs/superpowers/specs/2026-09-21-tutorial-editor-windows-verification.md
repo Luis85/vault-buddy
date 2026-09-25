@@ -44,8 +44,9 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **63 rows** today (T1–T63), of which **0** carry a result
-(T7 is obsolete since Task 59, which retired the legacy strip it guarded). An
+This file carries **66 rows** today (T1–T66), of which **0** carry a result
+(T7 is obsolete since Task 59, which retired the legacy strip it guarded).
+Task 60 added T64–T66 and the residual-gate map at the end of the file. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -493,3 +494,38 @@ half) and 38.
 | --- | --- | --- | --- |
 | T62 | **An untouched capture reaches a vault, lossless, end to end** | Record ~60 s WITH a microphone, stop, and click **Edit** on the capture bar. Change nothing. **Render video** at any quality; when it completes, **Publish to vault…** into a vault with notes on. **Record**: how long the render took (a remux of 60 s is seconds, not minutes); `vault-buddy.log`'s render line (it must say the plan was an identity/remux); the published `.mp4`'s byte size beside the staged `<base>.mp4`'s (a remux differs only by the container, a few KB); that it plays in Obsidian from the note's embed with sound; and that the staged capture is STILL listed under Record Screen → *Not published yet* (R6: publishing never deletes it). Then run `ffmpeg -v error -i <file> -map 0:v -c copy -f md5 -` on the staged and the published file and **record both md5 lines** — they must be equal. Finally, in Vault settings → Screen for that vault turn *Write a companion note* OFF and *year/month folders* ON, open Publish again and **record** that both toggles now default that way (fix round 1: the Screen settings are Publish's defaults, read from the editor window through `get_screen_capture_config` — a refused read here would also be a GAP-170 finding). | |
 | T63 | **Discard project, then the recording** | Open a staged capture in the editor, make one edit and save. Open the header's ▾ menu → **Discard project…**. **Record**: that the dialog says the recording stays; that Cancel leaves everything as it was; then confirm, and record that the window hides, that `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\` is gone, that the capture's sidecar no longer carries `editorProjectId`, and that the staged `.mp4` is untouched. Then in Record Screen, record that the row now offers **Discard** (it was hidden while pinned) and that discarding it removes the `.mp4`, the `.json` and any `.webcam.mp4`. Finally, repeat the discard with the project folder held open by another program (e.g. a `cmd` window `cd`'d into it): **record the message** — it must name the project folder by its role and contain no `<path:#…>` handle; the window must stay open WITH THE PROJECT STILL EDITABLE behind the dialog (never a "could not be opened" line), and — after closing the `cmd` window — pressing Discard project again must succeed (fix round 1). | |
+
+## Residual gates and the final journey (Task 60)
+
+Task 60 closes the increment's documentation, not its verification. Every
+residual gate the ADR names (§7) is listed here with the rows that test it;
+**all of them are OPEN** and none of their rows carries a result. R-P1 and
+R-P2 are product decisions a human makes, not checks anyone can run, so they
+have no row. The per-F-ID view of the same rows is
+`docs/superpowers/specs/2026-09-21-tutorial-editor-acceptance-evidence.md`.
+
+| Gate | What | Rows |
+| --- | --- | --- |
+| R-H1 | Physical camera and microphone | T32–T36 |
+| R-H2 | Windows ffmpeg against a real staged fragmented MP4: layers, libass fonts, `xfade`/`acrossfade`, the encoder choice | T23–T26, T62 |
+| R-H3 | The synchronized webcam producer: drift, unplug, a busy device | T37–T41 |
+| R-H4 | The per-input stems writer | T42–T44 |
+| R-H5 | Disk full during save, render and publish on a real volume | T30 (publish), T65 (save and render) |
+| R-A1 | Narrator and NVDA on WebView2 | T53, T58 |
+| R-A2 | Windows contrast themes at 150 % and 200 % | T59, T60 |
+| R-M1 | Memory of a ten-minute 1080p30 tutorial | T66 |
+| R-P1 | Product decision: a native package limit beyond 200 MiB of media | — |
+| R-P2 | Product decision: the `zip` crate dependency | — |
+
+T64 is the concept bundle's final representative journey
+(`docs/concepts/vault-buddy-editor/docs/IMPLEMENTATION-PLAN.md` § Final
+acceptance tasks for representative users). It needs a person driving the
+real app and watching for confusion, which no test and no agent session can
+stand in for — it has not been walked. T65 closes R-H5's two halves T30 does
+not reach; T66 is R-M1, which asks for a number on a named machine.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T64 | **The final representative journey** | With a person new to the editor at the keyboard (the observer only watches and notes): capture a short screen recording (or import one), remove a mistake, rearrange an explanation, add an arrow, a zoom and a text cue and a presenter overlay (webcam take or synchronized webcam), fade the audio and the video, correct the captions and add chapters, **Save project** without rendering, close the editor and reopen the project from the panel, **Render video** and watch the product, then make one more edit and render a second product. Use the guide along the way: start it, dismiss it, resume it. **Record**: where the user completed each step unaided, where they stalled and for how long, what they said was confusing, every error message they saw (verbatim), and whether both products play and match what was on screen. Blockers and confusion are the result, not a pass/fail tick. | |
+| T65 | **Disk full during Save project and during a render (R-H5)** | Put the local app data on, or junction `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects` to, a small volume (a VHD of a few hundred MB). (a) Fill it to a few KB free, make an edit and **Save project**. **Record**: the message (it must say the disk is full — `diskFull` — not a generic failure), that `project.json` is byte-identical to before (compare a hash taken beforehand), that the header still reads Unsaved changes, and that freeing space and saving again succeeds. (b) Free enough for the project but not for a product, and **Render video**. **Record**: whether the render is refused before it starts (the free-space check) or fails mid-way, the message, that no `jobs\<jobId>\` directory or `out.mp4.part` is left behind, that `products.json` gained nothing, and that the project still opens. | |
+| T66 | **Memory of a ten-minute 1080p30 tutorial (R-M1)** | On a named machine (record its CPU, RAM, GPU and Windows build), build a ten-minute tutorial from 1920×1080 30 fps footage (on the 16:9 canvas, 1280×720 — the largest the editor renders) with three video layers (the capture, a presenter picture-in-picture, a title card track) and two audio layers (the capture's sound and an imported music bed), with a few cues and captions. In Task Manager → Details (add the *Peak working set* column), watch `vault-buddy.exe`, its `msedgewebview2.exe` children and the `ffmpeg.exe` child. **Record**: steady and peak working set of each while editing (scrub, play, zoom the timeline), and during a High-quality render; the render's wall time; whether anything became unresponsive. The concept bundle's NFR is the reference; a number is the result, not a judgment. | |

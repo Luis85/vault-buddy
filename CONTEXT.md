@@ -44,6 +44,30 @@ _Avoid_: Export, upload — nothing leaves the machine
 Permanently deleting a Staged Capture — its video and its sidecar — from staging. Always confirm-gated, because it destroys the only copy of a recording that has not been Published. The only way a Staged Capture's life ends. Discarding a tutorial *project* is a different act: it deletes the project's edits and Renders and unpins its Staged Capture, and never deletes the recording.
 _Avoid_: Cancel (that stops a Render in flight and keeps the footage), Archive (nothing is kept), Delete (reserved for the Task domain's own destructive write)
 
+**Tutorial Project**:
+The tutorial editor's editable document: Tracks of Clips, Teaching Cues, captions, chapters and a destination Vault, kept in the app's own project store (`editor-projects\<projectId>\`), **outside every Vault**. It refers to its media (a Staged Capture it pins, imported copies, Takes) and is never itself a vault file; *Save project* commits it there, and a portable or lightweight project file is an export of it. `project` stays the field and module name inside the editor's code, where the scope disambiguates it.
+_Avoid_: Project (that is Task metadata), timeline (one view of it), draft
+
+**Track**:
+One layer of a Tutorial Project's timeline — video or audio — holding Clips that never overlap except across a transition. Video Tracks composite top over bottom; each Track can be hidden, locked, muted or soloed.
+_Avoid_: Layer (the render's word for one drawn Clip), Stem (a recorded audio input, which the editor puts on its own Track)
+
+**Clip**:
+One placed use of a media source on a Track: which part of the source (its in and out points) plays when, at what speed, where in the frame and how loud. Cutting, trimming, moving and fading all act on Clips; the source file is never changed.
+_Avoid_: Segment (the retired phase-4 editor's word), asset (the source a Clip plays from)
+
+**Teaching Cue**:
+An instructional overlay attached to a Clip in the Clip's SOURCE time, so it stays on the moment it explains when the Clip is cut, moved or sped up: a text callout, an arrow, a highlight, a spotlight, a zoom, a numbered step or a privacy cover.
+_Avoid_: Annotation, effect (the code's wire word for it), sticker
+
+**Take**:
+A webcam recording made inside the editor (camera and microphone in the editor window), streamed into the Tutorial Project's own `takes\` folder and added to the project as a new source. A Take is independent of any Staged Capture; only a webcam recorded **with** a screen capture is synchronized with it.
+_Avoid_: Recording (a Capture), webcam track (the synchronized one that belongs to a Staged Capture)
+
+**Rendered Product** (or just **Product**, in the editor):
+The immutable video a Render produces, kept in the Tutorial Project's `products\` folder with a record of the exact edit it was made from, which can be watched, restored as the current edit, and Published. Nothing ever writes to a Product after it lands.
+_Avoid_: Export, output file, render (the act, not its result)
+
 **Flat layout**:
 Vault Buddy's **default** on-disk layout for a capture/import domain: files live directly in `<folder>`, with no year/month subfolders. The timestamped base name encodes the full date, so the folders were never what identified a file.
 _Avoid_: Migration — switching layouts never moves or rewrites existing files
@@ -110,7 +134,7 @@ _Avoid_: Today (the broader Plan bucket), Dashboard, Agenda
 
 **Project**:
 Task metadata linking a Task to the larger body of notes or work it belongs to.
-_Avoid_: Epic, initiative
+_Avoid_: Epic, initiative — and the tutorial editor's document, which is a **Tutorial Project**
 
 **Runtime**:
 The local service layer (Knowledge Engine, Task Engine, Workflow Engine, and peers) that owns all business logic. The desktop UI, the MCP Server, and Workflows are all just clients of the Runtime — none of them re-implement its logic.

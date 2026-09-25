@@ -9,7 +9,7 @@ it and your Obsidian vaults are one action away — no window hunting, no
 context switching. Your knowledge stays yours: everything runs locally.
 
 - **Platform:** Windows 11 (MVP)
-- **Status:** vault access · cross-vault search · per-vault & cross-vault tasks · one-click meeting & voice recording · screen recording with an editor · local offline transcription · local MCP server for AI clients
+- **Status:** vault access · cross-vault search · per-vault & cross-vault tasks · one-click meeting & voice recording · screen recording · tutorial video editor · local offline transcription · local MCP server for AI clients
 
 See the [Product Requirements Document](docs/PRD.md) for the full vision,
 principles, capabilities, and roadmap.
@@ -61,21 +61,34 @@ The buddy appears as a small, always-on-top character on your desktop.
   template, and transcription — in the panel. When the **follow-up template**
   is on (the default), each recording's companion note gets a ready-made
   `## Follow-up` section (action items, decisions, notes) to fill in after.
-- **Record your screen** into a vault: from the capture chooser pick
-  **Record screen**, then a monitor, a window, or a region you drag out — with
-  any of your audio devices mixed in. Pause, resume and stop from the capture
-  bar or the tray; Vault Buddy's own windows stay out of the picture. When you
-  stop, the recording waits in a staging area outside your vault until you
-  decide what to do with it. Click **Edit** to open it in its own window,
-  where you can split, delete and reorder blocks with undo/redo — every edit
-  is saved as you make it, so a crash costs at most the last one. Then **Save
-  to vault** writes a playable `.mp4` plus a companion note, or **Discard**
-  throws the recording away (two clicks, never silently). An untrimmed
-  recording is saved losslessly and almost instantly; a trimmed one is
-  re-encoded to exactly what you cut. Anything you walked away from — including
-  a recording interrupted by a crash — is offered back to you the next time you
-  open Record screen. **Saving needs [ffmpeg](https://ffmpeg.org/download.html)
-  installed** (recording and editing do not); Vault Buddy does not bundle it.
+- **Record your screen**: from the capture chooser pick **Record screen**,
+  then a monitor, a window, or a region you drag out — with any of your audio
+  devices mixed in, and optionally a webcam recorded in sync. Pause, resume
+  and stop from the capture bar or the tray; Vault Buddy's own windows stay
+  out of the picture. When you stop, the recording waits in a staging area
+  outside your vault until you decide what to do with it — anything you
+  walked away from, including a recording interrupted by a crash, is listed
+  the next time you open Record screen.
+- **Turn a recording into a tutorial**: click **Edit** to open it in the
+  tutorial editor, its own window. Cut, trim, move and speed up clips across
+  several video and audio tracks; add fades and transitions, a presenter
+  picture-in-picture (from the synchronized webcam or a take recorded right
+  in the editor), title cards, arrows, highlights, zooms, numbered steps,
+  privacy covers, captions (typed or imported from `.srt`/`.vtt`) and
+  chapters; run the before-you-share checks. Everything has undo/redo, and a
+  crash costs at most the last edit — the editor offers to resume it.
+  **Save project** keeps your editable project on this computer (never in a
+  vault; a portable project file can be saved too). **Render video** makes a
+  playable video you can watch in the editor — an unedited recording renders
+  losslessly and almost instantly — and **Publish to vault…** copies it into
+  a vault as a playable `.mp4` plus a companion note with its chapters. A
+  built-in guided walkthrough and a learning center (Help) show you around.
+  Throwing a recording away takes two steps, never silently: **Discard
+  project…** in the editor, then **Discard** in the Record screen list.
+  **Rendering, importing video or audio, waveforms and thumbnails, and
+  webcam takes need [ffmpeg](https://ffmpeg.org/download.html) installed**
+  (recording and editing do not); Vault Buddy does not bundle it — point it
+  at yours in Buddy settings → Integrations if it is not on your PATH.
 - **Transcribe** locally, opt-in per vault: after a recording finishes,
   Vault Buddy runs speech-to-text on-device with whisper.cpp and writes a
   transcript that the note embeds. It downloads a small speech model on
