@@ -37,6 +37,7 @@ import type {
   PackageReceipt,
   ProductDto,
   ProjectSummaryDto,
+  PublishDefaults,
   PublishDestination,
   PublishReceipt,
   RelinkReport,
@@ -73,6 +74,7 @@ import { decodeRelinkReport } from "./decodeRelink";
 import {
   decodeNullableFileName,
   decodeProducts,
+  decodePublishDefaults,
   decodePublishReceipt,
   decodeRenderStarted,
   decodeVaultChoices,
@@ -241,6 +243,9 @@ export interface EditorPort {
   exportDiagnostics(): Promise<string | null>;
   /** `list_vaults` — the vaults a publish can go into. */
   listVaults(): Promise<VaultChoice[]>;
+  /** `get_screen_capture_config` — a vault's Screen settings as the
+   * Publish dialog's `dated`/`createNote` defaults (GAP-211). */
+  publishDefaults(vaultId: string): Promise<PublishDefaults>;
   /** `open_screen_capture` — open a PUBLISHED file in Obsidian (Rust
    * requires it to be inside the named vault). */
   openScreenCapture(vaultId: string, path: string): Promise<void>;
@@ -403,6 +408,9 @@ export function createTauriEditorPort(): EditorPort {
     },
     listVaults() {
       return call("list_vaults", undefined, decodeVaultChoices);
+    },
+    publishDefaults(vaultId) {
+      return call("get_screen_capture_config", { id: vaultId }, decodePublishDefaults);
     },
     async openScreenCapture(vaultId, path) {
       await call("open_screen_capture", { id: vaultId, path }, () => undefined);

@@ -30,14 +30,14 @@ _Avoid_: Track (the editor's timeline word), channel (a stem is a whole device's
 
 **Export** *(superseded)*:
 The phase-5 act of turning a Staged Capture straight into a `.mp4` plus a companion note inside a Vault, and removing the Staged Capture afterwards. Retired by the tutorial editor (Task 59): the same outcome is now a **Render** followed by a **Publish**, and the Staged Capture is kept. Use the word only for that history — and for the editor's own file exports (a project file, subtitles, diagnostics), which write outside every Vault.
-_Avoid_: Save (the phase-5 UI's word for it) — a tutorial project is *saved*, a Render is *published*
+_Avoid_: Save (the phase-5 UI's word for it) — a tutorial project is *saved*, a Product (a Render's output) is *published*
 
 **Render**:
 Producing a playable video (a **Product**) from a tutorial project's current edit, inside the project's own folder, never a Vault. An untouched Staged Capture renders as a lossless remux; any edit re-encodes exactly what the timeline shows. Repeatable and cancellable, because the project is kept.
 _Avoid_: Export, save — nothing reaches a Vault by rendering
 
 **Publish**:
-Copying one rendered Product, plus a companion note, into a Vault — the tenth sanctioned vault write. Never moves or deletes the Product or the Staged Capture it came from.
+Copying one Product (a Render's output video), plus a companion note, into a Vault — the tenth sanctioned vault write. Never moves or deletes the Product or the Staged Capture it came from.
 _Avoid_: Export, upload — nothing leaves the machine
 
 **Discard**:

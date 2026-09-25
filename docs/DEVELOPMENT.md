@@ -462,8 +462,8 @@ ever written into your vaults except recordings and their notes.
     vault-relative folder a Publish lands a video and its note in when the
     Publish dialog's folder is left blank.
   - `screenCaptureDateFolders` (bool, default `false`) — the dated `YYYY/MM`
-    vs flat toggle. **Read by nothing since Task 59** (the Publish dialog asks
-    each time; docs/Gaps.md GAP-211).
+    vs flat toggle, as the Publish dialog's DEFAULT for this vault (the user
+    can change it per publish).
   - `screenQuality` (`"low"` | `"balanced"` | `"high"`, default
     `"balanced"`) — the capture's recording bitrate, applied when the
     **next** recording starts. A render picks its own quality in the
@@ -474,9 +474,9 @@ ever written into your vaults except recordings and their notes.
     a hand-edited file still opens the app — but the settings command
     **refuses** it rather than normalizing, because a control the user is
     looking at must not quietly become something else.
-  - `screenCreateNote` (bool, default `true`) — whether the retired phase-5
-    export wrote a companion note. **Read by nothing since Task 59** (the
-    Publish dialog's own checkbox decides; docs/Gaps.md GAP-211).
+  - `screenCreateNote` (bool, default `true`) — whether a Publish writes the
+    companion note, as the Publish dialog's DEFAULT for this vault (the user
+    can change it per publish).
   - `screenAudioStems` (bool, default `false`) — keep each audio input as its
     own stem beside the mixed track (new recordings only).
   - `screenExtraFrontmatter` / `screenBodyTemplate` (string or omit) — the

@@ -15,8 +15,9 @@
 //! and settable nowhere, so a user could record and export but never choose
 //! a folder, a frame rate or whether a note was written. Since Task 59 the
 //! folder and the two templates are the tutorial editor's Publish's, and
-//! the date-folder and note toggles are read by nothing (docs/Gaps.md
-//! GAP-211).
+//! the date-folder and note toggles are the Publish dialog's defaults for
+//! the vault (it reads them through `get_screen_capture_config`; GAP-211,
+//! closed).
 
 use std::path::Path;
 

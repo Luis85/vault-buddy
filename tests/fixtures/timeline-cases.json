@@ -5,14 +5,15 @@
     "by this exact path, so moving this file breaks a Rust build (include_str!).",
     "Task 59 retired the phase-4 editor and its TypeScript twin of the algebra,",
     "and with it tests/timelineFixtures.test.ts and its size guard: Rust keeps",
-    "the table because the tutorial editor's migration reads a phase-4 sidecar",
-    "timeline through core::timeline, and Timeline::is_untouched is the identity",
-    "cross-check. Why it exists, and what each row pins, is in timeline.rs.",
+    "the table as the record of the algebra every saved phase-4 cut on disk was",
+    "made with; the migration itself reads a cut through from_sidecar_value only.",
+    "Why it exists, and what each row pins, is in timeline.rs.",
     "toSourceMs rows are [outputMs, expectedSourceMs]; null means past the end.",
     "isUntouched rows are [sourceDurationMs, expected] for Timeline::is_untouched",
-    "-- the predicate the retired phase-5 export's fast path keyed on, and the",
-    "migration still does. RUST ASSERTS THESE, and requires every case to",
-    "declare the field, so a new case cannot skip it."
+    "-- the predicate the retired phase-5 export's fast path keyed on; now read",
+    "by the staged list's edited label and by render_plan's",
+    "identity_detection_matches_is_untouched cross-check. RUST ASSERTS THESE,",
+    "and requires every case to declare the field, so a new case cannot skip it."
   ],
   "whole": [
     {

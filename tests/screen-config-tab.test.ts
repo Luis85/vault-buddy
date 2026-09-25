@@ -112,6 +112,20 @@ describe("ScreenCaptureConfigTab", () => {
     expect(lastSaved(calls)?.screenAudioStems).toBe(false);
   });
 
+  // Task 59 fix round 1 (GAP-211): the retired phase-5 Save read these two;
+  // now they are the Publish dialog's defaults for this vault, and the
+  // controls say so rather than implying a save they no longer drive.
+  it("the date-folder and note toggles say they are Publish's defaults", async () => {
+    const { wrapper } = mountTab({});
+    await flushPromises();
+    for (const id of ["screen-date-folders", "screen-create-note"]) {
+      const label = wrapper.get(`label[for='${id}']`).text();
+      expect(label).toContain("Publish");
+      expect(label).toContain("default");
+      expect(label.toLowerCase()).not.toContain("save");
+    }
+  });
+
   it("loads all eight fields from disk", async () => {
     const { wrapper } = mountTab({
       screenCaptureFolder: "Recordings/Screen",

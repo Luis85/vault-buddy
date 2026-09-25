@@ -17,9 +17,10 @@ import VaultFolderSetting from "./VaultFolderSetting.vue";
 //
 // Until this landed all seven fields (now eight) were config.json hand-edits — READ in
 // production and settable nowhere. Since Task 59 retired the phase-5 export,
-// quality, fps and stems are read by the capture worker, and the folder and
-// the two templates by the tutorial editor's Publish; the date-folder and
-// note toggles are read by nothing (docs/Gaps.md GAP-211).
+// quality, fps and stems are read by the capture worker, the folder and the
+// two templates by the tutorial editor's Publish, and the date-folder and
+// note toggles are the Publish dialog's defaults for this vault (Task 59 fix
+// round 1, GAP-211 closed).
 const props = defineProps<{ vaultId: string }>();
 
 const { loading, loadError, load } = useSettingsLoad();
@@ -179,7 +180,7 @@ function onBodyTemplateInput(event: Event) {
           class="text-sm text-slate-200"
         >
           Organize into year/month folders
-          <span class="block text-xs text-fg-subtle">Off = one flat folder</span>
+          <span class="block text-xs text-fg-subtle">Publish's default for this vault (you can change it each time). Off = one flat folder</span>
         </label>
         <input
           id="screen-date-folders"
@@ -237,7 +238,7 @@ function onBodyTemplateInput(event: Event) {
           class="text-sm text-slate-200"
         >
           Write a companion note
-          <span class="block text-xs text-fg-subtle">Off = the video only</span>
+          <span class="block text-xs text-fg-subtle">Publish's default for this vault (you can change it each time). Off = the video only</span>
         </label>
         <input
           id="screen-create-note"

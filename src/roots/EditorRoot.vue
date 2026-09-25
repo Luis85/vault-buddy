@@ -101,12 +101,16 @@ const sessionMatchesRequest = computed(() => {
     : editorProject.snapshot.projectId === r.value;
 });
 
-/** A refused open, in the store's role wording (no redaction handle —
- * `src/editor/errorCopy.ts`), or `null`. Shown only while the shell is not:
- * a refused picker probe over a working session is not this window's news. */
-const openFailure = computed(() =>
-  !sessionMatchesRequest.value && requested.value !== null ? (editorProject.lastError?.message ?? null) : null,
-);
+/** Why this root's most recent OPEN was refused, in the store's role
+ * wording (no redaction handle — `src/editor/errorCopy.ts`), or `null`.
+ * Set by an open alone, never read off the store's shared `lastError`
+ * (Task 59 fix round 1): a refused DISCARD also lands there, and a project
+ * that opened fine must never be reported as one that could not be. */
+const openError = ref<string | null>(null);
+
+/** Shown only while the shell is not: a refused picker probe over a
+ * working session is not this window's news. */
+const openFailure = computed(() => (sessionMatchesRequest.value ? null : openError.value));
 
 /** Drain the stash and open whatever it held. Runs on mount AND on every
  * `editor:open`. An empty drain means "nothing new", never "close what is
@@ -127,6 +131,7 @@ async function openRequested() {
   requested.value = request;
   if (request.kind === "staged") await editorProject.openStaged(request.value);
   else await editorProject.openProject(request.value, false);
+  openError.value = editorProject.lastError?.message ?? null;
   // A failed open is logged here, not inside the store, because the
   // store's own `openWith` doc is explicit that a failure is a normal,
   // expected outcome for some callers (a picker probing a project that no
@@ -162,6 +167,22 @@ async function openProjectFile() {
     return;
   }
   if (hydrateNewSession()) await recovery.value?.check();
+}
+
+/** Task 59 fix round 1: a REFUSED discard left the Rust session live while
+ * the store forgot it, so the project is reopened (Rust reuses the live
+ * session) and the shell's gate pointed at it. `true` when a session is
+ * back. */
+async function reattach(projectId: string): Promise<boolean> {
+  requested.value = { kind: "project", value: projectId };
+  await editorProject.openProject(projectId, false);
+  if (editorProject.lastError) {
+    logWarning(`editor_open_project failed after a refused discard: ${editorProject.lastError.message}`);
+    return false;
+  }
+  openError.value = null;
+  if (hydrateNewSession()) await recovery.value?.check();
+  return true;
 }
 
 /** Task 59: a discarded project leaves nothing in this window to show, so
@@ -315,6 +336,7 @@ onBeforeUnmount(() => {
     <CloseGuardDialog ref="closeGuard" />
     <DiscardProjectDialog
       :open="discardOpen"
+      :reattach="reattach"
       @close="discardOpen = false"
       @discarded="onDiscarded"
     />

@@ -4,7 +4,14 @@
  * `decodeRelink.ts` precedent). Held to the literals `render_jobs_tests.rs`
  * pins on the Rust side.
  */
-import type { ProductDto, PublishReceipt, RenderRange, RenderStarted, VaultChoice } from "../editorTypes";
+import type {
+  ProductDto,
+  PublishDefaults,
+  PublishReceipt,
+  RenderRange,
+  RenderStarted,
+  VaultChoice,
+} from "../editorTypes";
 import {
   asArray,
   asBoolean,
@@ -87,4 +94,15 @@ export function decodeVaultChoices(value: unknown): VaultChoice[] {
     const v = asObject(raw, `vaults[${i}]`);
     return { id: asString(v.id, `vaults[${i}].id`), name: asString(v.name, `vaults[${i}].name`) };
   });
+}
+
+/** `get_screen_capture_config`'s reply (`ScreenCaptureConfigDto`, whose
+ * camelCase keys `screen_config_commands.rs` pins), reduced to the two
+ * settings the Publish dialog takes its defaults from. */
+export function decodePublishDefaults(value: unknown): PublishDefaults {
+  const v = asObject(value, "screenConfig");
+  return {
+    dated: asBoolean(v.screenCaptureDateFolders, "screenConfig.screenCaptureDateFolders"),
+    createNote: asBoolean(v.screenCreateNote, "screenConfig.screenCreateNote"),
+  };
 }

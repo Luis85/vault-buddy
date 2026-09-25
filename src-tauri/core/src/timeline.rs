@@ -4,14 +4,20 @@
 //!
 //! **Since Task 59 it is read, never written.** The phase-4 editor that
 //! wrote a `timeline` into the staging sidecar, and the phase-5 export that
-//! planned on it, are retired. What remains are two readers: the tutorial
-//! editor's MIGRATION (`core::editor::migrate`, through
-//! `from_sidecar_value`), which carries a capture's saved cut into its first
-//! project, and the `is_untouched` cross-check — the same "is this the
-//! whole capture" question R1's identity render answers for a project, and
-//! the staged list's "edited" label. The operations below stay because the
-//! shared fixture table (`tests/fixtures/timeline-cases.json`) pins the
-//! algebra those saved cuts were made with.
+//! planned on it, are retired. Its PRODUCTION surface is four functions:
+//! `from_sidecar_value` (the tutorial editor's MIGRATION,
+//! `core::editor::migrate`, carries a capture's saved cut into its first
+//! project through it, and so does the staged list), `whole`,
+//! `output_duration_ms` and `is_untouched` (the staged list's "edited"
+//! label, and the `identity_detection_matches_is_untouched` cross-check in
+//! `core::editor::render_plan`'s tests).
+//!
+//! **`split_at`, `delete`, `reorder` and `to_source_ms` have NO production
+//! caller.** They are retained ONLY as the fixture record of the phase-4
+//! editor's algebra — the Rust half of `tests/fixtures/timeline-cases.json`
+//! (the `ops`/`toSourceMs` rows), which documents how every saved cut on
+//! disk was made. Nothing may start calling them; delete them together with
+//! those rows if that record is ever judged not worth keeping.
 //!
 //! Every operation returns a NEW `Timeline`, which is what made the phase-4
 //! editor's undo/redo a stack of snapshots rather than a set of inverse

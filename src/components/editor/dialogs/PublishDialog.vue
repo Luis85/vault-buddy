@@ -13,6 +13,13 @@
  * longer lists gets no default at all: the user picks one, and the
  * disabled Publish says so (R20).
  *
+ * **The vault's Screen settings are the defaults** (Task 59 fix round 1,
+ * GAP-211): *Date folders* → the dated toggle, *Write a companion note* →
+ * the note toggle, read from `get_screen_capture_config` for the vault
+ * picked — and re-read whenever the pick changes. The user can still
+ * override either for this publish. Settings that cannot be read fall back
+ * to the project's own date choice and a note, never to a refusal.
+ *
  * **Never closes onto a publish in flight.** From the click until the
  * receipt (or the refusal) lands, Close is disabled and Escape/backdrop
  * are refused (`DialogHost`'s `closable`) — the copy is registered in
@@ -43,6 +50,24 @@ const createNote = ref(true);
 const publishing = ref(false);
 const error = ref<string | null>(null);
 const receipt = ref<PublishReceipt | null>(null);
+
+/** The vault's Screen settings as this publish's defaults. A ticket keeps
+ * a slow reply for a vault no longer picked from overwriting a newer one. */
+let defaultsTicket = 0;
+async function loadDefaults(id: string): Promise<void> {
+  const ticket = ++defaultsTicket;
+  if (!id) return;
+  try {
+    const defaults = await editorProject.port.publishDefaults(id);
+    if (ticket !== defaultsTicket) return;
+    dated.value = defaults.dated;
+    createNote.value = defaults.createNote;
+  } catch (e) {
+    logWarning(`editor publish: the vault's Screen settings could not be read: ${toEditorError(e).message}`);
+  }
+}
+
+watch(vaultId, (id) => void loadDefaults(id));
 
 async function loadVaults(capture: string): Promise<void> {
   try {

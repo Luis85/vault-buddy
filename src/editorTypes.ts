@@ -549,5 +549,6 @@ export type { EditorCommand } from "./editor/editorCommandTypes";
 export type { CheckAction, CheckFinding, CheckSeverity, CheckTarget } from "./editor/editorCheckTypes";
 export type { GuidePreferences, GuideProgress } from "./editor/editorGuideTypes";
 export type { ProductDto, PublishDestination, PublishReceipt, RenderQuality } from "./editor/editorRenderTypes";
-export type { RenderRange, RenderRequest, RenderStarted, SubtitleFormat, VaultChoice } from "./editor/editorRenderTypes";
+export type { PublishDefaults, RenderRange, RenderRequest, RenderStarted } from "./editor/editorRenderTypes";
+export type { SubtitleFormat, VaultChoice } from "./editor/editorRenderTypes";
 export type { TakeDto, TakeStarted } from "./editor/editorTakeTypes";

@@ -640,14 +640,20 @@ describe("EditorRoot", () => {
 
   function discardPort(closeSession: (id: string, disposition: string) => Promise<void>) {
     const hideWindow = vi.fn(async () => {});
+    // A refused discard leaves the Rust session live; reopening the project
+    // gets it back (Rust reuses the live session for the project).
+    const openProject = vi.fn((id: string) =>
+      Promise.resolve(openResultFixture({ sourceBase: "cap one", snapshot: snapshotFixture({ projectId: id }) })),
+    );
     const port = fakeEditorPort({
       openStaged: (base) => Promise.resolve(openResultFixture({ sourceBase: base })),
+      openProject,
       closeSession,
       hideWindow,
       getJobs: async () => [],
     });
     useEditorProjectStore().setPort(port);
-    return hideWindow;
+    return Object.assign(hideWindow, { openProject });
   }
 
   async function askToDiscard() {
@@ -708,6 +714,64 @@ describe("EditorRoot", () => {
     const alert = w.get('[data-testid="discard-project-dialog"] [role="alert"]').text();
     expect(alert).toContain("Could not remove the project folder: Access is denied.");
     expect(alert).not.toContain("<path:#");
+  });
+
+  // Fix round 1 (review Important 1): the store drops its session before
+  // it asks Rust, and a REFUSED discard leaves the Rust session live. The
+  // window used to fall back to "This could not be opened." — a failed
+  // OPEN's copy, for a project that opened fine — with the dialog's
+  // Discard disabled, so the user could neither retry nor keep editing.
+  // Now the dialog reattaches the project (Rust reuses the live session),
+  // the editor stays usable behind it, and Discard can be tried again.
+  it("a refused discard leaves the editor usable and the discard retryable", async () => {
+    let refuse = true;
+    const closes: string[] = [];
+    const hideWindow = discardPort(async (id, disposition) => {
+      closes.push(`${id}:${disposition}`);
+      if (refuse) {
+        throw new EditorPortError({
+          code: "internal",
+          message: "Could not remove the project folder <path:#1a2b3c4d>: Access is denied.",
+          retryable: true,
+          operationId: "op-3",
+        });
+      }
+    });
+    const w = await askToDiscard();
+    await w.get('[data-testid="discard-project-confirm"]').trigger("click");
+    await flushPromises();
+
+    // The window: the shell is back, and nothing claims an open failed.
+    expect(hideWindow.openProject).toHaveBeenCalledWith("project-a", false);
+    expect(w.find('[data-testid="editor-shell"]').exists()).toBe(true);
+    expect(w.find('[data-testid="editor-open-failed"]').exists()).toBe(false);
+    expect(w.find('[data-testid="editor-empty"]').exists()).toBe(false);
+    expect(useEditorProjectStore().sessionId).toBe("ses-a");
+
+    // The dialog: the refusal is said, and Discard works again.
+    const confirm = w.get('[data-testid="discard-project-confirm"]');
+    expect(confirm.attributes("disabled")).toBeUndefined();
+    refuse = false;
+    await confirm.trigger("click");
+    await flushPromises();
+    expect(closes).toEqual(["ses-a:discardProject", "ses-a:discardProject"]);
+    expect(hideWindow).toHaveBeenCalledTimes(1);
+  });
+
+  // ...and Cancel after a refusal returns to a working editor, not to an
+  // error line.
+  it("Cancel after a refused discard returns to the open project", async () => {
+    discardPort(async () => {
+      throw new EditorPortError({ code: "internal", message: "locked", retryable: true, operationId: "op-4" });
+    });
+    const w = await askToDiscard();
+    await w.get('[data-testid="discard-project-confirm"]').trigger("click");
+    await flushPromises();
+    await w.get('[data-testid="discard-project-cancel"]').trigger("click");
+    await flushPromises();
+    expect(w.find('[data-testid="discard-project-dialog"]').exists()).toBe(false);
+    expect(w.find('[data-testid="editor-shell"]').exists()).toBe(true);
+    expect(w.find('[data-testid="editor-open-failed"]').exists()).toBe(false);
   });
 
   // Task 33 fix round 1 (review finding, Important #1): `TitlesLibrary.vue`

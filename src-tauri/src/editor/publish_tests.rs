@@ -535,6 +535,39 @@ fn a_refused_publish_creates_nothing() {
     );
 }
 
+// Task 59 fix round 1 (review Minor 8): the export's structural rollback
+// pin went with the export, and the tenth write rides the same rails. A
+// failure after `prepare_export_dir` has CREATED folders in the user's vault
+// must hand them to `rollback_export_dir`, or a refused publish leaves empty
+// `Screen Captures/2026/09` litter behind (GAP-150's class). The behavioural
+// test (`failure_before_the_video_rolls_back_created_dirs`) proves today's
+// one fallible step; this walk -- the shared `assert_every_exit_is_paired`,
+// which arms per BLOCK so a rollback on one branch never covers another --
+// catches the NEXT fallible step added to `run_publish` without one.
+#[test]
+fn every_exit_after_the_folders_exist_rolls_them_back() {
+    use crate::structural_scan::{assert_every_exit_is_paired, fn_body, production_half};
+
+    let src = production_half(include_str!("publish.rs"));
+    let body = fn_body(src, "fn run_publish(");
+    let created = body
+        .find("prepare_export_dir(")
+        .expect("run_publish creates the vault folders");
+    let eol = body[created..]
+        .find('\n')
+        .map(|i| created + i)
+        .expect("its line ends");
+    let scan =
+        assert_every_exit_is_paired(&body[eol..], "rollback_export_dir(&created)", "run_publish");
+    // Vacuity: a region with no exit and no rollback satisfies any rule.
+    assert!(
+        scan.exits >= 1 && scan.releases >= 1,
+        "the walk found {} exit(s) and {} rollback(s) -- it is broken, not the invariant",
+        scan.exits,
+        scan.releases
+    );
+}
+
 // F19, structural: both quit workers cancel a publish (bounded) before the
 // two unbounded capture finalizes, beside the render cancel -- a copy left
 // running behind them would keep writing into a vault for as long as they

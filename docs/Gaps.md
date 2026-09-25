@@ -5302,7 +5302,7 @@ across `.rs`/`.ts`/`.vue`). Those are task/document-domain entries closed and
 DELETED, whereas the screen era closes with a strikethrough and keeps the entry.
 Two conventions in one file.
 
-### GAP-159 · ~~Low~~ RETIRED 2026-09-25 (Task 59) · `assert_every_exit_is_paired` has one documented false negative
+### GAP-159 · Low · `assert_every_exit_is_paired` has one documented false negative
 
 `src-tauri/src/structural_scan.rs`. The shared exit-pairing walk tracks brace
 depth and arms per block, which is what lets the idiomatic
@@ -5318,10 +5318,13 @@ exit inside a closure ahead of the release also trips them), which is the safe
 direction — it produces false alarms, not false confidence. Recorded so the
 next author does not discover the gap by shipping through it.
 
-> **2026-09-25 — RETIRED.** Both call sites (the export's reservation release and
-> its directory rollback) were deleted with the phase-5 export, and
-> `assert_every_exit_is_paired` went with them rather than stay as an
-> uncalled helper.
+> **2026-09-25.** Both original call sites (the export's reservation release
+> and its directory rollback) went with the phase-5 export in Task 59, and the
+> helper briefly with them; Task 59's fix round 1 reinstated it for the tenth
+> write — `publish_tests.rs` `every_exit_after_the_folders_exist_rolls_them_back`
+> pins that every exit of `run_publish` after `prepare_export_dir` hands the
+> created folders to `rollback_export_dir`. The one-line false negative above
+> applies to that call site now.
 
 ### GAP-160 · ~~Medium~~ FIXED 2026-09-20 · The updater exits the process through a live recording, screen capture or export, gating on nothing at all
 
@@ -6673,7 +6676,7 @@ answers (`null` if the runtime query fails). Its `ffmpeg.filters` come from
 `screen::render::run::FEATURE_FILTERS`, which a screen test holds equal to
 the optional filters `required_filters` can ask for.
 
-### GAP-211 · Low · Two Screen-tab settings are read by nothing since the phase-5 export was retired
+### GAP-211 · ~~Low~~ FIXED 2026-09-25 (Task 59 fix round 1) · Two Screen-tab settings are read by nothing since the phase-5 export was retired
 `src/components/ScreenCaptureConfigTab.vue`, `src-tauri/src/screen_config_commands.rs`,
 `src/components/editor/dialogs/PublishDialog.vue` (found by Task 59). The
 per-vault **Screen** tab still offers *Date folders* (`screenCaptureDateFolders`)
@@ -6693,3 +6696,14 @@ dialog's two checkboxes from the capture's vault's Screen settings (an
 `project.destination` at migration), or remove the two toggles from the tab
 and say that Publish asks each time. Deliberately NOT done in Task 59, which
 retires paths rather than adding a new read to the Publish dialog.
+
+> **2026-09-25 — FIXED in Task 59 fix round 1 (controller ruling: keep them
+> meaningful).** The two settings are now the Publish dialog's DEFAULTS for
+> the vault picked in it: `screenCaptureDateFolders` → the dated toggle,
+> `screenCreateNote` → the companion-note toggle, read through
+> `get_screen_capture_config` (the port's `publishDefaults`) and re-read
+> whenever the picked vault changes; the user can still override either
+> per publish, and settings that cannot be read fall back to the project's
+> own date choice and a note. The tab's hints say "Publish's default for
+> this vault". Pinned by `tests/editorPublishDialog.test.ts` (a vault with
+> notes off gets no note by default; a vault change re-reads).

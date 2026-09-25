@@ -17,7 +17,7 @@ import RenderDialog from "../src/components/editor/dialogs/RenderDialog.vue";
 import ReviewDialog from "../src/components/editor/dialogs/ReviewDialog.vue";
 import CaptionsExport from "../src/components/editor/library/CaptionsExport.vue";
 import ProductLibrary from "../src/components/editor/library/ProductLibrary.vue";
-import { decodeNullableFileName, decodePublishReceipt } from "../src/editor/decodeRender";
+import { decodeNullableFileName, decodePublishDefaults, decodePublishReceipt } from "../src/editor/decodeRender";
 import type { EditorPort } from "../src/editor/port";
 import { createTauriEditorPort, EditorPortError } from "../src/editor/port";
 import type { PublishReceipt, RenderStarted } from "../src/editorTypes";
@@ -33,6 +33,17 @@ beforeEach(() => {
 afterEach(() => {
   clearMocks();
 });
+
+const SCREEN_CONFIG = {
+  screenCaptureFolder: null,
+  screenCaptureDateFolders: true,
+  screenQuality: "balanced",
+  screenFps: 30,
+  screenCreateNote: false,
+  screenExtraFrontmatter: null,
+  screenBodyTemplate: null,
+  screenAudioStems: false,
+};
 
 const VAULTS = [
   { id: "vault-a", name: "Panel Pick" },
@@ -60,6 +71,10 @@ async function openPublish(extra: Partial<EditorPort> = {}) {
   const env = await openWithRenders({
     openStaged: () => Promise.resolve(opened),
     listVaults: () => Promise.resolve(VAULTS),
+    // Each vault's Screen settings: vault-b dates its folders and writes
+    // notes, vault-a does neither.
+    publishDefaults: (id: string) =>
+      Promise.resolve(id === "vault-b" ? { dated: true, createNote: true } : { dated: false, createNote: false }),
     publishProduct,
     openScreenCapture,
     ...extra,
@@ -172,10 +187,63 @@ describe("PublishDialog", () => {
   });
 });
 
+// Fix round 1 (controller ruling on GAP-211): the vault's Screen settings
+// *Date folders* and *Write a companion note* are the Publish dialog's
+// DEFAULTS for that vault — they were read only by the retired phase-5
+// export, and a control that silently does nothing is what R20 forbids.
+describe("PublishDialog — the vault's Screen settings are its defaults", () => {
+  function checked(w: ReturnType<typeof mount>, id: string): boolean {
+    return (w.get(`[data-testid="${id}"]`).element as HTMLInputElement).checked;
+  }
+
+  it("a vault with notes off gets no note by default, and its date-folder setting", async () => {
+    const publishDefaults = vi.fn((id: string) =>
+      Promise.resolve(id === "vault-b" ? { dated: false, createNote: false } : { dated: true, createNote: true }),
+    );
+    // The project's own destination says dated: the vault's setting wins.
+    const { w, publishProduct } = await openPublish({ publishDefaults });
+    expect(publishDefaults).toHaveBeenCalledWith("vault-b");
+    expect(checked(w, "publish-dated")).toBe(false);
+    expect(checked(w, "publish-create-note")).toBe(false);
+    await w.get('[data-testid="publish-start"]').trigger("click");
+    await flushPromises();
+    expect(publishProduct).toHaveBeenCalledWith(SESSION, "prod-a", {
+      vaultId: "vault-b",
+      folder: "Tutorials",
+      dated: false,
+      createNote: false,
+    });
+  });
+
+  it("picking another vault re-reads that vault's defaults", async () => {
+    const { w } = await openPublish();
+    expect(checked(w, "publish-dated")).toBe(true);
+    expect(checked(w, "publish-create-note")).toBe(true);
+    await w.get('[data-testid="publish-vault"]').setValue("vault-a");
+    await flushPromises();
+    expect(checked(w, "publish-dated")).toBe(false);
+    expect(checked(w, "publish-create-note")).toBe(false);
+  });
+
+  // Settings that cannot be read are not a reason to refuse a publish: the
+  // dialog keeps the project's own date choice and writes a note, and the
+  // user can still change either.
+  it("unreadable settings fall back to the project's choice and a note", async () => {
+    const { w } = await openPublish({
+      publishDefaults: () =>
+        Promise.reject(new EditorPortError({ code: "internal", message: "no", retryable: false, operationId: "op" })),
+    });
+    expect(checked(w, "publish-dated")).toBe(true);
+    expect(checked(w, "publish-create-note")).toBe(true);
+    expect(w.find('[data-testid="publish-error"]').exists()).toBe(false);
+  });
+});
+
 describe("PublishDialog — the form and its failures", () => {
   it("sends what the user changed: another vault, a folder, undated, no note", async () => {
     const { w, publishProduct } = await openPublish();
     await w.get('[data-testid="publish-vault"]').setValue("vault-a");
+    await flushPromises();
     await w.get('[data-testid="publish-folder"]').setValue("  Guides/Video  ");
     await w.get('[data-testid="publish-dated"]').setValue(false);
     await w.get('[data-testid="publish-create-note"]').setValue(false);
@@ -392,6 +460,7 @@ describe("the publish and subtitle wire", () => {
       if (cmd === "editor_export_subtitles") return null;
       if (cmd === "list_vaults") return [{ id: "v1", name: "Notes", path: "C:\\N", open: false }];
       if (cmd === "open_screen_capture") return null;
+      if (cmd === "get_screen_capture_config") return SCREEN_CONFIG;
       throw new Error(`unexpected command ${cmd}`);
     });
     const port = createTauriEditorPort();
@@ -400,12 +469,22 @@ describe("the publish and subtitle wire", () => {
     await expect(port.exportSubtitles("ses-1", "vtt")).resolves.toBeNull();
     await expect(port.listVaults()).resolves.toEqual([{ id: "v1", name: "Notes" }]);
     await port.openScreenCapture("v1", "C:\\N\\a.md");
+    await expect(port.publishDefaults("v1")).resolves.toEqual({ dated: true, createNote: false });
     expect(calls).toEqual([
       { cmd: "editor_publish_product", args: { sessionId: "ses-1", productId: "prod-a", destination } },
       { cmd: "editor_export_subtitles", args: { sessionId: "ses-1", format: "vtt" } },
       { cmd: "list_vaults", args: {} },
       { cmd: "open_screen_capture", args: { id: "v1", path: "C:\\N\\a.md" } },
+      { cmd: "get_screen_capture_config", args: { id: "v1" } },
     ]);
+  });
+
+  // `get_screen_capture_config`'s reply, in the spelling
+  // `screen_config_commands.rs` pins key for key; the dialog reads two.
+  it("decodes the publish defaults from the Screen settings literal and refuses a missing key", () => {
+    expect(decodePublishDefaults(SCREEN_CONFIG)).toEqual({ dated: true, createNote: false });
+    const { screenCreateNote: _dropped, ...missing } = SCREEN_CONFIG;
+    expect(() => decodePublishDefaults(missing)).toThrow();
   });
 
   // The Rust literal `publish_tests.rs` pins: notePath/warning are
