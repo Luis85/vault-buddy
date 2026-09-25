@@ -6813,7 +6813,11 @@ editor's "could not be opened" line for an `invalidProject` project) and
    folder it is, so `remove_project` refuses and nothing in the app removes
    it. Its capture is no longer stranded (Edit re-migrates it into a fresh
    project, which re-pins it), so what is left is a folder of the user's
-   old edit on disk. Remedy today: delete the folder by hand.
+   old edit on disk. Remedy today: delete the folder by hand. (An OVERSIZED
+   `project.json` is not this case: it is still discardable, because the
+   ownership read allows 64 MiB and reads only `/project/id` — hardening
+   Task 5, `store_io::OWNERSHIP_PROOF_MAX_BYTES`, pinned by
+   `store_io::tests::remove_project_proves_ownership_of_a_project_json_past_the_load_bound`.)
 2. **A `project.json` that is JSON but no longer a valid project** is
    SKIPPED by `list_projects` (a view degrades), so the panel's Tutorial
    projects list never offers it — and the editor's discard offer is reached
@@ -6920,10 +6924,13 @@ editor's "could not be opened" line for an `invalidProject` project) and
    `staged_commands::tests::a_pin_whose_project_cannot_be_checked_keeps_the_capture`,
    `staging_commands::tests::clear_keeps_a_capture_whose_pin_cannot_be_checked`
    and `session_close::tests::a_discard_refused_for_ownership_leaves_a_running_render_running`.
-   **Until hardening Task 5**, a `project.json` over 8 MiB (the proof's
-   read bound, `OWNERSHIP_PROOF_MAX_BYTES` = the load bound) is refused
-   with the same "do not belong" copy, though it may well be the project's
-   own; Task 5 widens the bound. **Residual:** an open that took `EditorState::open` BEFORE a session's
+   **Since hardening Task 5** the proof reads up to 64 MiB
+   (`OWNERSHIP_PROOF_MAX_BYTES`, eight times the load bound) and
+   deserializes only `/project/id`, so a `project.json` past the load bound
+   — which the import can no longer install (post-merge review M-V2: it
+   measures the pretty `project.json` it writes before creating anything) —
+   is discardable; only one past 64 MiB still gets the "do not belong"
+   copy. **Residual:** an open that took `EditorState::open` BEFORE a session's
    discard can still hand the webview a session that discard then drops
    (the discard waits for the open, then removes the project): the webview's
    next call gets `sessionGone`. No pin is left dangling — the discard's
@@ -6932,6 +6939,25 @@ editor's "could not be opened" line for an `invalidProject` project) and
 9. **A project written by a NEWER build reads as damaged after a
    downgrade**: `invalidProject`, so a capture's Edit re-migrates it into a
    fresh project and the newer one is left an orphan (item 2's shape).
+10. **A session discard can still refuse AFTER its quiesce cancelled renders
+    and publishes** (Task 4 re-review). `precheck_discard` lists the staging
+    folder once, but `unpin_everywhere` — which runs after the quiesce —
+    walks it again: a per-entry `read_dir` error other than `NotFound`, or
+    an `unpin_staged` write failure mid-scan, refuses the discard there
+    ("…could not be released, so the project was kept"). Nothing is
+    removed, but the renders and publishes the quiesce cancelled stay
+    cancelled (item 5's rule — a refusal cancels nothing — does not hold for
+    this late arm). A cancelled render is repeatable.
+11. **A partial unpin leaves the kept project's other captures unpinned**
+    (Task 4 re-review). `unpin_everywhere` releases pins one sidecar at a
+    time; if capture A is unpinned and capture B's `unpin_staged` then
+    fails, the discard is refused and the project KEPT — with A no longer
+    pinned to it. A's own Discard, or Clear, can then delete a recording the
+    kept project still references (its `sources.json` names A's base).
+    **Fix (for 10 and 11):** collect every pin to release first, then write
+    them all, and on a failure re-pin what was released (or run the whole
+    scan before the quiesce and hold `open` across it, so nothing can change
+    in between).
 **Fix (for 1 and 2):** a "Damaged projects" row in the Tutorial projects
 list that names what the store holds but cannot read, with the same
 confirmed discard, and a raw-bytes ownership proof (a `"project":{"id":…}`
@@ -6974,3 +7000,24 @@ the trim preview does not follow. **Fix:** one `editor::errors` module
 module imports, `prefs_commands::local_data` as the only resolver, and
 `MIN_CLIP_MS` read by a Vitest from `core::editor::mod.rs` the way
 `editorCaptions.test.ts`' `rustLimit` reads `MAX_CAPTIONS`.
+
+### GAP-218 · Low · An imported envelope's product ids are never checked as ids, and envelope refusals can echo them
+`src-tauri/core/src/editor/validate.rs` (`validate_envelope`'s product
+loop), `src-tauri/src/editor/package_import.rs` (hardening Task 5; recorded,
+not fixed — outside the package-entry scope of post-merge review S-11).
+S-11 made every PACKAGE refusal name an entry by position and kind and
+refuse a bidirectional control in an entry name. What an envelope carries
+is checked separately: asset ids go through `is_valid_id` (ASCII
+alphanumerics, `_`, `-`), but a retained product's `id` is only checked for
+uniqueness and for its file name being `<id>.mp4` — so a lightweight
+`.vbproject.json` (which ships no product files, so no entry name is ever
+built from the id) can import a product whose id carries any text, a bidi
+control included, into `products.json` and `project.json`, and
+`validate_envelope`'s own refusals ("product {id}: duplicate id",
+"… project_id {…} does not match …") echo such an id verbatim.
+**Failure scenario:** a crafted project file's refusal message, or the
+product list, renders reordered text; nothing escapes the project and no
+file is named after the id (a portable file's product entries are
+`is_valid_id`-checked by the manifest). **Fix:** `validate_envelope` checks
+every product id with `is_valid_id` (the app's own `new_product` ids
+already pass), after which its messages are safe to keep.

@@ -41,7 +41,7 @@ fn entry_span<R: Read + Seek, S: Read + Seek>(
     let (name, header, data_start, compressed) = {
         let file = archive
             .by_index_raw(index)
-            .map_err(|e| invalid(format!("package entry {index} is unreadable: {e}")))?;
+            .map_err(|e| invalid(format!("package entry {} is unreadable: {e}", index + 1)))?;
         (
             file.name_raw().to_vec(),
             file.header_start(),
@@ -49,10 +49,11 @@ fn entry_span<R: Read + Seek, S: Read + Seek>(
             file.compressed_size(),
         )
     };
-    let shown = String::from_utf8_lossy(&name).into_owned();
+    // By position, never by name (S-11).
+    let shown = format!("package entry {}", index + 1);
     let mismatch = || {
         invalid(format!(
-            "package entry {shown:?}: its local header does not match the central directory"
+            "{shown}: its local header does not match the central directory"
         ))
     };
     let mut fixed = [0u8; LOCAL_HEADER_LEN as usize];
@@ -71,9 +72,7 @@ fn entry_span<R: Read + Seek, S: Read + Seek>(
     }
     let end = data_start.saturating_add(compressed);
     if end > directory {
-        return Err(invalid(format!(
-            "package entry {shown:?} runs into the central directory"
-        )));
+        return Err(invalid(format!("{shown} runs into the central directory")));
     }
     Ok(header..end)
 }
@@ -107,33 +106,42 @@ pub fn extract_verified_entry<R: Read + Seek, S: Read + Seek, W: Write>(
 ) -> Result<ExtractedEntry, EditorError> {
     let index = archive
         .index_for_name(name)
-        .ok_or_else(|| invalid(format!("the project package has no entry {name:?}")))?;
+        .ok_or_else(|| invalid("the project package has no such entry"))?;
     entry_span(raw, archive, index)?;
     extract_entry_bounded(archive, name, dest, max)
 }
 
-/// An already-inspected package opened for extraction, holding the raw
-/// reader beside the archive so the shell never names a `zip` type (the
-/// crate is `core`'s dependency alone, ADR R9). `R` is cloned once: `&File`
-/// and `Cursor<&[u8]>` are both cheap handles onto the same bytes.
-pub struct PackageExtractor<R: Read + Seek + Clone> {
+/// The archive `package::inspect_archive` VALIDATED, with the raw reader
+/// cloned from the same handle (S-3, post-merge review): extraction reads
+/// through this very `ZipArchive` -- the directory those checks passed --
+/// instead of parsing the archive a second time without
+/// `package_archive`'s raw pre-checks. Opaque, so the shell never names a
+/// `zip` type (the crate is `core`'s dependency alone, ADR R9) and only
+/// `inspect_archive` can make one.
+pub struct ValidatedArchive<R> {
+    pub(super) raw: R,
+    pub(super) archive: ZipArchive<R>,
+}
+
+impl<R> std::fmt::Debug for ValidatedArchive<R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ValidatedArchive")
+    }
+}
+
+/// An already-inspected package opened for extraction.
+pub struct PackageExtractor<R: Read + Seek> {
     raw: R,
     archive: ZipArchive<R>,
 }
 
-impl<R: Read + Seek + Clone> PackageExtractor<R> {
-    /// Opens the archive and runs `verify_entry_layout` over every entry
-    /// before anything is extracted.
-    pub fn open(reader: R) -> Result<Self, EditorError> {
-        let archive = ZipArchive::new(reader.clone()).map_err(|e| {
-            invalid(format!(
-                "the project package is not a readable archive: {e}"
-            ))
-        })?;
-        let mut me = Self {
-            raw: reader,
-            archive,
-        };
+impl<R: Read + Seek> PackageExtractor<R> {
+    /// Takes the archive `inspect_archive` validated (never a fresh parse)
+    /// and runs `verify_entry_layout` over every entry before anything is
+    /// extracted.
+    pub fn from_validated(validated: ValidatedArchive<R>) -> Result<Self, EditorError> {
+        let ValidatedArchive { raw, archive } = validated;
+        let mut me = Self { raw, archive };
         verify_entry_layout(&mut me.raw, &mut me.archive)?;
         Ok(me)
     }

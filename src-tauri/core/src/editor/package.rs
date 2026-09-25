@@ -33,7 +33,7 @@
 //! later read goes through `extract_entry_bounded`, which counts the bytes
 //! actually produced and never trusts the header.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
 use serde::{Deserialize, Serialize};
@@ -46,9 +46,10 @@ use super::error::{EditorError, EditorErrorCode};
 use super::fingerprint::assets_referenced;
 use super::ids::is_valid_id;
 use super::limits;
-use super::model::{Asset, Builtin};
 use super::model_cues::WorkspaceEnvelope;
 use super::package_archive::{read_end_record, walk_central_directory, MAX_ENTRY_NAME_BYTES};
+use super::package_extract::ValidatedArchive;
+use super::package_plan::{asset_definitions, assets_needing_media, file_backed};
 use super::validate::validate_envelope;
 use super::PACKAGE_SCHEMA;
 use crate::device_names::is_reserved_device_name;
@@ -122,6 +123,22 @@ pub struct PackageIndex {
     pub missing: Vec<String>,
 }
 
+/// What `inspect_archive` returns: the proof and the very archive it was
+/// proven on, which `PackageExtractor::from_validated` extracts through
+/// (S-3) -- the archive is parsed ONCE.
+pub struct InspectedPackage<R> {
+    pub index: PackageIndex,
+    pub archive: ValidatedArchive<R>,
+}
+
+impl<R> std::fmt::Debug for InspectedPackage<R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InspectedPackage")
+            .field("index", &self.index)
+            .finish_non_exhaustive()
+    }
+}
+
 /// What `extract_entry_bounded` actually produced (never the header's
 /// claim): the byte count and the lowercase hex SHA-256 of those bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,7 +187,10 @@ fn zip_write_failed(e: ZipError) -> EditorError {
 /// anywhere too -- a drive prefix, or an NTFS alternate data stream. And a
 /// last segment whose stem is a Windows device (`media/CON.mp4`: `CON` is a
 /// valid asset id) is refused, because extracting it would open the device
-/// (`crate::device_names`).
+/// (`crate::device_names`). A bidirectional control (U+202A-202E,
+/// U+2066-2069) is refused too (S-11): `cod\u{202E}4pm.exe` DISPLAYS as
+/// `codexe.mp4`, so such a name misleads every dialog, log and archive
+/// tool that shows it.
 pub fn validate_entry_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("an entry name is empty".to_string());
@@ -180,6 +200,9 @@ pub fn validate_entry_name(name: &str) -> Result<(), String> {
     }
     if name.chars().any(char::is_control) {
         return Err("contains a NUL or control character".to_string());
+    }
+    if name.chars().any(is_bidi_control) {
+        return Err("contains a bidirectional control character".to_string());
     }
     if name.starts_with('/') || name.starts_with('\\') {
         return Err("is an absolute or UNC path".to_string());
@@ -211,11 +234,16 @@ pub fn validate_entry_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
 /// The facts the per-entry scan keeps: every name's declared size, and the
-/// first entry's name.
+/// names in archive order (a refusal names an entry by its 1-based POSITION
+/// there, never by its name -- the name is the package author's text, S-11).
 struct EntryScan {
     sizes: HashMap<String, u64>,
-    first: String,
+    order: Vec<String>,
 }
 
 /// Every per-entry rule that needs only the central directory and the
@@ -223,21 +251,22 @@ struct EntryScan {
 fn scan_entries<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<EntryScan, EditorError> {
     let mut sizes = HashMap::new();
     let mut folded = HashSet::new();
-    let mut first = String::new();
+    let mut order = Vec::new();
     let mut total: u64 = 0;
     for i in 0..archive.len() {
         let file = archive.by_index_raw(i).map_err(unreadable)?;
         let name = file.name().to_string();
+        let entry = format!("package entry {}", i + 1);
         if std::str::from_utf8(file.name_raw()) != Ok(name.as_str()) {
             return Err(invalid(format!(
-                "package entry {name:?} is not allowed: its name is not UTF-8"
+                "{entry} is not allowed: its name is not UTF-8"
             )));
         }
         validate_entry_name(&name)
-            .map_err(|why| invalid(format!("package entry {name:?} is not allowed: {why}")))?;
+            .map_err(|why| invalid(format!("{entry} is not allowed: {why}")))?;
         if !folded.insert(name.to_lowercase()) {
             return Err(invalid(format!(
-                "package entry {name:?} is a duplicate (names are compared case-insensitively)"
+                "{entry} is a duplicate (names are compared case-insensitively)"
             )));
         }
         // `unix_mode()` is `None` for an entry made on a host other than Unix
@@ -249,7 +278,7 @@ fn scan_entries<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<EntryScan
             .is_some_and(|m| m & S_IFMT != 0 && m & S_IFMT != S_IFREG)
         {
             return Err(invalid(format!(
-                "package entry {name:?} is not a regular file (a symlink or special entry)"
+                "{entry} is not a regular file (a symlink or special entry)"
             )));
         }
         // Encryption and the compression method were refused earlier, from
@@ -257,12 +286,12 @@ fn scan_entries<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<EntryScan
         let (size, compressed) = (file.size(), file.compressed_size());
         if file.compression() == CompressionMethod::Stored && size != compressed {
             return Err(invalid(format!(
-                "package entry {name:?} is stored with inconsistent sizes"
+                "{entry} is stored with inconsistent sizes"
             )));
         }
         if size > compressed.max(1).saturating_mul(limits::MAX_ENTRY_RATIO) {
             return Err(invalid(format!(
-                "package entry {name:?} expands {size} bytes from {compressed}, past the {}:1 ratio limit",
+                "{entry} expands {size} bytes from {compressed}, past the {}:1 ratio limit",
                 limits::MAX_ENTRY_RATIO
             )));
         }
@@ -273,12 +302,10 @@ fn scan_entries<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<EntryScan
                 limits::MAX_PACKAGE_BYTES
             )));
         }
-        if i == 0 {
-            first = name.clone();
-        }
-        sizes.insert(name, size);
+        sizes.insert(name.clone(), size);
+        order.push(name);
     }
-    Ok(EntryScan { sizes, first })
+    Ok(EntryScan { sizes, order })
 }
 
 /// Reads a JSON entry into memory, bounded twice: its DECLARED size is
@@ -322,6 +349,9 @@ fn is_media_path(path: &str, asset_id: &str) -> bool {
 /// One manifest file entry, media or product, as `check_listed_file` sees it.
 struct Listed<'a> {
     kind: &'static str,
+    /// Its 1-based position in the manifest's list of that kind: what a
+    /// refusal names (S-11), never the listed id or path.
+    position: usize,
     id: &'a str,
     path: &'a str,
     /// Whether `path` is exactly the name this kind of entry must carry.
@@ -338,28 +368,24 @@ fn check_listed_file(
     scan: &EntryScan,
     seen: &mut HashSet<String>,
 ) -> Result<(), EditorError> {
-    let (kind, id, path) = (f.kind, f.id, f.path);
-    if !is_valid_id(id) || !seen.insert(id.to_string()) {
-        return Err(invalid(format!(
-            "manifest {kind} {id:?}: invalid or duplicate id"
-        )));
+    let listed = format!("manifest {} file {}", f.kind, f.position);
+    if !is_valid_id(f.id) || !seen.insert(f.id.to_string()) {
+        return Err(invalid(format!("{listed}: invalid or duplicate id")));
     }
     if !f.path_ok {
         return Err(invalid(format!(
-            "manifest {kind} {id}: path {path:?} is not its expected name"
+            "{listed}: its path is not its expected name"
         )));
     }
     if !is_sha256_hex(f.sha256) {
         return Err(invalid(format!(
-            "manifest {kind} {id}: sha256 is not 64 lowercase hex digits"
+            "{listed}: sha256 is not 64 lowercase hex digits"
         )));
     }
-    match scan.sizes.get(path) {
-        None => Err(invalid(format!(
-            "manifest {kind} {id}: {path} is missing from the archive"
-        ))),
+    match scan.sizes.get(f.path) {
+        None => Err(invalid(format!("{listed}: it is missing from the archive"))),
         Some(&actual) if actual != f.size => Err(invalid(format!(
-            "manifest {kind} {id}: declares size {} but the archive entry holds {actual}",
+            "{listed}: declares size {} but the archive entry holds {actual}",
             f.size
         ))),
         Some(_) => Ok(()),
@@ -391,9 +417,10 @@ fn check_manifest(m: &PackageManifest, scan: &EntryScan) -> Result<(), EditorErr
         return Err(invalid("manifest: too many media or product files"));
     }
     let mut seen = HashSet::new();
-    for f in &m.media {
+    for (i, f) in m.media.iter().enumerate() {
         let listed = Listed {
             kind: "media",
+            position: i + 1,
             id: &f.asset_id,
             path: &f.path,
             path_ok: is_media_path(&f.path, &f.asset_id),
@@ -403,9 +430,10 @@ fn check_manifest(m: &PackageManifest, scan: &EntryScan) -> Result<(), EditorErr
         check_listed_file(&listed, scan, &mut seen)?;
     }
     let mut seen = HashSet::new();
-    for f in &m.products {
+    for (i, f) in m.products.iter().enumerate() {
         let listed = Listed {
             kind: "product",
+            position: i + 1,
             id: &f.product_id,
             path: &f.path,
             path_ok: f.path == format!("products/{}.mp4", f.product_id),
@@ -433,9 +461,10 @@ fn check_manifest(m: &PackageManifest, scan: &EntryScan) -> Result<(), EditorErr
         .chain(m.products.iter().map(|f| f.path.as_str()))
         .chain([MANIFEST_NAME, WORKSPACE_NAME])
         .collect();
-    if let Some(extra) = scan.sizes.keys().find(|n| !listed.contains(n.as_str())) {
+    if let Some(i) = scan.order.iter().position(|n| !listed.contains(n.as_str())) {
         return Err(invalid(format!(
-            "package entry {extra:?} is not listed in the manifest"
+            "package entry {} is not listed in the manifest",
+            i + 1
         )));
     }
     Ok(())
@@ -471,40 +500,25 @@ fn cross_check(m: &PackageManifest, env: &WorkspaceEnvelope) -> Result<Vec<Strin
             f.product_id
         )));
     }
-    let referenced: BTreeSet<String> = assets_referenced(&env.project, &env.record.products);
-    if let Some(f) = m.media.iter().find(|f| !referenced.contains(&f.asset_id)) {
-        return Err(invalid(format!(
-            "manifest media {} is not used by the project or any retained product",
-            f.asset_id
-        )));
+    // S-13: only a file-backed asset something USES may ship bytes. A card
+    // is synthesized from the project, so media listed for one was
+    // extracted and then recorded nowhere.
+    let needed = assets_needing_media(env);
+    if m.media.iter().any(|f| !needed.contains(&f.asset_id)) {
+        return Err(invalid("The project file lists media no clip can use."));
     }
-    let snapshots = env
-        .record
-        .products
-        .iter()
-        .filter_map(|p| p.snapshot.as_deref());
     // Every definition of an id, across the live graph AND each snapshot:
     // each graph is validated on its own, but nothing makes them agree, so
     // an id may be a card in one and the real screen recording in another.
-    let mut definitions: HashMap<&str, Vec<&Asset>> = HashMap::new();
-    for asset in std::iter::once(&env.project)
-        .chain(snapshots)
-        .flat_map(|p| &p.assets)
-    {
-        definitions
-            .entry(asset.id.as_str())
-            .or_default()
-            .push(asset);
-    }
-    let needs_bytes = |a: &&Asset| a.builtin != Some(Builtin::Card) && a.linked_asset.is_none();
+    let definitions = asset_definitions(env);
     let packaged: HashSet<&str> = m.media.iter().map(|f| f.asset_id.as_str()).collect();
-    Ok(referenced
+    Ok(assets_referenced(&env.project, &env.record.products)
         .into_iter()
         .filter(|id| !packaged.contains(id.as_str()))
         .filter(|id| {
             definitions
                 .get(id.as_str())
-                .is_none_or(|defs| defs.iter().any(needs_bytes))
+                .is_none_or(|defs| file_backed(defs))
         })
         .collect())
 }
@@ -512,7 +526,10 @@ fn cross_check(m: &PackageManifest, env: &WorkspaceEnvelope) -> Result<Vec<Strin
 /// Validates an untrusted package end to end WITHOUT extracting any media:
 /// see the module doc for the order and why it is that order. `Err` is
 /// always `invalidProject` and names the first rule the archive breaks.
-pub fn inspect_archive<R: Read + Seek>(mut reader: R) -> Result<PackageIndex, EditorError> {
+pub fn inspect_archive<R: Read + Seek + Clone>(
+    mut reader: R,
+) -> Result<InspectedPackage<R>, EditorError> {
+    let handle = reader.clone();
     let len = reader.seek(SeekFrom::End(0)).map_err(unreadable)?;
     if len > limits::MAX_PACKAGE_BYTES {
         return Err(invalid(format!(
@@ -542,10 +559,9 @@ pub fn inspect_archive<R: Read + Seek>(mut reader: R) -> Result<PackageIndex, Ed
         ));
     }
     let scan = scan_entries(&mut archive)?;
-    if scan.first != MANIFEST_NAME {
+    if scan.order.first().map(String::as_str) != Some(MANIFEST_NAME) {
         return Err(invalid(format!(
-            "the project package's first entry must be {MANIFEST_NAME}, found {:?}",
-            scan.first
+            "the project package's first entry must be {MANIFEST_NAME}"
         )));
     }
     let raw = read_json_entry(&mut archive, &scan, MANIFEST_NAME, MAX_MANIFEST_BYTES)?;
@@ -562,10 +578,16 @@ pub fn inspect_archive<R: Read + Seek>(mut reader: R) -> Result<PackageIndex, Ed
         serde_json::from_slice(&raw).map_err(|e| invalid(format!("{WORKSPACE_NAME}: {e}")))?;
     validate_envelope(&envelope)?;
     let missing = cross_check(&manifest, &envelope)?;
-    Ok(PackageIndex {
-        manifest,
-        envelope,
-        missing,
+    Ok(InspectedPackage {
+        index: PackageIndex {
+            manifest,
+            envelope,
+            missing,
+        },
+        archive: ValidatedArchive {
+            raw: handle,
+            archive,
+        },
     })
 }
 
@@ -581,23 +603,28 @@ pub fn extract_entry_bounded<R: Read + Seek, W: Write>(
     dest: &mut W,
     max: u64,
 ) -> Result<ExtractedEntry, EditorError> {
+    let index = archive
+        .index_for_name(name)
+        .ok_or_else(|| invalid("the project package has no such entry"))?;
+    // By position, never by name (S-11).
+    let entry = format!("package entry {}", index + 1);
     let mut file = archive
-        .by_name(name)
-        .map_err(|e| invalid(format!("package entry {name:?}: {e}")))?;
+        .by_index(index)
+        .map_err(|e| invalid(format!("{entry}: {e}")))?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
     let mut total: u64 = 0;
     loop {
         let n = file
             .read(&mut buf)
-            .map_err(|e| invalid(format!("package entry {name:?} is corrupt: {e}")))?;
+            .map_err(|e| invalid(format!("{entry} is corrupt: {e}")))?;
         if n == 0 {
             break;
         }
         total += n as u64;
         if total > max {
             return Err(invalid(format!(
-                "package entry {name:?} expands past its {max}-byte limit"
+                "{entry} expands past its {max}-byte limit"
             )));
         }
         hasher.update(&buf[..n]);

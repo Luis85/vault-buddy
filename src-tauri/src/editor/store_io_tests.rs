@@ -423,6 +423,13 @@ fn oversized_store_files_are_refused_not_read_whole() {
         list_projects(root.path()).is_empty(),
         "an oversized project.json is not listed"
     );
+    // The ownership proof reads further than the load bound (GAP-214 item
+    // 1) -- but it is bounded too.
+    std::fs::write(
+        dir.join(PROJECT_FILE),
+        padded(&project_json, OWNERSHIP_PROOF_MAX_BYTES + 1),
+    )
+    .unwrap();
     assert_eq!(
         remove_project(root.path(), "proj1").unwrap_err().code,
         EditorErrorCode::InvalidProject
@@ -496,4 +503,58 @@ fn a_pin_to_a_project_that_exists_is_live_and_to_one_that_does_not_is_gone() {
     assert_eq!(pin_liveness(root.path(), "proj-here"), PinLiveness::Live);
     assert_eq!(pin_liveness(root.path(), "proj-gone"), PinLiveness::Gone);
     assert_eq!(pin_liveness(root.path(), "../escape"), PinLiveness::Gone);
+}
+
+// M-V2 / GAP-214 item 1: a `project.json` past the LOAD bound is exactly
+// the project that must stay discardable, so the ownership proof reads
+// further (`OWNERSHIP_PROOF_MAX_BYTES`, 64 MiB) and only `/project/id`.
+#[test]
+fn remove_project_proves_ownership_of_a_project_json_past_the_load_bound() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = project_with_content(root.path());
+    let project_json = std::fs::read_to_string(dir.join(PROJECT_FILE)).unwrap();
+    let nine_mib = 9 * 1024 * 1024;
+    assert!(nine_mib > limits::MAX_PROJECT_JSON_BYTES);
+    std::fs::write(dir.join(PROJECT_FILE), padded(&project_json, nine_mib)).unwrap();
+    remove_project(root.path(), "proj1").expect("its own id proves it");
+    assert!(!dir.exists());
+}
+
+/// A directory link: a symlink on Unix, an NTFS junction on Windows (which
+/// needs no privilege, unlike a symlink, and which Rust reports as a
+/// symlink). `false` where neither could be made.
+fn dir_link(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link).is_ok();
+    #[cfg(windows)]
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .is_ok_and(|o| o.status.success());
+    made
+}
+
+// S-2 (post-merge review): `remove_dir_no_follow` (an import's build
+// directory, a stale `.importing` sweep) checked every entry INSIDE the
+// folder but not the folder itself, so a junction standing at the top was
+// walked into and everything behind it deleted.
+#[test]
+fn remove_dir_no_follow_refuses_a_link_at_the_top() {
+    let root = tempfile::tempdir().unwrap();
+    let precious = root.path().join("precious");
+    std::fs::create_dir(&precious).unwrap();
+    std::fs::write(precious.join("keep.txt"), b"keep").unwrap();
+    let link = root.path().join(".proj1.importing");
+    if !dir_link(&precious, &link) {
+        eprintln!("SKIP: this host cannot create a directory link");
+        return;
+    }
+    remove_dir_no_follow(&link).expect_err("a link at the top is refused");
+    assert_eq!(std::fs::read(precious.join("keep.txt")).unwrap(), b"keep");
+    assert!(
+        std::fs::symlink_metadata(&link).is_ok(),
+        "the link is left too"
+    );
 }

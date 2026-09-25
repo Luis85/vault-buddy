@@ -524,3 +524,68 @@ fn staged_stems_are_packaged_or_reported_missing() {
         .unwrap();
     assert_eq!(sorted_missing(&imported), ["src", "stem-1", "stem-2"]);
 }
+
+/// The save dialog, answered after `grow` ran: the moment between the
+/// export's size check and its copy.
+struct GrowingChooser<F: Fn()> {
+    save: PathBuf,
+    grow: F,
+}
+
+impl<F: Fn()> PathChooser for GrowingChooser<F> {
+    fn save_target(&self, _format: PackageFormat, _suggested: &str) -> Option<PathBuf> {
+        (self.grow)();
+        Some(self.save.clone())
+    }
+    fn package_to_open(&self) -> Option<PathBuf> {
+        None
+    }
+}
+
+// S-12 (post-merge review): the portable 200 MiB limit was measured on the
+// sizes BEFORE the dialog, so a source that grew while it was open made a
+// package past the limit -- one the import then refuses. The bytes the
+// export actually hashes are summed against the limit again.
+#[test]
+fn a_source_that_grows_past_the_portable_limit_during_the_dialog_is_refused() {
+    let (a, session_id, project_id) = machine_a();
+    let image = project_dir(a.root(), &project_id)
+        .unwrap()
+        .join("media")
+        .join("img1.png");
+    let resize = |path: &std::path::Path, len: u64| {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_len(len)
+            .unwrap();
+    };
+    resize(&image, limits::MAX_PACKAGE_MEDIA_BYTES - 1024);
+    let out = tempfile::tempdir().unwrap();
+    let grown = image.clone();
+    let chooser = GrowingChooser {
+        save: out.path().join("Growing.vbproject.zip"),
+        grow: move || resize(&grown, limits::MAX_PACKAGE_MEDIA_BYTES),
+    };
+    let revision = a.revision(&session_id);
+    let err = export_package_in(
+        &a.state,
+        a.root(),
+        &chooser,
+        &session_id,
+        revision,
+        PackageFormat::Portable,
+    )
+    .expect_err("the copied bytes are past the limit");
+    assert_eq!(err.code, EditorErrorCode::InvalidRequest);
+    assert_eq!(
+        err.message,
+        "This project is too large for a portable file (limit 200 MiB). Save a lightweight copy instead."
+    );
+    assert_eq!(
+        std::fs::read_dir(out.path()).unwrap().count(),
+        0,
+        "no file, no temp"
+    );
+}

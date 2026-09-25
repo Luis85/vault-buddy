@@ -83,6 +83,15 @@ fn refused(result: Result<impl std::fmt::Debug, EditorError>, needle: &str) {
     );
 }
 
+/// What `inspect_archive` hands over, built directly: these archives are
+/// not packages, only layouts.
+fn validated(bytes: &[u8]) -> ValidatedArchive<Cursor<&[u8]>> {
+    ValidatedArchive {
+        raw: Cursor::new(bytes),
+        archive: ZipArchive::new(Cursor::new(bytes)).unwrap(),
+    }
+}
+
 fn good() -> Vec<u8> {
     zip_of(&[("package.json", b"{}"), (A, b"alpha-bytes"), (B, b"bravo")])
 }
@@ -156,7 +165,7 @@ fn an_entry_running_into_the_central_directory_is_refused() {
 #[test]
 fn the_extractor_verifies_the_layout_before_it_opens() {
     let bytes = good();
-    let mut ok = PackageExtractor::open(Cursor::new(&bytes[..])).expect("well formed");
+    let mut ok = PackageExtractor::from_validated(validated(&bytes)).expect("well formed");
     let mut out = Vec::new();
     let got = ok.extract(A, &mut out, 1 << 20).unwrap();
     assert_eq!((out.as_slice(), got.bytes), (&b"alpha-bytes"[..], 11));
@@ -164,7 +173,7 @@ fn the_extractor_verifies_the_layout_before_it_opens() {
     let local = local_offset(&bad, B) as usize;
     bad[local + 30] = b'X';
     refused(
-        PackageExtractor::open(Cursor::new(&bad[..])).map(|_| ()),
+        PackageExtractor::from_validated(validated(&bad)).map(|_| ()),
         "local header",
     );
 }

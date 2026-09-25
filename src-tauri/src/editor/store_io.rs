@@ -395,11 +395,26 @@ pub fn list_projects(root: &Path) -> Vec<ProjectSummaryDto> {
     out
 }
 
-/// The most of `project.json` the ownership proof reads. ONE named bound,
-/// so widening what a discard can prove (a lightweight project's file can
-/// legitimately exceed the load bound, GAP-214 / review ruling R2) is a
-/// one-line change here rather than a hunt through every remover.
-const OWNERSHIP_PROOF_MAX_BYTES: u64 = limits::MAX_PROJECT_JSON_BYTES;
+/// The most of `project.json` the ownership proof reads: 64 MiB, eight times
+/// the LOAD bound, because a `project.json` past the load bound (hand-edited,
+/// or installed by a build before the import measured what it writes,
+/// M-V2) is exactly the project that cannot open and must stay discardable
+/// (GAP-214 item 1). ONE named bound for every remover (review ruling R2).
+/// The proof deserializes only `/project/id` (`OwnerDocument`), so this is
+/// the read's size, never a 64 MiB JSON tree.
+const OWNERSHIP_PROOF_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// All of `project.json` the ownership proof looks at: `/project/id`.
+/// Every other field is skipped by serde without being built.
+#[derive(serde::Deserialize)]
+struct OwnerDocument {
+    project: OwnerProject,
+}
+
+#[derive(serde::Deserialize)]
+struct OwnerProject {
+    id: String,
+}
 
 /// Whether a staged capture's pin names a project that still exists —
 /// THREE states, because the answer decides whether a Discard or Clear
@@ -495,19 +510,16 @@ pub(crate) fn prove_ownership(root: &Path, id: &str) -> Result<(), EditorError> 
     }
     let project_path = dir.join(PROJECT_FILE);
     let bytes = read_bounded(&project_path, OWNERSHIP_PROOF_MAX_BYTES)?;
-    let document: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+    let document: OwnerDocument = serde_json::from_slice(&bytes).map_err(|e| {
         EditorError::new(
             EditorErrorCode::InvalidProject,
             format!(
-                "The project file {} is not valid: {e}",
+                "The project file {} does not name its project: {e}",
                 redact_path(&project_path)
             ),
         )
     })?;
-    let own_id = document
-        .pointer("/project/id")
-        .and_then(serde_json::Value::as_str);
-    if own_id != Some(id) {
+    if document.project.id != id {
         return Err(EditorError::new(
             EditorErrorCode::InvalidProject,
             format!(
@@ -534,7 +546,7 @@ pub(crate) fn prove_ownership(root: &Path, id: &str) -> Result<(), EditorError> 
 /// `remove_dir_all`, which would recurse without this module's own
 /// symlink check at every level). `walk_no_follow` only inspects what is
 /// INSIDE the folder; `prove_ownership` has already refused a folder that
-/// is itself a symlink or junction.
+/// is itself a symlink or junction, and `remove_tree` refuses one again.
 pub fn remove_project(root: &Path, id: &str) -> Result<(), EditorError> {
     prove_ownership(root, id)?;
     let dir = project_dir(root, id).ok_or_else(|| invalid_id_err(id))?;
@@ -557,7 +569,20 @@ pub(crate) fn remove_dir_no_follow(dir: &Path) -> io::Result<()> {
     remove_tree(dir, None)
 }
 
+/// `dir` ITSELF is checked first (S-2): `read_dir` on a symlink or an NTFS
+/// junction (which Rust reports as a symlink) walks the folder it points
+/// at, and every file there would be removed. `walk_no_follow` only sees
+/// what is inside.
 fn remove_tree(dir: &Path, last: Option<&str>) -> io::Result<()> {
+    if std::fs::symlink_metadata(dir)?.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{} is a symlink or junction; refusing to remove through it",
+                redact_path(dir)
+            ),
+        ));
+    }
     for (path, is_dir) in removal_plan(dir, last)? {
         if is_dir {
             std::fs::remove_dir(&path)?;

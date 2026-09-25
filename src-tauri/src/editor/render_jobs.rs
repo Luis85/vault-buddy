@@ -89,7 +89,8 @@ pub(crate) const PART_FILE: &str = "out.mp4.part";
 
 /// The largest `products.json` accepted: every product may embed a whole
 /// project snapshot, so the bound is the project-file bound per product.
-const LEDGER_MAX_BYTES: u64 = limits::MAX_PROJECT_JSON_BYTES * (limits::MAX_PRODUCTS as u64 + 1);
+pub(crate) const LEDGER_MAX_BYTES: u64 =
+    limits::MAX_PROJECT_JSON_BYTES * (limits::MAX_PRODUCTS as u64 + 1);
 /// How often a quit's cancel re-reads the registry.
 const CANCEL_POLL: Duration = Duration::from_millis(50);
 

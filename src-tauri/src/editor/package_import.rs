@@ -15,13 +15,19 @@
 //! 2. **Choose the id**: the manifest's `projectId`, or a fresh one when a
 //!    project (or an import in progress) already holds it — the file then
 //!    imports as a COPY and the envelope is re-keyed.
-//! 3. **Build it aside**, in `editor-projects\.<id>.importing\`: each media
+//! 3. **Measure what the store will hold** (M-V2): `project.json` and the
+//!    product ledger are serialised PRETTY, exactly as they are written, and
+//!    refused past the bounds their readers enforce, BEFORE any directory
+//!    exists. A compact file under the read bound can be far over it once
+//!    pretty-printed, and an installed project nothing can read could be
+//!    neither saved, listed nor discarded.
+//! 4. **Build it aside**, in `editor-projects\.<id>.importing\`: each media
 //!    (and product) file extracted through `PackageExtractor` (its local
 //!    header checked against the central directory at extraction), bounded
 //!    by the manifest's own size, and its byte count and SHA-256 compared
 //!    with the manifest BEFORE the next entry is touched. Then
 //!    `sources.json`, `project.json` and `workspace.json`.
-//! 4. **Install last**: one directory rename into place. Any failure
+//! 5. **Install last**: one directory rename into place. Any failure
 //!    before it drops `ImportDir`, which removes the build directory with
 //!    the store's owned, no-follow removal — nothing was ever installed.
 //!    A crash leaves a `.importing` directory the startup sweep
@@ -49,20 +55,20 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{File, OpenOptions};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use vault_buddy_core::capture_note::write_atomic_replacing;
 use vault_buddy_core::device_names::is_reserved_device_name;
 use vault_buddy_core::editor::package::{inspect_archive, validate_entry_name, PackageManifest};
-use vault_buddy_core::editor::package_extract::PackageExtractor;
+use vault_buddy_core::editor::package_extract::{PackageExtractor, ValidatedArchive};
 use vault_buddy_core::editor::package_plan::{
     asset_definitions, asset_id_problem, file_backed_asset_ids, placeholder_file_name,
     rekey_envelope, take_source_facts, FactsMediaKind, PackageFormat, SourceFacts,
 };
 use vault_buddy_core::editor::{
-    has_canonical_file_name, is_valid_id, limits, new_project_id,
-    product_file_name as product_canonical_name, sanitize, validate_envelope, Asset, AssetKind,
-    EditorError, EditorErrorCode, EditorOpenResult, MediaType, WorkspaceEnvelope,
+    has_canonical_file_name, is_valid_id, limits, new_project_id, sanitize, validate_envelope,
+    Asset, AssetKind, EditorError, EditorErrorCode, EditorOpenResult, MediaType, WorkspaceEnvelope,
 };
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
@@ -72,7 +78,7 @@ use super::project_store::{
     join_contained, project_dir, store_dir, SourceLocator, SourceMediaKind, SourceRecord,
 };
 use super::redact::redact_path;
-use super::render_jobs::PRODUCTS_FILE;
+use super::render_jobs::{LEDGER_MAX_BYTES, PRODUCTS_FILE};
 use super::save_commands::map_write_error;
 use super::session_commands::{missing_media, register_session};
 use super::store_io::{read_bounded, remove_dir_no_follow, PROJECT_FILE, SOURCES_FILE};
@@ -81,8 +87,16 @@ use super::EditorState;
 /// The suffix of an import's build directory, `.<projectId>.importing`.
 const IMPORTING_SUFFIX: &str = ".importing";
 
+/// The refusal for a file whose stored form would be past what the store
+/// can read back (M-V2).
+const TOO_LARGE_TO_INSTALL: &str = "This project file is too large to install.";
+
 fn invalid(message: impl Into<String>) -> EditorError {
     EditorError::new(EditorErrorCode::InvalidProject, message)
+}
+
+fn internal(message: impl Into<String>) -> EditorError {
+    EditorError::new(EditorErrorCode::Internal, message)
 }
 
 /// The project id a store entry named `.<id>.importing` was building, if
@@ -98,19 +112,24 @@ fn importing_dir(root: &Path, id: &str) -> PathBuf {
 }
 
 /// What a validated file brings: the envelope and, for a portable file,
-/// its manifest.
-struct Incoming {
+/// its manifest and the very archive `inspect_archive` validated — the
+/// extraction reads through it, never a second parse (S-3).
+struct Incoming<'f> {
     envelope: WorkspaceEnvelope,
-    manifest: Option<PackageManifest>,
+    package: Option<(PackageManifest, ValidatedArchive<&'f File>)>,
 }
 
-fn read_incoming(file: &File, path: &Path, format: PackageFormat) -> Result<Incoming, EditorError> {
+fn read_incoming<'f>(
+    file: &'f File,
+    path: &Path,
+    format: PackageFormat,
+) -> Result<Incoming<'f>, EditorError> {
     let incoming = match format {
         PackageFormat::Portable => {
-            let index = inspect_archive(file)?;
+            let inspected = inspect_archive(file)?;
             Incoming {
-                envelope: index.envelope,
-                manifest: Some(index.manifest),
+                envelope: inspected.index.envelope,
+                package: Some((inspected.index.manifest, inspected.archive)),
             }
         }
         PackageFormat::Lightweight => {
@@ -120,7 +139,7 @@ fn read_incoming(file: &File, path: &Path, format: PackageFormat) -> Result<Inco
             validate_envelope(&envelope)?;
             Incoming {
                 envelope,
-                manifest: None,
+                package: None,
             }
         }
     };
@@ -202,16 +221,22 @@ struct Extracted {
 /// or a link already there) and PROVES it before anything else happens:
 /// its local header at extraction, at most `size` bytes out, and exactly
 /// `size` bytes whose SHA-256 is `sha256`.
+///
+/// `label` names the file by kind and manifest position ("media file 2"),
+/// never by its name, which is the package author's text (S-11).
 fn extract_one(
     extractor: &mut PackageExtractor<&File>,
-    entry: &str,
+    (entry, label): (&str, &str),
     dir: &Path,
     name: &str,
     size: u64,
     sha256: &str,
 ) -> Result<Extracted, EditorError> {
-    let dest = join_contained(dir, name)
-        .ok_or_else(|| invalid(format!("{entry:?} cannot be saved as a file here")))?;
+    let dest = join_contained(dir, name).ok_or_else(|| {
+        invalid(format!(
+            "The package's {label} cannot be saved as a file here."
+        ))
+    })?;
     let mut out = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -223,7 +248,7 @@ fn extract_one(
     // entry installed.
     if got.bytes != size || got.sha256 != sha256 {
         return Err(invalid(format!(
-            "package entry {entry:?} does not match its manifest (size or SHA-256); the file is damaged"
+            "The package's {label} does not match its manifest (size or SHA-256); the file is damaged."
         )));
     }
     out.sync_all().map_err(map_write_error)?;
@@ -239,7 +264,7 @@ fn extract_one(
 /// plain, non-device component, unique ignoring case.
 fn product_file_name<'a>(
     env: &'a WorkspaceEnvelope,
-    product_id: &str,
+    (product_id, label): (&str, &str),
     seen: &mut HashSet<String>,
 ) -> Result<&'a str, EditorError> {
     let filename = env
@@ -248,7 +273,7 @@ fn product_file_name<'a>(
         .iter()
         .find(|p| p.id == product_id)
         .map(|p| p.filename.as_str())
-        .ok_or_else(|| invalid(format!("product {product_id} is not in the project")))?;
+        .ok_or_else(|| invalid(format!("The package's {label} is not in the project.")))?;
     let usable = validate_entry_name(&format!("products/{filename}")).is_ok()
         && !filename.contains('/')
         && !is_reserved_device_name(filename)
@@ -257,7 +282,7 @@ fn product_file_name<'a>(
         Ok(filename)
     } else {
         Err(invalid(format!(
-            "product {product_id}'s file name {filename:?} cannot be saved as a file"
+            "The package's {label} has a file name that cannot be saved as a file."
         )))
     }
 }
@@ -265,28 +290,32 @@ fn product_file_name<'a>(
 /// Every packaged media and product file, extracted and verified; returns
 /// the media by asset id.
 fn extract_all(
-    file: &File,
+    archive: ValidatedArchive<&File>,
     manifest: &PackageManifest,
     env: &WorkspaceEnvelope,
     build: &ImportDir,
 ) -> Result<BTreeMap<String, Extracted>, EditorError> {
-    let mut extractor = PackageExtractor::open(file)?;
+    let mut extractor = PackageExtractor::from_validated(archive)?;
     let mut media = BTreeMap::new();
     if !manifest.media.is_empty() {
         let dir = build.subdir("media")?;
-        for m in &manifest.media {
+        for (i, m) in manifest.media.iter().enumerate() {
             let ext = m.path.rsplit_once('.').map_or("bin", |(_, ext)| ext);
             let name = format!("{}.{ext}", m.asset_id);
-            let got = extract_one(&mut extractor, &m.path, &dir, &name, m.size, &m.sha256)?;
+            let label = format!("media file {}", i + 1);
+            let entry = (m.path.as_str(), label.as_str());
+            let got = extract_one(&mut extractor, entry, &dir, &name, m.size, &m.sha256)?;
             media.insert(m.asset_id.clone(), got);
         }
     }
     let mut seen = HashSet::new();
     if !manifest.products.is_empty() {
         let dir = build.subdir("products")?;
-        for p in &manifest.products {
-            let name = product_file_name(env, &p.product_id, &mut seen)?;
-            extract_one(&mut extractor, &p.path, &dir, name, p.size, &p.sha256)?;
+        for (i, p) in manifest.products.iter().enumerate() {
+            let label = format!("product file {}", i + 1);
+            let name = product_file_name(env, (&p.product_id, &label), &mut seen)?;
+            let entry = (p.path.as_str(), label.as_str());
+            extract_one(&mut extractor, entry, &dir, name, p.size, &p.sha256)?;
         }
     }
     Ok(media)
@@ -371,13 +400,54 @@ fn build_sources(
 }
 
 fn write_json(dir: &Path, name: &str, value: &impl serde::Serialize) -> Result<(), EditorError> {
-    let json = serde_json::to_string_pretty(value).map_err(|e| {
-        EditorError::new(
-            EditorErrorCode::Internal,
-            format!("Could not encode {name}: {e}"),
-        )
-    })?;
-    write_atomic_replacing(&dir.join(name), &json).map_err(map_write_error)
+    let json = serde_json::to_string_pretty(value)
+        .map_err(|e| internal(format!("Could not encode {name}: {e}")))?;
+    write_text(dir, name, &json)
+}
+
+fn write_text(dir: &Path, name: &str, json: &str) -> Result<(), EditorError> {
+    write_atomic_replacing(&dir.join(name), json).map_err(map_write_error)
+}
+
+/// A sink that holds at most `max` bytes and fails the write that would
+/// pass them, remembering why.
+struct Capped {
+    bytes: Vec<u8>,
+    max: usize,
+    over: bool,
+}
+
+impl io::Write for Capped {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.bytes.len().saturating_add(buf.len()) > self.max {
+            self.over = true;
+            return Err(io::Error::other("past the bound"));
+        }
+        self.bytes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// `value` pretty-printed exactly as `write_json` would store it, refused
+/// once it passes `max` — the bound its reader enforces (M-V2). It stops
+/// THERE, so a crafted file never makes the import build a pretty form
+/// many times its own size.
+fn stored_json(value: &impl serde::Serialize, max: u64) -> Result<String, EditorError> {
+    let mut out = Capped {
+        bytes: Vec::new(),
+        max: usize::try_from(max).unwrap_or(usize::MAX),
+        over: false,
+    };
+    match serde_json::to_writer_pretty(&mut out, value) {
+        Ok(()) => String::from_utf8(out.bytes)
+            .map_err(|e| internal(format!("Could not encode the project: {e}"))),
+        Err(_) if out.over => Err(invalid(TOO_LARGE_TO_INSTALL)),
+        Err(e) => Err(internal(format!("Could not encode the project: {e}"))),
+    }
 }
 
 fn import_file(
@@ -400,59 +470,66 @@ fn import_file(
         return Err(invalid("The chosen project file is not a plain file."));
     }
     let file = File::open(path).map_err(map_write_error)?;
-    let incoming = read_incoming(&file, path, format)?;
+    let Incoming {
+        mut envelope,
+        package,
+    } = read_incoming(&file, path, format)?;
 
     let _open = lock_ignoring_poison(&state.open);
-    let mut envelope = incoming.envelope;
     // Transport only: taken OUT of the envelope before anything is stored.
     let facts = take_source_facts(&mut envelope).map_err(invalid)?;
     // Task 46: a product's file is `products\<productId>.mp4` and nothing
     // else -- refused here, before anything is built, like every other
     // name this file carries.
-    if let Some(p) = envelope
+    // Neither the file name nor the product id is echoed: both are the
+    // file author's text (S-11).
+    if let Some(i) = envelope
         .record
         .products
         .iter()
-        .find(|p| !has_canonical_file_name(p))
+        .position(|p| !has_canonical_file_name(p))
     {
         return Err(invalid(format!(
-            "product {}'s file name {:?} is not {}",
-            p.id,
-            p.filename,
-            product_canonical_name(&p.id)
+            "The file name of product {} in the project file is not its id followed by .mp4.",
+            i + 1
         )));
     }
     let id = choose_id(root, &envelope.project.id);
     if id != envelope.project.id {
         rekey_envelope(&mut envelope, &id);
     }
-    let build = ImportDir::create(root, &id)?;
-    let extracted = match &incoming.manifest {
-        Some(manifest) => extract_all(&file, manifest, &envelope, &build)?,
-        None => BTreeMap::new(),
-    };
-    let sources = build_sources(&envelope, &extracted, &facts);
     // `project.json` carries the SANITIZED blob too (fix round 1), exactly
     // as `editor_save_project` embeds it: untrusted package content never
     // lands in the store verbatim.
     let workspace = sanitize(&envelope.workspace);
-    envelope.workspace = serde_json::to_value(&workspace).map_err(|e| {
-        EditorError::new(
-            EditorErrorCode::Internal,
-            format!("Could not encode the workspace: {e}"),
-        )
-    })?;
-    write_json(&build.dir, SOURCES_FILE, &sources)?;
+    envelope.workspace = serde_json::to_value(&workspace)
+        .map_err(|e| internal(format!("Could not encode the workspace: {e}")))?;
     // The ledger is the products' authority (Task 46, R5): an imported
     // project lists its retained products before any save. `project.json`
     // keeps them WITHOUT their snapshots, as a save does (fix round 1).
-    if !envelope.record.products.is_empty() {
-        write_json(&build.dir, PRODUCTS_FILE, &envelope.record.products)?;
-        for product in &mut envelope.record.products {
-            product.snapshot = None;
-        }
+    // Both are measured here, before anything exists (M-V2).
+    let ledger = if envelope.record.products.is_empty() {
+        None
+    } else {
+        Some(stored_json(&envelope.record.products, LEDGER_MAX_BYTES)?)
+    };
+    for product in &mut envelope.record.products {
+        product.snapshot = None;
     }
-    write_json(&build.dir, PROJECT_FILE, &envelope)?;
+    // MUTATION CHECK (`a_compact_file_whose_stored_form_is_too_large_installs_nothing`):
+    // not measuring it installs a project nothing can read back.
+    let project_json = stored_json(&envelope, limits::MAX_PROJECT_JSON_BYTES)?;
+    let build = ImportDir::create(root, &id)?;
+    let extracted = match package {
+        Some((manifest, archive)) => extract_all(archive, &manifest, &envelope, &build)?,
+        None => BTreeMap::new(),
+    };
+    let sources = build_sources(&envelope, &extracted, &facts);
+    write_json(&build.dir, SOURCES_FILE, &sources)?;
+    if let Some(ledger) = &ledger {
+        write_text(&build.dir, PRODUCTS_FILE, ledger)?;
+    }
+    write_text(&build.dir, PROJECT_FILE, &project_json)?;
     write_json(&build.dir, WORKSPACE_FILE, &workspace)?;
     build.install(root, &id)?;
 

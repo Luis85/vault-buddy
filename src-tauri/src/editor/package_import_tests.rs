@@ -76,7 +76,11 @@ fn failed_import_installs_nothing() {
     let b = Machine::new();
     let err = import(&b, path).expect_err("a corrupt entry refuses the import");
     assert_eq!(err.code, EditorErrorCode::InvalidProject, "{}", err.message);
-    assert!(err.message.contains("media/src.mp4"), "{}", err.message);
+    // By kind and position, never by name (S-11).
+    assert_eq!(
+        err.message,
+        "The package's media file 2 does not match its manifest (size or SHA-256); the file is damaged."
+    );
     assert_eq!(
         b.store_entries(),
         Vec::<String>::new(),
@@ -122,7 +126,11 @@ fn a_retained_product_is_installed_as_its_id_and_recorded_in_the_ledger() {
 
     let b = Machine::new();
     let err = import(&b, bad).expect_err("a foreign product file name is refused");
-    assert!(err.message.contains("take-one.mp4"), "{}", err.message);
+    // The file name is the file author's text, never echoed (S-11).
+    assert_eq!(
+        err.message,
+        "The file name of product 1 in the project file is not its id followed by .mp4."
+    );
     assert_eq!(b.store_entries(), Vec::<String>::new());
 
     let opened = import(&b, good).unwrap().unwrap();
@@ -286,4 +294,39 @@ fn the_stored_envelope_carries_only_the_sanitized_workspace() {
     );
     assert_eq!(stored.workspace["theme"], "light");
     assert!(!stored.record.extra.contains_key("vaultBuddySourceFacts"));
+}
+
+// M-V2 (post-merge review): the import re-serialises the envelope PRETTY,
+// so a compact file under the 8 MiB read bound (here: a large, deeply
+// laid-out `extra` on the project) became a `project.json` past it -- an
+// installed project no save, list or discard could read. The final file is
+// now measured before anything is created.
+#[test]
+fn a_compact_file_whose_stored_form_is_too_large_installs_nothing() {
+    let (a, session_id, _) = machine_a();
+    let mut envelope =
+        export_envelope(&a.state, a.root(), &session_id, a.revision(&session_id)).unwrap();
+    let rows: Vec<serde_json::Value> = (0..400_000).map(|_| json!([[1]])).collect();
+    envelope
+        .project
+        .extra
+        .insert("padding".to_string(), serde_json::Value::Array(rows));
+    let compact = serde_json::to_vec(&envelope).unwrap();
+    let limit = vault_buddy_core::editor::limits::MAX_PROJECT_JSON_BYTES;
+    assert!((compact.len() as u64) < limit, "{} bytes", compact.len());
+    assert!(serde_json::to_vec_pretty(&envelope).unwrap().len() as u64 > limit);
+    let out = tempfile::tempdir().unwrap();
+    let path = out.path().join("Padded.vbproject.json");
+    std::fs::write(&path, compact).unwrap();
+
+    let b = Machine::new();
+    let err = import(&b, path).expect_err("its stored form is past the bound");
+    assert_eq!(err.code, EditorErrorCode::InvalidProject);
+    assert_eq!(err.message, "This project file is too large to install.");
+    assert_eq!(
+        b.store_entries(),
+        Vec::<String>::new(),
+        "no project and no .importing directory"
+    );
+    assert!(lock_ignoring_poison(&b.state.sessions).is_empty());
 }

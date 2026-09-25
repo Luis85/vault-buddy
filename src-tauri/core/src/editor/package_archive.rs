@@ -129,11 +129,11 @@ pub(super) fn walk_central_directory<R: Read + Seek>(
             return Err(malformed());
         }
         let name_len = u16_at(head, 28) as usize;
-        let name = dir
-            .get(at + CENTRAL_HEADER_LEN..at + CENTRAL_HEADER_LEN + name_len)
+        dir.get(at + CENTRAL_HEADER_LEN..at + CENTRAL_HEADER_LEN + name_len)
             .ok_or_else(malformed)?;
-        let name = String::from_utf8_lossy(name);
-        let entry = |why: &str| invalid(format!("package entry {name:?} {why}"));
+        // By position, never by name (S-11): the name is the package
+        // author's text and may carry a bidi control.
+        let entry = |why: &str| invalid(format!("package entry {record} {why}"));
         if name_len > MAX_ENTRY_NAME_BYTES {
             return Err(malformed());
         }

@@ -258,10 +258,11 @@ fn placement(
 /// The project id an existing file of `format` belongs to, if it is one.
 fn existing_project_id(path: &Path, format: PackageFormat) -> Option<String> {
     match format {
-        PackageFormat::Portable => File::open(path)
-            .ok()
-            .and_then(|file| inspect_archive(&file).ok())
-            .map(|index| index.manifest.project_id),
+        PackageFormat::Portable => File::open(path).ok().and_then(|file| {
+            inspect_archive(&file)
+                .ok()
+                .map(|inspected| inspected.index.manifest.project_id)
+        }),
         PackageFormat::Lightweight => read_bounded(path, limits::MAX_PROJECT_JSON_BYTES)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<WorkspaceEnvelope>(&bytes).ok())
@@ -310,6 +311,11 @@ fn create_temp(target: &Path) -> Result<(OwnedTemp, File), EditorError> {
 /// compared with the manifest: a source that changed in between, even at
 /// the same size, fails the export instead of yielding a receipt for a file
 /// the import would refuse. `write_package` itself refuses a size change.
+///
+/// The first read's sizes are summed against the portable limit AGAIN
+/// (S-12): `collect_media` measured the files before the save dialog, and a
+/// source that grew while it was open would otherwise make a package past
+/// the limit, one the import refuses.
 fn write_portable(
     file: File,
     env: &WorkspaceEnvelope,
@@ -319,10 +325,15 @@ fn write_portable(
     let mut entries = Vec::with_capacity(media.len());
     let mut readers = Vec::with_capacity(media.len());
     let mut digests = Vec::with_capacity(media.len());
+    let mut total: u64 = 0;
     for m in media {
         let (size, sha256) = File::open(&m.path)
             .and_then(|mut f| copy_hashing(&mut f, &mut io::sink()))
             .map_err(map_write_error)?;
+        total = total.saturating_add(size);
+        if total > limits::MAX_PACKAGE_MEDIA_BYTES {
+            return Err(err(EditorErrorCode::InvalidRequest, TOO_LARGE));
+        }
         entries.push(PackageMedia {
             asset_id: m.asset_id.clone(),
             path: m.entry.clone(),

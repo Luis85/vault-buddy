@@ -6,7 +6,7 @@
 //! precedent) so its builders are in scope and that file stays under the
 //! 800-line Rust cap.
 
-use std::io::Read;
+use std::io::{Read, SeekFrom};
 
 use zip::write::FullFileOptions;
 
@@ -247,4 +247,146 @@ fn write_package_refuses_a_manifest_listing_a_path_twice() {
         .expect_err("a duplicate manifest path is refused");
     assert_eq!(err.code, EditorErrorCode::Internal);
     assert!(err.message.contains("twice"), "{}", err.message);
+}
+
+// S-11 (post-merge review): a refusal names an entry by POSITION, never by
+// its name -- a name is the package author's text, and a bidi control in it
+// (U+202E renders `cod\u{202E}4pm.exe` as `codexe.mp4`) makes a message say
+// something else than it holds. Such a name is refused outright too.
+#[test]
+fn a_bidi_control_in_an_entry_name_is_refused_without_echoing_it() {
+    for c in ['\u{202A}', '\u{202D}', '\u{202E}', '\u{2066}', '\u{2069}'] {
+        refused_name(&format!("media/a{c}1.mp4"), "bidirectional control");
+    }
+    let (env, b1, manifest) = base();
+    let bad = "media/cod\u{202E}4pm.exe";
+    let err = inspect(&assembled(&json(&manifest), &env, &b1, &[bad])).expect_err("refused");
+    assert_eq!(err.code, EditorErrorCode::InvalidProject);
+    assert_eq!(
+        err.message,
+        "package entry 4 is not allowed: contains a bidirectional control character"
+    );
+}
+
+// S-11: every other per-entry refusal names the position too.
+#[test]
+fn per_entry_refusals_name_the_position_not_the_name() {
+    let (env, b1, manifest) = base();
+    let err = inspect(&assembled(&json(&manifest), &env, &b1, &["media/zz.mp4"]))
+        .expect_err("an unlisted entry");
+    assert_eq!(err.message, "package entry 4 is not listed in the manifest");
+    let mut m = manifest.clone();
+    m.media[0].path = "media/a1.mp4x9abcd".into();
+    let err = inspect(&assembled(&json(&m), &env, &b1, &[])).expect_err("a bad path");
+    assert_eq!(
+        err.message,
+        "manifest media file 1: its path is not its expected name"
+    );
+}
+
+// S-13 (post-merge review): a manifest media entry for an asset that needs
+// no file (a `card`, synthesized from the project) was extracted into
+// `media\` and then recorded nowhere -- bytes the project can never use.
+#[test]
+fn media_listed_for_a_card_is_refused() {
+    let mut project = project_using(&["a1", "card1"]);
+    project.assets[1].builtin = Some(Builtin::Card);
+    let env = envelope_of(project, Vec::new());
+    let (b1, card) = (bytes_of(300, 1), bytes_of(64, 4));
+    let media: [(&str, &[u8]); 2] = [("a1", &b1), ("card1", &card)];
+    let err = inspect(&written(&env, &manifest_for(&env, &media), &media))
+        .expect_err("a card's media is refused");
+    assert_eq!(err.code, EditorErrorCode::InvalidProject);
+    assert_eq!(err.message, "The project file lists media no clip can use.");
+    let only_a1: [(&str, &[u8]); 1] = [("a1", &b1)];
+    inspect(&written(&env, &manifest_for(&env, &only_a1), &only_a1))
+        .expect("positive control: without the card's media it is valid");
+}
+
+/// A reader over bytes the test can change after it was handed out: every
+/// clone reads the same buffer, as every handle onto one file does.
+#[derive(Clone)]
+struct Shared {
+    bytes: std::rc::Rc<std::cell::RefCell<Vec<u8>>>,
+    pos: u64,
+}
+
+impl Read for Shared {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let bytes = self.bytes.borrow();
+        let start = (self.pos as usize).min(bytes.len());
+        let n = buf.len().min(bytes.len() - start);
+        buf[..n].copy_from_slice(&bytes[start..start + n]);
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl std::io::Seek for Shared {
+    fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+        let len = self.bytes.borrow().len() as i64;
+        self.pos = match to {
+            SeekFrom::Start(n) => n,
+            SeekFrom::End(d) => (len + d) as u64,
+            SeekFrom::Current(d) => (self.pos as i64 + d) as u64,
+        };
+        Ok(self.pos)
+    }
+}
+
+// S-3 (post-merge review): the extractor used to parse the archive a SECOND
+// time, without `package_archive`'s raw pre-checks, and trust whatever
+// directory that parse found. Here the directory changes after inspection
+// (entry 3 renamed): extraction must still follow the directory that was
+// validated, so a re-parse (the old `PackageExtractor::open`) goes red.
+#[test]
+fn extraction_follows_the_directory_inspect_archive_validated() {
+    let (env, b1, manifest) = base();
+    let bytes = written(&env, &manifest, &[("a1", &b1)]);
+    let shared = Shared {
+        bytes: std::rc::Rc::new(std::cell::RefCell::new(bytes)),
+        pos: 0,
+    };
+    let inspected = inspect_archive(shared.clone()).expect("a valid package");
+    {
+        let mut bytes = shared.bytes.borrow_mut();
+        let record = (0..bytes.len() - 46)
+            .find(|&i| {
+                bytes[i..i + 4] == [0x50, 0x4b, 0x01, 0x02]
+                    && bytes[i + 46..].starts_with(A1.as_bytes())
+            })
+            .expect("a1's central record");
+        bytes[record + 46..record + 46 + A1.len()].copy_from_slice(b"media/z1.mp4");
+    }
+    let mut extractor =
+        crate::editor::package_extract::PackageExtractor::from_validated(inspected.archive)
+            .expect("the validated layout still holds");
+    let mut out = Vec::new();
+    extractor
+        .extract(A1, &mut out, 300)
+        .expect("the validated entry");
+    assert_eq!(out, b1);
+}
+
+// S-3: the brief's own shape -- the FILE at the chosen path is replaced
+// after inspection; extraction reads the handle that was validated, so the
+// bytes are the original ones.
+#[test]
+fn extraction_reads_the_validated_handle_after_the_file_is_swapped() {
+    let (env, b1, manifest) = base();
+    let b2 = bytes_of(300, 9);
+    let other: [(&str, &[u8]); 1] = [("a1", &b2)];
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("p.vbproject.zip");
+    std::fs::write(&path, written(&env, &manifest, &[("a1", &b1)])).unwrap();
+    let file = std::fs::File::open(&path).unwrap();
+    let inspected = inspect_archive(&file).expect("a valid package");
+    std::fs::rename(&path, dir.path().join("moved-away")).unwrap();
+    std::fs::write(&path, written(&env, &manifest_for(&env, &other), &other)).unwrap();
+    let mut extractor =
+        crate::editor::package_extract::PackageExtractor::from_validated(inspected.archive)
+            .unwrap();
+    let mut out = Vec::new();
+    extractor.extract(A1, &mut out, 300).unwrap();
+    assert_eq!(out, b1, "the original bytes, not the swapped file's");
 }

@@ -118,7 +118,7 @@ fn json(value: &impl serde::Serialize) -> Vec<u8> {
 }
 
 fn inspect(bytes: &[u8]) -> Result<PackageIndex, EditorError> {
-    inspect_archive(Cursor::new(bytes.to_vec()))
+    inspect_archive(Cursor::new(bytes.to_vec())).map(|inspected| inspected.index)
 }
 
 fn rejected(bytes: &[u8], needle: &str) -> EditorError {
@@ -215,9 +215,9 @@ fn traversal_names_are_rejected() {
             (A1, &b1, CompressionMethod::Stored),
             (bad, b"x", CompressionMethod::Stored),
         ]);
-        let err = rejected(&bytes, "is not allowed");
-        let quoted = format!("{bad:?}");
-        assert!(err.message.contains(&quoted), "{}", err.message);
+        let err = rejected(&bytes, "package entry 4 is not allowed: ");
+        // By position, never by name (S-11).
+        assert!(!err.message.contains(bad), "{}", err.message);
     }
 }
 
@@ -236,7 +236,10 @@ fn duplicate_case_folded_names_are_rejected() {
         ("media/a.mp4", &lower, CompressionMethod::Stored),
     ]);
     let err = rejected(&bytes, "duplicate");
-    assert!(err.message.contains("media/a.mp4"), "{}", err.message);
+    assert_eq!(
+        err.message,
+        "package entry 4 is a duplicate (names are compared case-insensitively)"
+    );
 }
 
 #[test]
@@ -271,7 +274,12 @@ fn ratio_bomb_is_rejected() {
         (A1, &zeros, CompressionMethod::Deflated),
     ]);
     let err = rejected(&bytes, "ratio");
-    assert!(err.message.contains(A1), "{}", err.message);
+    assert!(
+        err.message.starts_with("package entry 3 expands"),
+        "{}",
+        err.message
+    );
+    assert!(!err.message.contains(A1), "{}", err.message);
 }
 
 #[test]
@@ -472,7 +480,7 @@ fn every_manifest_defect_is_rejected() {
     m.media.push(listed("zz", "media/zz.mp4", &b1));
     rejected(
         &assembled(&json(&m), &env, &b1, &["media/zz.mp4"]),
-        "is not used by",
+        "The project file lists media no clip can use.",
     );
     let mut m = good.clone();
     m.products.push(PackageProduct {
@@ -596,6 +604,7 @@ fn declared_expansion_past_the_package_limit_is_rejected() {
 
 #[test]
 fn an_oversized_archive_is_refused_before_parsing() {
+    #[derive(Clone)]
     struct Huge;
     impl std::io::Read for Huge {
         fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {

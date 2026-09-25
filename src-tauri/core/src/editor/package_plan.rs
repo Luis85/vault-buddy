@@ -86,7 +86,7 @@ pub fn asset_definitions(env: &WorkspaceEnvelope) -> BTreeMap<&str, Vec<&Asset>>
 /// kind but a `card` builtin (synthesized from the project) and a linked
 /// asset (detached audio, whose bytes are its source's). `package::
 /// cross_check`'s rule -- a `screen` builtin IS a file (the staged capture).
-fn file_backed(defs: &[&Asset]) -> bool {
+pub(super) fn file_backed(defs: &[&Asset]) -> bool {
     defs.iter()
         .any(|a| a.builtin != Some(Builtin::Card) && a.linked_asset.is_none())
 }
