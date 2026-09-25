@@ -16,7 +16,8 @@ use crate::editor::project_store::pinned_project;
 use crate::editor::relink_commands::claim_relink;
 use crate::editor::session_close::close_in;
 use crate::editor::session_commands::{open_staged_session, snapshot_in, CloseDisposition};
-use crate::editor::webcam_commands::{append_in, begin_in, finish_in, ChunkHeaders, TakeIo};
+use crate::editor::webcam_commands::{append_in, begin_in, ChunkHeaders};
+use crate::editor::webcam_finish::{finish_in, TakeIo};
 
 const BASE: &str = "2026-09-21 0915 Discard demo";
 

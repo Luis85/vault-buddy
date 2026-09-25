@@ -16,8 +16,10 @@ use vault_buddy_core::editor::{
 };
 
 use super::*;
-use crate::editor::project_store::minimal_project;
-use crate::editor::store_io::create_project;
+use crate::editor::project_store::{minimal_project, SourceLocator, SourceRecord};
+use crate::editor::store_io::{create_project, load_sources};
+use vault_buddy_core::editor::import_io::copy_hashing;
+use vault_buddy_core::editor::probe::ProbeFacts;
 
 const SESSION: &str = "ses-proj1";
 

@@ -15,7 +15,8 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use super::*;
 use crate::editor::project_store::{project_dir, SourceLocator, SourceMediaKind, SourceRecord};
 use crate::editor::store_io::create_project;
-use crate::editor::webcam_commands::{begin_in, TakeIo};
+use crate::editor::webcam_commands::begin_in;
+use crate::editor::webcam_finish::TakeIo;
 
 const SESSION: &str = "ses-checks";
 
