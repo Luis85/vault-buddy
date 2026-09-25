@@ -3678,8 +3678,9 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
   stores. It surfaced as a load-dependent flake in `editorLearningCenter`
   ("a refused or dismissed restore changes nothing"). `notifications.ts`
   (`expire`) and `editorOnboarding.ts` (`writeProgress`) call plain
-  functions from their timers instead; `capture.ts`'s rename-prompt timer
-  and `settingsStatus.ts`'s fade timer still call actions.
+  functions from their timers instead; `capture.ts`'s rename-prompt expiry
+  (`clearRenamePrompt`, `src/stores/renamePrompt.ts`) and
+  `settingsStatus.ts`'s fade (the module-level `recompute`) do the same.
 - **`tests/e2e/` is Playwright, not Vitest, and it exists for the ONE thing
   the suite above structurally cannot do: measure.** happy-dom has no layout
   engine, so every geometry assertion in `tests/*.test.ts` is really a class

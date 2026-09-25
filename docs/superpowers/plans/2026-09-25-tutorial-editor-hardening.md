@@ -459,6 +459,8 @@ Findings: M-V13..16 and the docs minors of the review; triage GAP-170 / GAP-174 
 
 ## Decisions (the user's, before execution)
 
+**Taken 2026-09-25:** D1 = (a) suppress + reattach; D2 = yes; D3 = yes; D4 = register as recovered; D5 = keep (recommendation, not objected). Tasks 9, 15, 23 and 25 run in full.
+
 - **D1 — GAP-208 / F5 reload (re-opens ruling l.100's deferral).** (a) *Recommended:* suppress F5 / Ctrl+R / Ctrl+Shift+R / Ctrl+F / Ctrl+P in the editor window from the webview (no dependency) AND implement the reattach so a reload that still happens (devtools builds) reopens the project and a running render's progress (Task 15); (b) the same but switch WebView2's accelerators off natively — adds `webview2-com` as a direct dependency; (c) docs only (Task 1's correction).
 - **D2 — GAP-213:** new tutorial notes say `created-by: Vault Buddy` like every other note (existing notes untouched). *Recommended: yes.*
 - **D3 — GAP-178:** duplicate/paste a crossfaded pair with its transition (additive wire field). *Recommended: yes, it removes a refusal.*
