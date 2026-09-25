@@ -146,23 +146,6 @@ pub fn canvas_is_exact(width: u32, height: u32) -> bool {
     u64::from(width) * u64::from(ch) == u64::from(height) * u64::from(cw)
 }
 
-/// Resolves a reference project's destination vault, recorded on disk as a
-/// name or an id, against the vaults actually registered today (R3): an id
-/// match wins outright (ids are stable and unambiguous), else a UNIQUE name
-/// match; anything else (no match, or more than one vault sharing that
-/// name) is `None` rather than a guess.
-pub fn map_reference_destination(name_or_id: &str, vaults: &[(String, String)]) -> Option<String> {
-    if vaults.iter().any(|(id, _)| id == name_or_id) {
-        return Some(name_or_id.to_string());
-    }
-    let mut by_name = vaults.iter().filter(|(_, name)| name == name_or_id);
-    let first = by_name.next()?;
-    if by_name.next().is_some() {
-        return None;
-    }
-    Some(first.0.clone())
-}
-
 /// Migrates a staged screen capture into a tutorial `Project` (R6, ADR §4).
 ///
 /// One asset (`src`, the capture itself), two tracks (`v1` "Screen" video,

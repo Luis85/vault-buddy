@@ -6,7 +6,6 @@ import { Channel } from "@tauri-apps/api/core";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createListenerScope } from "../src/editor/listenerScope";
 import { createTauriEditorPort, EditorPortError } from "../src/editor/port";
 import { openWebcamTakes } from "../src/editor/webcamTakes";
 import type { EditorCommand, ExecuteRequest } from "../src/editorTypes";
@@ -578,40 +577,5 @@ describe("EditorPort", () => {
     // keep matching too.
     const plainCall = 'await invoke("editor_open_staged", { stagedBase: base });';
     expect(INVOKE_PATTERN.test(plainCall)).toBe(true);
-  });
-});
-
-describe("createListenerScope", () => {
-  it("unlistens a registration that resolves after dispose", async () => {
-    const scope = createListenerScope();
-    const unlisten = vi.fn();
-    let resolveRegistration!: (u: () => void) => void;
-    const registration = new Promise<() => void>((resolve) => {
-      resolveRegistration = resolve;
-    });
-
-    const addPromise = scope.add(registration);
-    // Dispose BEFORE the registration resolves — the whole point of the
-    // scope: an async `listen()` call that completes after unmount must
-    // not leak.
-    scope.dispose();
-    resolveRegistration(unlisten);
-    await addPromise;
-
-    expect(unlisten).toHaveBeenCalledTimes(1);
-  });
-
-  it("unlistens every tracked listener on dispose, and only once", async () => {
-    const scope = createListenerScope();
-    const first = vi.fn();
-    const second = vi.fn();
-    await scope.add(Promise.resolve(first));
-    await scope.add(Promise.resolve(second));
-
-    scope.dispose();
-    scope.dispose();
-
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(second).toHaveBeenCalledTimes(1);
   });
 });

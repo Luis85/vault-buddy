@@ -366,32 +366,3 @@ fn nearest_canvas_picks_by_aspect() {
     assert!(canvas_is_exact(1920, 1080), "16:9 exactly matches 1280x720");
     assert!(canvas_is_exact(1024, 768), "4:3 exactly matches 960x720");
 }
-
-#[test]
-fn map_reference_destination_prefers_id_then_unique_name() {
-    let vaults = vec![
-        ("id-a".to_string(), "Notes".to_string()),
-        ("id-b".to_string(), "Work".to_string()),
-    ];
-    assert_eq!(
-        map_reference_destination("id-b", &vaults),
-        Some("id-b".to_string()),
-        "an id match wins outright"
-    );
-    assert_eq!(
-        map_reference_destination("Notes", &vaults),
-        Some("id-a".to_string()),
-        "a unique name match resolves to its id"
-    );
-    assert_eq!(map_reference_destination("Nope", &vaults), None);
-
-    let ambiguous = vec![
-        ("id-a".to_string(), "Notes".to_string()),
-        ("id-b".to_string(), "Notes".to_string()),
-    ];
-    assert_eq!(
-        map_reference_destination("Notes", &ambiguous),
-        None,
-        "an ambiguous name match must not guess"
-    );
-}

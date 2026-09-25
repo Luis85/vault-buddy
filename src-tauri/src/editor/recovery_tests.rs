@@ -588,7 +588,19 @@ fn a_save_queued_behind_a_discard_finds_the_session_gone() {
             .name("editor-save-queued".into())
             .spawn_scoped(s, || save_project_in(&state, f.root(), &sid, 1))
             .unwrap();
-        std::thread::sleep(Duration::from_millis(200));
+        // Wait until the save HOLDS its clone of the lock — past its own
+        // "the session exists" check, so it is truly queued behind the
+        // discard (final review M12: a bare sleep could not tell that from
+        // a save that only started after the discard, which also finds the
+        // session gone).
+        let started = std::time::Instant::now();
+        while std::sync::Arc::strong_count(&lock) < 3 {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the save never queued"
+            );
+            std::thread::yield_now();
+        }
         close_locked(
             &state,
             f.root(),

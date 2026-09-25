@@ -120,8 +120,10 @@ fn content() -> &'static Content {
     })
 }
 
-/// Every lesson id, in lesson order.
-pub fn known_step_ids() -> Vec<&'static str> {
+/// Every lesson id, in lesson order — test-only (final review M11): the
+/// production reads go through `is_known`/`first_step_of`.
+#[cfg(test)]
+pub(crate) fn known_step_ids() -> Vec<&'static str> {
     content().steps.iter().map(|s| s.id.as_str()).collect()
 }
 
@@ -151,8 +153,10 @@ fn resolve_step_with(id: &str, retired: &[(String, String)]) -> &'static str {
     chapter_first.unwrap_or_else(|| content().steps[0].id.as_str())
 }
 
-/// [`resolve_step_with`] over the compiled-in retired map.
-pub fn resolve_step_id(id: &str) -> &'static str {
+/// [`resolve_step_with`] over the compiled-in retired map — test-only
+/// (final review M11): production resolves through `resolve_step_with`.
+#[cfg(test)]
+pub(crate) fn resolve_step_id(id: &str) -> &'static str {
     resolve_step_with(id, &content().retired)
 }
 

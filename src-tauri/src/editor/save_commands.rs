@@ -302,7 +302,7 @@ pub(crate) fn save_project_with(
 
     // MUTATION CHECK: calling `mark_saved` before the write above (or
     // unconditionally, ignoring the write's Result) makes
-    // `injected_write_failure_keeps_the_last_good_file` fail — the session
+    // `a_failed_write_never_marks_the_session_saved` fail — the session
     // would report a revision as persisted that a failed write never
     // actually landed on disk.
     let current = lock_ignoring_poison(&state.sessions)

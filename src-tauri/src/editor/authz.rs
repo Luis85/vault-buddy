@@ -72,8 +72,11 @@ pub fn require_session<'a>(
 mod tests {
     use super::*;
 
+    // The label predicate only (final review M12): `require_editor_window`
+    // itself needs a live `WebviewWindow`, which only a running app can
+    // make; `authz_guard.rs` pins that every command calls it first.
     #[test]
-    fn require_editor_window_refuses_other_labels() {
+    fn only_the_editor_label_passes_the_window_predicate() {
         assert!(is_editor_label("editor"));
         for other in [
             "main",

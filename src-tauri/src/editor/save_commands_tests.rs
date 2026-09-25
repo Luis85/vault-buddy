@@ -195,10 +195,14 @@ fn save_with_a_stale_revision_is_a_conflict_and_writes_nothing() {
     );
 }
 
-// A20: an injected write failure must leave the previous project.json
-// byte-identical and must never advance persistedRevision.
+// A20: an injected write failure must never advance persistedRevision.
+// The injected writer fails BEFORE touching the file (final review M12:
+// the old name claimed more), so the byte-identical check below only says
+// the save path writes nothing else on its own; that a REAL write failing
+// part way leaves the old file is `write_atomic_replacing`'s temp +
+// replacing-rename guarantee, pinned in `core::capture_note`.
 #[test]
-fn injected_write_failure_keeps_the_last_good_file() {
+fn a_failed_write_never_marks_the_session_saved() {
     let f = Fixture::new();
     f.stage(&sidecar(BASE, "vaultA"));
     let state = EditorState::default();
