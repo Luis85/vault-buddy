@@ -30,6 +30,7 @@ pub mod package_import;
 #[cfg(test)]
 mod package_test_support;
 pub mod prefs_commands;
+pub mod project_discard;
 pub mod project_store;
 pub mod publish;
 pub mod recovery;

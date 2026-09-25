@@ -6,6 +6,8 @@ use super::*;
 use vault_buddy_core::editor::commands::payloads::{DetachAudioPayload, RenamePayload};
 use vault_buddy_screen::staging::StagedSidecar;
 
+use crate::editor::store_io::source_base_of;
+
 const BASE: &str = "2026-09-20 1432 Demo";
 
 struct Fixture {
@@ -636,25 +638,65 @@ fn concurrent_opens_of_one_capture_mint_one_project() {
 
 // A pin is a claim by a hand-editable sidecar; if it names a project whose
 // sources belong to a DIFFERENT capture, opening this capture must not
-// silently open (and later edit or discard) someone else's project.
+// open (and later edit or discard) someone else's project. Final review
+// I3: it must not strand this capture either — refusing left it pinned to
+// a project it could never open, so it could be neither edited nor
+// discarded. The claim is ignored and this capture gets a project of its
+// own; the other project and its pin are untouched.
 #[test]
-fn open_staged_refuses_a_pin_to_another_captures_project() {
+fn open_staged_ignores_a_pin_to_another_captures_project() {
     const OTHER: &str = "2026-09-21 0915 Other";
     let f = Fixture::new();
     f.stage(&sidecar(OTHER, "vaultB"));
     let other = open_staged_in(f.root(), &f.staging(), OTHER).unwrap();
     let other_id = other.envelope.project.id.clone();
+    let other_bytes = std::fs::read(
+        f.root()
+            .join("editor-projects")
+            .join(&other_id)
+            .join("project.json"),
+    )
+    .unwrap();
     f.stage(&sidecar(BASE, "vaultA"));
     pin_staged(&f.staging(), BASE, &other_id).unwrap();
 
-    let e = open_staged_in(f.root(), &f.staging(), BASE)
-        .err()
-        .expect("a cross-wired pin must be refused");
-    assert_eq!(e.code, EditorErrorCode::InvalidProject);
-    assert!(
-        e.message.contains(BASE) && e.message.contains(OTHER),
-        "{}",
-        e.message
+    let opened = open_staged_in(f.root(), &f.staging(), BASE).expect("a project of its own");
+    let own_id = opened.envelope.project.id.clone();
+    assert_ne!(own_id, other_id, "someone else's project was opened");
+    assert_eq!(source_base_of(&opened.sources).as_deref(), Some(BASE));
+    assert_eq!(pinned_project(&f.sidecar(BASE)), Some(own_id));
+    assert_eq!(pinned_project(&f.sidecar(OTHER)), Some(other_id.clone()));
+    let after = std::fs::read(
+        f.root()
+            .join("editor-projects")
+            .join(&other_id)
+            .join("project.json"),
+    )
+    .unwrap();
+    assert_eq!(after, other_bytes, "the other project is untouched");
+}
+
+// Final review I3: a pinned project whose files no longer parse used to
+// refuse the open — and the pin then refused the capture's Discard, so the
+// recording was stuck behind a project nothing could open. The broken
+// project is left where it is (the editor's own "Discard this project"
+// can remove it) and the capture gets a fresh project.
+#[test]
+fn open_staged_remigrates_when_the_pinned_project_is_damaged() {
+    let f = Fixture::new();
+    f.stage(&sidecar(BASE, "vaultA"));
+    let first = open_staged_in(f.root(), &f.staging(), BASE).unwrap();
+    let broken = first.envelope.project.id.clone();
+    let broken_dir = f.root().join("editor-projects").join(&broken);
+    std::fs::write(broken_dir.join("sources.json"), b"{ not json").unwrap();
+
+    let reopened = open_staged_in(f.root(), &f.staging(), BASE).expect("a fresh project");
+    let fresh = reopened.envelope.project.id.clone();
+    assert_ne!(fresh, broken);
+    assert_eq!(pinned_project(&f.sidecar(BASE)), Some(fresh));
+    assert_eq!(
+        std::fs::read(broken_dir.join("sources.json")).unwrap(),
+        b"{ not json",
+        "the damaged project is left exactly as it was"
     );
-    assert_eq!(f.project_dirs(), vec![other_id], "nothing new minted");
 }

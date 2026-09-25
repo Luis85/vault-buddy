@@ -792,8 +792,10 @@ fn a_corrupt_sources_json_refuses_the_save_rather_than_overwriting_the_valid_pro
     let before = std::fs::read(&project_path).unwrap();
     std::fs::write(f.sources_json_path(&pid), b"{ not actually json").unwrap();
 
+    // `invalidProject` since the final review (I3): a damaged sources file
+    // is a damaged project, never a retryable internal fault.
     let err = save_project_in(&state, f.root(), &sid, 2).unwrap_err();
-    assert_eq!(err.code, EditorErrorCode::Internal);
+    assert_eq!(err.code, EditorErrorCode::InvalidProject);
 
     let after = std::fs::read(&project_path).unwrap();
     assert_eq!(

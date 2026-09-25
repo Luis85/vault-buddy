@@ -145,6 +145,10 @@ export interface EditorPort {
   execute(req: ExecuteRequest): Promise<EditorProjection>;
   save(sessionId: string, expectedRevision: number): Promise<SaveReceipt>;
   closeSession(sessionId: string, disposition: CloseDisposition): Promise<void>;
+  /** `editor_discard_project` (final review I3) — discard a project with no
+   * session, the way out for one too damaged to open. Rust refuses one a
+   * session holds; the captures it pinned are released. */
+  discardProject(projectFileId: string): Promise<void>;
   hideWindow(): Promise<void>;
   /** `editor_get_workspace` — reads (and sanitizes) `workspace.json`;
    * missing/malformed degrades to an object with every field absent. */
@@ -319,6 +323,9 @@ export function createTauriEditorPort(): EditorPort {
     },
     async closeSession(sessionId, disposition) {
       await call("editor_close_session", { sessionId, disposition }, () => undefined);
+    },
+    async discardProject(projectFileId) {
+      await call("editor_discard_project", { projectFileId }, () => undefined);
     },
     async hideWindow() {
       await call("editor_hide_window", undefined, () => undefined);

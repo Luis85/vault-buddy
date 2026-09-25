@@ -9,7 +9,7 @@
 //! the ones named — see the EXHAUSTIVE note below for why that is not
 //! optional. So every custom command in this app IS capability-gated,
 //! unconditionally: `capabilities/editor.json` grants the `editor_*`
-//! session commands (eleven as of Task 22) to the `editor` window alone, and
+//! commands (`EXPECTED_EDITOR` below is their count) to the `editor` window alone, and
 //! `capabilities/default.json` grants every other command to its
 //! `windows` list. A command reachable from a window with no matching
 //! grant is a bug this scan exists to catch, not an intentional gap.
@@ -59,7 +59,8 @@ use std::path::{Path, PathBuf};
 use crate::structural_scan::code_only;
 
 /// The `editor_*` session, save/list/reopen, workspace, media and job
-/// commands — thirty-five as of Task 58 (`editor_export_diagnostics`, after
+/// commands — thirty-six since the final review's `editor_discard_project`
+/// (I3), after Task 58's `editor_export_diagnostics` (after
 /// Task 57's `editor_export_guide_progress`/`editor_import_guide_progress`,
 /// after Task 55's `editor_get_guide_progress`/`editor_save_guide_progress`,
 /// after Task 54's `editor_get_checks` and Task 49's
@@ -71,6 +72,7 @@ use crate::structural_scan::code_only;
 const EXPECTED_EDITOR: &[&str] = &[
     "editor_cancel_job",
     "editor_close_session",
+    "editor_discard_project",
     "editor_execute",
     "editor_export_diagnostics",
     "editor_export_guide_progress",

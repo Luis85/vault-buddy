@@ -31,6 +31,7 @@ const THE_CALL: &str = "require_editor_window(&window)";
 const EXPECTED: &[&str] = &[
     "editor_cancel_job",
     "editor_close_session",
+    "editor_discard_project",
     "editor_execute",
     "editor_export_diagnostics",
     "editor_export_guide_progress",

@@ -18,6 +18,7 @@ export function fakeEditorPort(overrides: Partial<EditorPort> = {}): EditorPort 
     execute: unimplemented("execute"),
     save: unimplemented("save"),
     closeSession: unimplemented("closeSession"),
+    discardProject: unimplemented("discardProject"),
     hideWindow: unimplemented("hideWindow"),
     getWorkspace: unimplemented("getWorkspace"),
     saveWorkspace: unimplemented("saveWorkspace"),

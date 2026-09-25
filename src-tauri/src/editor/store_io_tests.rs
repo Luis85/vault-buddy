@@ -362,3 +362,34 @@ fn a_removal_that_fails_part_way_can_be_retried() {
     remove_project(root.path(), "proj1").expect("the retry finishes the removal");
     assert!(!dir.exists());
 }
+
+// Final review I3: ownership is `project.json`'s own `project.id`, read
+// from the JSON document — not from a fully valid project. A project whose
+// graph no longer deserializes is exactly the one that must stay
+// discardable; bytes that are not JSON at all still prove nothing.
+#[test]
+fn remove_project_proves_ownership_from_a_damaged_but_readable_project_json() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = project_with_content(root.path());
+    std::fs::write(
+        dir.join(PROJECT_FILE),
+        br#"{"project":{"id":"proj1","tracks":"not a list"}}"#,
+    )
+    .unwrap();
+    remove_project(root.path(), "proj1").expect("its own id owns the folder");
+    assert!(!dir.exists());
+
+    let dir = project_with_content(root.path());
+    std::fs::write(dir.join(PROJECT_FILE), b"\x00 not json").unwrap();
+    assert_eq!(
+        remove_project(root.path(), "proj1").unwrap_err().code,
+        EditorErrorCode::InvalidProject
+    );
+    std::fs::write(
+        dir.join(PROJECT_FILE),
+        br#"{"project":{"id":"someone-else"}}"#,
+    )
+    .unwrap();
+    assert!(remove_project(root.path(), "proj1").is_err());
+    assert!(dir.join(PROJECT_FILE).is_file(), "nothing was removed");
+}

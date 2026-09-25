@@ -280,9 +280,12 @@ fn read_sources(dir: &Path) -> Result<BTreeMap<String, SourceRecord>, EditorErro
             format!("Cannot read the file {}: {e}", redact_path(&path)),
         )
     })?;
+    // `invalidProject`, not `internal` (final review I3): a sources file
+    // that does not parse is a damaged project — no retry opens it — and
+    // `editor_open_staged` re-migrates a capture pinned to one.
     serde_json::from_slice(&bytes).map_err(|e| {
         EditorError::new(
-            EditorErrorCode::Internal,
+            EditorErrorCode::InvalidProject,
             format!("The sources file {} is not valid: {e}", redact_path(&path)),
         )
     })
@@ -380,7 +383,8 @@ pub fn list_projects(root: &Path) -> Vec<ProjectSummaryDto> {
 /// trash, mirroring `delete_task`'s posture on the vault side.
 ///
 /// **Ownership is proven before anything is deleted**: `project.json` must
-/// parse AND its own `project.id` must equal `id`. Without that second
+/// be JSON AND its own `project.id` must equal `id` (the document need not
+/// be a valid project any more — final review I3). Without that second
 /// check, a directory whose name and content disagree (hand-edited, or a
 /// caller that passed the wrong id) could have the WRONG project's
 /// `project.json` believed and the RIGHT directory deleted anyway — the
@@ -433,7 +437,10 @@ pub fn remove_project(root: &Path, id: &str) -> Result<(), EditorError> {
             ),
         )
     })?;
-    let envelope: WorkspaceEnvelope = serde_json::from_slice(&bytes).map_err(|e| {
+    // The JSON document, not a valid project (final review I3): a damaged
+    // project is exactly the one that must stay discardable, and its own
+    // `project.id` is still the proof of whose folder this is.
+    let document: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
         EditorError::new(
             EditorErrorCode::InvalidProject,
             format!(
@@ -442,7 +449,10 @@ pub fn remove_project(root: &Path, id: &str) -> Result<(), EditorError> {
             ),
         )
     })?;
-    if envelope.project.id != id {
+    let own_id = document
+        .pointer("/project/id")
+        .and_then(serde_json::Value::as_str);
+    if own_id != Some(id) {
         return Err(EditorError::new(
             EditorErrorCode::InvalidProject,
             format!(

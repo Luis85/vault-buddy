@@ -58,6 +58,7 @@ import SpeedSection from "../components/editor/inspector/SpeedSection.vue";
 import LibraryPanel from "../components/editor/library/LibraryPanel.vue";
 import PreviewSurface from "../components/editor/preview/PreviewSurface.vue";
 import EditorShell from "../components/editor/shell/EditorShell.vue";
+import OpenFailureNotice from "../components/editor/shell/OpenFailureNotice.vue";
 import TimelineView from "../components/editor/timeline/TimelineView.vue";
 import { importProjectPackage } from "../composables/useProjectPackage";
 import { logWarning } from "../logging";
@@ -107,10 +108,20 @@ const sessionMatchesRequest = computed(() => {
  * (Task 59 fix round 1): a refused DISCARD also lands there, and a project
  * that opened fine must never be reported as one that could not be. */
 const openError = ref<string | null>(null);
+/** Its code, alongside: a project Rust calls `invalidProject` is damaged,
+ * and the notice offers to discard it (final review I3). */
+const openErrorCode = ref<string | null>(null);
 
 /** Shown only while the shell is not: a refused picker probe over a
  * working session is not this window's news. */
 const openFailure = computed(() => (sessionMatchesRequest.value ? null : openError.value));
+
+/** The project a refused open may be discarded as damaged — see
+ * `OpenFailureNotice` — or `null`. */
+const damagedProjectId = computed(() => {
+  const r = requested.value;
+  return r?.kind === "project" && openErrorCode.value === "invalidProject" ? r.value : null;
+});
 
 /** Drain the stash and open whatever it held. Runs on mount AND on every
  * `editor:open`. An empty drain means "nothing new", never "close what is
@@ -132,6 +143,7 @@ async function openRequested() {
   if (request.kind === "staged") await editorProject.openStaged(request.value);
   else await editorProject.openProject(request.value, false);
   openError.value = editorProject.lastError?.message ?? null;
+  openErrorCode.value = editorProject.lastError?.code ?? null;
   // A failed open is logged here, not inside the store, because the
   // store's own `openWith` doc is explicit that a failure is a normal,
   // expected outcome for some callers (a picker probing a project that no
@@ -314,14 +326,11 @@ onBeforeUnmount(() => {
     <!-- Task 59: the window's own words when no session is on screen —
          the retired phase-4 surface used to say them, and without them an
          empty or refused open would be a blank window. -->
-    <p
+    <OpenFailureNotice
       v-else-if="openFailure"
-      data-testid="editor-open-failed"
-      role="alert"
-      class="rounded-control border border-line bg-panel px-3 py-2 text-sm text-danger-fg"
-    >
-      This could not be opened. {{ openFailure }}
-    </p>
+      :message="openFailure"
+      :project-id="damagedProjectId"
+    />
     <p
       v-else
       data-testid="editor-empty"

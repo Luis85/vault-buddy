@@ -223,7 +223,7 @@ describe("EditorPort", () => {
     ]);
   });
 
-  it("sends camelCased, unwrapped arguments for openProject/closeSession/hideWindow", async () => {
+  it("sends camelCased, unwrapped arguments for openProject/closeSession/discardProject/hideWindow", async () => {
     const calls: { cmd: string; args: unknown }[] = [];
     mockIPC((cmd, args) => {
       calls.push({ cmd, args });
@@ -231,6 +231,7 @@ describe("EditorPort", () => {
         return { ...PROJECTION_REPLY, workspace: {}, missing: [], sourceBase: null, recovered: false };
       }
       if (cmd === "editor_close_session") return null;
+      if (cmd === "editor_discard_project") return null;
       if (cmd === "editor_hide_window") return null;
       throw new Error(`unexpected command ${cmd}`);
     });
@@ -238,11 +239,13 @@ describe("EditorPort", () => {
     const port = createTauriEditorPort();
     await port.openProject("proj-1", false);
     await port.closeSession("ses-1", "keep");
+    await port.discardProject("proj-2");
     await port.hideWindow();
 
     expect(calls).toEqual([
       { cmd: "editor_open_project", args: { projectFileId: "proj-1", useRecovery: false } },
       { cmd: "editor_close_session", args: { sessionId: "ses-1", disposition: "keep" } },
+      { cmd: "editor_discard_project", args: { projectFileId: "proj-2" } },
       { cmd: "editor_hide_window", args: {} },
     ]);
   });

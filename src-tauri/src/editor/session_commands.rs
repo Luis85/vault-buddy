@@ -114,13 +114,27 @@ pub(crate) fn open_staged_in(
 
     if let Some(pid) = pinned_project(&sidecar) {
         if project_dir(root, &pid).is_some_and(|d| d.is_dir()) {
-            let opened = load_opened(root, &pid)?;
-            return ensure_sources_name(opened, base, &pid);
+            // Final review I3: a pinned project that cannot be this
+            // capture's (damaged files, or a hand-edited pin naming another
+            // capture's project) must not strand the capture — the pin
+            // would refuse its Discard for good. It is left in place (the
+            // editor's "Discard this project" removes it) and the capture
+            // is adopted or migrated below, which re-pins it.
+            match load_opened(root, &pid).and_then(|o| ensure_sources_name(o, base, &pid)) {
+                Ok(opened) => return Ok(opened),
+                Err(e) if e.code == EditorErrorCode::InvalidProject => log::warn!(
+                    "editor_open_staged: {} is pinned to project {pid:?}, which cannot open it                      ({}); giving it a project of its own",
+                    redact_name(base),
+                    e.message
+                ),
+                Err(e) => return Err(e),
+            }
+        } else {
+            log::warn!(
+                "editor_open_staged: {} is pinned to missing project {pid:?}; re-adopting",
+                redact_name(base)
+            );
         }
-        log::warn!(
-            "editor_open_staged: {} is pinned to missing project {pid:?}; re-adopting",
-            redact_name(base)
-        );
     }
 
     if let Some(orphan) = list_projects(root)
@@ -363,12 +377,10 @@ fn ensure_sources_name(
     if staged.contains(&base) {
         return Ok(opened);
     }
+    let _ = project_id;
     Err(err(
         EditorErrorCode::InvalidProject,
-        format!(
-            "The capture {base:?} is linked to project {project_id:?}, but that project edits {:?}. It was not opened.",
-            staged.join(", ")
-        ),
+        "This capture is linked to a project that edits a different capture.",
     ))
 }
 

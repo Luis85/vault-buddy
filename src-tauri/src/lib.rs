@@ -69,6 +69,7 @@ use editor::guide_commands;
 use editor::media_commands;
 use editor::package_commands;
 use editor::prefs_commands;
+use editor::project_discard;
 use editor::publish;
 use editor::relink_commands;
 use editor::render_commands;
@@ -510,6 +511,7 @@ pub fn run() {
             session_commands::editor_execute,
             session_commands::editor_close_session,
             session_commands::editor_hide_window,
+            project_discard::editor_discard_project,
             save_commands::editor_save_project,
             save_commands::editor_list_projects,
             save_commands::editor_open_project,
