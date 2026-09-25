@@ -487,7 +487,7 @@ fn every_new_command_is_registered_and_the_base_takers_are_guarded() {
     );
 }
 
-/// A tutorial project that exists under `root`'s store: all `pin_is_live`
+/// A tutorial project that exists under `root`'s store: all `pin_liveness`
 /// asks of it is a `project.json`.
 pub(crate) fn live_project(root: &Path, id: &str) {
     let dir = crate::editor::project_store::project_dir(root, id).unwrap();
@@ -555,4 +555,118 @@ fn the_staged_list_reports_a_pin_to_a_missing_project_as_no_pin() {
         .is_some(),
         "the list is a view: it never writes a sidecar"
     );
+}
+
+/// A local-data root whose project store cannot be READ — not merely empty —
+/// so every pin's liveness under it is `Unknown`: Windows refuses a `<` in a
+/// path (`InvalidFilename`); elsewhere a FILE where `editor-projects` should
+/// be makes every lookup under it `NotADirectory`.
+pub(crate) fn unreadable_store_root(tmp: &Path) -> PathBuf {
+    #[cfg(windows)]
+    let root = tmp.join("in<valid");
+    #[cfg(not(windows))]
+    let root = {
+        std::fs::write(tmp.join("editor-projects"), b"not a folder").unwrap();
+        tmp.to_path_buf()
+    };
+    assert_eq!(
+        crate::editor::store_io::pin_liveness(&root, "proj-x"),
+        crate::editor::store_io::PinLiveness::Unknown,
+        "the fixture must produce an I/O error other than NotFound"
+    );
+    root
+}
+
+/// Make rewriting `base`'s sidecar fail (so an unpin cannot land): a
+/// read-only sidecar on Windows, whose replacing rename is then refused; a
+/// read-only staging folder elsewhere. `false` where this host ignores
+/// either (running as root) — the caller then SKIPS visibly.
+pub(crate) fn block_sidecar_rewrite(dir: &Path, base: &str) -> bool {
+    #[cfg(windows)]
+    {
+        let path = dir.join(staging::sidecar_file_name(base));
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&path, perms).unwrap();
+        true
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = base;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let probe = dir.join(".write-probe");
+        let writable = std::fs::write(&probe, b"").is_ok();
+        let _ = std::fs::remove_file(&probe);
+        !writable
+    }
+}
+
+/// Undo `block_sidecar_rewrite`, so the tempdir can be removed.
+pub(crate) fn unblock_sidecar_rewrite(dir: &Path, base: &str) {
+    #[cfg(windows)]
+    {
+        let path = dir.join(staging::sidecar_file_name(base));
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&path, perms).unwrap();
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = base;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+// Task 4 fix round 1 (review Important 1): a pin whose project cannot be
+// CHECKED (an I/O error other than NotFound) is honoured as a pin — the
+// liveness decides whether the recording is deleted, so it fails closed.
+// `is_file()` read every error as "gone" and deleted the capture.
+#[test]
+fn a_pin_whose_project_cannot_be_checked_keeps_the_capture() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = unreadable_store_root(tmp.path());
+    let dir = tmp.path().join("staging");
+    std::fs::create_dir_all(&dir).unwrap();
+    stage(&dir, "A", "2026-09-20T14:32:00+02:00");
+    crate::editor::project_store::pin_staged(&dir, "A", "proj-x").unwrap();
+
+    assert_eq!(
+        discard_unpinned(&Mutex::new(()), &root, &dir, "A").unwrap_err(),
+        "This capture is used by a tutorial project. Discard the project first."
+    );
+    assert!(dir.join(staging::mp4_file_name("A")).is_file());
+    assert_eq!(pinned_project_of(&dir, "A").as_deref(), Some("proj-x"));
+    let rows = live_summaries(&root, &dir);
+    assert_eq!(
+        rows[0].project_id.as_deref(),
+        Some("proj-x"),
+        "the list shows an unknown pin as pinned"
+    );
+}
+
+// The unpin-failure branch: a dangling pin that cannot be CLEARED refuses
+// the discard (in words without a path), and the capture stays.
+#[test]
+fn a_dangling_pin_that_cannot_be_cleared_refuses_the_discard() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = staging::staging_dir(root.path());
+    std::fs::create_dir_all(&dir).unwrap();
+    stage(&dir, "A", "2026-09-20T14:32:00+02:00");
+    crate::editor::project_store::pin_staged(&dir, "A", "proj-gone").unwrap();
+    if !block_sidecar_rewrite(&dir, "A") {
+        eprintln!("SKIP: this host writes through a read-only folder; the branch did not run");
+        return;
+    }
+
+    let refused = discard_unpinned(&Mutex::new(()), root.path(), &dir, "A");
+    unblock_sidecar_rewrite(&dir, "A");
+
+    assert_eq!(
+        refused.unwrap_err(),
+        "That capture could not be discarded. See the log for details."
+    );
+    assert!(dir.join(staging::mp4_file_name("A")).is_file());
 }

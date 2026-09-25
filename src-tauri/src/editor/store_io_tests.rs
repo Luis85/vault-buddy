@@ -455,3 +455,45 @@ fn read_bounded_never_follows_a_link() {
     }
     assert!(read_bounded(&link, 1024).is_err());
 }
+
+// Task 4 fix round 1 (review Important 1): the pin's liveness decides
+// whether a staged capture's Discard/Clear deletes the recording, so it is
+// THREE-state. Only `NotFound` means the project is gone; any other error
+// reading `project.json`'s metadata (access denied, a sharing violation,
+// an antivirus hold) is UNKNOWN, which every caller treats as live — the
+// earlier `is_file()` read every such error as "gone" and deleted the
+// capture of a project that still existed.
+#[test]
+fn a_pins_liveness_is_unknown_on_any_error_but_not_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("project.json");
+    std::fs::write(&file, b"{}").unwrap();
+    assert_eq!(
+        liveness_of(&std::fs::symlink_metadata(&file)),
+        PinLiveness::Live
+    );
+    assert_eq!(
+        liveness_of(&Err(io::Error::from(io::ErrorKind::NotFound))),
+        PinLiveness::Gone
+    );
+    for kind in [
+        io::ErrorKind::PermissionDenied,
+        io::ErrorKind::ResourceBusy,
+        io::ErrorKind::Other,
+    ] {
+        assert_eq!(
+            liveness_of(&Err(io::Error::from(kind))),
+            PinLiveness::Unknown,
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn a_pin_to_a_project_that_exists_is_live_and_to_one_that_does_not_is_gone() {
+    let root = tempfile::tempdir().unwrap();
+    create_project(root.path(), &minimal_project("proj-here"), &BTreeMap::new()).unwrap();
+    assert_eq!(pin_liveness(root.path(), "proj-here"), PinLiveness::Live);
+    assert_eq!(pin_liveness(root.path(), "proj-gone"), PinLiveness::Gone);
+    assert_eq!(pin_liveness(root.path(), "../escape"), PinLiveness::Gone);
+}

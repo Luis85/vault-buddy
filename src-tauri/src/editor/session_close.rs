@@ -114,7 +114,13 @@ pub(crate) fn close_in(
                 .test_hooks
                 .discard_waiting_for_open
                 .store(true, std::sync::atomic::Ordering::SeqCst);
-            Some(lock_ignoring_poison(&state.open))
+            let open = lock_ignoring_poison(&state.open);
+            // Task 4 fix round 1: every refusal that does not need the
+            // quiesce — ownership, and a staging folder the pin scan could
+            // not list — lands HERE, before the closing mark and the
+            // quiesce's cancels, so it cancels nothing (GAP-214 item 5).
+            super::project_discard::precheck_discard(root, staging_dir, &project_id)?;
+            Some(open)
         }
         _ => None,
     };
@@ -171,9 +177,9 @@ pub(crate) fn close_locked(
             // staging sidecars — never through `sources.json`, which may be
             // exactly what is damaged (and a hand-edited pin may name this
             // project from a capture `sources.json` does not list).
-            // GAP-214 item 8: ownership is proven before any pin is
-            // released, so a refused removal leaves every capture pinned.
-            super::project_discard::prove_owned_for_discard(root, project_id)?;
+            // GAP-214 item 8: ownership was proven before any pin is
+            // released — in `close_in`, before the quiesce cancelled
+            // anything (`project_discard::precheck_discard`).
             super::project_discard::unpin_everywhere(staging_dir, project_id)?;
             remove_project(root, project_id)?;
         }

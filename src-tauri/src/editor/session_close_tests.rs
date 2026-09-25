@@ -11,6 +11,7 @@ use vault_buddy_screen::staging::{self, StagedSidecar};
 
 use super::*;
 use crate::editor::discard::{is_closing, mark_closing};
+use crate::editor::media_jobs::JobKind;
 use crate::editor::project_store::pinned_project;
 use crate::editor::save_commands::open_project_session;
 use crate::editor::session_commands::open_staged_session;
@@ -201,4 +202,67 @@ fn a_session_discard_proves_ownership_before_it_unpins() {
     );
     assert_eq!(f.pinned(), Some(f.project.clone()), "the pin is untouched");
     assert!(path.is_file());
+}
+
+// Fix round 1 (Task 4 review, Important 2): the ownership proof and the
+// staging listing ran in `close_locked`, AFTER the quiesce had cancelled
+// the session's renders and publishes — so a discard refused for a folder
+// that is not the project's had already killed the user's render (GAP-214
+// item 5: a refused discard cancels nothing). Both now run under `open`,
+// before the closing mark.
+#[test]
+fn a_discard_refused_for_ownership_leaves_a_running_render_running() {
+    let f = Fixture::new();
+    let (_job, cancel) =
+        crate::editor::media_jobs::start_job_in(&f.state, &f.session, JobKind::Render).unwrap();
+    let path = f.project_dir().join("project.json");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    value["project"]["id"] = serde_json::json!("proj-someone-else");
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+    let e = f.discard().unwrap_err();
+
+    assert_eq!(
+        e.message,
+        "This project could not be discarded because its files do not belong to it."
+    );
+    assert!(
+        !cancel.load(SeqCst),
+        "a refused discard cancelled the render"
+    );
+    assert!(lock_ignoring_poison(&f.state.jobs).is_running(&f.session, JobKind::Render));
+    assert!(!is_closing(&f.state, &f.session), "no closing mark is left");
+    assert_eq!(f.pinned(), Some(f.project.clone()));
+}
+
+// ...and the same for a staging folder that cannot be listed (here: a file
+// where the folder should be): refused before anything is cancelled.
+#[test]
+fn a_discard_refused_for_unlistable_staging_leaves_a_running_render_running() {
+    let f = Fixture::new();
+    let (_job, cancel) =
+        crate::editor::media_jobs::start_job_in(&f.state, &f.session, JobKind::Render).unwrap();
+    let not_a_folder = f.root().join("staging-is-a-file");
+    std::fs::write(&not_a_folder, b"not a folder").unwrap();
+
+    let e = close_in(
+        &f.state,
+        f.root(),
+        &not_a_folder,
+        &f.session,
+        CloseDisposition::DiscardProject,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        e.message,
+        "The captures linked to this project could not be checked, so the project was kept. \
+         Try again in a moment."
+    );
+    assert!(
+        !cancel.load(SeqCst),
+        "a refused discard cancelled the render"
+    );
+    assert!(f.project_dir().join("project.json").is_file());
 }

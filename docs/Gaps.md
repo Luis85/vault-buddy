@@ -6892,7 +6892,9 @@ editor's "could not be opened" line for an `invalidProject` project) and
    calls it; its read bound is the single constant
    `OWNERSHIP_PROOF_MAX_BYTES`), and BOTH discards — the sessionless one and
    a session's `discardProject` — run it before any pin is released
-   (`project_discard::prove_owned_for_discard`); a document that is not JSON
+   (`project_discard::precheck_discard`, with the check that staging can be
+   listed; the session discard runs it under `open` BEFORE its closing mark,
+   so this refusal cancels no render or publish either — item 5); a document that is not JSON
    or names another project is refused `invalidProject` with the fixed "This
    project could not be discarded because its files do not belong to it.",
    every pin untouched, the proof's own text only in the log. The pin scan
@@ -6901,8 +6903,10 @@ editor's "could not be opened" line for an `invalidProject` project) and
    discard ("The captures linked to this project could not be checked, so
    the project was kept. Try again in a moment."), and a sidecar that cannot
    be read is skipped with a redacted log line. Review finding D-2 closed
-   with it: a pin naming a project whose folder or `project.json` is gone
-   (`store_io::pin_is_live`) no longer refuses the capture's Discard or keeps
+   with it: a pin naming a project whose folder or `project.json` is
+   provably gone (`store_io::pin_liveness`: `NotFound` only — any other I/O
+   error is `Unknown` and honoured as a pin, since the answer decides whether
+   a recording is deleted) no longer refuses the capture's Discard or keeps
    it out of Clear — it is cleared under `EditorState::open` and the capture
    goes (the editor's open already re-adopted such a capture), and the
    staged list reports it as no pin, so the row offers Discard. Pinned by
@@ -6911,8 +6915,15 @@ editor's "could not be opened" line for an `invalidProject` project) and
    `session_close::tests::a_session_discard_proves_ownership_before_it_unpins`,
    `staged_commands::tests::a_capture_pinned_to_a_missing_project_is_discarded`,
    `…::the_staged_list_reports_a_pin_to_a_missing_project_as_no_pin` and
-   `staging_commands::tests::clear_removes_a_capture_pinned_to_a_missing_project`.
-   **Residual:** an open that took `EditorState::open` BEFORE a session's
+   `staging_commands::tests::clear_removes_a_capture_pinned_to_a_missing_project`,
+   and (fix round 1) `store_io::tests::a_pins_liveness_is_unknown_on_any_error_but_not_found`,
+   `staged_commands::tests::a_pin_whose_project_cannot_be_checked_keeps_the_capture`,
+   `staging_commands::tests::clear_keeps_a_capture_whose_pin_cannot_be_checked`
+   and `session_close::tests::a_discard_refused_for_ownership_leaves_a_running_render_running`.
+   **Until hardening Task 5**, a `project.json` over 8 MiB (the proof's
+   read bound, `OWNERSHIP_PROOF_MAX_BYTES` = the load bound) is refused
+   with the same "do not belong" copy, though it may well be the project's
+   own; Task 5 widens the bound. **Residual:** an open that took `EditorState::open` BEFORE a session's
    discard can still hand the webview a session that discard then drops
    (the discard waits for the open, then removes the project): the webview's
    next call gets `sessionGone`. No pin is left dangling — the discard's

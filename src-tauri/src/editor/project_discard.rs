@@ -53,10 +53,10 @@ fn err(code: EditorErrorCode, message: &str) -> EditorError {
 pub(crate) const NOT_ITS_FILES: &str =
     "This project could not be discarded because its files do not belong to it.";
 
-/// `store_io::prove_ownership`, worded for a discard — shared with a
-/// session's `discardProject` (`session_close::close_locked`). Run BEFORE
-/// any pin is released, so a refusal leaves every capture pinned.
-pub(super) fn prove_owned_for_discard(root: &Path, project_id: &str) -> Result<(), EditorError> {
+/// `store_io::prove_ownership`, worded for a discard (through
+/// `precheck_discard`). Run BEFORE any pin is released, so a refusal leaves
+/// every capture pinned.
+fn prove_owned_for_discard(root: &Path, project_id: &str) -> Result<(), EditorError> {
     prove_ownership(root, project_id).map_err(|e| {
         if e.code != EditorErrorCode::InvalidProject {
             return e;
@@ -64,6 +64,25 @@ pub(super) fn prove_owned_for_discard(root: &Path, project_id: &str) -> Result<(
         log::warn!("project discard: refused {project_id}: {}", e.message);
         err(EditorErrorCode::InvalidProject, NOT_ITS_FILES)
     })
+}
+
+/// What a discard can learn before it touches anything: ownership
+/// (`prove_owned_for_discard`) and that the staging folder can be listed
+/// (so the pin scan will not refuse later). Run under `EditorState::open`
+/// — pins cannot change while it is held, and a save keeps the project id —
+/// FIRST in both discards: a session's `discardProject` runs it before its
+/// closing mark, so a refusal here has cancelled no render, publish or
+/// derived media (GAP-214 item 5; Task 4 fix round 1).
+pub(super) fn precheck_discard(
+    root: &Path,
+    staging_dir: &Path,
+    project_id: &str,
+) -> Result<(), EditorError> {
+    prove_owned_for_discard(root, project_id)?;
+    match std::fs::read_dir(staging_dir) {
+        Ok(_) => Ok(()),
+        Err(e) => staging_unreadable(&e).map_or(Ok(()), Err),
+    }
 }
 
 /// A staging folder that cannot be listed means the pins cannot be found,
@@ -89,7 +108,7 @@ fn staging_unreadable(e: &io::Error) -> Option<EditorError> {
 /// A sidecar that cannot be read or parsed is skipped WITH a log line: it
 /// may hold a pin to this project, which then outlives it — harmless since
 /// a pin to a project that no longer exists refuses nothing (review finding
-/// D-2, `store_io::pin_is_live`).
+/// D-2, `store_io::pin_liveness`).
 pub(super) fn unpin_everywhere(staging_dir: &Path, project_id: &str) -> Result<(), EditorError> {
     let entries = match std::fs::read_dir(staging_dir) {
         Ok(entries) => entries,
@@ -164,7 +183,7 @@ pub(crate) fn discard_project_in(
             "That project is no longer on disk.",
         ));
     }
-    prove_owned_for_discard(root, project_id)?;
+    precheck_discard(root, staging_dir, project_id)?;
     unpin_everywhere(staging_dir, project_id)?;
     remove_project(root, project_id)?;
     log::info!("editor_discard_project: discarded the project {project_id}");

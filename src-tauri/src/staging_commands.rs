@@ -86,7 +86,10 @@ fn clear_staged(open: &Mutex<()>, root: &Path, dir: &Path) -> (ClearStagedResult
                 cleared.push(summary.base);
             }
             Err(e) => {
-                log::warn!("clear_staged_captures: {} was kept: {e}", summary.base);
+                log::warn!(
+                    "clear_staged_captures: {} was kept: {e}",
+                    crate::editor::redact::redact_name(&summary.base)
+                );
                 result.failed += 1;
             }
         }
@@ -273,6 +276,52 @@ mod tests {
         assert_eq!(cleared, vec!["A".to_string()]);
         assert!(!dir.path().join(staging::mp4_file_name("A")).exists());
         assert!(dir.path().join(staging::mp4_file_name("B")).is_file());
+    }
+
+    // Task 4 fix round 1 (Important 1): a pin whose project cannot be
+    // checked is honoured — Clear keeps the capture and counts it as kept.
+    #[test]
+    fn clear_keeps_a_capture_whose_pin_cannot_be_checked() {
+        use crate::staged_commands::tests::unreadable_store_root;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = unreadable_store_root(tmp.path());
+        let dir = tmp.path().join("staging");
+        std::fs::create_dir_all(&dir).unwrap();
+        stage(&dir, "A", Some("proj-x"));
+
+        let (result, cleared) = clear_staged(&Mutex::new(()), &root, &dir);
+
+        assert_eq!(
+            (result.cleared, result.skipped_pinned),
+            (0, 1),
+            "{result:?}"
+        );
+        assert!(cleared.is_empty());
+        assert!(dir.join(staging::mp4_file_name("A")).is_file());
+    }
+
+    // The unpin-failure branch: a dangling pin Clear cannot clear is a
+    // FAILED capture — kept, and never counted as cleared or as pinned.
+    #[test]
+    fn clear_counts_a_dangling_pin_it_cannot_clear_as_failed() {
+        use crate::staged_commands::tests::{block_sidecar_rewrite, unblock_sidecar_rewrite};
+        let dir = tempfile::tempdir().unwrap();
+        stage(dir.path(), "A", Some("proj-gone"));
+        if !block_sidecar_rewrite(dir.path(), "A") {
+            eprintln!("SKIP: this host writes through a read-only folder; the branch did not run");
+            return;
+        }
+
+        let (result, cleared) = clear_staged(&Mutex::new(()), dir.path(), dir.path());
+        unblock_sidecar_rewrite(dir.path(), "A");
+
+        assert_eq!(
+            (result.cleared, result.skipped_pinned, result.failed),
+            (0, 0, 1),
+            "{result:?}"
+        );
+        assert!(cleared.is_empty());
+        assert!(dir.path().join(staging::mp4_file_name("A")).is_file());
     }
 
     /// A file symlink, or `false` where this host cannot make one (Windows

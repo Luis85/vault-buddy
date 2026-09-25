@@ -401,13 +401,54 @@ pub fn list_projects(root: &Path) -> Vec<ProjectSummaryDto> {
 /// one-line change here rather than a hunt through every remover.
 const OWNERSHIP_PROOF_MAX_BYTES: u64 = limits::MAX_PROJECT_JSON_BYTES;
 
+/// Whether a staged capture's pin names a project that still exists —
+/// THREE states, because the answer decides whether a Discard or Clear
+/// deletes the recording (review finding D-2; Task 4 fix round 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PinLiveness {
+    /// `project.json` is there (anything wearing the name counts).
+    Live,
+    /// Provably gone: the id names no project, or `project.json` is
+    /// `NotFound`. Only this pins nothing.
+    Gone,
+    /// Any other error reading it (access denied, a sharing violation, an
+    /// antivirus hold): the project may well exist, so every caller treats
+    /// it as `Live` — never as a licence to delete.
+    Unknown,
+}
+
+/// The pure half of `pin_liveness`: what a `symlink_metadata` answer on
+/// `project.json` says. Only `NotFound` is "gone" — `Path::is_file`, which
+/// this replaces, read EVERY error as gone and so let a Discard delete the
+/// capture of a project it merely could not see.
+pub(crate) fn liveness_of(probe: &io::Result<std::fs::Metadata>) -> PinLiveness {
+    match probe {
+        Ok(_) => PinLiveness::Live,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => PinLiveness::Gone,
+        Err(_) => PinLiveness::Unknown,
+    }
+}
+
 /// Does the pin `project_id` name a project that still exists? A pin whose
 /// project folder, or that folder's `project.json`, is gone pins NOTHING —
 /// the editor's own open already re-adopts such a capture — so it neither
-/// refuses a staged capture's Discard nor keeps it out of Clear (review
-/// finding D-2). An id that is not a valid id cannot name a project.
-pub(crate) fn pin_is_live(root: &Path, project_id: &str) -> bool {
-    project_dir(root, project_id).is_some_and(|d| d.join(PROJECT_FILE).is_file())
+/// refuses a staged capture's Discard nor keeps it out of Clear. An id that
+/// is not a valid id cannot name a project. No-follow: a link wearing the
+/// name is `Live`, which only ever keeps a capture.
+pub(crate) fn pin_liveness(root: &Path, project_id: &str) -> PinLiveness {
+    let Some(dir) = project_dir(root, project_id) else {
+        return PinLiveness::Gone;
+    };
+    let probe = std::fs::symlink_metadata(dir.join(PROJECT_FILE));
+    let liveness = liveness_of(&probe);
+    if let (PinLiveness::Unknown, Err(e)) = (liveness, &probe) {
+        log::warn!(
+            "a staged capture's pin to project {project_id} could not be checked ({:?}); \
+             treating it as live",
+            e.kind()
+        );
+    }
+    liveness
 }
 
 /// Prove that the folder `project_dir(root, id)` is `id`'s own, before

@@ -26,7 +26,7 @@ use vault_buddy_screen::{staging, staging_files};
 
 use crate::editor::project_store::{pinned_project, unpin_staged};
 use crate::editor::redact::redact_name;
-use crate::editor::store_io::pin_is_live;
+use crate::editor::store_io::{pin_liveness, PinLiveness};
 use crate::editor::EditorState;
 
 /// `screen:discarded`, and SAY SO when the send fails.
@@ -174,7 +174,7 @@ pub(crate) fn capture_file_param(path: &Path, vault_root: &Path) -> Option<Strin
 }
 
 /// The app's local data root — the parent of both staging and the tutorial
-/// project store, which a pin's liveness (`store_io::pin_is_live`) reads.
+/// project store, which a pin's liveness (`store_io::pin_liveness`) reads.
 pub(crate) fn local_root_for(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_local_data_dir()
@@ -351,18 +351,21 @@ pub(crate) fn discard_unpinned(
 }
 
 /// The pin that still refuses a discard or a Clear: `pinned_project_of`,
-/// except that a pin naming a project that no longer exists
-/// (`store_io::pin_is_live`) is CLEARED here and answers `None` (review
+/// except that a pin naming a project that is provably GONE
+/// (`store_io::pin_liveness`) is CLEARED here and answers `None` (review
 /// finding D-2) — the editor's own open already treats such a pin as
 /// nothing and re-adopts the capture, and honouring it stranded the capture
-/// behind a refusal nobody could satisfy. The caller holds
-/// `EditorState::open`, like every pin writer, so an open cannot land a
-/// project (and its pin) between the liveness read and the unpin.
+/// behind a refusal nobody could satisfy. A liveness that cannot be read
+/// (`Unknown`) is honoured as a pin: the answer decides whether the
+/// recording is deleted, so it fails closed (Task 4 fix round 1). The
+/// caller holds `EditorState::open`, like every pin writer, so an open
+/// cannot land a project (and its pin) between the liveness read and the
+/// unpin.
 pub(crate) fn live_pin_of(root: &Path, dir: &Path, base: &str) -> Result<Option<String>, String> {
     let Some(pin) = pinned_project_of(dir, base) else {
         return Ok(None);
     };
-    if pin_is_live(root, &pin) {
+    if pin_liveness(root, &pin) != PinLiveness::Gone {
         return Ok(Some(pin));
     }
     unpin_staged(dir, base, &pin).map_err(|e| {
@@ -379,17 +382,19 @@ pub(crate) fn live_pin_of(root: &Path, dir: &Path, base: &str) -> Result<Option<
     Ok(None)
 }
 
-/// The resume-or-discard list with every pin to a missing project reported
-/// as no pin (D-2): the list hides Discard for a pinned row, so without this
-/// a capture `discard_unpinned` would now discard could not be asked to. A
-/// VIEW: it clears nothing on disk (the discard does, under `open`).
+/// The resume-or-discard list with every pin to a provably GONE project
+/// reported as no pin (D-2): the list hides Discard for a pinned row, so
+/// without this a capture `discard_unpinned` would now discard could not be
+/// asked to. A pin whose liveness cannot be read stays a pin, as it does
+/// for the discard. A VIEW: it clears nothing on disk (the discard does,
+/// under `open`).
 pub(crate) fn live_summaries(root: &Path, dir: &Path) -> Vec<StagedCaptureSummaryDto> {
     let mut rows = staged_summaries(dir);
     for row in &mut rows {
         if row
             .project_id
             .as_deref()
-            .is_some_and(|id| !pin_is_live(root, id))
+            .is_some_and(|id| pin_liveness(root, id) == PinLiveness::Gone)
         {
             row.project_id = None;
         }
