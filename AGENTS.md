@@ -1458,7 +1458,10 @@ Publish dialog's Open).
   `read_dir` walk, the actions, the retry loop) plus `screen_recovery/
   decide.rs` (`classify`, `owned`, `part_holds_footage`, `should_postpone`,
   `is_stale_at`, all pure) — split along the seam its own doc already named
-  when GAP-147 (800/800 nonblank) came due. `lib.rs` is unchanged.
+  when GAP-147 (800/800 nonblank) came due — plus `screen_recovery/
+  companions.rs` (a capture's webcam and stem parts: their promotion and
+  the listing of a promoted stem in its capture's sidecar). `lib.rs` is
+  unchanged.
 - **`CaptureGuard` is the one process-wide "what is capturing right now"
   claim (§7.3).** A screen capture and an audio recording cannot run
   concurrently: both contend for the same audio endpoints, and WASAPI

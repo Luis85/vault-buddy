@@ -1,13 +1,52 @@
-//! Listing a stem the recovery sweep promoted in its capture's sidecar
-//! (Task 53, F24). Split from `screen_recovery/mod.rs` at its 800-line cap;
-//! the sweep itself (`sweep_staging_dir`) collects the stems it promoted and
-//! calls this once the pass is done.
+//! A capture's COMPANION parts in the recovery sweep: its webcam track
+//! (F-22) and its per-input stems (Task 53, F24) -- promoting a stale one to
+//! its published name, and listing a promoted stem in its capture's sidecar.
+//! Split from `screen_recovery/mod.rs` near its 800-line cap; the sweep
+//! itself (`sweep_staging_dir`) decides what each entry is, promotes the
+//! companions and lists the stems it promoted once the pass is done.
 
 use std::path::Path;
 
 use vault_buddy_screen::staging;
 
-use super::{RecoveryAction, Sweep};
+use super::{part_is_footage, Found, RecoveryAction, Sweep};
+
+/// A webcam or stem part (F-22, F24) is promoted to its OWN published name —
+/// the part's name without the leading dot and `.part`, which its capture
+/// owns (`staging_files::capture_file_names`; a stem once
+/// `list_recovered_stem` has added it to the sidecar) — never to a free
+/// capture name: the name IS its link to the capture, so there is no
+/// ` (N)` to fall back to. A taken name is left alone (`rename_noreplace`)
+/// and not counted pending: no later pass would answer differently.
+/// `true` when the part was promoted.
+pub(super) fn promote_or_delete_companion_part(f: &Found, sweep: &mut Sweep) -> bool {
+    let published = f
+        .path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_prefix('.'))
+        .and_then(|n| n.strip_suffix(".part"))
+        .map(|n| f.path.with_file_name(n));
+    let Some(to) = published else { return false };
+    if !part_is_footage(f, sweep) {
+        return false;
+    }
+    match vault_buddy_core::capture_paths::rename_noreplace(&f.path, &to) {
+        Ok(()) => {
+            log::info!("screen-recovery: recovered {}", to.display());
+            sweep.actions.push(RecoveryAction::Promoted(to));
+            true
+        }
+        Err(e) => {
+            log::warn!(
+                "screen-recovery: could not promote {} to {}: {e}",
+                f.path.display(),
+                to.display()
+            );
+            false
+        }
+    }
+}
 
 /// Add a promoted stem to its capture's sidecar `stems` list (Task 53, F24):
 /// that list is what makes a stem the capture's to discard, Clear and serve,

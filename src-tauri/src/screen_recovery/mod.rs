@@ -44,10 +44,11 @@ use crate::capture_guard::CaptureGuard;
 
 mod decide;
 use decide::{classify, is_stale_at, part_holds_footage, should_postpone, Entry};
-// Listing a promoted stem in its capture's sidecar (Task 53) -- its own file
-// because this one sits at the 800-line cap.
-mod stems;
-use stems::list_recovered_stem;
+// A capture's companion parts (its webcam track, F-22, and its stems,
+// Task 53): promoting them and listing a promoted stem in its capture's
+// sidecar -- their own file because this one sits near the 800-line cap.
+mod companions;
+use companions::{list_recovered_stem, promote_or_delete_companion_part};
 
 /// How old a file must be before recovery will touch it. **The same 60 s the
 /// audio sweep gets**, deliberately: spec §10 asks for one staleness rule
@@ -334,43 +335,6 @@ fn part_is_footage(f: &Found, sweep: &mut Sweep) -> bool {
         return false;
     }
     true
-}
-
-/// A webcam or stem part (F-22, F24) is promoted to its OWN published name —
-/// the part's name without the leading dot and `.part`, which its capture
-/// owns (`staging_files::capture_file_names`; a stem once
-/// `list_recovered_stem` has added it to the sidecar) — never to a free
-/// capture name: the name IS its link to the capture, so there is no
-/// ` (N)` to fall back to. A taken name is left alone (`rename_noreplace`)
-/// and not counted pending: no later pass would answer differently.
-/// `true` when the part was promoted.
-fn promote_or_delete_companion_part(f: &Found, sweep: &mut Sweep) -> bool {
-    let published = f
-        .path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .and_then(|n| n.strip_prefix('.'))
-        .and_then(|n| n.strip_suffix(".part"))
-        .map(|n| f.path.with_file_name(n));
-    let Some(to) = published else { return false };
-    if !part_is_footage(f, sweep) {
-        return false;
-    }
-    match vault_buddy_core::capture_paths::rename_noreplace(&f.path, &to) {
-        Ok(()) => {
-            log::info!("screen-recovery: recovered {}", to.display());
-            sweep.actions.push(RecoveryAction::Promoted(to));
-            true
-        }
-        Err(e) => {
-            log::warn!(
-                "screen-recovery: could not promote {} to {}: {e}",
-                f.path.display(),
-                to.display()
-            );
-            false
-        }
-    }
 }
 
 fn promote_or_delete_part(f: &Found, dir: &Path, base: &str, sweep: &mut Sweep) {
@@ -694,6 +658,12 @@ mod tests {
         let production = src.split("#[cfg(test)]").next().unwrap_or(src);
         assert!(production.contains("capture_paths::rename_noreplace(from, &mp4)"));
         // std::fs::rename REPLACES its destination on every platform.
+        assert!(!production.contains("std::fs::rename("));
+        // The companion parts' promotion moved to its own file; it is the
+        // same move and gets the same pin.
+        let src = include_str!("companions.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        assert!(production.contains("capture_paths::rename_noreplace(&f.path, &to)"));
         assert!(!production.contains("std::fs::rename("));
     }
 
