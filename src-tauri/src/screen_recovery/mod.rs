@@ -41,6 +41,7 @@ use tauri::{AppHandle, Manager};
 use vault_buddy_screen::staging;
 
 use crate::capture_guard::CaptureGuard;
+use crate::editor::redact::{redact_name, redact_path};
 
 mod decide;
 use decide::{classify, is_stale_at, part_holds_footage, should_postpone, Entry};
@@ -48,7 +49,7 @@ use decide::{classify, is_stale_at, part_holds_footage, should_postpone, Entry};
 // Task 53): promoting them and listing a promoted stem in its capture's
 // sidecar -- their own file because this one sits near the 800-line cap.
 mod companions;
-use companions::{list_recovered_stem, promote_or_delete_companion_part};
+use companions::{list_recovered_stem, parts_first, promote_or_delete_companion_part, PartFate};
 
 /// How old a file must be before recovery will touch it. **The same 60 s the
 /// audio sweep gets**, deliberately: spec §10 asks for one staleness rule
@@ -236,19 +237,30 @@ fn sweep_staging_dir(dir: &Path, now: SystemTime, stale_after: Duration) -> Swee
         _ => None,
     });
 
+    // Every capture's own part is decided FIRST, and where it landed
+    // recorded, so its companions (webcam, stems) follow it to THAT name --
+    // a part promoted to `<base> (2)` because `<base>.mp4` was taken must
+    // not leave them beside the other capture (GAP-198 item 4, GAP-201).
+    let mut fates = std::collections::HashMap::new();
     // Stems promoted in this pass, listed in their capture's sidecar once
-    // every capture this pass promotes has one (the loop order is the
-    // directory's, not the capture's-before-its-stems).
+    // every capture this pass promotes has one.
     let mut stems = Vec::new();
-    for f in &found {
+    for f in parts_first(&found) {
         if !is_stale_at(f.modified, now, stale_after) {
             // Not yet stale: it may be a live capture's own file. Leave it
             // and come back.
             sweep.pending += 1;
+            if let Entry::Part(base) = &f.entry {
+                fates.insert(base.as_str(), PartFate::Waiting);
+            }
             continue;
         }
         match &f.entry {
-            Entry::Part(base) => promote_or_delete_part(f, dir, base, &mut sweep),
+            Entry::Part(base) => {
+                if let Some(fate) = promote_or_delete_part(f, dir, base, &mut sweep) {
+                    fates.insert(base.as_str(), fate);
+                }
+            }
             // Abandoned by definition: nothing has written an export temp
             // since Task 59 retired the phase-5 export, so this one is an
             // older build's leftover — and untouched for the staleness
@@ -278,12 +290,12 @@ fn sweep_staging_dir(dir: &Path, now: SystemTime, stale_after: Duration) -> Swee
                     &mut sweep,
                 )
             }
-            Entry::WebcamPart(_) => {
-                promote_or_delete_companion_part(f, &mut sweep);
+            Entry::WebcamPart(base) => {
+                promote_or_delete_companion_part(f, base, &fates, &mut sweep);
             }
             Entry::StemPart(base, index) => {
-                if promote_or_delete_companion_part(f, &mut sweep) {
-                    stems.push((base.as_str(), index.as_str()));
+                if let Some(owner) = promote_or_delete_companion_part(f, base, &fates, &mut sweep) {
+                    stems.push((owner, index.as_str()));
                 }
             }
             // Its capture's own file, never a capture: nothing to decide.
@@ -292,7 +304,7 @@ fn sweep_staging_dir(dir: &Path, now: SystemTime, stale_after: Duration) -> Swee
         }
     }
     for (base, index) in stems {
-        list_recovered_stem(dir, base, index, &mut sweep);
+        list_recovered_stem(dir, &base, index, &mut sweep);
     }
     sweep
 }
@@ -300,19 +312,30 @@ fn sweep_staging_dir(dir: &Path, now: SystemTime, stale_after: Duration) -> Swee
 /// Remove one of our own files and record it; `what` names it in the log, so
 /// a sweep is auditable after the fact.
 fn delete(f: &Found, what: &str, action: fn(PathBuf) -> RecoveryAction, sweep: &mut Sweep) {
-    log::info!("screen-recovery: removing {what} {}", f.path.display());
+    log::info!("screen-recovery: removing {what} {}", redact_path(&f.path));
     match std::fs::remove_file(&f.path) {
         Ok(()) => sweep.actions.push(action(f.path.clone())),
         Err(e) => log::warn!(
             "screen-recovery: could not remove {}: {e}",
-            f.path.display()
+            redact_path(&f.path)
         ),
     }
 }
 
-/// `true` when `f` is a part worth promoting; otherwise it has already been
-/// dealt with — deleted when proven empty, left pending when unreadable.
-fn part_is_footage(f: &Found, sweep: &mut Sweep) -> bool {
+/// What a part's head says, once `sniff_part` has acted on it.
+#[derive(Debug, PartialEq, Eq)]
+enum Sniff {
+    /// Worth promoting.
+    Footage,
+    /// Proven empty, and deleted (or its removal logged).
+    Empty,
+    /// Could not be read; left pending for a later pass.
+    Unreadable,
+}
+
+/// Anything but `Footage` has already been dealt with — deleted when proven
+/// empty, left pending when unreadable.
+fn sniff_part(f: &Found, sweep: &mut Sweep) -> Sniff {
     // A read failure (permissions, AV lock, transient I/O) must NOT look like
     // "no footage" — the audio side's rule, and what keeps deletion reserved
     // for a file proven empty. Leave it for a later pass. (Unexercised: the
@@ -320,10 +343,10 @@ fn part_is_footage(f: &Found, sweep: &mut Sweep) -> bool {
     let Ok(prefix) = read_prefix(&f.path, PART_SNIFF_LEN) else {
         log::warn!(
             "screen-recovery: cannot read {}, leaving it for a later pass",
-            f.path.display()
+            redact_path(&f.path)
         );
         sweep.pending += 1;
-        return false;
+        return Sniff::Unreadable;
     };
     if !part_holds_footage(&prefix) {
         delete(
@@ -332,36 +355,53 @@ fn part_is_footage(f: &Found, sweep: &mut Sweep) -> bool {
             RecoveryAction::DeletedEmptyPart,
             sweep,
         );
-        return false;
+        return Sniff::Empty;
     }
-    true
+    Sniff::Footage
 }
 
-fn promote_or_delete_part(f: &Found, dir: &Path, base: &str, sweep: &mut Sweep) {
-    if !part_is_footage(f, sweep) {
-        return;
+/// Promote a capture's own part, or delete it when it is empty. Its fate is
+/// where its companions go: `None` once it is gone (deleted as empty).
+fn promote_or_delete_part(
+    f: &Found,
+    dir: &Path,
+    base: &str,
+    sweep: &mut Sweep,
+) -> Option<PartFate> {
+    match sniff_part(f, sweep) {
+        Sniff::Footage => {}
+        Sniff::Empty => return None,
+        Sniff::Unreadable => return Some(PartFate::Waiting),
     }
     match promote_into_free_name(&f.path, dir, base) {
         Ok(mp4) => {
-            log::info!("screen-recovery: recovered {}", mp4.display());
+            log::info!("screen-recovery: recovered {}", redact_path(&mp4));
             let landed = mp4
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| base.to_string());
             write_minimal_sidecar(dir, &landed, f.modified, sweep);
             sweep.actions.push(RecoveryAction::Promoted(mp4));
+            Some(PartFate::Landed(landed))
         }
-        Err(e) => log::warn!(
-            "screen-recovery: could not promote {}: {e}",
-            f.path.display()
-        ),
+        Err(e) => {
+            log::warn!(
+                "screen-recovery: could not promote {}: {e}",
+                redact_path(&f.path)
+            );
+            // Still on disk: its companions wait for a pass that places it.
+            Some(PartFate::Waiting)
+        }
     }
 }
 
 fn write_minimal_sidecar(dir: &Path, base: &str, modified: SystemTime, sweep: &mut Sweep) {
     match staging::write_sidecar(dir, base, &minimal_sidecar(base, modified)) {
         Ok(path) => sweep.actions.push(RecoveryAction::WroteSidecar(path)),
-        Err(e) => log::warn!("screen-recovery: could not write a sidecar for {base:?}: {e}"),
+        Err(e) => log::warn!(
+            "screen-recovery: could not write a sidecar for {}: {e}",
+            redact_name(base)
+        ),
     }
 }
 

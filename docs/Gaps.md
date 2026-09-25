@@ -3114,7 +3114,7 @@ no-follow, staleness-gated like the screen sweep): remux-and-register a part
 that probes as video (or keep it raw, A09), remove a leftover
 `.remux.webm`, and report what it recovered in the next open of that project.
 
-### GAP-198 · Low (path 1 CLOSED 2026-09-25, Task 59) · A capture's webcam file can outlive its capture as untracked staging litter
+### GAP-198 · Low (path 1 CLOSED 2026-09-25, Task 59; path 4 CLOSED 2026-09-25, hardening Task 8) · A capture's webcam file can outlive its capture as untracked staging litter
 `src-tauri/src/screen_recovery/mod.rs` (paths 2–4),
 `src-tauri/src/export_worker/mod.rs` (`remove_staged_capture`, path 1,
 retired by Task 59), Task 51 (F-22). A staged capture now
@@ -3155,6 +3155,22 @@ deleting footage.
 > removes a staged capture now; the "split `export_worker/mod.rs` first"
 > step of the fix dissolved with the file. Paths (2)–(4) stand: they are the
 > recovery sweep's, and their fix is unchanged.
+
+> **2026-09-25 — path (4) is CLOSED by hardening Task 8**: the sweep now
+> decides every capture's own part FIRST (`companions::parts_first`, its own
+> order rather than `read_dir`'s) and records where it landed
+> (`PartFate::Landed`), and a webcam or stem part is promoted under THAT base
+> — `.<base>.webcam.mp4.part` beside a capture promoted to `<base> (2)`
+> becomes `<base> (2).webcam.mp4`, and its stem is listed in
+> `<base> (2).json`, never beside or in the other capture
+> (`companions_land_beside_the_name_their_capture_landed_on`). A companion
+> whose capture's part is still undecided (not yet stale, unreadable, or its
+> promotion failed) waits for the pass that decides it
+> (`a_companion_waits_for_its_captures_part_to_be_decided`). Not covered: a
+> ` (N)` name whose webcam or stem file is ALREADY taken by an older orphan —
+> `promote_into_free_name` checks only the `.mp4` and the sidecar, so the
+> capture lands there and its companion's `rename_noreplace` refuses, leaving
+> the part in place (kept, never clobbered). Paths (2) and (3) stand.
 
 ### GAP-199 · ~~Medium~~ FIXED in code 2026-09-24 (Task 52), hardware-unverified · A synchronized webcam track's length is derived, not measured
 `src-tauri/src/editor/session_commands.rs` (`staged_webcam`), Task 51
@@ -3252,15 +3268,22 @@ MEASURED stem length in the sidecar (a stem shorter than the capture would
 otherwise be placed past its own end).
 (2) **An orphaned stem whose capture has no sidecar under its base stays
 unlisted.** The recovery sweep promotes a stale `.<base>.stem-<n>.m4a.part`
-and LISTS it in `<base>.json` — but when the capture's own part was promoted
-to a ` (N)` name, or the capture is gone, there is no sidecar to list it in,
+and LISTS it in `<base>.json` — but ~~when the capture's own part was promoted
+to a ` (N)` name, or~~ **(the ` (N)` half CLOSED 2026-09-25, hardening
+Task 8: the stem is promoted as `<base> (N).stem-<n>.m4a` and listed in
+`<base> (N).json`, beside the name its capture landed on — see GAP-198
+path 4)** when the capture is gone, there is no sidecar to list it in,
 and a stem that is not listed is owned by nothing: discard and Clear leave it
 as litter in staging (logged, never deleted). A crash-free capture never
 reaches this path. Such a leftover can no longer hurt the NEXT capture:
 `reserve_base` treats any stem file's base as taken (review fix round 1), so
 a new capture never shares a base with one and never has its own complete
 stem's publish collide with it. A stem promoted in a pass where its capture
-was not yet stale is not revisited by later passes (review Minor 4, open).
+was not yet stale is not revisited by later passes (review Minor 4) —
+**CLOSED 2026-09-25 (hardening Task 8)** while that capture's part is still
+in staging: the stem now WAITS, counted pending, for the pass that promotes
+its capture, and is listed then
+(`a_companion_waits_for_its_captures_part_to_be_decided`).
 (1b) **Fixed in review fix round 1:** migration used to mute the mix whenever ANY
 stem was listed, so a capture with one failed stem migrated with that input
 silent. Stems are now placed all or none — only when every recorded input
