@@ -14,6 +14,7 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_screen::staging::{self, StagedSidecar};
 
 use crate::editor::project_store::{minimal_project, SourceLocator, SourceMediaKind, SourceRecord};
+use crate::editor::recovery::{flush_due, RecoveryJournal, RECOVERY_SCHEMA};
 use crate::editor::save_commands::open_project_session_with;
 use crate::editor::session_close::close_in;
 use crate::editor::session_commands::{open_staged_session_with, CloseDisposition};
@@ -28,11 +29,15 @@ const TAKE_A: &str = "take-a1a1a1a1a1";
 const TAKE_B: &str = "take-b2b2b2b2b2";
 
 #[derive(Default)]
-struct FakeIo {
+struct FakeIo<'a> {
     no_ffmpeg: bool,
+    /// When set, the remux records whether this (the editor's `open` lock)
+    /// was free while it ran.
+    open: Option<&'a std::sync::Mutex<()>>,
+    open_was_free: std::cell::Cell<Option<bool>>,
 }
 
-impl FakeIo {
+impl FakeIo<'_> {
     fn missing(&self) -> Result<(), EditorError> {
         if self.no_ffmpeg {
             return Err(EditorError::new(
@@ -44,8 +49,11 @@ impl FakeIo {
     }
 }
 
-impl TakeIo for FakeIo {
+impl TakeIo for FakeIo<'_> {
     fn remux(&self, part: &Path, out: &Path) -> Result<(), EditorError> {
+        if let Some(open) = self.open {
+            self.open_was_free.set(Some(open.try_lock().is_ok()));
+        }
         self.missing()?;
         std::fs::copy(part, out)
             .map(|_| ())
@@ -93,8 +101,31 @@ impl Fixture {
         dir
     }
 
-    fn open(&self, io: &FakeIo) -> EditorOpenResult {
+    fn open(&self, io: &FakeIo<'_>) -> EditorOpenResult {
         open_project_session_with(&self.state, self.root.path(), PROJECT, false, io).unwrap()
+    }
+
+    fn journal(&self) -> PathBuf {
+        self.root
+            .path()
+            .join("editor-projects")
+            .join(PROJECT)
+            .join("recovery.json")
+    }
+
+    /// A pre-crash journal: the unsaved edit is a renamed title.
+    fn write_journal(&self, title: &str) -> Vec<u8> {
+        let mut project = minimal_project(PROJECT);
+        project.title = title.to_string();
+        let journal = RecoveryJournal {
+            schema: RECOVERY_SCHEMA.into(),
+            session_revision: 3,
+            saved_revision: Some(1),
+            project,
+        };
+        let bytes = serde_json::to_vec_pretty(&journal).unwrap();
+        std::fs::write(self.journal(), &bytes).unwrap();
+        bytes
     }
 }
 
@@ -293,7 +324,10 @@ fn without_ffmpeg_the_interrupted_take_lands_raw_with_length_zero() {
     let f = Fixture::new();
     let takes = f.takes();
     write_aged(&takes.join(part_name(TAKE_A)), b"EBML-raw", STALE);
-    let opened = f.open(&FakeIo { no_ffmpeg: true });
+    let opened = f.open(&FakeIo {
+        no_ffmpeg: true,
+        ..FakeIo::default()
+    });
     assert_eq!(opened.project.assets.len(), 1);
     assert_eq!(opened.project.assets[0].name, "Webcam take 1 (recovered)");
     assert_eq!(opened.project.assets[0].duration_ms, 0);
@@ -392,20 +426,21 @@ fn one_open_recovers_a_bounded_number_of_takes() {
         CloseDisposition::Keep,
     )
     .unwrap();
-    let reopened = f.open(&FakeIo::default());
+    // The recovered takes left the project unsaved, so Keep wrote the
+    // journal: the next new session is the Resume one (review C1).
+    let reopened =
+        open_project_session_with(&f.state, f.root.path(), PROJECT, true, &FakeIo::default())
+            .unwrap();
+    assert_eq!(reopened.project.assets.len(), MAX_RECOVERED_PER_OPEN + 1);
     assert!(
         reopened.project.assets.iter().any(|a| &a.id == last),
         "the next new session recovers it"
     );
 }
 
-// The staged-capture open path recovers too: a capture's project, closed,
-// reopened through its capture's Edit after a crash left a take behind.
-#[test]
-fn the_staged_open_recovers_an_interrupted_take() {
-    let root = tempfile::tempdir().unwrap();
-    let staging = staging::staging_dir(root.path());
-    std::fs::create_dir_all(&staging).unwrap();
+/// A staged capture (sidecar + `.mp4`) under `staging`; its base.
+fn stage_capture(staging: &Path) -> &'static str {
+    std::fs::create_dir_all(staging).unwrap();
     let base = "2026-09-20 1432 Demo";
     let sidecar = StagedSidecar {
         base: base.to_string(),
@@ -418,8 +453,18 @@ fn the_staged_open_recovers_an_interrupted_take() {
         recorded_at: "2026-09-20T14:32:00Z".into(),
         ..Default::default()
     };
-    staging::write_sidecar(&staging, base, &sidecar).unwrap();
+    staging::write_sidecar(staging, base, &sidecar).unwrap();
     std::fs::write(staging.join(staging::mp4_file_name(base)), b"mp4").unwrap();
+    base
+}
+
+// The staged-capture open path recovers too: a capture's project, closed,
+// reopened through its capture's Edit after a crash left a take behind.
+#[test]
+fn the_staged_open_recovers_an_interrupted_take() {
+    let root = tempfile::tempdir().unwrap();
+    let staging = staging::staging_dir(root.path());
+    let base = stage_capture(&staging);
     let state = EditorState::default();
     let io = FakeIo::default();
     let first = open_staged_session_with(&state, root.path(), &staging, base, &io).unwrap();
@@ -440,6 +485,24 @@ fn the_staged_open_recovers_an_interrupted_take() {
     std::fs::create_dir(&takes).unwrap();
     write_aged(&takes.join(part_name(TAKE_A)), b"EBML", STALE);
 
+    // Review C1: a staged open never uses the journal, so while one exists
+    // it recovers nothing (the offer comes first) and leaves it as it was.
+    let journal = takes.with_file_name("recovery.json");
+    std::fs::write(&journal, b"unsaved edits").unwrap();
+    let held = open_staged_session_with(&state, root.path(), &staging, base, &io).unwrap();
+    assert!(held.project.assets.iter().all(|a| a.id != TAKE_A));
+    assert_eq!(std::fs::read(&journal).unwrap(), b"unsaved edits");
+    assert!(takes.join(part_name(TAKE_A)).is_file());
+    std::fs::remove_file(&journal).unwrap();
+    close_in(
+        &state,
+        root.path(),
+        &staging,
+        &held.snapshot.session_id,
+        CloseDisposition::Keep,
+    )
+    .unwrap();
+
     let reopened = open_staged_session_with(&state, root.path(), &staging, base, &io).unwrap();
     let take = reopened
         .project
@@ -449,4 +512,113 @@ fn the_staged_open_recovers_an_interrupted_take() {
         .expect("recovered");
     assert_eq!(take.name, "Webcam take 1 (recovered)");
     assert!(!takes.join(part_name(TAKE_A)).exists());
+}
+
+// Fix round 1 (review C1): the common crash is a take started over UNSAVED
+// edits, so `recovery.json` is there too. A clean open (the webview has not
+// yet offered Resume or Discard) must not recover into its session: the
+// recovered asset would dirty it, the journal thread would overwrite the
+// pre-crash journal within 500 ms, and a dirty open never shows the offer —
+// the unsaved edits lost without a word. The take waits for the offer.
+#[test]
+fn a_clean_open_over_unsaved_changes_recovers_nothing() {
+    let f = Fixture::new();
+    let takes = f.takes();
+    write_aged(&takes.join(part_name(TAKE_A)), b"EBML", STALE);
+    let journal = f.write_journal("Before the crash");
+
+    let opened = f.open(&FakeIo::default());
+    assert!(opened.project.assets.is_empty(), "the take waits");
+    assert_eq!(
+        opened.snapshot.persisted_revision,
+        Some(opened.snapshot.revision)
+    );
+    flush_due(&f.state, std::time::Instant::now() + Duration::from_secs(5));
+    assert_eq!(
+        std::fs::read(f.journal()).unwrap(),
+        journal,
+        "byte-identical"
+    );
+    assert_eq!(
+        std::fs::read(takes.join(part_name(TAKE_A))).unwrap(),
+        b"EBML"
+    );
+}
+
+// …and Resume (the journal's working copy, a MINTED session) is where it
+// comes back: the recovered take lands beside the pre-crash edits, and the
+// next journal write carries both.
+#[test]
+fn resuming_unsaved_changes_recovers_the_take_beside_them() {
+    let f = Fixture::new();
+    let takes = f.takes();
+    write_aged(&takes.join(part_name(TAKE_A)), b"EBML", STALE);
+    f.write_journal("Before the crash");
+
+    let resumed =
+        open_project_session_with(&f.state, f.root.path(), PROJECT, true, &FakeIo::default())
+            .unwrap();
+    assert!(resumed.recovered);
+    assert_eq!(resumed.project.title, "Before the crash");
+    assert_eq!(resumed.project.assets.len(), 1);
+    assert_eq!(resumed.project.assets[0].name, "Webcam take 1 (recovered)");
+    assert!(!takes.join(part_name(TAKE_A)).exists());
+
+    flush_due(&f.state, std::time::Instant::now() + Duration::from_secs(5));
+    let written: RecoveryJournal =
+        serde_json::from_slice(&std::fs::read(f.journal()).unwrap()).unwrap();
+    assert_eq!(
+        written.project.title, "Before the crash",
+        "the edits survive"
+    );
+    assert!(written.project.assets.iter().any(|a| a.id == TAKE_A));
+}
+
+// Fix round 1 (review I1): `open` is the OUTERMOST lock, held for bounded
+// I/O only (`EditorState`'s doc). A recovery remuxes through an external
+// ffmpeg bounded at 15 minutes a take — held under `open` it would stall
+// every other open, discard, import and sweep that long. The open answers
+// the recovered session, but the remux runs with `open` released.
+#[test]
+fn a_recovery_runs_with_the_open_lock_released() {
+    for use_recovery in [false, true] {
+        let f = Fixture::new();
+        write_aged(&f.takes().join(part_name(TAKE_A)), b"EBML", STALE);
+        if use_recovery {
+            f.write_journal("Before the crash");
+        }
+        let io = FakeIo {
+            open: Some(&f.state.open),
+            ..FakeIo::default()
+        };
+        let opened =
+            open_project_session_with(&f.state, f.root.path(), PROJECT, use_recovery, &io).unwrap();
+        assert_eq!(opened.project.assets.len(), 1, "recovered");
+        assert_eq!(
+            io.open_was_free.get(),
+            Some(true),
+            "the remux ran with `open` released (useRecovery: {use_recovery})"
+        );
+    }
+    let root = tempfile::tempdir().unwrap();
+    let staging = staging::staging_dir(root.path());
+    let state = EditorState::default();
+    let base = stage_capture(&staging);
+    let first =
+        open_staged_session_with(&state, root.path(), &staging, base, &FakeIo::default()).unwrap();
+    let takes = root
+        .path()
+        .join("editor-projects")
+        .join(&first.project.id)
+        .join("takes");
+    let sid = first.snapshot.session_id.clone();
+    close_in(&state, root.path(), &staging, &sid, CloseDisposition::Keep).unwrap();
+    std::fs::create_dir(&takes).unwrap();
+    write_aged(&takes.join(part_name(TAKE_A)), b"EBML", STALE);
+    let io = FakeIo {
+        open: Some(&state.open),
+        ..FakeIo::default()
+    };
+    open_staged_session_with(&state, root.path(), &staging, base, &io).unwrap();
+    assert_eq!(io.open_was_free.get(), Some(true), "the staged open too");
 }

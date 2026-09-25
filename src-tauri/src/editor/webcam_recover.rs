@@ -6,8 +6,13 @@
 //! quit, which closes no editor session — leaves the user's recording (a
 //! streamable WebM prefix that plays) where nothing offered it back. Now the
 //! project's next open does: when an open MINTS a session (never when it
-//! reuses a live one), every stale part of ours in the project's `takes\`
-//! is finished through the finish's own land + register
+//! reuses a live one) — and, unless that open resumed the journal, only when
+//! the project has NO `recovery.json` (review C1: the recovered asset would
+//! dirty a clean session, the journal thread would overwrite the pre-crash
+//! journal within 500 ms, and a dirty open never offers Resume/Discard, so
+//! the unsaved edits would be lost; the take waits until Resume, whose open
+//! is minted from the journal, or Discard, whose reopen finds none) — every
+//! stale part of ours in the project's `takes\` is finished through the finish's own land + register
 //! (`webcam_finish::land`) — remuxed `-c copy`, probed, hashed, recorded in
 //! `sources.json` and added through ONE `AddAssets` as "Webcam take N
 //! (recovered)", or, without ffmpeg, kept exactly as recorded with its
@@ -32,17 +37,28 @@
 //! where it is and is tried again on the next new session: a recording is
 //! never deleted for failing to remux.
 //!
-//! **Bounded.** It runs on the open's blocking thread (never the main
-//! thread), under the open's `open` lock — so a discard, which takes that
-//! lock first, waits for it rather than meeting it half-done — and recovers
-//! at most `MAX_RECOVERED_PER_OPEN` takes per open, each a remux bounded by
-//! the finish's own timeout; any others wait for the next new session.
+//! **Bounded, and never under `open`** (review I1). It runs on the open's
+//! blocking thread (never the main thread) AFTER the open has registered its
+//! session and RELEASED `open` — `open` is held for bounded I/O only, and a
+//! remux can take up to the finish's 15-minute timeout — and recovers at
+//! most `MAX_RECOVERED_PER_OPEN` takes per open; any others wait for the
+//! next new session.
 //!
-//! **Locks** — `open`, then the take's entry, then the save lock, then
-//! `sessions` (`webcam_registry.rs`). A recovering take is registered in
-//! `EditorState::takes` while it lands, so a discard's quiesce sees it busy
-//! and `forget_session` never removes its part (`TakeSlot::recovered`).
-//! Nothing here logs a path or a file name.
+//! **Locks** — the take's entry, then the save lock, then `sessions`, a
+//! finish's own order (`webcam_registry.rs`); `open` is never held. A
+//! recovering take is claimed in `EditorState::takes` (insert-if-vacant
+//! under the map lock, so no two recoveries — and no live take — ever hold
+//! one id) with its entry held while it lands. So a racing session discard
+//! either finds the entry busy (its quiesce waits, then refuses) or marks
+//! the session closing first (the recovery's `refuse_if_closing` refuses);
+//! a racing close drops the session, `register` then fails `sessionGone`,
+//! and the land puts the part back (`land_raw`) or removes only its own
+//! copy (`land_indexed`) — the part is kept either way, and
+//! `forget_session` never removes it (`TakeSlot::recovered`). A second
+//! open of the same project during a recovery reuses the session and may
+//! answer a revision the recovery then advances; the webview's next edit
+//! is refused `revisionConflict` like any stale one. Nothing here logs a
+//! path or a file name.
 
 use std::collections::BTreeSet;
 use std::io;
@@ -55,6 +71,7 @@ use vault_buddy_core::editor::{EditorError, EditorProjection};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::project_store::project_dir;
+use super::recovery::journal_present;
 use super::store_io::load_sources;
 use super::webcam_finish::{land, Landed, TakeIo};
 use super::webcam_registry::{remove_owned, TakeEntry, TakeSlot};
@@ -67,15 +84,17 @@ pub(crate) const STALE_AFTER: Duration = Duration::from_secs(60);
 /// The most interrupted takes one open recovers (each is a remux).
 pub(crate) const MAX_RECOVERED_PER_OPEN: usize = 4;
 
-/// After an open registered `projection`'s session: when the open MINTED
-/// it (`minted`), recover the project's interrupted takes, and answer the
-/// session's projection as it stands afterwards. A reused session is
-/// answered as it is — it is not a new open.
+/// After an open registered `projection`'s session, with `open` RELEASED:
+/// when the open MINTED it (`minted`) — and either `resumed` the journal or
+/// found none (review C1) — recover the project's interrupted takes, and
+/// answer the session's projection as it stands afterwards. A reused
+/// session is answered as it is — it is not a new open.
 pub(crate) fn recover_after_open(
     state: &EditorState,
     root: &Path,
     projection: EditorProjection,
     minted: bool,
+    resumed: bool,
     io: &dyn TakeIo,
 ) -> EditorProjection {
     if !minted {
@@ -83,6 +102,10 @@ pub(crate) fn recover_after_open(
     }
     let session_id = projection.snapshot.session_id.clone();
     let project_id = projection.project.id.clone();
+    if !resumed && journal_present(root, &project_id) {
+        // Unsaved changes wait for Resume or Discard; so does the take.
+        return projection;
+    }
     let recovered =
         recover_interrupted_takes(state, root, &session_id, &project_id, io, SystemTime::now());
     if recovered == 0 {
@@ -159,8 +182,14 @@ pub(crate) fn recover_interrupted_takes(
                 remove_owned(&slot.part());
                 continue;
             }
-            Err(e) => {
-                log::warn!("webcam recovery: take {}: {}", part.take_id, e.message());
+            Err(_) => {
+                // Only `TakeTooLarge` is left: bigger than any take this app
+                // can record, so not one of ours to register.
+                log::warn!(
+                    "webcam recovery: take {}'s part is larger than any webcam take can be; left \
+                     in place",
+                    part.take_id
+                );
                 continue;
             }
         };
@@ -261,10 +290,12 @@ fn registered_ids(
     Ok(ids)
 }
 
-/// Land one recovered take: registered in `EditorState::takes` (only if no
-/// take of this process holds its id) with its entry held, a leftover remux
-/// temp removed, then the finish's own land + register. `None` when a live
-/// take of this process holds the id — then nothing is touched.
+/// Land one recovered take: claimed in `EditorState::takes` (only if no
+/// take of this process holds its id) with its entry held; left alone if its
+/// `.webm` already landed (checked AFTER the claim, so a concurrent
+/// recovery that just landed it is seen); else a leftover remux temp
+/// removed, then the finish's own land + register. `None` when nothing was
+/// touched.
 fn recover_one(
     state: &EditorState,
     root: &Path,
@@ -285,6 +316,15 @@ fn recover_one(
             return Ok(None);
         }
         takes.insert(slot.take_id.clone(), Arc::clone(&slot));
+    }
+    if std::fs::symlink_metadata(slot.out()).is_ok() {
+        log::warn!(
+            "webcam recovery: take {} already landed; its part was left in place",
+            slot.take_id
+        );
+        drop(entry);
+        lock_ignoring_poison(&state.takes.0).remove(&slot.take_id);
+        return Ok(None);
     }
     let landed = super::discard::refuse_if_closing(state, &slot.session_id).and_then(|()| {
         remove_owned(&slot.remux_temp());

@@ -90,7 +90,11 @@ use vault_buddy_core::editor::EditorSession;
 /// that holds `open` for as long as that discard's quiesce takes — up to
 /// four bounded waits of 5 s each (`discard::quiesce`), about 20 s. No
 /// holder of `open` other than a discard takes a save lock, and nothing a
-/// discard's quiesce waits for takes `open`. Execute, snapshot, save and a
+/// discard's quiesce waits for takes `open`. An open's recovery of an
+/// interrupted webcam take (`webcam_recover`, GAP-197) remuxes through an
+/// external ffmpeg for up to 15 minutes a take, so it runs AFTER the open
+/// has registered its session and RELEASED `open` (review I1), never under
+/// it. Execute, snapshot, save and a
 /// `keep`/`discardRecovery` close never take it. The maps are never held
 /// across disk I/O.
 ///

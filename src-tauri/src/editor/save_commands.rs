@@ -13,6 +13,7 @@
 //! (`save_project_in`/`open_project_session`) so it is unit-testable on a
 //! tempdir.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -20,13 +21,14 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, WebviewWindow};
 use vault_buddy_core::editor::{
-    self, sanitize, EditorError, EditorErrorCode, EditorOpenResult, EditorSession, Map, Record,
-    WorkspaceEnvelope,
+    self, sanitize, EditorError, EditorErrorCode, EditorOpenResult, EditorProjection,
+    EditorSession, Map, Record, Workspace, WorkspaceEnvelope,
 };
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::{require_editor_window, require_session};
 use super::prefs_commands::read_workspace;
+use super::project_store::SourceRecord;
 use super::recovery::load_journal;
 use super::session_commands::{missing_media, register_session_with};
 use super::store_io::{
@@ -400,6 +402,45 @@ pub(crate) fn open_project_session_with(
     use_recovery: bool,
     io: &dyn TakeIo,
 ) -> Result<EditorOpenResult, EditorError> {
+    let opened = open_project_locked(state, root, project_file_id, use_recovery)?;
+    // After `open` is released (review I1): a recovery can remux for minutes.
+    let projection = recover_after_open(
+        state,
+        root,
+        opened.projection,
+        opened.minted,
+        use_recovery,
+        io,
+    );
+    let missing = missing_media(root, &projection.project, &opened.sources);
+    Ok(EditorOpenResult {
+        snapshot: projection.snapshot,
+        project: projection.project,
+        workspace: opened.workspace,
+        missing,
+        source_base: source_base_of(&opened.sources),
+        recovered: opened.recovered,
+    })
+}
+
+/// What `open_project_session` does under `open`: load, then find or mint
+/// the session.
+struct LockedOpen {
+    projection: EditorProjection,
+    /// The session was minted by this open (not a live one reused).
+    minted: bool,
+    /// The session was minted from the journal (`EditorOpenResult::recovered`).
+    recovered: bool,
+    workspace: Workspace,
+    sources: BTreeMap<String, SourceRecord>,
+}
+
+fn open_project_locked(
+    state: &EditorState,
+    root: &Path,
+    project_file_id: &str,
+    use_recovery: bool,
+) -> Result<LockedOpen, EditorError> {
     let _open = lock_ignoring_poison(&state.open);
     super::discard::refuse_if_project_closing(state, project_file_id)?;
     let (envelope, sources) = load_project(root, project_file_id)?;
@@ -423,15 +464,12 @@ pub(crate) fn open_project_session_with(
         });
         (projection, minted, false)
     };
-    let projection = recover_after_open(state, root, projection, minted, io);
-    let missing = missing_media(root, &projection.project, &sources);
-    Ok(EditorOpenResult {
-        snapshot: projection.snapshot,
-        project: projection.project,
-        workspace,
-        missing,
-        source_base: source_base_of(&sources),
+    Ok(LockedOpen {
+        projection,
+        minted,
         recovered,
+        workspace,
+        sources,
     })
 }
 

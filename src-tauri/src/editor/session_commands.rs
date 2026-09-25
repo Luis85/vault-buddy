@@ -488,19 +488,23 @@ pub(crate) fn open_staged_session_with(
     base: &str,
     io: &dyn TakeIo,
 ) -> Result<EditorOpenResult, EditorError> {
-    // Held until the session is registered: the open lock (outermost; see
-    // `EditorState`) serializes find-or-mint + pin + register.
-    let _open = lock_ignoring_poison(&state.open);
-    let opened = open_staged_in(root, staging_dir, base)?;
-    super::discard::refuse_if_project_closing(state, &opened.envelope.project.id)?;
-    let workspace = sanitize(&opened.envelope.workspace);
-    let revision = opened.envelope.record.revision;
-    let (projection, minted) =
-        register_session_with(state, opened.envelope.project, |id, project| {
-            EditorSession::resume(id, project, revision)
-        });
-    let projection = recover_after_open(state, root, projection, minted, io);
-    let missing = missing_media(root, &projection.project, &opened.sources);
+    let (projection, minted, workspace, sources) = {
+        // Held until the session is registered: the open lock (outermost;
+        // see `EditorState`) serializes find-or-mint + pin + register.
+        let _open = lock_ignoring_poison(&state.open);
+        let opened = open_staged_in(root, staging_dir, base)?;
+        super::discard::refuse_if_project_closing(state, &opened.envelope.project.id)?;
+        let workspace = sanitize(&opened.envelope.workspace);
+        let revision = opened.envelope.record.revision;
+        let (projection, minted) =
+            register_session_with(state, opened.envelope.project, |id, project| {
+                EditorSession::resume(id, project, revision)
+            });
+        (projection, minted, workspace, opened.sources)
+    };
+    // After `open` is released (review I1): a recovery can remux for minutes.
+    let projection = recover_after_open(state, root, projection, minted, false, io);
+    let missing = missing_media(root, &projection.project, &sources);
     Ok(EditorOpenResult {
         snapshot: projection.snapshot,
         project: projection.project,

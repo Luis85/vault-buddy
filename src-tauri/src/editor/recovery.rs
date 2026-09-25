@@ -154,6 +154,20 @@ fn journal_path(root: &Path, project_id: &str) -> Option<PathBuf> {
     project_dir(root, project_id).map(|d| d.join(RECOVERY_FILE))
 }
 
+/// Is there a journal — ANY entry wearing `recovery.json`'s name, checked
+/// no-follow — for `project_id`? A metadata failure other than "not found"
+/// answers yes: the caller (`webcam_recover`) holds back rather than risk
+/// overwriting unsaved changes it could not see (review C1).
+pub(crate) fn journal_present(root: &Path, project_id: &str) -> bool {
+    let Some(path) = journal_path(root, project_id) else {
+        return false;
+    };
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => true,
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
 /// Note an acknowledged edit of `session_id`: its journal is written within
 /// `JOURNAL_DEBOUNCE`.
 pub(crate) fn note_acknowledged(state: &EditorState, root: &Path, session_id: &str) {

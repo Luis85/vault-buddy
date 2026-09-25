@@ -6,8 +6,11 @@
 //! **Locks.** `TakeRegistry`'s map is a LEAF lock, taken only to find, add
 //! or remove one slot. Each slot's own `entry` lock is held across that
 //! take's file I/O (so its chunks, its finish and its discard are serial)
-//! and, in finish, across the save lock and then `sessions` — the order is:
-//! take entry, then save lock, then `sessions`. Nothing takes a take entry
+//! and, in finish (and in a crash recovery, `webcam_recover`, which lands
+//! through the same path), across the save lock and then `sessions` — the
+//! order is: take entry, then save lock, then `sessions`. `EditorState::open`
+//! is never held around an entry: a recovery runs after its open released it
+//! (review I1). Nothing takes a take entry
 //! while holding the save lock: `forget_session` (run by `drop_session`
 //! after the maps are released, under the save lock) never locks an entry,
 //! and `wait_idle` (a discard's quiesce, `discard.rs`) only ever TRIES one,

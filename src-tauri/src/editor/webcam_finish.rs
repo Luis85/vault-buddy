@@ -5,7 +5,10 @@
 //! without ffmpeg, the raw recording kept as-is (A09).
 //!
 //! **Locks** — take entry, then save lock, then `sessions`
-//! (`webcam_registry.rs`).
+//! (`webcam_registry.rs`). Never under `EditorState::open`: a finish is an
+//! IPC command that takes no `open`, and crash recovery calls `land` only
+//! after its open has released `open` (review I1) — a remux is not the
+//! bounded I/O `open` may be held across.
 
 use std::cell::OnceCell;
 use std::collections::BTreeMap;
