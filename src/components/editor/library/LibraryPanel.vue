@@ -1,0 +1,129 @@
+<script setup lang="ts">
+/**
+ * Switches the editor shell's `library` slot between `MediaLibrary`,
+ * `TitlesLibrary`, and (Task 36) `CaptionsLibrary`/`ChaptersLibrary` -- the
+ * library that "owns Media/Titles/Captions/Chapters" (SCREENS-AND-
+ * INTERACTIONS.md) (Task 33 fix round 1; review finding, Important #1):
+ * `TitlesLibrary.vue` was fully built and tested in isolation but never
+ * mounted anywhere, so F-37 — inserting a title card — was unreachable
+ * from the running editor. `EditorRoot.vue` now fills its `library` slot
+ * with THIS component instead of `MediaLibrary` directly.
+ *
+ * A four-tab `role="tablist"`: `aria-selected` + a `tabindex="0"` only on
+ * the active tab, only the active tab's panel mounted ("don't pay for a
+ * hidden tab" — the `InspectorPanel.vue` precedent), and roving-tabindex
+ * keyboard behavior via the shared `useRovingTablist` composable
+ * (`InspectorPanel.vue`'s own copy of the same handler was extracted into
+ * it once `check:quality`'s clone-group gate caught the two as duplicates).
+ *
+ * **Which tab is open is `editorWorkspace.libraryTab`** (the persisted
+ * `library_tab` field, like `InspectorPanel`'s `propertyTab`) — Task 54
+ * moved it there from a local ref because a before-you-share finding must
+ * be able to OPEN a tab (Reconnect and Webcam live on Media, caption
+ * findings on Captions: `checkReveal.ts`). An unset or unknown stored
+ * value falls back to Media.
+ *
+ * **Products (Task 47)** is the fifth tab: `ProductLibrary`, the project's
+ * Rendered Products (the guide's `library.products` target) — mounted here
+ * so a render's output is reachable from the running editor, not only from
+ * the Render dialog that made it.
+ *
+ * **Guide targets (Task 55):** only the open tab's panel is mounted, so each
+ * tab is the FALLBACK route to the lessons its panel owns — the guide points
+ * at Captions while the Captions library is closed, and at the library
+ * itself once it is open (the panels bind their own keys).
+ */
+import { computed } from "vue";
+
+import { useGuideTabTargets } from "../../../composables/useGuideTarget";
+import { useRovingTablist } from "../../../composables/useRovingTablist";
+import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import CaptionsLibrary from "./CaptionsLibrary.vue";
+import ChaptersLibrary from "./ChaptersLibrary.vue";
+import MediaLibrary from "./MediaLibrary.vue";
+import ProductLibrary from "./ProductLibrary.vue";
+import TitlesLibrary from "./TitlesLibrary.vue";
+
+type LibraryTab = "media" | "titles" | "captions" | "chapters" | "products";
+
+const TABS: { id: LibraryTab; label: string }[] = [
+  { id: "media", label: "Media" },
+  { id: "titles", label: "Titles" },
+  { id: "captions", label: "Captions" },
+  { id: "chapters", label: "Chapters" },
+  { id: "products", label: "Products" },
+];
+
+const workspace = useEditorWorkspaceStore();
+const activeTab = computed<LibraryTab>(() => {
+  const saved = workspace.libraryTab;
+  return TABS.some((t) => t.id === saved) ? (saved as LibraryTab) : "media";
+});
+function choose(tab: LibraryTab): void {
+  workspace.setLibraryTab(tab);
+}
+
+const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
+  () => TABS.length,
+  () => TABS.findIndex((t) => t.id === activeTab.value),
+  (i) => choose(TABS[i].id),
+);
+
+const bindTabTarget = useGuideTabTargets<LibraryTab>({
+  media: ["library.import", "library.webcam"],
+  captions: ["library.captions"],
+  chapters: ["library.chapters"],
+  products: ["library.products"],
+});
+function setTab(i: number, el: Element | null): void {
+  setTabRef(i, el);
+  bindTabTarget(TABS[i].id, el);
+}
+</script>
+
+<template>
+  <div
+    data-testid="library-panel"
+    class="flex h-full flex-col gap-2"
+  >
+    <div
+      role="tablist"
+      aria-label="Library"
+      data-testid="library-tablist"
+      class="flex shrink-0 gap-1"
+      @keydown="onTablistKeydown"
+    >
+      <button
+        v-for="(tab, i) in TABS"
+        :id="`library-tab-${tab.id}`"
+        :key="tab.id"
+        :ref="(el) => setTab(i, el as Element | null)"
+        type="button"
+        role="tab"
+        :data-testid="`library-tab-${tab.id}`"
+        :aria-selected="tab.id === activeTab"
+        :aria-controls="`library-tabpanel-${tab.id}`"
+        :tabindex="tab.id === activeTab ? 0 : -1"
+        class="cursor-pointer rounded px-1.5 py-0.5 text-micro transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        :class="tab.id === activeTab ? 'bg-accent/20 text-accent-fg' : 'text-fg-subtle'"
+        @click="choose(tab.id)"
+      >
+        {{ tab.label }}
+      </button>
+    </div>
+
+    <div
+      :id="`library-tabpanel-${activeTab}`"
+      role="tabpanel"
+      :aria-labelledby="`library-tab-${activeTab}`"
+      data-testid="library-body"
+      class="min-h-0 flex-1"
+    >
+      <MediaLibrary v-if="activeTab === 'media'" />
+      <TitlesLibrary v-else-if="activeTab === 'titles'" />
+      <CaptionsLibrary v-else-if="activeTab === 'captions'" />
+      <ChaptersLibrary v-else-if="activeTab === 'chapters'" />
+      <ProductLibrary v-else />
+    </div>
+  </div>
+</template>

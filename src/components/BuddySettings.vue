@@ -9,9 +9,11 @@ import { useVaultsStore } from "../stores/vaults";
 import BuddyAvatar from "./BuddyAvatar.vue";
 import DiagnosticsSettings from "./DiagnosticsSettings.vue";
 import DocumentImportSettings from "./DocumentImportSettings.vue";
+import FfmpegSettings from "./FfmpegSettings.vue";
 import McpSettings from "./McpSettings.vue";
 import PanelSizeSetting from "./PanelSizeSetting.vue";
 import SelectMenu from "./SelectMenu.vue";
+import StagedCapturesCard from "./StagedCapturesCard.vue";
 import TabGroup from "./TabGroup.vue";
 import TranscriptionAppSettings from "./TranscriptionAppSettings.vue";
 import TranscriptionModelsCard from "./TranscriptionModelsCard.vue";
@@ -140,7 +142,10 @@ async function pickPanelSize(size: PanelSize) {
 </script>
 
 <template>
+  <!-- `initial` is undefined unless a route deep-linked a tab (the Record
+       Screen ffmpeg notice does), so the default stays Buddy. -->
   <TabGroup
+    :initial="vaults.settingsTab ?? undefined"
     :tabs="[
       { id: 'buddy', label: 'Buddy' },
       { id: 'system', label: 'System' },
@@ -337,12 +342,14 @@ async function pickPanelSize(size: PanelSize) {
         </section>
         <UpdateSettings />
         <DiagnosticsSettings />
+        <StagedCapturesCard />
       </div>
     </template>
     <template #integrations>
       <div class="flex flex-col gap-3">
         <McpSettings />
         <DocumentImportSettings />
+        <FfmpegSettings />
         <TranscriptionAppSettings />
         <TranscriptionModelsCard />
       </div>

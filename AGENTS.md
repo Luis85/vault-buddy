@@ -21,9 +21,10 @@ here documents a failure mode somebody already hit.
 - [The window system (most invariant-heavy area)](#the-window-system-most-invariant-heavy-area)
 - [The vault domain](#the-vault-domain-core-crate--vaults-store)
 - [The capture domain](#the-capture-domain-src-tauricapture--capture_commandsrs--capture-store)
+- [The tutorial editor domain](#the-tutorial-editor-domain-coresrceditor--src-taurisrceditor--srccomponentseditor--editorroot)
 - [The document-import domain](#the-document-import-domain-coresrcdocument_importrs--src-taurisrcdocument_commandsrs--documentimportsettingsvue--importvaultpickervue)
 - [The transcription & recordings domains](#the-transcription--recordings-domains-src-tauritranscribe--coresrctranscriptrecordingsrs--transcriptionrs)
-- [The tasks domain](#the-tasks-domain-coresrctasksrs--task_commandsrs--tasksvue)
+- [The tasks domain](#the-tasks-domain-coresrctasks--task_commandsrs--tasksvue)
 - [The search domain](#the-search-domain-coresrcsearchrs--search_commandsrs--searchvue)
 - [The MCP server domain](#the-mcp-server-domain-src-taurimcp--mcp_commandsrs--mcpsettingsvue)
 - [Updater flow](#updater-flow-srcstoresupdatests-updatesettingsvue)
@@ -42,11 +43,37 @@ shell (Rust) hosting a Vue 3 + Pinia + Tailwind 4 frontend. A tiny
 always-on-top transparent window shows an animated buddy character;
 clicking it opens a panel that lists the user's Obsidian vaults and opens
 them (or today's daily note) via `obsidian://` URIs. On top of that base
-the app has grown five vertical domains:
+the app has grown seven vertical domains:
 
 - **Capture** — one-click meeting/voice-note recording (cpal + WASAPI
   loopback → streaming LAME MP3) saved into a vault folder with an optional
   companion note.
+- **Screen capture** — the second capture provider (phases 2–5): record a
+  monitor, a window or a region with any number of audio devices mixed in,
+  into a crash-survivable fragmented MP4 staged OUTSIDE every vault; then open
+  it in the tutorial editor, render it through a user-installed ffmpeg and
+  publish the render into a vault as a playable `.mp4` plus a companion note
+  (the phase-4 editor and the phase-5 export that did this through Task 58
+  were retired by tutorial-editor Task 59), with a **Screen**
+  tab in Vault settings for the eight per-vault fields (seven through Phase 6;
+  Task 53 added `screenAudioStems`, per-input audio stems). **All six phases are
+  complete**: spec §13's Phase 6 row is `ScreenCaptureConfigTab` (GAP-103),
+  the staging size readout and bulk clear (GAP-115), and the doc
+  reconciliation — and all three have landed. What remains is not
+  implementation but **verification debt** (the manual Windows checklist,
+  34 of its 57 rows unrun) plus the ordinary gap backlog. There is no
+  "staged-capture browser" outstanding: that phrase was never in the spec,
+  which mentions a browser only twice and both times in its
+  explicitly-out-of-scope list (screen captures in the RECORDINGS browser,
+  GAP-143). Spec §10's resume-or-discard surface is `StagedCaptureList`,
+  shipped in Phase 5.
+- **Tutorial editor** — a Rust-backed multi-track video editor in its own
+  window: a staged screen capture (or imported media, or webcam Takes) is
+  cut, layered, faded, annotated with Teaching Cues, captioned and chaptered
+  as a Tutorial Project kept OUTSIDE every vault; **Render video** makes an
+  immutable Product through the user's ffmpeg, and **Publish to vault…**
+  copies one into a vault with a companion note (the tenth vault write). See
+  [the tutorial editor domain](#the-tutorial-editor-domain-coresrceditor--src-taurisrceditor--srccomponentseditor--editorroot).
 - **Transcription** — opt-in, fully local speech-to-text (whisper.cpp via
   `whisper-rs`) run after a recording, writing a transcript sidecar the
   note embeds; plus a read-only recordings browser.
@@ -72,13 +99,16 @@ here is deliberately only the shipped increments.
 | [README.md](README.md) | What the product does, install, usage — user-facing |
 | [AGENTS.md](AGENTS.md) (this file) | Agent operating guide — keep it (not CLAUDE.md) up to date when the repo changes |
 | [CLAUDE.md](CLAUDE.md) | Thin pointer at this file for Claude Code |
-| [CONTEXT.md](CONTEXT.md) | The domain glossary / ubiquitous language (Vault, Buddy, Capture, Task vs Todo vs Task Tag, Runtime, Capability…). Use these terms in code, docs, and commits; keep it current via the `domain-modeling` skill |
+| [CONTEXT.md](CONTEXT.md) | The domain glossary / ubiquitous language (Vault, Buddy, Capture, Staged Capture vs Render vs Publish vs Discard, Tutorial Project, Track, Clip, Teaching Cue, Take, Rendered Product, Task vs Todo vs Task Tag, Runtime, Capability…). Use these terms in code, docs, and commits; keep it current via the `domain-modeling` skill |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Contributor setup, build prerequisites, CI/release pipelines, logs & crash reporting, capture config reference |
 | [docs/PRD.md](docs/PRD.md) | Vision, principles, capability roadmap |
 | [docs/prds/](docs/prds/) | Per-domain PRDs (knowledge intake, task management, …) |
 | [docs/use-cases/](docs/use-cases/) | One file per use case, reconciled against reality on each release |
 | [docs/superpowers/specs/](docs/superpowers/specs/) | Dated design specs — the *why* behind each increment's shape |
 | [docs/superpowers/plans/](docs/superpowers/plans/) | Dated implementation plans that executed those specs |
+| [docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md](docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md) | The screen-capture feature's manual Windows checklist — a RUNNING document across phases, not one phase's gate. It carries **57 rows** today — 1–55 plus 27a and 27b — of which **23** carry a result; the count is measured on the tree, not incremented (it has been wrong before from incrementing, which is why the one-liner to re-measure it lives in the file's own header). An empty Result column means unrun, which is not the same as failed. **The deferral is LIFTED**: the user began running it on 2026-09-21, batch by batch. Rows 1–13, 16, 17, 29 and 37–43 carry results (11 and 12 are DEFERRED by the author's decision to after the remaining Phase 3 work, not passed; 16, 17 and 43 passed on the GAP-166 fix build and re-run on the next installer); 14, 15, 18–28, 30–36, 44–52 **and 53–55** are still unrun — 34 rows. **Rows 44–52 are the region-capture indicator's own verification** (GAP-165), added when it landed and not run since: row 44 is the GATE, re-testing GAP-166's exact symptom against the SIXTH excluded window, and a failure there costs the indicator its capture exclusion and the feature with it. Row 49 is expected BLOCKED on the single-monitor verification machine, like row 13. **Rows 41–43 were added BY that pass**, each for something it found: GAP-164 (fixed), GAP-165 (an approved design never implemented) and GAP-166 (Vault Buddy breaking File Explorer's toolbar, unlocalised). Row 13 is BLOCKED — the verification machine has one monitor, so the mixed-DPI case its own module doc calls most likely to fail cannot be reached at all. **Rows 53–55** were added by the gap close-out: 53 records a window titled `CON` (the only thing that can test GAP-108's close-out against the Win32 name resolver rather than against reasoning), and 54–55 collect the evidence GAP-122's first-frame rework needs before anyone attempts it — the declared-vs-delivered sizes across window styles, and a window resized mid-capture, which is the one case where the prediction is known to go stale. **Task 59 superseded 15 rows** (19, 20, 21, 27, 27a, 27b, 28, 29, 30, 31, 32, 33, 36, 37, 38 — plus row 34's editor half) when it retired the phase-4 editor and the phase-5 export they tested: each now opens with **SUPERSEDED** and names the tutorial-editor row that replaces it; none was deleted, and 12 of the 34 unrun rows are among them, so 22 unrun rows still test something that exists (the file's header carries the one-liner) |
+| [docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md](docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md) | The tutorial-editor increment's manual Windows checklist — created by Task 15, a RUNNING document across that increment's own tasks (the screen-capture checklist's own precedent). Carries **68 rows** today (T1–T68), **0** with a result (T7 is obsolete since Task 59 retired the legacy strip it guarded): T1–T3 verify Task 15's own `editor_open_staged` open paths (from the capture bar, from the staged list, and that a second open of the same capture reuses the session); T4–T5 close GAP-170 (the app-wide IPC ACL exhaustiveness gap Task 11 opened); T6–T7 are Task 21's timeline interactions in real WebView2 (pointer-captured drag/trim/Escape, and the shell's shortcut dispatcher not double-handling the legacy strip's Ctrl+Z); T8–T10 are Task 22's preview (audible playback through `editor_media_url` and Web Audio, local monitor mute/rate, and the widened asset scope still refusing `project.json`, `jobs` and vault paths); T11 is Task 25's media import (a mixed batch with one corrupt file, through the native dialog and a real ffprobe); T12–T13 are Task 27's detached audio and mixer (a detached clip audible once and in sync, a silent video refused, solo, the monitoring-only mute and the preview peak); T14 is Task 28's waveforms and thumbnails (a real long recording's waveform off the UI thread, a poster frame through the asset protocol from `cache\`, the cache surviving a reopen, and the no-ffmpeg hint); T15 is Task 31's picture-in-picture handles, transforms and speed (a real mouse dragging the handles over a playing picture, a circular/rotated/mirrored/cropped frame in WebView2, and `preservesPitch` at 2×); T16 is Task 32's canvas ratio and colour presets (letterboxing at each ratio, the one-time Checks toast, CSS colour filters on a playing picture); T17 is Task 35's teaching cues (the SVG overlay pinned over the playing picture, an arrow endpoint dragged as one Undo step, a zoom that never shows the letterbox, the privacy cover's permanent notice, and a cue reachable through a full-frame layout box); T18 is Task 36's captions and chapters (the native subtitle dialog with a real CRLF/WebVTT file, the skipped-cue report, the preview caption layer's position/size/off, captions re-timed by a 2× speed, and a chapter following a trim); T19–T20 are Task 37's recovery and close guard (a process killed mid-edit resuming its last acknowledged edit, Discard leaving `project.json` byte-identical, and Keep for later surviving a reopen with no recovery prompt); T21–T22 are Task 39's project files and Task 40's reconnect; T23–T26 are Task 45's real-ffmpeg renders (a real staged capture with cues, libass's fonts, a non-libx264 build, the untouched-capture remux); T27 is Task 46's render job under a quit, Alt+F4, the updater and a discard; T28 is Task 47's Render dialog, product library (Watch, Restore, a missing file) and Review played back in WebView2; T29–T31 are Task 48's publish into a vault (a same-name collision and the subtitle export, a full disk, and a quit/updater/crash mid-copy); T32–T36 are Task 50's webcam takes on a real camera (no prompt before Enable camera, a blocked or busy camera and a missing ffmpeg leaving the project alone, a real take reviewed and retaken, Add to timeline's presenter placement rendered as a circle, and the camera's light going off on every way out); T37–T41 are Task 52's synchronized webcam beside a screen capture (ten-minute A/V drift across claps, an unplugged webcam finalizing early while the screen continues, a webcam another app holds refusing the start, pause/resume keeping both aligned, and no webcam = the unchanged capture); T42–T44 are Task 53's per-input audio stems (two inputs as two stems that match the mix at both ends, pause and a stem that cannot be written, and stems off = the unchanged capture); T45–T47 are Task 54's before-you-share checks (every finding's button revealing its object in real WebView2 — selection, output-time seek, scroll, the mixer/Webcam/Layout surfaces and focus on the ratio control; a real missing file blocking Render while warnings do not; and the canvas toast's Open Checks, the destination picker and the dialog read by Narrator); T48–T50 are Task 55's guide progress and targets (the progress file landing in the app-wide `editor-prefs` folder and in no project, a malformed file read as fresh while an unreadable one shows "Session only", and the new timeline **Edit actions** menu opening at its button); T51–T55 are Task 56's guided walkthrough (every lesson's control found and never covered in a real window at both sizes, resume after a hide, a reopen and a quit, F6/Escape/F1/? with Narrator, a modal dialog suspending the coach with no camera prompt, and no guide pixel in a rendered file plus a contrast theme and animations off); T56–T57 are Task 57's progress file through Windows' own dialogs (Save progress file writes lesson progress only and never replaces a file that is not guide progress; Restore installs it paused, with no coach, no camera prompt and no project change, and refuses a foreign file); T58–T61 are Task 58's (the keyboard journey with Narrator and then NVDA, a Windows contrast theme at 150 % and at 200 % with the light editor theme's contrast, and Export diagnostics through Windows' own dialog holding only counts and codes, plus redacted log lines); T62–T63 are Task 59's (an untouched capture rendered and published end to end, lossless by md5, the successor of the retired phase-5 Save; and Discard project unpinning a capture the Record Screen list can then discard, with a refused discard's message free of any redaction handle); T64–T66 are Task 60's (the concept bundle's final representative journey, walked by a person — never claimed by an agent; disk full during Save project and during a render, R-H5's other two halves; and R-M1's memory measurement on a named machine); T67–T68 are the final whole-branch review's (Discard project refused while a real webcam take or import is still writing, then succeeding; and a project too damaged to open re-migrated from its capture's Edit and discarded from the editor's "could not be opened" line through the live ACL); and the file carries Task 60's map of every residual gate (R-H1–R-H5, R-A1, R-A2, R-M1 and the two product decisions R-P1/R-P2) to its rows — all OPEN — re-measure with the file's own one-liner, never increment |
+| [docs/superpowers/specs/2026-09-21-tutorial-editor-acceptance-evidence.md](docs/superpowers/specs/2026-09-21-tutorial-editor-acceptance-evidence.md) | The tutorial editor's release evidence (Task 60): one row per concept-bundle F-ID (all 50) naming the tests that prove it as `path#test name` and the checklist rows that still have to, the ADR's GAP-N1..N5 placeholders mapped to real Gaps entries, the residual gates (all open) and the branch-completeness and baseline checks. **`tests/editorEvidence.test.ts` checks it**: a row naming a test file or test that no longer exists turns CI red |
 | [docs/Gaps.md](docs/Gaps.md) | The audited backlog of known issues, weaknesses, tech debt, and untested paths — check it before "discovering" a known problem, extend it when you find a new one |
 
 ## Repository map
@@ -86,39 +116,216 @@ here is deliberately only the shipped increments.
 ```
 vault-buddy/
 ├── AGENTS.md / CLAUDE.md / CONTEXT.md / README.md
-├── index.html                  # single HTML entry — all three windows load it
+├── index.html                  # single HTML entry — all six windows load it
 ├── package.json / vite.config.ts / tsconfig.json
 ├── .github/workflows/          # ci.yml, release.yml, bump-version.yml
 ├── .claude/                    # vendored superpowers skills + SessionStart hook
 ├── docs/                       # see the documentation map above
 ├── scripts/                    # bump-version.mjs, setup-linux-deps.sh, make-icon.mjs
-├── src/                        # Vue 3 frontend — ONE bundle, three window roots
+├── src/                        # Vue 3 frontend — ONE bundle, six window roots
 │   ├── main.ts                 # mounts rootFor(window label)
-│   ├── roots/                  # BuddyRoot / PanelRoot / BubbleRoot + rootFor() map
+│   ├── roots/                  # BuddyRoot / PanelRoot / BubbleRoot / RegionRoot / EditorRoot /
+│   │                           #   RegionIndicatorRoot + rootFor() map
 │   ├── components/             # panel views + buddy character (ActionPanel is the shell)
-│   ├── stores/                 # Pinia: vaults, capture, updates, settings, notifications
-│   ├── composables/            # settings sync, startup update check, bubble, announcements
-│   └── utils/                  # highlight, recentSearches, formatDuration
-├── src-tauri/                  # Rust workspace: root shell crate + 3 member crates
-│   ├── tauri.conf.json         # the 3 windows, updater endpoint, version
-│   ├── capabilities/           # single default capability (all 3 windows)
+│   │   └── editor/             # the tutorial editor's components (the phase-4
+│   │                           #   capture editor surface was retired by Task 59)
+│   │       └── shell/          # EditorShell + EditorHeader — the tutorial editor's own
+│   │                           #   responsive grid/header (Task 16), mounted by EditorRoot
+│   │       └── preview/        # PreviewSurface + TransportBar — the layered preview stage
+│   │                           #   (Task 22); its non-reactive PreviewController +
+│   │                           #   pure layer/geometry math live in src/editor/preview*.ts
+│   │       └── library/        # MediaLibrary — asset cards, Import (Rust's own dialog),
+│   │                           #   per-file results, "+" at the playhead (Task 25)
+│   │       └── guide/          # GuideInvitation + GuideCoach (+ GuideCoachCard,
+│   │                           #   GuideStartOver) — the guided walkthrough (Task 56),
+│   │                           #   mounted by EditorShell OUTSIDE the preview section;
+│   │                           #   its pure placement/preparation live in
+│   │                           #   src/editor/guide/{position,prepare}.ts; LearningCenter
+│   │                           #   (+ LearningWalkthrough/Answers/Shortcuts/Preferences) —
+│   │                           #   the learning center behind Help (Task 57), its quick
+│   │                           #   answers + shortcut table in src/editor/guide/answers.ts
+│   ├── stores/                 # Pinia: vaults, capture, screenCapture, documentImports,
+│   │                           #   pandoc, ffmpeg, updates, settings, settingsStatus, notifications,
+│   │                           #   editorProject, editorWorkspace, editorJobs (the job channel),
+│   │                           #   editorProducts (the render product ledger, Task 47),
+│   │                           #   editorChecks (the before-you-share findings, Task 54),
+│   │                           #   editorOnboarding (the guide's app-wide progress, Task 55)
+│   ├── composables/            # settings sync, startup update check, bubble, announcements,
+│   │                           #   tasks helpers, useTaskDetailSubtasks,
+│   │                           #   useTimelineDrag (the tutorial timeline's drag/trim/
+│   │                           #   nudge math), useInspectorDraft (inspector field drafts),
+│   │                           #   useGuideTarget (binds a guide target from the component
+│   │                           #   that owns the control, Task 55), useCoachTarget (tracks
+│   │                           #   the current lesson's control on screen, Task 56)
+│   ├── types.ts                # the wire types; re-exports screenTypes.ts, which holds
+│   │                           #   the screen-capture domain's (split at the 500 cap)
+│   └── utils/                  # highlight, recentSearches, formatDuration,
+│                               #   searchResults (Search.vue's pure grouping/summary)
+├── src-tauri/                  # Rust workspace: root shell crate + 5 member crates
+│   ├── tauri.conf.json         # the 6 windows, updater endpoint, version,
+│   │                           #   assetProtocol scope (staging + four editor-project media
+│   │                           #   dirs, ADR R7 — an enumerated security boundary)
+│   ├── capabilities/           # default.json (all 6 windows, every command but the
+│   │                           #   35 editor_* ones) + editor.json (those 35, the
+│   │                           #   editor window alone — Task 11, R8's app-manifest half)
 │   ├── src/                    # SHELL: lib.rs (builder/setup/metronome), commands.rs,
 │   │                           #   capture_commands.rs, capture_config_commands.rs,
 │   │                           #   transcription.rs, task_commands.rs, task_config_commands.rs,
 │   │                           #   search_commands.rs, mcp_commands.rs, document_commands.rs,
+│   │                           #   screen_commands.rs (the capture LIFECYCLE) +
+│   │                           #     screen_dto.rs (its WIRE types — the
+│   │                           #     screenTypes.ts split, same cause),
+│   │                           #   screen_capture_worker.rs,
+│   │                           #   region_commands.rs (the overlay's selection lifecycle),
+│   │                           #   region_indicator.rs (the region BORDER's window
+│   │                             #     lifecycle -- a window concern like region_commands,
+│   │                             #     not a capture one; one show site, one hide site),
+│   │                           #   screen_config_commands.rs (the per-vault Screen
+│   │                           #     Capture SETTINGS surface — config, not lifecycle),
+│   │                           #   screen_webcam_commands.rs (the synchronized webcam:
+│   │                           #     list_capture_webcams + the webcamId/sidecar helpers),
+│   │                           #   window_upkeep.rs (the 1 s metronome's tick + the
+│   │                           #     main-thread window upkeep it posts, split from lib.rs) +
+│   │                           #     cfg_windows_guard.rs (test-only: the scan standing in
+│   │                           #     for the cfg(windows) bodies Linux never compiles),
+│   │                           #   structural_scan.rs (test-only: the source-scan helpers
+│   │                           #     the structural tests share),
+│   │                           #   editor_commands.rs (the panel-callable doors into the
+│   │                           #     editor: open_capture_editor/open_project_editor,
+│   │                           #     take_editor_request, list_tutorial_projects),
+│   │                           #   editor/ (the tutorial editor: project store, pin, the
+│   │                           #     editor_* session commands, the durable save/list/reopen
+│   │                           #     commands (save_commands.rs) + the workspace view-preference
+│   │                           #     commands (prefs_commands.rs, Task 18 — never touches the
+│   │                           #     revision or history) + guide_commands.rs (the app-wide
+│   │                           #     editor-prefs\guide-progress.json read/write, Task 55, and
+│   │                           #     the portable progress file's native save/open, Task 57)
+│   │                           #     + the media surface
+│   │                           #     (media_commands.rs: media URL + the import/cancel/jobs
+│   │                           #     commands; media_jobs.rs: the job DTOs, JobRegistry and
+│   │                           #     the one JobReporter; media_import.rs: the import
+│   │                           #     pipeline behind an ImportIo seam; media_probe.rs: the
+│   │                           #     import's own ffprobe rule; media_derive.rs: waveform
+│   │                           #     peaks + thumbnails via ffmpeg into cache\, Task 28)
+│   │                           #     + caption_commands.rs (subtitle import onto a clip,
+│   │                           #     its own native dialog, Task 36) + recovery.rs (the
+│   │                           #     recovery.json journal + the startup re-pin sweep,
+│   │                           #     Task 37) + package_commands.rs/package_import.rs
+│   │                           #     (portable/lightweight project files, Task 39)
+│   │                           #     + render_commands.rs/render_jobs.rs (render jobs on
+│   │                           #     the editor-render thread, the products.json ledger
+│   │                           #     and the shutdown gate's render term, Task 46)
+│   │                           #     + render_review.rs (disposable Review renders kept
+│   │                           #     in the project cache, never products, Task 47)
+│   │                           #     + publish.rs (the TENTH vault write: a product
+│   │                           #     copied into a vault + its companion note, Task 48)
+│   │                           #     + subtitle_commands.rs (SRT/WebVTT export, Task 48)
+│   │                           #     + webcam_commands.rs (webcam takes streamed as raw
+│   │                           #     chunks into takes\, Task 49; its TakeRegistry lives in
+│   │                           #     webcam_registry.rs since the final review)
+│   │                           #     + discard.rs (a discardProject's closing mark and
+│   │                           #     quiesce, final review I1) + project_discard.rs
+│   │                           #     (editor_discard_project: a project with no session,
+│   │                           #     final review I3)
+│   │                           #     + checks_commands.rs (editor_get_checks: the
+│   │                           #     before-you-share findings, Task 54)
+│   │                           #     + diagnostics.rs (editor_export_diagnostics: counts,
+│   │                           #     capabilities and error codes to a new file, Task 58)
+│   │                           #     + redact.rs (redact_path/redact_name: how an editor
+│   │                           #     log line or error message carries a path or a name;
+│   │                           #     its test-only redact_guard.rs scans the log calls and
+│   │                           #     message constructions — limits in GAP-210)
+│   │                           #     + vault_dir.rs (the publication's vault folder:
+│   │                           #     create contained / roll back, Task 59 moved it here
+│   │                           #     from the retired export_worker/)
+│   │                           #     + their caller-window scan),
+│   │                           #   shutdown_gate.rs (the ONE composition of all four
+│   │                           #     shutdown predicates + the bounded wait the quit
+│   │                           #     workers' cancels share, read by quit, Alt+F4 and
+│   │                           #     the updater) +
+│   │                           #     staging_commands.rs (staging as a WHOLE: its
+│   │                           #     size, and the bulk clear) +
+│   │                           #     staged_commands.rs (a staged capture as an OBJECT:
+│   │                           #     list / discard / open, and screen:discarded's one
+│   │                           #     emitter) + screen_recovery/ (the
+│   │                           #     staging sweep, wired after run_import_recovery),
+│   │                           #   external_tool.rs (the tool-agnostic half of the Pandoc
+│   │                           #     integration, shared) + external_stream.rs (its
+│   │                           #     streaming, cancelable runner — Task 28's peaks decode)
+│   │                           #     + ffmpeg.rs (resolve/probe/commands),
+│   │                           #   window_close.rs (CloseRequested routing) +
+│   │                           #     window_close_guard.rs (its structural test),
+│   │                           #   capture_exclusion.rs (WDA_EXCLUDEFROMCAPTURE apply/clear),
+│   │                           #   capture_guard.rs (cross-domain capture exclusion),
 │   │                           #   tray.rs, diagnostics.rs, config_lock_guard.rs, main.rs
-│   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, search_cache, tasks, services,
-│   │                           #   transcript, recordings, capture_{config,note,paths}, vault_config,
+│   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search (+ search/text: pure name/snippet helpers), search_cache, tasks, services,
+│   │                           #   transcript, recordings, capture_{config,note,paths}, vault_config
+│   │                           #   (+ vault_config_screen: the screen fields' parse/serialize),
 │   │                           #   mcp_config + document_import_config + transcription_config (split-out config sections),
 │   │                           #   document_import, companion_placement, checkpoint,
-│   │                           #   app_diagnostics, vault_walk, crash, throttle, sync_util
+│   │                           #   template, config_merge, timeline, screen_geometry,
+│   │                           #   screen_note (the video embed), screen_capture_config,
+│   │                           #   screen_capture_paths (the vault write's pairwise naming —
+│   │                           #     in core because the one collision-suffix minter,
+│   │                           #     capture_paths::candidate, is pub(crate) to this crate),
+│   │                           #   app_diagnostics, vault_walk, crash, throttle, sync_util,
+│   │                           #   device_names (Windows CON/NUL/COM1... component check),
+│   │                           #   editor/ (the tutorial editor's pure model, commands,
+│   │                           #     validation; package.rs = the portable-package
+│   │                           #     validator/writer, the crate's ONE `zip` use (major 4,
+│   │                           #     the same 4.6.1 tauri-plugin-updater locks), ADR R9;
+│   │                           #     package_archive.rs = its raw end-record/directory walk;
+│   │                           #     checks.rs + checks_layout.rs = the before-you-share
+│   │                           #     findings, Task 54; guide.rs = the guide-progress
+│   │                           #     document's strict save / lenient read, its lessons
+│   │                           #     include_str!'d from src/editor/guide/steps.json, Task 55)
 │   ├── capture/src/            # AUDIO engine: devices, mixer, encoder, session,
 │   │                           #   recovery, rename
 │   ├── mcp/src/                # MCP server: service (7 tools), http (guards+runner),
 │   │                           #   token; real-socket integration tests in mcp/tests/
+│   ├── screen/src/             # SCREEN CAPTURE: clock (pause-aware time base),
+│   │                           #   convert (BGRA→NV12
+│   │                           #   + the offset crop), staging (out-of-vault paths
+│   │                           #   and the names a capture owns), staging_title
+│   │                           #   (a window title → a file-name FRAGMENT; never a
+│   │                           #   whole name — see GAP-108), staging_stems (a
+│   │                           #   stem's names + the sidecar's `stems` block, Task 53),
+│   │                           #   sink (fMP4 via Media Foundation) + sink_format (its PURE
+│   │                           #   format/bitrate/timestamp arithmetic), source
+│   │                           #   (monitors/windows/regions) + source_derive (its PURE
+│   │                           #   size/crop/label derivations), region (the region
+│   │                           #   source id), exclusion (SetWindowDisplayAffinity),
+│   │                           #   frames (WGC callback), session/ (3 threads, one clock;
+│   │                           #     + an optional webcam producer, webcam.rs pure +
+│   │                           #     webcam_windows.rs; + optional per-input audio
+│   │                           #     stems, stems.rs pure + stems_windows.rs),
+│   │                           #   source_webcam (webcam enumeration),
+│   │                           #   ffmpeg_args (PURE: the identity remux, the encode
+│   │                           #     tails and -progress parsing),
+│   │                           #     staging_files (PURE-ish: which files one staged
+│   │                           #       capture owns and what they weigh, no-follow;
+│   │                           #       split from staging.rs at 790/800), ffmpeg_run
+│   │                           #     (the ONE ffmpeg runner: spawn/-progress/stderr
+│   │                           #     drain/cancel; the phase-5 export that shared it
+│   │                           #     was retired by Task 59), render/ (PURE: the
+│   │                           #     tutorial editor's RenderPlan -> filter_complex
+│   │                           #     argv, video AND audio (Task 44 folded the mixed,
+│   │                           #     delayed, limited audio part into the SAME
+│   │                           #     filter_complex the video graph builds);
+│   │                           #     tests/render_graph_roundtrip.rs reads pixels back
+│   │                           #     and probes audio timing with silencedetect;
+│   │                           #     render/run.rs (Task 45) is its one NON-pure
+│   │                           #     module: refuse by probed FfmpegCapabilities,
+│   │                           #     write both ASS docs to the job dir, run, verify
+│   │                           #     with ffprobe -- tests/render_roundtrip.rs renders
+│   │                           #     real Projects end to end and decodes them), disk
+│   │                           #     (free space,
+│   │                           #     Option not Result), mp4_boxes (the .part footage sniff)
 │   └── transcribe/src/         # STT: decode (Symphonia), model (download+verify),
 │                               #   engine (whisper-rs FFI), lib (orchestration)
 └── tests/                      # Vitest suite (happy-dom + mockIPC, no Tauri runtime)
+    └── e2e/                    # Playwright: the built dist/ in real Chromium —
+                                #   the only place any layout is MEASURED
 ```
 
 Rule of thumb for where logic goes: **anything that doesn't need Tauri
@@ -136,6 +343,7 @@ The Rust code is deliberately split so agents can work outside Windows:
 | `src-tauri/transcribe/` | Pure-ish crate: MP3→PCM decode (Symphonia), model registry/download, and whisper.cpp via `whisper-rs` behind the `whisper` feature. GPU inference via `whisper-vulkan` (Vulkan SDK required; Windows CI builds only). | Anywhere — CI builds *and tests* the `whisper` feature on Linux (the only place the whisper FFI regression tests run); the shipped engine builds on Windows; `whisper-vulkan` compiles only where the Vulkan SDK exists (Windows CI/release jobs enable it through the shell's `gpu` feature; local builds stay CPU-only) |
 | `src-tauri/capture/` | Audio engine (cpal, LAME). | Anywhere (Linux needs `libasound2-dev`); the WASAPI loopback block is Windows-only, compile-gated |
 | `src-tauri/mcp/` | Tauri-free crate: the embedded MCP server — rmcp service (seven tools over `core::services`), HTTP guards, streamable-HTTP runner. | Anywhere — unit + real-socket integration tests run on Linux; CI gates it explicitly (`-p vault_buddy_mcp`) because `tauri build` alone wouldn't run its tests. |
+| `src-tauri/screen/` | Screen capture engine: source enumeration, frame acquisition, BGRA→NV12 conversion, the fragmented-MP4 Media Foundation sink, the capture session, and out-of-vault staging. The Phase-1 `engine.rs` stub is **gone** — Phase 2 replaced it with a real `cfg(windows)` split. The PURE submodules (`clock`, `convert`, `staging`, `staging_title`, `mp4_boxes`, `region`, `session::pacing`, `ffmpeg_args`, `render` (the tutorial editor's `RenderPlan` -> one `filter_complex` argv, Task 42; `screen/tests/render_graph_roundtrip.rs` runs it through a real ffmpeg and samples pixels -- except `render::run` (Task 45), which spawns ffmpeg and ffprobe and is proven end to end by `screen/tests/render_roundtrip.rs`; its capability refusal enforces the render's ffmpeg floor, 4.3, by filter presence (GAP-173)), `sink_format` (the sink's format/bitrate/timestamp arithmetic), `source_derive` (the size/crop/label derivations, including `region_dims`), and `source`'s id encoding/parsing) compile and test anywhere and deliberately carry this feature's correctness, because no CI runner can record a screen. **Phase 5 moved the export's correctness INTO that list rather than adding to the Windows one**, which is the whole reason the route changed from Media Foundation to a user-installed ffmpeg (commit `1b458dd`): the argv is a plain pure function, and the runner (`ffmpeg_run`) — which spawns ffmpeg, streams its `-progress` and cancels by killing the child — is portable too. Tutorial-editor Task 59 retired the phase-5 export (`screen::export`, `select`, the edited-export graph and `tests/export_roundtrip.rs`); the editor's render inherited the route, and `screen/tests/render_roundtrip.rs` is now the real CI round trip — including `identity_render_of_an_untouched_capture_is_lossless`, the successor of the export's fast-path proof. `disk` is the one genuinely split addition: `free_bytes` is `GetDiskFreeSpaceExW` under `cfg(windows)` and a `None` ("unknown") stub everywhere else — `Option`, never `Result`, so an unmeasurable volume lets a save PROCEED instead of reading as a full disk. `ffmpeg_run` (moved out of the export in Task 42) carries one three-line `cfg(windows)` arm for `CREATE_NO_WINDOW`, bound on both platforms so its constant stays compiled where the suite runs. `sink`, `frames`, `session::{audio,mux,windows_session}` and `source`'s enumeration/resolution are `cfg(windows)`, with `Unsupported` arms off Windows. `fmp4_spike` is Windows-only behind the non-default `fmp4-spike` feature (spec §6.4's answered spike, kept re-runnable). `exclusion` is the odd one out: its `set_display_affinity` is `cfg(windows)` but it lives HERE, not in the shell, because `cargo clippy -p vault-buddy --target x86_64-pc-windows-msvc` cannot run on Linux at any scope (`ring` fails in cc-rs for want of `lib.exe`) while this crate cross-checks cleanly — and it takes the `HWND` as an `isize` because Tauri 2.11.5 pulls `windows` 0.61.3 while this crate uses 0.62.2. Both are in `Cargo.lock`; `HWND` has an identical layout in each but is a DISTINCT Rust type, so the integer hop is what bridges them. A direct-`HWND` signature does not compile, and "fixing" that by adding a second `windows` version to this crate is the trap. | Anywhere — `rust-core` gates the crate on Linux (clippy, tests, and the `llvm-cov` floor), and `windows-app` now runs its tests on Windows too (GAP-102). Note those Windows tests are still the PURE modules' — the `cfg(windows)` bodies execute in no automated test anywhere — the Windows-target clippy runs prove only that they TYPE-CHECK — which is why the manual checklist (`docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md`, a running document across phases) is this feature's real gate (GAP-117). |
 | `src-tauri/` (root crate) | Tauri shell: windows, tray, IPC commands, plugins. | **Windows** (release + behavior gate) — **also compiles on Linux** as a compile gate once GUI deps are installed (`npm run setup:linux`, then `npx tauri build --no-bundle`); CI runs both |
 | `src/` + `tests/` | Vue frontend + Vitest suite (happy-dom, no Tauri runtime needed) | Anywhere |
 
@@ -144,11 +352,29 @@ Linux container as a compile gate: run `npm run setup:linux` once (it
 installs the WebView/GTK/tray system libs — the single source of truth is
 `scripts/setup-linux-deps.sh`), then `npx tauri build --no-bundle`. This
 catches type errors, IPC signature drift, and missing `cfg` gates locally
-instead of push-and-wait. It is a **compile gate only** — the Windows job
+instead of push-and-wait — **for everything it COMPILES, which excludes every
+`cfg(windows)` body**. That is not a quibble: extracting `window_upkeep.rs`
+out of `lib.rs` carried `commands::primary_button_down()` into a sibling
+module where the path does not resolve, and fmt, workspace clippy, the shell's
+own tests and the whole `--no-bundle` build all stayed green while the Windows
+job failed with E0433. The Windows-target clippy cannot cover the shell either
+(`ring` needs MSVC's `lib.exe`), so `cfg_windows_guard.rs` is a source scan
+standing in that hole: it requires every sibling-module path inside a
+`cfg(windows)` region to be crate-qualified or imported. Weaker than compiling
+the arm, and the strongest thing available on Linux. It is a **compile gate only** — the Windows job
 remains the release + desktop-behavior gate (transparency, tray, drag, the
 Obsidian round-trip). Mirror existing `cfg`-gate patterns for any
 platform-specific code, run `cargo fmt --check`, and let CI's `windows-app`
 and `linux-app` jobs verify the build.
+
+**On a Windows host the picture inverts** (docs/Gaps.md GAP-168): the shell
+crate and every `cfg(windows)` body compile natively, so run
+`cargo clippy -p vault-buddy --all-targets -- -D warnings` and
+`cargo test -p vault-buddy --lib` there — CI's `windows-app` runs neither,
+and the first Windows-host run found three red results no gate had seen.
+What a Windows host cannot do is clippy the screen crate for Linux
+(`alsa-sys` will not cross-build), so its Linux-only `dead_code` is still
+CI's `rust-core` job's to catch.
 
 ## Commands
 
@@ -157,6 +383,8 @@ npm ci                              # install (Node 22)
 npm test                            # full Vitest suite
 npx vitest run tests/<file>.test.ts # single test file
 npm run build                       # vue-tsc typecheck + production build
+npm run test:e2e                    # Playwright layout check — needs `npm run build`
+                                    #   first (it serves dist/, not the dev server)
 npm run dev                         # Vite dev server only
 npm run test-build                  # `tauri dev` — full app, Windows only
 npx tauri build                     # real installer build (Windows only)
@@ -170,15 +398,18 @@ npm run lint && npm run check:loc && npm run check:quality && npm run test:cover
 cd src-tauri && cargo fmt --check   # rustfmt gate (whole workspace)
 cd src-tauri/core && cargo clippy --all-targets -- -D warnings
 cd src-tauri/core && cargo test
-# capture, transcribe, and mcp test the same way (capture needs
+# capture, transcribe, mcp and screen test the same way (capture needs
 # libasound2-dev on Linux; mcp's roundtrip tests bind real localhost
-# sockets); transcribe's whisper tests: cargo test --features whisper
+# sockets; screen's export round-trip tests need ffmpeg on PATH and SKIP
+# VISIBLY without it — check the skip lines, a green run proves nothing
+# about the export if ffmpeg was missing);
+# transcribe's whisper tests: cargo test --features whisper
 
 # Rust quality gates (CI: machete/coverage/deny in rust-core; workspace
 # clippy + shell tests in linux-app — the shell needs `npm run setup:linux`
 # and a built ../dist first; see docs/DEVELOPMENT.md § Rust quality gates)
 cd src-tauri && cargo machete .
-cd src-tauri && cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe --fail-under-lines 94
+cd src-tauri && cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_screen --fail-under-lines 94
 cd src-tauri && cargo deny check
 cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings
 cd src-tauri && cargo test -p vault-buddy --lib
@@ -200,28 +431,38 @@ launched the app on the CI runner and never exited.
 
 ## Architecture overview
 
-Three OS windows, one frontend bundle, one Rust process:
+Six OS windows, one frontend bundle, one Rust process:
 
 ```
    ┌───────────────────────────── Rust shell (src-tauri/src) ─────────────────────────────┐
    │  lib.rs: builder, plugins (single-instance FIRST), window events, 1 s metronome,     │
-   │          setup (crash handler → marker → restore → tray → recovery → transcriber →   │
-   │          MCP start_if_enabled)                                                       │
+   │          setup (crash handler → marker → restore → tray → capture recovery →        │
+   │          import recovery → SCREEN-STAGING recovery → EDITOR RE-PIN → transcriber →   │
+   │          MCP start_if_enabled → search prewarm)                                      │
    │  commands.rs ── window placement/toggle, drag, vault open, updater prep, autostart   │
    │  capture_commands.rs ── recording lifecycle + device/monitor/janitor threads         │
    │  transcription.rs ── single-worker transcription queue + model download              │
    │  task_commands.rs / search_commands.rs ── thin gates over core::tasks / core::search │
    │  mcp_commands.rs ── embedded MCP server lifecycle + settings (vault_buddy_mcp crate) │
    │  document_commands.rs ── pandoc detect/convert, import recovery, doc settings        │
+   │  region_commands.rs ── overlay show / answer / cleanup for region selection          │
+   │  editor_commands.rs ── editor show + stash (staged base / project id)                │
+   │  editor/ ── the tutorial editor: sessions, render, publish (TENTH vault write)       │
+   │  shutdown_gate.rs ── the ONE composition of all four shutdown predicates,           │
+   │                    read by quit, Alt+F4 and the updater's refusing prepare step    │
+   │  staged_commands.rs ── a staged capture as an object: list / discard / open          │
+   │  screen_recovery/ ── staging sweep (mod + pure decide);  ffmpeg.rs / external_tool.rs ── the tool      │
+   │  window_close.rs ── CloseRequested routing (buddy quit path; editor X → ask editor)  │
    │  tray.rs ── tray icon/menu + hide_buddy chokepoint;  diagnostics.rs ── crash/marker  │
-   └──────┬───────────────────────────┬───────────────────────────┬───────────────────────┘
-          │ IPC commands + events     │                           │
-   ┌──────┴──────┐             ┌──────┴──────┐             ┌──────┴──────┐
-   │ main (88²)  │             │ panel       │             │ bubble      │
-   │ BuddyRoot   │             │ PanelRoot   │             │ BubbleRoot  │
-   │ character,  │             │ ActionPanel │             │ greeting /  │
-   │ drag, dots  │             │ all views   │             │ announce    │
-   └─────────────┘             └─────────────┘             └─────────────┘
+   └─────┬────────────┬────────────┬────────────┬──────────────┬────────────┬─────────────┘
+         │            │            │            │              │            │  IPC + events
+   ┌─────┴────┐ ┌─────┴────┐ ┌─────┴────┐ ┌─────┴────┐ ┌───────┴───────┐┌───┴──────────┐
+   │main (88²)│ │panel     │ │bubble    │ │overlay   │ │editor 1280×820││region-       │
+   │BuddyRoot │ │PanelRoot │ │BubbleRoot│ │RegionRoot│ │EditorRoot     ││indicator     │
+   │character,│ │ActionPnl │ │greeting /│ │rubber    │ │preview +      ││RegionIndic.  │
+   │drag, dots│ │all views │ │announce  │ │band (1×) │ │strip          ││border, click-│
+   │          │ │          │ │          │ │          │ │               ││through       │
+   └──────────┘ └──────────┘ └──────────┘ └──────────┘ └───────────────┘└──────────────┘
       each webview = own Pinia; cross-window sync = Tauri events + localStorage `storage`
 
    pure logic lives below the shell:
@@ -248,8 +489,57 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 73 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
-Keep this table in sync when adding/removing commands.
+All 131 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+Keep this table in sync when adding/removing commands — and COUNT the
+`generate_handler![…]` list rather than adding to the previous number: this
+sentence has been wrong four times (73 when it was 79, 79 when it was 81,
+81 when it was 85, then 85 when it was 92), and the count above was measured,
+not incremented (112 after Task 28's `editor_media_peaks`/
+`editor_media_thumbnail`; 113 after Task 36's `editor_import_captions`; 115
+after Task 37 Part B's `list_tutorial_projects`/`open_project_editor` —
+Part A added no new command; 117 after Task 39's `editor_export_package`/
+`editor_import_package`; 118 after Task 40's `editor_relink_media`; 121 after
+Task 46's `editor_start_render`/`editor_get_products`/`editor_restore_product`;
+123 after Task 48's `editor_publish_product`/`editor_export_subtitles`; 127
+after Task 49's `editor_webcam_begin`/`_append`/`_finish`/`_discard`; 128
+after Task 52's `list_capture_webcams`; 129 after Task 54's `editor_get_checks`;
+131 after Task 55's `editor_get_guide_progress`/`editor_save_guide_progress`;
+133 after Task 57's `editor_export_guide_progress`/`editor_import_guide_progress`;
+134 after Task 58's `editor_export_diagnostics`; 130 after Task 59 retired
+`load_staged_capture`/`save_capture_timeline`/`export_and_save_capture`/
+`cancel_export`; re-measured unchanged at 130 by Task 60; 131 after the final
+review's `editor_discard_project`):
+
+```bash
+awk '/generate_handler!\[/,/\]\)/' src-tauri/src/lib.rs | grep -cE '^\s+[a-z_]+::[a-z_]+,$'
+```
+
+**Adding a command takes THREE steps, not one, since Task 11's exhaustive
+app manifest (R8's app-manifest half) — skip either of the last two and the
+command compiles, `npx tauri build --no-bundle` succeeds, and it is still
+refused at runtime from every window, including the ones it is supposed to
+work in.** `generate_handler!` alone used to be enough, because Tauri does
+not capability-gate a custom command by default; this app no longer relies
+on that default for ANY command, because `build.rs`'s
+`AppManifest::commands(ALL_COMMANDS)` being non-empty at all switches
+Tauri's own IPC dispatch into requiring an explicit capability grant for
+every command it names — which is why `ALL_COMMANDS` has to name all of
+them, not just the ones a given task is scoping. So a new command needs:
+1. The `generate_handler!` entry (as always).
+2. A matching entry in `build.rs`'s `ALL_COMMANDS` — measured the same
+   way as the count above, never incremented.
+3. A grant in EXACTLY ONE capability file's `permissions` array:
+   `capabilities/editor.json` (as `allow-<kebab-case>`) if and only if the
+   command is one of the `editor_*` commands (thirty-six since the final review's `editor_discard_project`, measured in `editor.json`), otherwise
+   `capabilities/default.json`. `src-tauri/src/editor/capability_guard.rs`
+   (test-only) is the enforcing test: it fails naming any command missing
+   step 2 or 3, granted in the wrong file, or granted in both, and a third
+   test replicates Tauri's own resolution over the files `tauri-build`
+   itself generates (`gen/schemas/{capabilities,acl-manifests}.json`) to
+   catch `tauri-build` mishandling a grant that the source files alone
+   would not reveal. See `docs/Gaps.md` GAP-170 for what even that does not
+   prove (a live IPC call refused inside a running app) and why that is
+   currently a High-severity unverified risk, not a defense-in-depth nice-to-have.
 
 | Defined in | Commands |
 | --- | --- |
@@ -263,6 +553,29 @@ Keep this table in sync when adding/removing commands.
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 | `document_commands.rs` | `detect_pandoc` *(async)*, `convert_document` *(async — spawns the pandoc child off the main thread)*, `get_documents_config`, `set_documents_config` *(async — now also carries the `document_date_folders` layout toggle, the `document_extract_images` images/text-only toggle, and the additive `document_extra_frontmatter`/`document_body_template` note-template fields)*, `set_pandoc_path` *(async)*, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `take_add_document_request` (one-shot drain of the buddy-menu "Import document…" flag — armed by the non-command `begin_add_document`, which the lib.rs menu handler calls; routes the panel to the vault-first import picker), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
 | `model_commands.rs` | `list_transcription_models`, `delete_transcription_model` *(async — the delete's bounded retry must not sit on the main thread)* |
+| `screen_commands.rs` | The screen-capture CAPTURE-lifecycle surface (the later-phase commands — the editor and the config setters — are deliberately absent; region select landed in phase 3, in its own `region_commands.rs` below). `list_capture_sources` *(async — WGC/WinRT enumeration takes hundreds of ms, GAP-22's reasoning for `list_audio_devices`; degrades to an empty list rather than an error)*, `start_screen_capture` *(async — source re-resolve, cpal endpoint opening, sink creation and staging-directory I/O all block, and the start waits on a 15 s ready handshake; since Task 52 it takes an OPTIONAL `webcamId` (F-22), additive: absent is today's capture byte for byte, present must be a canonical `webcam:<hash>` or the start is refused with "Unknown webcam." before anything is claimed)*, `stop_screen_capture` *(async — the wait is bounded at 30 s of mux teardown + fMP4 finalize + the publish rename, wider than audio's 15 s; returns typed `stillSaving` on expiry, mirroring `stop_capture`)*, `pause_screen_capture`, `resume_screen_capture`, `screen_capture_status` *(all three sync: each takes the reservation mutex for O(1) work and sends on an unbounded channel, so none can block the main thread — the same posture as the audio siblings)*. Its wire types live beside it in `screen_dto.rs` (the `screenTypes.ts` split, same feature, same 800/500 cause). Mutual exclusion with the audio domain lives in `CaptureGuard` (spec §7.3), claimed before the reservation and freed from exactly one chokepoint, `clear_active_screen` — both facts pinned by structural tests. That chokepoint also clears the buddy's capture exclusion and hides the region border, and since GAP-110 those two live in `clear_capture_window_effects`, which it calls unconditionally: **the reservation tracks what the DEVICES are doing, those track what the USER sees**, and the ready-timeout arm is the one caller that needs the second without the first. **A ready-handshake TIMEOUT does not free** the reservation (GAP-110, closed): the device thread is by definition still alive there, often wedged in `open_selected_sources`, so the release belongs to `spawn_outcome_monitor` — the only thing that learns the thread has ended — which clears it, writes the sidecar for anything published, and stays silent because the user has already been told the start failed. The reservation therefore outlives a failed start, and `capture_blocks_shutdown` is no longer plain `is_capturing`: it excepts a `startup_wedged` reservation with no `.part`, byte-for-byte the audio domain's `bypasses_shutdown_wait`, or a wedged driver would make the app unquittable (GAP-08, already paid for once on the audio side) |
+| `screen_webcam_commands.rs` | The synchronized webcam's shell surface (Task 52, F-22) — its own module (pre-flight F31) because `screen_commands.rs`/`screen_capture_worker.rs` are near the cap and none of it is the capture lifecycle. `list_capture_webcams` *(async — Media Foundation device enumeration (`MFEnumDeviceSources` with `MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID`, `source_webcam.rs` in the screen crate) activates the capture-device category; DEGRADES to `[]`, since "no webcam" is an ordinary picker state; each row is `{id: "webcam:<sha256 of the lower-cased symbolic link>", label}`)* — an ordinary NON-editor command, granted in `capabilities/default.json`. Also the pure helpers the worker calls: `parse_webcam_request` (the strict gate on `start_screen_capture`'s `webcamId`), `webcam_params` (this capture's OWN `.<base>.webcam.mp4.part` / `<base>.webcam.mp4`) and `webcam_block` (the sidecar's `webcam` block, a file NAME plus the MEASURED `offsetMs` and `durationMs`, GAP-199) |
+| `screen_config_commands.rs` | The per-vault SCREEN-CAPTURE SETTINGS surface (spec §12, closing docs/Gaps.md GAP-103 — until it landed all seven `screen_*` fields were read in production and settable nowhere). Its own module for the seam the screen domain draws everywhere else: `screen_commands` is the capture LIFECYCLE, `region_commands` a WINDOW lifecycle, `staged_commands` an OBJECT — and this is CONFIGURATION, which touches none of them; it mirrors `capture_config_commands.rs` sitting beside `capture_commands.rs`. `get_screen_capture_config` *(sync — `load_config` degrades per field, so a malformed entry yields defaults rather than an error the settings screen would have to render instead of fields)*, `set_screen_capture_config` *(async — the fsync'd config write, and `config_write_lock()` can be held across a full task-vault scan; takes ONE `cfg` DTO like `set_capture_config`, not eight positional params — three of the eight fields are `bool` with unrelated fields between them, so a transposed positional call would compile and write each choice into the other's setting; the eighth, `screenAudioStems` (Task 53, `#[serde(default)]`), keeps each audio input as its own stem and applies to NEW recordings only, which the tab's toggle says in its label)*. It VALIDATES where the parse layer NORMALISES: an unknown quality or an fps that is neither 30 nor 60 is refused inline. The parse layer normalises so a hand-edited `config.json` still opens the app; a settings screen is the opposite case — the user is looking right at the control, and a value that quietly became something else is how a setting reads as broken. Containment is asserted on the EFFECTIVE folder (the explicit one or the `Screen Captures` default) BEFORE anything is written, since a blank field means the default and the default is a path into the vault too |
+| `region_commands.rs` | The overlay's selection lifecycle (spec §5.2), split out of `screen_commands.rs` because it is a WINDOW-lifecycle concern — it touches no `CaptureGuard`, no `ScreenCaptureState` and no session. `select_capture_region` *(async — it waits for a human to draw a rectangle; on the main thread that would freeze the very event loop that dispatches the overlay's own pointer events. Bounded at 120 s so a webview that never answers cannot strand a full-screen invisible always-on-top window, and its overlay-show handshake is bounded at 5 s separately)*, `resolve_region_selection` *(sync — O(1) under a mutex plus one unbounded-channel send, the posture of the screen domain's own sync siblings)* |
+| `editor_commands.rs` (tests split into the sibling `editor_commands_tests.rs` at Task 37 Part B, the `session_commands`/`session_commands_tests` precedent) | The editor window's panel-callable doors (spec §8, §11), its own module because opening the editor takes TWO commands. Task 59 retired the phase-4 editor's own two here (its sidecar read and its per-edit timeline write). `open_capture_editor` *(sync — it shows and focuses a window, so it is main-thread-only; it therefore STASHES the base name rather than reading the capture, because a sync command must not touch disk — the `begin_document_import`/`take_pending_import` split, for the same reason. It emits `editor:open` to the editor window alone, BEFORE `show()`, and rolls the stash back on either failure so a later drain can never open a capture the user was just told failed)*, `open_project_editor` *(sync, Task 37 Part B, F4 — `open_capture_editor`'s own stash→emit→show shape, applied to a tutorial project id instead of a staged base. Deliberately PANEL-callable: it lives here, beside `open_capture_editor` and OUTSIDE `src/editor/`, so neither Task 10's `authz_guard` scan nor Task 11's editor-only capability manifest ever constrains it, and it is granted through `capabilities/default.json`, never `editor.json`)*, `take_editor_request` *(sync — the one-shot drain of that stash; widened at Task 37 Part B to return `EditorRequestKind` — `{kind: "staged"|"project", value}` on the wire — instead of a bare string, so `EditorRoot.vue` can tell which kind of open it drained)*, `list_tutorial_projects` *(async, Task 37 Part B, F4 — a panel-callable, READ-ONLY listing delegating to the SAME `editor::store_io::list_projects` helper `editor_list_projects` uses, without opening or touching any session; unlike that command it takes no `window: WebviewWindow` and calls no `require_editor_window`, for the same "lives outside `src/editor/`" reason `open_project_editor` does)*. `open_capture_editor`, the one that takes a `base` from the frontend, gates it through `is_safe_base` — no separator, no leading/trailing dot, no trailing space, no `:` (a drive prefix or an NTFS ADS marker), no control character and no Windows reserved device stem — before it becomes a path; an INTERIOR `..` is deliberately allowed, because within one path component it traverses nowhere and refusing it stranded real captures from windows titled "Saving... please wait". A structural test scans this file and fails if any command taking a base stops refusing an unsafe one, and asserts the whole command list so a NEW command has to be considered. `list_tutorial_projects` and `open_project_editor` are the documented exception to "every editor-adjacent command is editor-window-only": Task 10's `authz_guard`/Task 11's `capability_guard` structural tests pin that neither is scoped to the `editor` window, and a mutation routing either through `require_editor_window` is caught by a dedicated test |
+| `staged_commands.rs` | A staged capture as an OBJECT. `discard_staged_capture` *(async — an irreversible delete of every file `staging_files::capture_file_names` says the capture owns (`.mp4`, `.json`, any `.export.mp4.part` an older build left, and since Task 51 its synchronized `<base>.webcam.mp4`), gated behind the picker's two-step confirm, and REFUSED while it is PINNED to a tutorial project — `discard_conflict(pinned)`, the one refusal left since Task 59 retired the export's (F29) (its sidecar's `editorProjectId`, written by `editor_open_staged`): "This capture is used by a tutorial project. Discard the project first." — the pin is read, and the files removed, under `EditorState::open` (`discard_unpinned`, final review I2), the lock `editor_open_staged` holds across create-then-pin, so a discard can never delete a capture an open is pinning at that moment)*, `list_staged_captures` *(async — a `read_dir` of staging plus a sidecar parse per row; it DEGRADES to what it could read rather than erroring, so a transient failure never blanks a list the user is reading; each row carries `projectId`, the pin, so the list offers Edit and hides Discard for a pinned capture)*, `open_screen_capture` *(sync — the read-only `uri::launch` hand-off for a PUBLISHED capture, the Publish dialog's Open; the `open_recording`/`open_task` shape)*. `screen:discarded` is emitted from this module's single warning-logging emitter (`emit_discarded`, moved here by Task 59 from the retired `export_commands`), which `staging_commands` reuses, so the one-emitter invariant holds |
+| `staging_commands.rs` | Staging as a WHOLE — the DIRECTORY, where `staged_commands` is one capture as an object. Its own module for that seam and because `staged_commands` sits at 677 of the 800-line Rust cap. `staging_usage` *(async — a `read_dir`, a sidecar parse per capture and a `symlink_metadata` per file; DEGRADES to zero rather than rejecting, so a settings card can always render, and the Clear beside it is disabled by that same zero)*, `clear_staged_captures` *(async — up to four unlinks per capture; the widest-reaching destructive action in the app, behind the card's two-step confirm, spec §10's "nothing is ever deleted silently"; a capture PINNED to a tutorial project is SKIPPED and counted in the result's `skippedPinned`, which the card reports as kept, never as cleared; each capture's pin is re-read, and the capture removed, under `EditorState::open`, final review I2 — the list is read once, but an open can pin a capture while the loop runs)*. **Every rule it applies is borrowed, never re-grown**: which captures exist is `staged_summaries`, which files one owns is `screen::staging_files::capture_file_names`, whether one may go is `discard_conflict`, and the removal with its two-pass symlink refusal is `discard_staged_files` — a second answer to "is this file ours" on the one path that deletes many recordings at once is exactly the hazard. It deliberately does NOT refuse while a capture is RECORDING: a live capture owns `.<base>.mp4.part`, which is not one of a staged capture's three files, and has no published `<base>.mp4`, so `staged_summaries` cannot see it and a clear cannot reach it. It emits one `screen:discarded` per capture actually removed, through `staged_commands`' single emitter, or `lastStaged` would keep offering **Edit** for a base no longer on disk |
+| `editor/session_commands.rs` | The tutorial editor's session surface (ADR §3.3, R6, R8). **Every one takes `window: WebviewWindow` and calls `editor::authz::require_editor_window(&window)?` FIRST** — this is the NATIVE half of R8's two-layer authorization; `capabilities/editor.json` (Task 11, the app-manifest half) already scopes every `editor_*` command (thirty-six, counted in the IPC section above) to the `editor` window at the Tauri ACL layer, so without this native check the only remaining defense against a capability misconfiguration (or a new command mis-granted to the wrong file) would be gone — a structural scan (`editor/authz_guard.rs`) walks every `.rs` under `src/editor/` and fails naming any `#[tauri::command]` that lacks the parameter or the first-statement call, and pins the exact command set. Session ids are checked against the `EditorState` registry (`require_session` → `sessionGone`). Registered as `session_commands::…` via a `use` in `lib.rs` so the count one-liner still sees two-segment paths. `editor_open_staged` *(async — `is_safe_base`, reads the sidecar natively (missing → `sourceMissing`; the destination vault comes from the SIDECAR, A01), REFUSES a `recovered` or zero-duration capture before anything is created or pinned (F7), then reopens the pinned project, adopts an unpinned orphan whose `sources.json` names this base, or migrates a new one — `create_project` THEN `pin_staged`; reuses a live session on the same project. A pinned project that cannot open THIS capture — its files no longer parse (`invalidProject`; a `sources.json` that does not parse is `invalidProject` too), or a hand-edited pin names another capture's project — no longer refuses the open (final review I3: the pin would then refuse the capture's own Discard for good): it is left untouched, logged through `redact_name`, and the capture is adopted or migrated into a project of its own, which re-pins it)*, `editor_get_snapshot` *(async — in-memory; `knownRevision` accepted, full projection returned)*, `editor_execute` *(async on the blocking pool — the session mutex is held only for the apply. It builds `core::editor::commands::CommandContext` — the ONE place a shell fact crosses into a core call (Task 27, F15): for a `detachAudio` it reads the project's `sources.json` first, outside the session lock, and passes the ids of every asset whose record has `hasAudio`, so a staged capture made with no audio input (its record says what its sidecar recorded) or a silent imported video is refused; every other command gets an empty set and never touches `sources.json`, so an unreadable one blocks nothing else. `EditorSession::execute` takes the context and hands it to `commands::apply`; `execute_internal` does NOT, because it calls `apply_internal`, never `apply`. Every acknowledged command — and a finished import's `AddAssets` and a caption import — SCHEDULES the recovery journal (Task 37, `editor/recovery.rs`): the named `editor-journal` thread (started in `setup`) writes `recovery.json` = `{schema: "vault-buddy-recovery/1", sessionRevision, savedRevision, project}` through `write_atomic_replacing` at most once per 500 ms per session, never for a CLEAN session, and always under the session's SAVE lock, so a save that deletes it can never be overtaken by a write)*, `editor_close_session` *(async — EVERY disposition takes the session's save lock and drops the session INSIDE it, so a save queued behind a close gets `sessionGone`, never a generic write failure against a removed directory (Task 37, carried from Task 12's review). `keep` flushes a pending journal write synchronously, then drops the session; `discardRecovery` deletes only `recovery.json` (owned-file check: `symlink_metadata`, a plain file only, absent = already gone) and drops the session; `discardProject` UNPINS first, then removes the project directory, so a failure between leaves an adoptable orphan rather than a pin to nothing; the recording is never touched. **Before the save lock, `discardProject` quiesces the project** (final review I1/C2, `editor/discard.rs`): it marks the session CLOSING (`EditorState::closing`, under the jobs lock) — from then on every start path refuses it: a job registration (`media_jobs::start_job_in`, checked under the jobs lock), a take's begin/append/finish (under the take's entry lock), a reconnect and a caption import (after their claim) — then cancels and waits for derived media, renders and publishes (`stop_session_derivations`), cancels and waits (5 s) for an import, waits for a reconnect and for any take mid-write or mid-finish, and REFUSES the discard (`invalidRequest`, "A webcam take is still being saved. Wait for it to finish, then discard the project." and its import/reconnect siblings) when one is still running — the project's files, its pin and the session are then left as they were, but work cancelled before the refusal (a render, a publish, an import cut short, a take that had a chunk refused while closing) stays cancelled (docs/Gaps.md GAP-214 items 5–6). `store_io::remove_project` removes everything nested first and `project.json` LAST, so a removal a held file handle fails part way can be retried (its ownership check needs `project.json`). A `workspace.json` save writes under the same save lock. Closing a session with ANY disposition cancels its renders and publishes (`drop_session`; a render can land only in a live session) — the window's X never closes a session (the close guard hides the window), which is why nothing on a window close cancels a render)*, `editor_hide_window` *(sync — a window call)* |
+| `editor/project_discard.rs` | `editor_discard_project` *(async — `projectFileId` → `()`; final review I3)*: discard a tutorial project that has NO session — the way out for one whose `sources.json`/`project.json` no longer parses, which could otherwise be neither opened nor discarded (and whose pinned capture then refused its own Discard). Under `EditorState::open`; refused (`invalidRequest`) while a session holds the project ("…Discard it from its project menu."), `sourceMissing` for a project not on disk. Every staged capture pinned to the project is unpinned by a scan of the staging sidecars (never through `sources.json`, which may be what is damaged), a pin naming any other project untouched; then `remove_project`, whose ownership proof is `project.json`'s own `project.id` read from the JSON DOCUMENT (a damaged graph still proves it; bytes that are not JSON prove nothing and nothing is removed). Editor-window only (`capabilities/editor.json`, `require_editor_window` first). Frontend: `OpenFailureNotice.vue` — the editor window's "could not be opened" line — offers a confirmed "Discard this project…" only for a PROJECT open Rust refused as `invalidProject` (`port.discardProject`); a staged capture's failure, or one a retry could fix, offers nothing |
+| `editor/save_commands.rs` | The durable half of the session lifecycle (Task 12, F-40/F-44): nothing in `session_commands.rs` writes `project.json` past `create_project`'s one-time mint, this file is what does. Same NATIVE `require_editor_window` + `authz_guard.rs` discipline as its sibling; registered as `save_commands::…` in `lib.rs` for the same two-segment-path reason. `editor_save_project` *(async — checks the session's live revision against `expectedRevision` (else `revisionConflict`, never touching disk); builds a `WorkspaceEnvelope` carrying the record's original `createdAt` (read back from the on-disk envelope) and, since Task 18 (F17), the SANITIZED LIVE `workspace.json` — read through `prefs_commands::read_workspace`, never a raw file read and never the stale "last saved envelope's own workspace" this used to carry forward — plus an always-empty `products` array (Task 46 populates it); commits through `store_io::commit_project`, which takes an injectable `ProjectWriter` seam so a disk-full/permission-denied write is testable without touching the real filesystem's own failure modes — `io::ErrorKind::StorageFull`/raw OS 112 map to `diskFull`, `PermissionDenied` to `writeDenied`; `mark_saved` runs ONLY after a successful write, never before, so a failed save leaves `project.json` byte-identical and `persistedRevision` untouched (A20); returns a `SaveReceipt`)*, `editor_list_projects` *(async — a thin wrapper over `store_io::list_projects`, already sorted `updatedAt` desc)*, `editor_open_project` *(async — loads an existing project by id and registers, or reuses, a session over it, under the SAME `open`-lock and live-session-reuse discipline as `editor_open_staged`. With `useRecovery` (Task 37) `recovery.json` — validated like a project: bounded, strict schema, its own project id, `validate_project`; malformed → `invalidProject` with the file left byte-identical — is the working copy and the store's committed revision stays the persisted one, so the session opens DIRTY (`EditorSession::resume_recovered`) and `recovered: true`; the working revision never falls to or below the committed one)*. A save of the session's CURRENT revision deletes `recovery.json`; a save of an older one (an edit landed during the write) keeps it. Its existence check is `Path::try_exists`, so a metadata failure refuses the save instead of being misread as "never saved" |
+| `editor/prefs_commands.rs` | The workspace view-preference surface (Task 18; F-48/F-25/F-14) — the `workspace.json` half of a project's own directory, split out precisely because it is the OPPOSITE kind of write from `save_commands.rs`: selection, playhead, panel layout and the theme toggle are not edits, so neither command here ever touches a session's revision or its undo/redo history — `session_id` only resolves WHICH project directory to read/write, never a `require_session(...).get_mut(...)` into the live `EditorSession`. Same NATIVE `require_editor_window` + `authz_guard.rs` discipline as its siblings. `editor_get_workspace` *(async — reads and sanitizes `workspace.json`; a missing or malformed file degrades to the sanitized empty blob rather than an error, so a project that predates this task, or one with no saved preferences yet, still opens cleanly)*, `editor_save_workspace` *(async — refuses a RAW incoming payload over 64 KiB before it is ever sanitized or written (`invalidRequest`), then sanitizes and writes through `capture_note::write_atomic_replacing` — temp + fsync + replacing rename, the same rails every other project-store file rides)*. F16: `core::editor::workspace::Workspace` gained a 19th field, `theme: Option<Theme>` (`dark`/`light`), so the header's toggle (Task 16) survives a reopen instead of being dropped as an unknown key. Guide progress, which Task 55 first put here, moved to `guide_commands.rs` (next row) with Task 57. |
+| `editor/guide_commands.rs` (tests in `guide_commands_tests.rs`) | The app-wide guided-onboarding progress (Tasks 55, 57; F-46/F-47; ADR R16, R18) — split out of `prefs_commands.rs` by Task 57 because none of it is a project preference; no command here names a session. Same NATIVE `require_editor_window` + `authz_guard.rs` discipline as its siblings. `editor_get_guide_progress` *(async — no arguments, no session → `GuideProgress {contentRevision, currentStepId\|null, reviewed, explored, invitationDismissed, active, collapsed, completed, preferences: {dimming, motion: "system"\|"reduced"\|"full"}}`; reads `editor-prefs\guide-progress.json` under the app's local data root bounded (16 KiB + 1) and no-follow; a missing file is fresh progress, a malformed or oversized one is logged (never its content) and read as fresh, and only storage that is THERE but unreadable (permission, a link wearing the name) is an error — which the webview turns into "Session only" beside Help rather than starting over and later overwriting it)*, `editor_save_guide_progress` *(async — `progress` taken RAW so `core::editor::guide::validate_for_save` refuses (`invalidRequest`) over 16 KiB, any field outside the closed schema (`deny_unknown_fields`), a zero `contentRevision` and any step id that is not one of the 22 lessons BEFORE anything is created — no refusal message echoes the value it refused, since that value may be exactly the path this exists to keep out; then `editor-prefs\` is created (`create_dir_all` for the local-data root, `create_dir` for the folder, refused unless it is then a plain folder) and the file written through `write_atomic_replacing`)*. **One source of truth for the lessons**: `core::editor::guide` `include_str!`s the webview's own `src/editor/guide/steps.json` (a verbatim copy of the concept bundle's `onboarding.steps.json`) and `retired-steps.json` (retired lesson id → its chapter, empty today, read by both sides; a retired id resumes at its chapter's first lesson, anything else unknown at the first lesson). **Task 57 adds the portable progress file** (the learning center's Save progress file / Restore progress file; F-47: "a progress file can be restored separately from projects"): `editor_export_guide_progress` *(async — `progress` taken RAW and validated by `validate_for_save` BEFORE the dialog opens (a refused document never creates a file), then Rust's OWN save dialog on the named `editor-guide-file` thread joined from the blocking pool; `.json` is appended unless the name has it; a new name lands through an owned same-directory `.<name>.<id>.part` + `rename_noreplace`, and an EXISTING file is replaced (a replacing rename) only when it is a plain file that is itself valid guide progress AND exactly the path the dialog confirmed — anything else is `writeDenied`, left byte-identical → the file name written, or `null` for a dismissed dialog)*, `editor_import_guide_progress` *(async — no arguments; Rust's OWN open dialog on the same thread; the picked file must be a plain file (no-follow), is read bounded (16 KiB + 1) and judged by `core::editor::guide::parse_progress_file` — the raw byte bound, JSON, a retired lesson mapped the stored file's way (fix round 1), then `validate_for_save` — so foreign JSON (a project file), an unknown lesson or a path is `invalidRequest` and never echoed → the validated `GuideProgress`, or `null`. It READS ONLY: nothing is stored, started or opened; the webview installs the progress PAUSED (`editorOnboarding.restoreFrom`) and saves it through `editor_save_guide_progress` like any change)*. |
+| `editor/media_commands.rs` | The preview's media-URL lookup (Task 22, ADR R7). `editor_media_url` *(async — reads `sources.json` (or, since Task 46, the `products.json` LEDGER for a product — never `project.json`) and stats one file off the main thread)* takes `sessionId` and `ref: { assetId } \| { productId } \| { reviewJobId }` (the Rust parameter is `r#ref`; Tauri's macro unraws it, so the IPC key is `ref`; `reviewJobId`, Task 47, names a Review render — only ever the project's own `cache\review-<jobId>.mp4`, built by `render_review` from a valid id) and returns the ABSOLUTE path of a REGISTERED entity only: an asset must be in the live session's graph AND have a `sources.json` record that `project_store::resolve_source` resolves (a DETACHED audio asset (Task 27) has no record of its own — its bytes are its video's — so its lookup follows `linked_asset` one hop to the root's record; `validate_media` guarantees the root is itself unlinked) (so a hand-edited escaping `file`, a `Builtin` with no file, or a stale record for an asset the graph no longer holds is `unauthorizedSource`); a product must be in the product LEDGER (`products.json`, Task 46) with a `filename` of exactly `<productId>.mp4` under `products\`. A registered entity whose file is gone is `sourceMissing`; a symlink wearing one of our names is refused no-follow. A malformed `ref` (zero or two keys, an unknown key, an invalid id) is `invalidRequest`, parsed by hand rather than through an untagged serde enum so it is an `EditorError`, not Tauri's opaque argument-decode string. **This is not the authorization boundary** — `convertFileSrc` is URL conversion and the asset protocol's enumerated scope (below, pinned by `tray.rs`) is what Tauri enforces on every request; this command exists so the frontend NEVER builds a path. Same NATIVE `require_editor_window` + `authz_guard.rs` discipline as its siblings; it reuses `prefs_commands`' `project_id_for`/`local_data`/`blocking` rather than a fourth copy. **Task 25 adds the media-import job and the job channel every later editor job reuses.** `editor_import_media` *(async — answers `{ jobId }` at once; takes `sessionId` and `onProgress: Channel<JobProgressDto>`; REFUSES (`invalidRequest`) a second import while one is still running in the same session — Rust is the authority, not the UI's disabled button)* opens its OWN native multi-file dialog (`tauri_plugin_dialog`, filtered by `core::editor::probe::import_extensions()` — the classification allowlist itself) on a named `editor-import` thread: the dialog, never a frontend string, is what grants access to a file. Per file (`media_import.rs`): classify by name → the 4 GiB size cap → a video/audio file first asks whether ffmpeg exists at all (missing ffmpeg is a per-file `encoderUnavailable` NAMING ffmpeg, and nothing is copied) → copy into `media\<assetId>.<ext>` through an owned, `create_new` `.part` renamed with `rename_noreplace`, SHA-256 computed on the same pass (`core::editor::import_io::copy_hashing`) → probe the COPY (`editor::media_probe::probe_media`, its own dimension rule: NON-ZERO width/height with parity IGNORED — an import is scaled onto an even canvas, while the export's `ffmpeg::parse_probe_output` keeps its even-only H.264 rule; both read ffprobe through one stream grouping; cover art (`DISPOSITION:attached_pic=1`) is never video, and `-select_streams a` is added for an audio file; images sniffed natively) → `core::editor::import_io::settle_av_import` (an audio-only `.mp4` imports as audio; zero or over-2-hour length refused per file) → a `sources.json` record written under the session's save lock (`store_io::write_sources`; a registry failure reaches the user path-free, the detail goes to the log). A failing file is one `perFile {name, error}` entry — display name only, never a path — and leaves no `.part`, copy or record; the successes land as ONE `InternalCommand::AddAssets` (one undo step). A refused `AddAssets` (the session closed mid-import) fails the job and ROLLS BACK the batch's copies and records. Cancel stops FUTURE files; finished ones still land, and the terminal is `cancelled`. A dismissed dialog is `cancelled` with nothing imported. `editor_cancel_job` *(sync — one leaf-lock read and an `AtomicBool` store; another session's job is refused like an unknown one; a finished job is an acknowledged no-op)* and `editor_get_jobs` *(async — the authoritative `JobRecordDto[]`, oldest first)* read `EditorState::jobs`, a `JobRegistry` render (Task 46) and the shutdown gate (`blocks_shutdown`) reuse, bounded to 8 terminal records per session (GAP-174). **Jobs never use events**: progress travels on the caller's per-job `Channel`, emitted ONLY by `media_jobs::JobReporter`, which owns the strictly increasing `sequence`, updates the registry BEFORE each send (so a reconcile is never older than the stream) and whose `finish` consumes it — exactly one terminal, last. `drop_session` cancels the closing session's jobs. The crash windows (unreferenced copies/records, a leftover `.part`) are docs/Gaps.md GAP-174. **Task 28 adds derived media** (`media_derive.rs`). `editor_media_peaks` *(async — `sessionId`, `assetId`, `buckets` (1..=4000, else `invalidRequest`) → `{ peaks: number[] }`, each a FULL-SCALE max-abs value in `0..=1`)* resolves the asset exactly as `editor_media_url` does (`resolve_asset`, shared), refuses an asset with no sound (`unsupportedMedia`), serves `cache\<recordId>.peaks.<buckets>.json` when its stamped size+mtime still match the file, and otherwise runs `ffmpeg -v error -i <src> -ac 1 -ar 8000 -f s16le -` through `external_stream::run_streaming` (built on `external_tool::tool_command`, so `CREATE_NO_WINDOW` and the registry-fresh PATH still have one chokepoint), stdout folded by `core::editor::peaks` on the named `editor-peaks` thread — memory is the ≤ 4000-bucket vector, never the audio. Each decode is a registered `peaks` job (NOT exclusive, unlike an import; a process-wide gate runs them one at a time), so `editor_cancel_job` and a closing session kill the child; its record is FORGOTTEN once the reply exists, so peaks jobs do not grow GAP-174's registry. `editor_media_thumbnail` *(async — `sessionId`, `assetId`, `atMs` → the absolute path of `cache\<recordId>-<ms>.jpg`, `ms` clamped into the source and floored to 250 ms, one input-seeked `-frames:v 1 -vf scale=160:-2` frame rendered to an owned temp and renamed in; a hit refreshes its mtime, and the directory is held to 200 thumbnails by LRU, touching only names it owns)*. Both answer `encoderUnavailable` without ffmpeg (a cache hit needs none), which the timeline shows as "Install ffmpeg to see waveforms"; `<recordId>` is the `sources.json` record the bytes live under, so a detached audio asset shares its video's waveform. Thumbnails are not fingerprinted (GAP-176). **Nothing derived lands in a closing project** (fix round 1): a thumbnail renders into the OS temp directory on a named, cancelable `editor-thumbnail` thread (tracked per session, not as a registry job — no wire `JobKind` names it) and is committed, like a waveform's cache file, only under the session's SAVE lock with the session still live (`with_live_project`); `editor_close_session{discardProject}` first stops the session's peaks decodes and thumbnail renders and waits (bounded, 5 s) before taking that lock, and `drop_session` cancels both on every close. The remembered ffmpeg is keyed on the configured path, so `set_ffmpeg_path` takes effect on the next request. The webview memoizes waveforms but shares only IN-FLIGHT thumbnail requests — a memoized path would stop Rust's refresh-on-hit and point a remounted clip at an evicted file. |
+| `editor/caption_commands.rs` | Subtitle import onto one clip (Task 36; F-34; ADR §3.3), its own module because `media_commands.rs` sits at the 800-line cap. `editor_import_captions` *(async — `sessionId`, `clipId`, `replace` → `CaptionImportResult { projection, imported, skipped }`, or `null` when the dialog was cancelled; the session is checked BEFORE the dialog opens, and a second import while one runs in the same session is refused (`invalidRequest`) through `EditorState::caption_imports`, the media import's posture)* opens its OWN native open dialog (`srt`, `vtt`, `txt`) on a named `editor-captions` thread joined from the blocking pool — the dialog, never a frontend string, grants the path (the Task 25 posture). The file is read BOUNDED (at most `MAX_CAPTION_FILE_BYTES` + 1 bytes, UTF-8 or refused), parsed by `core::editor::captions_io` (SRT + plain WebVTT; `STYLE`/`REGION`/`NOTE` skipped; only each format's OWN tags are stripped — SRT `i`/`b`/`u`/`font`, WebVTT `c`/`i`/`b`/`u`/`v`/`lang`/`ruby`/`rt` and timestamps — while any other `<…>` and an unclosed `<` stay caption text, so `Press <Ctrl> + <S>` is never shortened; ≤ 2 MiB, ≤ 2000 cues, ≤ 500 characters a cue, ≤ 2 h; every error names its 1-based LINE), then `core::editor::commands::captions::plan_caption_import` maps the file's times — OUTPUT time relative to the clip's own start — to the clip's SOURCE time through the inverse of `time::output_at` (`in_ms + round(relative · speed)`); a cue starting at or past the clip's output end is SKIPPED and counted, one running past it is cut at the clip's source end, and a file with nothing inside the clip is refused (`invalidRequest`) rather than applied as an empty — with `replace`, destructive — edit. The whole import is ONE `InternalCommand::ImportCaptions` edit (one Undo). No error or log line carries the picked file's name, path or text (bundle § Privacy): a failed open/read logs only the `io::ErrorKind`. `captions_io::export_srt`/`export_vtt` (cues already in OUTPUT time) are Task 48's `editor_export_subtitles`' writers. Same NATIVE `require_editor_window` + `authz_guard.rs` discipline as its siblings. |
+| `editor/package_commands.rs` + `editor/package_import.rs` | Portable and lightweight project files (Task 39; F-40; ADR R5, R9; A17, A22). Both commands run on a named `editor-package` thread joined from the blocking pool, and both open Rust's OWN native dialog behind a `PathChooser` seam (the tests answer it) — no path ever comes from the webview. `editor_export_package` *(async — `sessionId`, `expectedRevision`, `format: "portable" \| "lightweight"` → `PackageReceipt { sessionId, savedRevision, fileName, format }`, or `null` for a dismissed dialog)* freezes the SESSION's project at `expectedRevision` (`revisionConflict` otherwise — an export is a file, never a store commit: `project.json`, the persisted revision and every pin are untouched) into a `WorkspaceEnvelope` (`createdAt` from the last saved envelope, the sanitized `workspace.json`, and an empty `products` list until Task 46's ledger exists). Everything the project itself earns is refused BEFORE the dialog opens: asset ids that differ only by case or name a Windows device (`core::editor::package_plan::asset_id_problem` — they cannot be package file names), an envelope over 8 MiB (when only the products' saved edits push it over — a save leaves those to the ledger, a project file carries them — the refusal says so, rather than calling a project that just saved too large, final review M7), and a portable file whose AVAILABLE originals exceed 200 MiB (`invalidRequest` "This project is too large for a portable file (limit 200 MiB). Save a lightweight copy instead."). The portable file (`package::write_package`) carries every file-backed source the live graph or a retained snapshot uses (`package_plan::assets_needing_media`, A17) — a `screen` builtin (the staged capture's own `.mp4`, whose base exists only on this machine) included, only `card` builtins and linked (detached) audio excluded; a source with no file is left out and reported missing on import, never pruned silently. The chosen name is normalized to `.vbproject.zip`/`.vbproject.json`, written to an owned `<name>.part-<rand>` in the SAME directory (fsync'd, removed on every failure path), then placed with `rename_noreplace`; an EXISTING target is replaced only when it is a plain file of the same format whose `projectId` is this project's AND is exactly the path the dialog confirmed (a name the normalization changed onto an existing file is `writeDenied` with that name), and anything else is `writeDenied` "Choose a new name — that file is not this project", left byte-identical. The manifest's digests come from a first read of each original; the bytes actually written are hashed again (`import_io::hashing_reader`) and a mismatch fails the export, so a source that changed mid-export never yields a receipt. `editor_import_package` *(async — no arguments → `EditorOpenResult`, or `null` for a dismissed dialog)* validates the WHOLE file before anything is created (`package::inspect_archive` for a `.zip`; a bounded read + `validate_envelope` for a `.json`; `asset_id_problem` for both), then, under the editor's `open` lock, picks the manifest's `projectId` or a fresh one when it is taken (a COPY, re-keyed by `package_plan::rekey_envelope`), builds the project in `editor-projects\.<id>.importing\` — each media/product entry extracted through `core::editor::package_extract::PackageExtractor` (which checks every local header against the central directory, entry offsets against the directory start and entries against each other, at extraction), bounded by its manifest size, into an exclusively-created file, and its byte count and SHA-256 compared with the manifest BEFORE the next entry is read — writes `sources.json`/`project.json`/`workspace.json` there, and installs it with ONE directory rename, last; any failure removes the build directory through `store_io::remove_dir_no_follow`, so nothing is ever half-installed. Every file-backed source becomes a `media` record: the extracted file (with its SHA-256), or a `<assetId>.<ext>` placeholder that `missing` reports for reconnection — a source that was a STAGING locator where the file was made is no exception, and the import never reads or writes any staged sidecar, so it never pins. A retained product lands in `products\` under its record's own `filename` (one plain, non-device component, unique ignoring case, or the import is refused). The package format has no source registry, so the export carries each source's facts (`hasAudio`, `hasVideo`, dimensions, `mediaKind`, size, duration, from its own `sources.json`) in `record.extra.vaultBuddySourceFacts` (`package_plan::SourceFacts`, closed); the import validates them strictly, takes them OUT of the envelope before anything is stored, and uses them for each record, so a capture recorded with no audio device still refuses `detachAudio` after a round trip. A file without them (an older build's, another editor's) gets its facts from the asset and NEVER invents audio: a video's `hasAudio` is false (docs/Gaps.md GAP-182). Carried facts are TRUSTED, not re-probed, even for media the package itself carries (docs/Gaps.md GAP-215). `project.json` carries the SANITIZED workspace, like `workspace.json`. Same NATIVE `require_editor_window` + `authz_guard.rs` discipline as its siblings. |
+| `editor/relink_commands.rs` + `editor/relink_media.rs` | Reconnect missing originals (Task 40; F-03; A19; SCREENS 07), their own modules because `media_commands.rs` sits near the 800-line cap (pre-flight ruling F31); the matching is PURE in `core::editor::relink` (F32). `editor_relink_media` *(async — `sessionId`, `assetIds`, `confirmReplace` → `RelinkReport { projection, missing, matched, replaced, ambiguous, unmatched, mismatched, failed, unused, excluded, perFile }` (files by DISPLAY name), or `null` for a dismissed dialog; a second reconnect in the same session while one runs is refused through `EditorState::relinks`)* checks every id BEFORE the dialog (a graph asset whose `sources.json` record is file-backed and really missing: a present source, a builtin, a detached-audio asset and a STAGED capture are refused — the last because its file belongs to the capture staging folder and rewriting its record would cut the project's pin/`sourceBase`, docs/Gaps.md GAP-183), then opens Rust's OWN open dialog on a named `editor-relink` thread joined from the blocking pool (single-select for one asset, multi for a batch, the import's extension allowlist). Each picked file is probed (the import's own `describe`, so an image's length is the same default an import records) and SHA-256 hashed; `relink::match_candidates` decides: a hashed record matches its hash ONLY (a same-size, same-length file with other bytes is `mismatched`, "different content"), an unhashed one (a lightweight placeholder) needs size AND length within `DURATION_TOLERANCE_MS` (50) AND kind; two or more equally good files are `ambiguous` and never chosen (A19) — and A19 holds both ways: ONE file claimed by two sources where either claim rests on size + length is ambiguous for BOTH (two hashed sources claiming one file record the same bytes and both reconnect); a stray file is reported `mismatched` with a reason (`"different duration: 12.4 s vs 31.0 s"`, chosen file first) only against the ONE unresolved source of the call — otherwise the sources are `unmatched` and the stray files `unused`. In a BATCH, a source that cannot be reconnected here (staged, snapshot-only, builtin, present) is left out and reported in `excluded` with its reason instead of refusing the call (a batch with nothing left opens no dialog); asked for alone it is refused. Only unique matches are applied, plus — with `confirmReplace` (one asset, one file) — a mismatch, which is still REFUSED when it could break the edit (a different kind, shorter than the asset the graph describes, or without a sound track while a detached-audio asset plays its sound). A match whose copy fails is reported in `failed` with its real cause, never as unmatched. An applied file is copied to `media\<assetId>.<ext>` via the import's owned `.part` + `rename_noreplace` (the copy's hash must equal the matched one), and under the session's SAVE lock `sources.json` is rewritten from the chosen file's OWN probe (never the old record's facts; a replacement also records `replacedFrom`, the identity it replaced), then ONE `InternalCommand::RelinkAssets` bumps the revision — the graph (asset id, clips, cues, captions, markers) is untouched and it is NOT an undo step (Undo cannot put a file back) — and the asset's cached thumbnails and waveforms are purged (GAP-176, closed) — on the webview side too: `useMediaReconnect` calls `mediaDerived.forgetDerived` for every reconnected asset and every detached-audio asset playing its sound (memo dropped, `mediaVersion` bumped), which `ClipWaveform`/`ClipThumbnail` watch, so the timeline re-requests. A reconnect leaves a clean project reading unsaved, by design (GAP-184). A refused `RelinkAssets` restores the records and removes the copies. Frontend: `ReconnectDialog.vue` (opened from the media library's "Reconnect…" while anything is missing) over `useMediaReconnect`; an asset that leaves the missing list makes `PreviewSurface` call `PreviewController.forgetMedia`, so its failed lookup is asked again (Task 22's deferred minor). Same NATIVE `require_editor_window` + `authz_guard.rs` discipline as its siblings. |
+| `editor/render_commands.rs` + `editor/render_jobs.rs` | Render jobs, the product ledger and the shutdown gate's render term (Task 46; F-41, F-42; ADR R5, R12; A16). `render_commands` resolves ffmpeg and spawns; the rules live in `render_jobs` (its tests: `render_jobs_tests.rs` + `render_ledger_tests.rs`, over a FAKE `RenderRunner`). `editor_start_render` *(async — `request: RenderRequest { sessionId, expectedRevision, name, range: {startMs,endMs}\|null, quality: "low"\|"balanced"\|"high" }`, `onProgress: Channel<JobProgressDto>` → `{ jobId, revision }` at once)* refuses, in order and BEFORE a job exists: a stale revision (`revisionConflict` — a pending edit cannot be rendered; checked before ffmpeg is even looked for), no ffmpeg (`encoderUnavailable` naming the fix), the plan (`core::editor::render_plan` over the `sources.json` records whose file is on disk — planned TWICE, the second time over only the files the first read, indexed from zero, so the job hands `screen::render::run::render` exactly `file_input_count(plan)` inputs and `render_args`' input-count assertion holds by construction), the probed build (`render_refusal`, `encoderUnavailable`), the 40-product cap ("Remove an older product first" — no removal UI yet, docs/Gaps.md GAP-187) and free space (`export_space_shortfall` on the canvas; `None` = proceed); then registers ONE `render` job per session (the shutdown gate counts every not-yet-ended RENDER job — by kind, so Task 48's publish job is not a render — the same set the quit's `cancel_all_bounded` cancels and waits for) (`invalidRequest` "A render is already running…") and runs it on the named `editor-render` thread — its ffmpeg reader threads are `editor-render-progress`/`-stderr` (`screen::ffmpeg_run::RENDER_RUNNER`; the export keeps `screen-export-*`). Phases `preparing → rendering → publishing → complete{productId}`; the child writes `jobs\<jobId>\out.mp4.part`; publishing, under the session's SAVE lock, MOVES the part to `products\<productId>.mp4` (`rename_noreplace`) and only THEN commits `products.json` (a failed ledger write takes the unrecorded file back out), so a ledger entry always has its file. Cancel kills the child and deletes the part; failure deletes it too; both remove the job directory BEFORE the terminal and leave the project untouched. A failure's ffmpeg stderr names every file it was handed, so it is logged with the inputs, the output and the job folder redacted (`redact::redact_paths_in`) and the webview is told only "The render failed. See the log for details." (final review M8; the webcam remux's failure log is redacted the same way). The ledger writer is a seam (`record_product_with`) so the "unrecorded file is taken back out" arm is tested (I6). `editor_get_products` *(async → `ProductDto[]`, `available` = the file is on disk; `renderRange` present-even-when-null)*; `editor_restore_product` *(async — `sessionId, expectedRevision, productId, commandId` → `EditorProjection`)* installs the product's frozen snapshot through `InternalCommand::RestoreSnapshot` via `EditorSession::execute_internal_as` (the request's revision/replay bookkeeping): a new revision, one undo step back, product file and ledger untouched. **Products are immutable** (ADR invariant 5); the ledger is committed with the product (R5), so an unsaved project keeps its products, and `editor_save_project` / a package export assemble `record.products` FROM it (a damaged or duplicate-id ledger refuses the save). `project.json` carries the products WITHOUT their snapshots (the schema makes `snapshot` optional; the ledger keeps them, a package export includes them) — copying them grew `project.json` past the 8 MiB load bound — and `store_io::commit_project` refuses (`invalidProject`, "too large to save", last good file untouched) any `project.json` over that bound rather than write one that cannot be reopened. A panic on the render thread still ends the job `failed`. A product's file is exactly `<productId>.mp4` (`core::editor::product_file_name`): the ledger read, `editor_media_url`'s product lookup (which now reads the LEDGER, not `project.json`) and a package import all refuse any other name. A discard (`editor_close_session{discardProject}`) cancels and WAITS for a running render (`media_derive::stop_session_derivations`) before it removes the project. Same NATIVE `require_editor_window` + `authz_guard.rs` discipline as its siblings. **Task 47 adds the Review render** (`editor/render_review.rs`, pre-flight F18; tests `render_review_tests.rs`): `RenderRequest` gains an optional `review: bool` (`#[serde(default)]` — absent is a product render, so no new command). A review is still a `render` job — one per session, counted by the shutdown gate, cancelled by the quit/discard paths — but it skips the 40-product cap, and publishing (under the same save lock, cancel re-checked) MOVES its part to the project's `cache\review-<jobId>.mp4` (inside R7's scope; `jobs\` deliberately is not), never `products\` and never `products.json`; its `complete` terminal names no `productId`. Only the newest review is kept (landing one removes the project's older `review-*.mp4`, owned names only, no-follow) and `close_locked` removes it on a `keep`/`discardRecovery` close (a discard removes the directory anyway). The frontend: `RenderDialog` (header **Render video**, via `RenderVideoButton`), `ProductLibrary` (the library's **Products** tab, `ProductCard` per ledger entry: Watch through `ProductPlayer`, a plain `<video>` fed by `editor_media_url({productId})`, and a confirmed Restore), `ReviewDialog` (the preview toolbar's **Review**: the selection's output span or 5 s either side of the playhead, `renderRanges.reviewRange`); `editorJobs.startRender` / `renderError` (never `lastError`, never `editorProject.saveError`), `editorProducts` (the ledger, re-read on a terminal naming a `productId`), `editorProject.restoreProduct`. The bar reaches 100 % only on a `complete` terminal (`renderProgress.renderPercent`). |
+| `editor/publish.rs` | Publish a rendered product into a vault (Task 48; F-43; ADR R13; A21) — **the TENTH sanctioned vault write** (see the vault domain). `editor_publish_product` *(async — `sessionId, productId, destination: PublishDestination { vaultId, folder, dated, createNote }` → `PublishReceipt { videoPath, notePath\|null, vaultId, vaultName, warning\|null }`; `folder` blank = the vault's `screen_capture_root()`)* refuses BEFORE anything exists (no such product → `invalidRequest`; its file gone → `sourceMissing`; no/unknown/missing vault or a folder `safe_recording_root` rejects → `destinationUnavailable`, the latter with a fixed "That folder is outside the vault…" that never repeats what the user typed, final review M10), then registers a `publish` job (`JobKind::Publish`, one per session, no Channel — the receipt is the reply) BEFORE a byte is written, so `editor_get_jobs`, the close guard and the shutdown gate see it (F19). In the vault: `export_worker::vault_dir::prepare_export_dir` (widened to `pub(crate)`), the free-space check (the product's size), the journal `jobs\<jobId>\publish.json` (`{step: reserved\|video\|note\|complete, video, note}`, vault-relative names), the COPY (`core::editor::publish_io::copy_into_vault`: an owned hidden temp beside the target, fsync'd, landed by `commit_screen_capture` — pairwise reservation, `rename_noreplace`, ` (N)` retry; the product is only ever READ, never moved), then the note (`core::editor::note::render_tutorial_note` — `type: Tutorial`, `created-by: vault-buddy`, recorded/duration/product/revision/range, the vault's `screen_extra_frontmatter`/`screen_body_template` filtered against the managed keys, the embed through `screen_note::embed` (widened to `pub(crate)`), `## Chapters` at the RENDERED range's output time via `render_plan::chapters_for`) rendered with the name the video LANDED under (A21), never the reservation's. The file name is `YYYY-MM-DD HHmm <product name>` (the capture naming, from the product's own `createdAt` wall clock, through `staging_title::sanitize_title`). A failure before the video lands rolls the created folders back (`rollback_export_dir`, widened to `pub(crate)`) and leaves no temp; a note failure is a `warning` on a successful receipt. The journal directory is removed when the command returns, whatever the outcome, so only a CRASH leaves one — `recovery::interrupted_publishes` reports it on the next start (in the log) and never deletes or retries it (docs/Gaps.md GAP-192). A quit cancels the copy (`publish::cancel_all_bounded`, 5 s; the temp is removed), and so does a discard, which also waits for it before removing the project (`media_derive::stop_session_derivations`); the gate's fifth term, `publish::blocks_shutdown`, counts PUBLISH jobs only, with its own `PUBLISHES_ABANDONED` latch, and the updater refuses while one runs. Frontend: `PublishDialog` (+ `PublishForm`), opened from the Render dialog's completion (`RenderOutcome`'s **Publish to vault…**) and from each available `ProductCard`; the vault defaults to `project.destination.vault` — the CAPTURE's vault (F-01), never the panel's selection — and the dated/companion-note toggles default to THAT vault's Screen settings (`screenCaptureDateFolders`/`screenCreateNote`, read through `get_screen_capture_config` via the port's `publishDefaults`, re-read when the picked vault changes; Task 59 fix round 1, GAP-211 closed) — and the dialog cannot close while the publish is in flight; Open goes through `open_screen_capture` (the note when there is one). The Render and Review dialogs likewise cannot close while their START request is in flight (Task 47's carry). |
+| `editor/subtitle_commands.rs` | Subtitle export (Task 48; F-35), its own module because `media_commands.rs` is at its cap. `editor_export_subtitles` *(async — `sessionId, format: "srt"\|"vtt"` → the file name, or `null` for a dismissed dialog)* maps every caption the Captions list shows to OUTPUT time over the whole timeline (`render_plan::subtitle_cues` — the burn-in's own rows, whether or not captions are shown or burned in), refuses `invalidRequest` BEFORE the dialog when there are none, opens Rust's OWN native save dialog on the named `editor-subtitles` thread, and writes `captions_io::export_srt`/`export_vtt` through an owned same-directory temp + `rename_noreplace` — an existing file at the chosen name is refused (`writeDenied`) and left byte-identical. Never a store or vault write. Frontend: `CaptionsExport` (**Export .srt** / **Export .vtt** in the Captions library). |
+| `editor/webcam_commands.rs` | Webcam takes (Task 49; F-20; ADR R10; A08, A09). The editor webview records with `getUserMedia` + `MediaRecorder`; the chunks stream HERE into the project's own `takes\` — no frame or sample crosses JSON or Pinia. The pure rules are `core::editor::take` (`TakeState { Recording{next_seq, bytes}, Finished, Discarded }`: a chunk must be EXACTLY the next sequence number, at most 1 MiB, the take at most 4 GiB; `finish(last_seq)` needs `last_seq + 1 == next_seq`; the three WebM MIME types; the canonical `x-editor-seq` parse; the asset a take becomes, named "Webcam take N"). `editor_webcam_begin` *(async — `sessionId, mimeType` → `{ takeId }`; `mimeType` ∈ `video/webm;codecs=vp8,opus` / `video/webm;codecs=vp9,opus` / `video/webm`)* refuses `deviceUnavailable` "Stop the screen recording first." (or "…audio recording…") while `CaptureGuard::active()` is `Some` — F35: native, stronger than R10's UI-only rule — and `encoderUnavailable` when ffmpeg cannot be resolved (a take it could not index would be a dead end), then exclusive-creates `takes\.<takeId>.webm.part` (`takes\` with `create_dir`, never `create_dir_all`). `editor_webcam_append` *(async — takes a `tauri::ipc::Request`: the body must be `InvokeBody::Raw` (a JSON body is `invalidRequest`), the chunk named by the `x-editor-session` / `x-editor-take` / `x-editor-seq` headers; the 1 MiB bound is checked on the borrowed body before it is copied)* validates through `take.rs` and appends through a flushed `BufWriter`, reopening the part per chunk no-follow (no handle outlives a call, so a discard or a project removal never meets an open file); ANY error marks the take failed — later chunks are refused, a failed write is truncated back, and the `.part` (every accepted chunk, nothing else) is kept for finish/discard. `editor_webcam_finish` *(async — `sessionId, takeId, lastSeq` → `TakeDto { takeId, assetId, durationMs, width, height, hasAudio }`)* validates the sequence, remuxes `-c copy` (`-n`, never overwriting) into an owned `.<takeId>.remux.webm`, probes it (a take with no picture is refused), hashes it, lands it as `takes\<takeId>.webm` with `rename_noreplace`, records `sources.json` `{"store":"takes","file":…}` under the save lock and adds the asset (id = the take id, `take-…`) through ONE `AddAssets` — a NEW asset, the capture's clips untouched (A08); only then is the `.part` removed, so any failure before that leaves the take finishable again. If ffmpeg vanished mid-take (A09) the raw bytes BECOME the `.webm` and are registered anyway (length unknown, recorded as 0, never guessed) and the reply is `encoderUnavailable` with `retainedAssetIds: [assetId]` — the take is never lost, though it can never be placed (docs/Gaps.md GAP-196). `editor_webcam_discard` *(async — `sessionId, takeId`)* removes an UNFINISHED take's own `.part` (plain files only, no-follow); a FINISHED take's `.webm` is NEVER deleted — the in-use check sees only current clips, never the undo history — so one a clip plays is refused `invalidRequest` and any other is only forgotten as a pending take, file, record and asset kept (no command removes an asset — docs/Gaps.md GAP-195). A take id answers only to the session that began it. `EditorState::takes` (`TakeRegistry`, in `webcam_registry.rs` since the final review) is a leaf lock around per-take slots; the order is take entry → save lock → `sessions`, and `drop_session` (under the save lock, after it has released `by_project`/`sessions`, final review M1) forgets a closing session's takes and removes its UNFINISHED parts without ever locking an entry. `open_takes` (Checks, the close guard's count) only TRIES an entry — a take being finished counts as open (final review M2) — and a discard's quiesce only tries them too, before the save lock. A begin registers its slot with the entry held before creating anything; begin, append and finish each check the session's CLOSING mark under the entry lock (`discard.rs`). A take does NOT claim `CaptureGuard` (docs/Gaps.md GAP-193), and no native WebView2 permission handler scopes the camera to the editor window (GAP-194). Frontend: `port.ts`'s `webcamBegin`/`webcamAppend` (the RAW body + headers)/`webcamFinish`/`webcamDiscard`, decoded by `decodeWebcam.ts`; `webcamTakes.ts` records the takes still OPEN (written by the port alone), which the close guard reads first — "You have an unsaved webcam take": Cancel, or Discard the take. The recorder and its dialog are Task 50. |
+| `editor/checks_commands.rs` | Before-you-share checks (Task 54; F-45, F-33, F-38; SCREENS 07), its own module (pre-flight F31) rather than another command in `media_commands.rs`. `editor_get_checks` *(async — `sessionId` → `CheckFinding[]`; reads `sources.json` and stats every source on the blocking pool; read-only)* hands `core::editor::checks::run_checks` the session's project and three shell facts, each from its ONE existing source: the missing originals are `session_commands::missing_media` (the list the open result, the media library's Reconnect… and `editor_relink_media` report), sound is each `sources.json` record's `hasAudio` (the `CommandContext` fact `detachAudio` reads — without it a synchronized webcam, a video-only file, would read as sound), and the unfinished webcam takes are `EditorState::takes.open_takes` (the webview's `webcamTakes.ts` is only its close guard's mirror). An unreadable `sources.json` is an error, never a quietly short list. Each finding is `{id: "chk-<code>-<target>", severity: "blocking"\|"warning"\|"info", code, message, target: {kind, id\|null}, action\|null}` — fourteen codes (`missingMedia`, `emptyProject`, `noDestination`, `gap`, `allMuted`, `clipping`, `excludedCaptions`, `captionOverlap`, `captionDensity`, `pendingTake`, `transparentClip`, `textCollision`, `privacyCover`, `canvasReview`; `core/src/editor/checks.rs` + `checks_layout.rs`, the rules reading the render's own time/audibility algebra), and NO score anywhere (`no_quality_score_is_ever_emitted`). **Only `blocking` stops a render**, and only two things block: a missing file the render READS — a clip on a visible video track, or an audible clip on a visible audio track (`render_reads`, over the render's own `is_audible`: exactly the files `render_plan::plan` refuses; one only hidden or silenced clips use is a warning) and an empty timeline. Frontend: `editorChecks` (the store, re-read by the header's `ChecksButton` on every revision, session or open-take change, and when the Checks or Render dialog opens; `blockedReason` is the Render dialog's one rule), `ChecksDialog` (summary, Fix/Review/Note groups, `ChecksDestination` for `setDestination`, Continue to render), `checkReveal.ts` (what each action reveals: select, seek to the OUTPUT time, open the inspector tab or library panel) over `revealBus.ts` (the per-surface reveal requests the mixer, the media library's Reconnect/Webcam, the timeline's scroll, the ratio control, the compact drawers and the Render button answer). The library's open tab is now `editorWorkspace.libraryTab`. Same NATIVE `require_editor_window` + `authz_guard.rs` discipline as its siblings. |
+| `editor/diagnostics.rs` (tests in `diagnostics_tests.rs`) + `editor/redact.rs` | Content-free support (Task 58; F-50). `editor_export_diagnostics` *(async — no arguments → the file name written, or `null` for a dismissed dialog)* builds `Diagnostics {appVersion, os, ffmpeg: {found, version, filters}, sessions, projects, products, jobs: [{kind, phase, errorCode}], webview2Version}` from typed fields only (counts from `EditorState`, `store_io::list_projects` and each ledger; jobs from `JobRegistry::summaries` — kind, phase and the error CODE, never its message, which can name a file; ffmpeg's major.minor and which of the render's feature filters it has, never its banner line; `os` is `OS ARCH`; `webview2Version` is `tauri::webview_version()`, `null` on failure), then opens Rust's OWN save dialog on the named `editor-diagnostics` thread joined from the blocking pool and writes pretty JSON through `subtitle_commands::write_new_file` (an owned same-directory temp + `rename_noreplace`: an existing file is refused `writeDenied` and left byte-identical; `.json` appended unless present). Frontend: Help → **Export diagnostics** (`GuideHelpButton`, a toast naming the file or the refusal). **`redact.rs`** is the other half of F-50: `redact_path(&Path)` → `<path:#hash8>` and `redact_name(&str)` → `<name:#hash8>` (the first 8 hex digits of the SHA-256, through `core::editor::import_io::hashing_reader` — no new dependency), how an editor log line — or an error message, which its receiver logs as-is — carries a path, a file or capture name, a title or caption text (`store_io`'s and `recovery`'s messages redact at the source: "Cannot read the project file <path:#…>"). `redact_guard.rs` (test-only) scans every `.rs` under `src/editor/**` (subdirectories included, so a module moved in is covered; comments and char literals blanked) and names the file and line of any log call (`log::` level macros and `log::log!(Level::…)`) formatting an argument named `path`/`file`/`name`/`title`/`text`/`caption`/`base` without `redact`, and of any log call or message construction (`format!`, `format_args!`, `io::Error::new`, `Error::other`, `anyhow!`) containing a `.display()` whatever its name (F38) or `{:?}` of an identifier the file declares or binds as a `Path`/`PathBuf`. What it cannot see — a path reached through a function or `to_string_lossy()`, `write!`, a third-party `Display`, a capture name inside a user-facing message — is docs/Gaps.md GAP-210. The diagnostics' `ffmpeg.filters` come from `screen::render::run::FEATURE_FILTERS`, held equal to the render's optional filters by a screen test. Same NATIVE `require_editor_window` + `authz_guard.rs` discipline as its siblings. |
+| `ffmpeg.rs` | The export's external tool, resolved the way Pandoc is (`external_tool.rs` is the shared layer both consume — `CREATE_NO_WINDOW`, the timeout kill, the bounded drain, the registry-fresh PATH). `detect_ffmpeg` *(async — it spawns `ffmpeg -version` and `ffmpeg -encoders`)*, `set_ffmpeg_path` *(async — an fsync'd config write; the override lands in the app-global `documentImport` section beside `pandocPath`, which is where that section's tool overrides live rather than a statement about document import)*. **Both now have frontend callers** (GAP-144, closed): `FfmpegSettings.vue` in Buddy settings → Integrations, and `src/stores/ffmpeg.ts`, the `pandoc.ts` analogue whose `ensureDetected()` the Record Screen picker consults on mount. The picker shows a **non-blocking NOTICE, deliberately not a gate**: recording and editing work fine without ffmpeg and only the Save needs it, so disabling Start would take away a capture the user can make and edit. A regression test pins that Start stays enabled either way. Both cards consume one `useExternalTool` composable — the frontend mirror of `external_tool.rs` being the tool-agnostic half Pandoc and ffmpeg already share in Rust; a third tool card should reuse it rather than copy a fourth time |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
 `tauri-plugin-autostart`. Tray + buddy context menu live in `tray.rs`; menu
@@ -270,8 +583,9 @@ item events are handled in `lib.rs`.
 
 ### Events (Rust → webviews)
 
-All emitted app-wide (`app.emit`); listeners noted are the windows that
-actually subscribe.
+All emitted app-wide (`app.emit`) with THREE exceptions, `region:begin`,
+`editor:open` and `editor:closeRequested`, noted below; listeners noted are
+the windows that actually subscribe.
 
 | Event | Meaning | Listened to by |
 | --- | --- | --- |
@@ -285,6 +599,16 @@ actually subscribe.
 | `capture:transcribing/transcribeProgress/transcribed/transcribeSkipped/transcribeFailed/transcribeCancelled` | Transcription job lifecycle (each carries the `mp3`) | capture store |
 | `capture:transcribeRetargeted` | A rename moved a queued job OR a transcript sidecar `{from, to}`; the store re-keys its seeded row (queued or terminal) | capture store |
 | `capture:modelDownload` / `capture:modelReady` | Whisper model download progress / ready | capture store |
+| `screen:started` | A screen capture began. Carries a full `ScreenStatusPayload` (same shape as `screen_capture_status`' reply, and `src/types.ts` documents it as such) which the store deliberately IGNORES in favour of a re-read: the `screen-capture-monitor` thread is live before `start_screen_capture`'s tail emits, so this event can arrive AFTER `screen:stopped` for the same capture | screenCapture store (init in BuddyRoot **and** PanelRoot) |
+| `screen:paused` / `screen:resumed` | `{atMs}` / `{pausedTotalMs}` — the pause edges. The store IGNORES either while idle: its `status` is one tri-state, so an ungated pause would raise a paused capture out of nothing | screenCapture store |
+| `screen:stopped` | The staged capture `{base, path, durationMs, sourceTitle, width, height}` — emitted on the clean stop AND on a self-finalize (the source closed) | screenCapture store |
+| `screen:failed` | `{message, retainedPath}` — `retainedPath` is the `.part` a stop that failed AFTER writing real footage deliberately left behind, carried as data so the UI can offer that (still playable) file | screenCapture store |
+| `screen:warning` | `{message}` — spec §14: a vanished source or audio device warns, the capture finalizes cleanly. Toasted only when it arrives outside a live capture | screenCapture store |
+| `screen:frames` | `{fps, dropped}` ~2 Hz, advisory & lossy (the audio domain's `capture:level` posture) | screenCapture store → `ScreenCaptureBar`'s dropped chip (`dropped > 0` only; `fps` stays log-only, a rate is not an anomaly) |
+| `screen:discarded` | `{base}` — **not in spec §11**, added deliberately. Without it a discarded capture leaves `lastStaged` pointing at a base no longer on disk, so the panel keeps offering **Edit** and the editor opens on a sidecar that is gone. Emitted from `staged_commands`' single emitter (`emit_discarded`, which the bulk clear reuses), so the one-emitter invariant holds. (Until Task 59 the phase-5 export sent four more `screen:export*` events; they are retired with it) | screenCapture store (`forgetStaged`) |
+| `region:begin` | The overlay is about to be shown for a NEW selection. **The FIRST of the three events emitted to a single window** (`emit_to("overlay", …)`, not `app.emit`; `editor:open` and `editor:closeRequested` below are the others): it re-arms a one-shot latch that exists in exactly one webview and means nothing anywhere else. Emitted from INSIDE the same main-thread closure as `set_size`, immediately BEFORE `show()` — a hidden window takes no pointer input and the webview's task queue is FIFO, so the re-arm cannot lose the race to the user's first pointerdown. A failed emit is a hard error, not a `let _ =`: an un-armed overlay IS a full-screen scrim that ignores every click and Escape for the whole 120 s wait | RegionRoot (overlay) |
+| `editor:open` | A staged capture, or (Task 37 Part B) a tutorial project, is about to be opened in the editor. **The SECOND event emitted to a single window** (`emit_to("editor", …)`, the `region:begin` shape): it says "re-read the stash", it carries no state, and it means nothing in any other webview. It exists because draining `take_editor_request` from `onMounted` alone is not enough — `window_close.rs` answers the editor's own X with `prevent_close()` and never destroys it (a hide, directly or via the close guard since Task 37's `editor:closeRequested`), so that webview mounts exactly ONCE per process: open capture A, close the editor, open capture B, and without this event the window comes back up still showing A while B sits in the stash forever (`editor_commands.rs`'s module doc, at length). Emitted BEFORE `show()`, and a failed emit ROLLS THE STASH BACK and errors rather than leaving a request a later drain would silently open | EditorRoot (editor) |
+| `editor:closeRequested` | `{}` — the user clicked the editor window's titlebar X (Task 37). **The THIRD event emitted to a single window** (`emit_to("editor", …)`, the `editor:open` shape): `window_close.rs` still `prevent_close()`s, but instead of hiding it now ASKS the editor webview, whose close guard decides — a dirty session or a live render/publish job (read from the job REGISTRY by kind) gets `CloseGuardDialog`, anything else, including a window with no session open, hides at once through `editor_hide_window`. If the emit fails, `route_editor_close` falls back to hiding directly and logs, so the X can never do nothing. Nothing on the window's X or an unmount ever cancels a render — only the dialog's explicit "Cancel the render"; the X only HIDES the window and never closes the session. Closing a SESSION does (final review M3: `editor_close_session` with any disposition, e.g. Resume's `keep`, cancels its renders and publishes, because a render can only land in a live session) | EditorRoot (editor) |
 | `mcp:status` | MCP server state `{state, port?, message?}` on every transition | McpSettings (panel) |
 | `mcp:write` | An MCP client's successful vault write `{kind, title, vaultName}` | useBuddyAnnouncements (buddy window ONLY — exactly-once) |
 
@@ -312,6 +636,14 @@ actually subscribe.
 - **Task toggle**: `Tasks.vue` optimistic flip (per-row in-flight set) →
   `set_task_status` → containment gates → `core::tasks::set_status`
   surgical frontmatter edit → atomic replacing write.
+- **Staged capture → vault** (since Task 59; the phase-5 export's
+  `export_and_save_capture` flow is retired): the panel's **Edit** →
+  `open_capture_editor` → `editor_open_staged` (pin + migrate the sidecar's
+  saved cut) → edit → **Render video** (`editor_start_render`; an untouched
+  capture is an identity plan, R1, and renders as a lossless `-c copy`
+  remux) → **Publish to vault…** (`editor_publish_product`, the TENTH
+  write). The staged capture stays staged (R6); the user discards it — after
+  **Discard project…** unpins it — from the Record Screen list.
 - **Update**: see [Updater flow](#updater-flow-srcstoresupdatests-updatesettingsvue).
 
 ### Where state lives on disk
@@ -319,9 +651,12 @@ actually subscribe.
 | State | Location |
 | --- | --- |
 | Vault registry (read-only input) | `%APPDATA%\obsidian\obsidian.json` |
-| Per-vault capture/tasks/`documents_folder` settings (including six additive per-vault template fields — `note_extra_frontmatter`/`note_body_template` capture-owned via `set_capture_config`, `task_extra_frontmatter`/`task_body_template` owned by `set_task_template_config`, `document_extra_frontmatter`/`document_body_template` documents-owned via `set_documents_config`; each save preserves the other two pairs untouched — `config_merge.rs`'s `merge_capture_owned`/`merge_documents_owned` for the capture/documents surfaces, a direct read-modify-write for the task-template surface) + app-global `mcp`, `document_import` (user-set `pandoc_path` override), and `panel` (the S/M/L preset size, `core::panel_config`) sections | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse; `serialize_config` round-trips every section) |
+| Per-vault capture/tasks/`documents_folder` settings (including six additive per-vault template fields — `note_extra_frontmatter`/`note_body_template` capture-owned via `set_capture_config`, `task_extra_frontmatter`/`task_body_template` owned by `set_task_template_config`, `document_extra_frontmatter`/`document_body_template` documents-owned via `set_documents_config`; each save preserves the other two pairs untouched — `config_merge.rs`'s `merge_capture_owned`/`merge_documents_owned` for the capture/documents surfaces, a direct read-modify-write for the task-template surface) + app-global `mcp`, `document_import` (the user-set `pandoc_path` override **and, since phase 5, `ffmpeg_path`** — both tool overrides live in that section; the name is where the first one landed, not a claim about document import), and `panel` (the S/M/L preset size, `core::panel_config`) sections | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse; `serialize_config` round-trips every section) |
 | Whisper models | `%APPDATA%\vault-buddy\models\ggml-<tier>.bin` + `ggml-silero-v5.1.2.bin` (pinned Hugging Face URLs + SHA-256) |
-| Buddy window position | tauri-plugin-window-state file in `%APPDATA%\com.vaultbuddy.desktop` (POSITION only; panel/bubble denylisted) |
+| Buddy window position | tauri-plugin-window-state file in `%APPDATA%\com.vaultbuddy.desktop` (POSITION only; panel/bubble/overlay **and editor** denylisted — `tray::POSITION_DENYLIST` is `ALL_WINDOW_LABELS` minus `main`, so every window but the buddy is excluded) |
+| Staged screen captures | `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures` — `<base>.mp4` + `<base>.json` (the sidecar, which carries the editor's `timeline`), a hidden `.<base>.mp4.part` while recording, and — left only by a build before Task 59, which retired the phase-5 export — a hidden `.<base>.export.mp4.part` (`staging::EXPORT_PART_INFIX`; the recovery sweep deletes a stale one, discard and Clear include it). Task 51 (F-22) adds a capture's synchronized webcam track — `.<base>.webcam.mp4.part` while recording, `<base>.webcam.mp4` once published (`staging::WEBCAM_INFIX`), described by the sidecar's optional `webcam` block `{file, width, height, deviceLabel, offsetMs}` — and the stem shape `<base>.stem-<n>.m4a`. Task 53 (F-05) mints the stems when the vault keeps them (`screenAudioStems`, default off): one mono AAC `.m4a` per audio input, `.<base>.stem-<n>.m4a.part` while recording (`n` 1-based in input order), published with the capture, listed by NAME in the sidecar's optional `stems` block `[{index, input, file}]` (`staging_stems.rs`; skipped when empty, and a malformed block degrades to no stems, kept raw in `extra`, like `webcam`). The webcam file and every LISTED stem are files a capture OWNS (`staging_files::capture_file_names(base, &sidecar.stem_files())` — every caller reads the sidecar's real list, never `&[]`, and admits only this base's own stem shape): discard, Clear and the size readout include them, and a stem-shaped file the sidecar does not list is not the capture's (and `reserve_base` treats any stem file's base as TAKEN, by pattern, so a new capture never adopts a base a leftover stem already uses); one reader, `staging::listed_stems(dir, base)`, serves discard, the size readout and `resolve_source`; `staging_title` refuses a title ending in `.webcam` or `.stem-<digits>` exactly as it refuses `.export`. **OUTSIDE every vault, deliberately:** an unedited, unapproved capture is not knowledge, so discarding one must not leave litter in the user's notes. Phase 5 gave the directory a startup sweep, `screen_recovery::run_screen_recovery`, wired into `setup` after `run_import_recovery`: it promotes an orphaned `.part` that holds real footage, deletes an abandoned export temp outright, promotes an orphaned webcam part (by exact name) or stem part (`.<base>.stem-<n>.m4a.part`, by PATTERN — no sidecar lists an orphan's stems) to its own published name beside the capture, never as a capture of its own, and then LISTS a promoted stem in its capture's sidecar (input name from `inputs`, else "Audio input N") so discard and Clear own it (one whose capture has no sidecar under that base stays unlisted — docs/Gaps.md GAP-201), leaves a published webcam file alone, classifies anything that does not round-trip through `capture_paths::is_capture_base` as **Foreign** and never touches it, never follows a symlink, and postpones while EITHER capture domain holds `CaptureGuard` (the export's `ExportState`, a third source from the 2026-09-20 fix wave, is retired with the export: nothing writes an export temp any more). Its staleness window, `STALE_AFTER`, is the audio sweep's 60 s — named rather than inlined so the next reader can see it is shared on purpose. A completed staged capture is still never size-BOUNDED — nothing expires one, deliberately, since deleting a recording the user has not decided about is the loss this design exists to prevent — but the directory is now measured and clearable: `staging_commands::{staging_usage, clear_staged_captures}` back the **Staged screen captures** card in Buddy settings → System (docs/Gaps.md GAP-115). Phase 6 is complete; the missing size bound GAP-115 still records is a deliberate non-goal, not outstanding work |
+| Tutorial editor projects | `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<projectId>\` — `project.json` (the workspace envelope) + `sources.json` (asset id → where its bytes live; a staged capture is referenced as `{"store":"staging","base":…}`, ADOPTED, never moved; since Task 51 its synchronized webcam track as `{"store":"stagingFile","base":…,"file":"<base>.webcam.mp4"}` under asset `webcam` — `resolve_source` refuses any `file` that is not literally one of the capture's COMPANION files (`staging_files::companion_file_names`: the webcam file and the stems the capture's OWN sidecar lists, read only for a non-webcam name — never its own `.mp4`/`.json`/export temp); since Task 53 each listed stem as `{"store":"stagingFile","base":…,"file":"<base>.stem-<n>.m4a"}` under asset `stem-<n>` (registered by `editor_open_staged` only when `capture_file_names` owns it; migration puts each on its own audio track `as<n>` named by its input, one clip per placed legacy-timeline segment at the screen clip's own start and source range — a stem is the capture's audio time — and MUTES the screen clips, since the mix would otherwise play every input twice; ALL OR NONE: stems are placed, and the mix muted, only when every recorded input has a registered stem and they fit `MAX_TRACKS` and `MAX_CLIPS` — a failed, missing or doubled stem, or a limit, migrates the capture as if stems were off, mix audible, and only placed stems are registered), reconnect excludes it like the capture, a portable package carries it, and a malformed or future-shaped `webcam` block degrades to `None` (kept raw in `extra`) instead of hiding the capture; migration puts it on track `v2` at the presenter placement, one clip per placed legacy-timeline segment at that segment's output start, clipped to what the webcam covers (`offsetMs ..`), so a cut or reorder moves the presenter with its screen, marked `capture_sync: "shared-clock"`, its length derived from the capture's — docs/Gaps.md GAP-199) + `workspace.json` (Task 18: the sanitized view-preference blob — selection, playhead, panel layout, theme — written by `editor_save_workspace` on every debounced edit; `editor_save_project` embeds a read-only sanitized copy of it into `project.json`'s own `workspace` field, but writing THIS file never touches the project's revision or its undo/redo history), `media\` (Task 25: imported originals, COPIED in as `<assetId>.<ext>` via an owned `.part` + `rename_noreplace`, the same way Task 40's reconnect copies a found original, whose `sources.json` record then carries the chosen file's own facts and, for a confirmed replacement, `replacedFrom` — the asset protocol's scope already names this directory, and no scope entry for a user's own folder is ever added), `cache\` (Task 28: DERIVED and deletable — `<assetId>.peaks.<buckets>.json` waveforms stamped with their source's size+mtime, and `<assetId>-<ms>.jpg` thumbnails quantized to 250 ms and held to 200 per project by LRU, and — Task 47 — at most one `review-<jobId>.mp4` Review render, removed by the next review or a session close; created with `create_dir`, never `create_dir_all`, so a removed project is not resurrected by a late write), `recovery.json` (Task 37: the uncommitted-edit journal of a DIRTY session — written by the `editor-journal` thread at most once per 500 ms, deleted by a save of the current revision or `discardRecovery`, surfaced as `hasRecovery` and offered back as Resume/Discard by `RecoveryDialog` the next time a clean session opens the project), `products.json` + `products\<productId>.mp4` (Task 46: the immutable product LEDGER, a JSON array of `Product` records each named exactly `<productId>.mp4`, committed by the render job the moment a product lands — never by a save — and the products themselves; `record.products` in `project.json` is assembled from it on save/export), `jobs\<jobId>\` (Task 46: a render's own scratch — `out.mp4.part` and its ASS documents — removed by the job on success, cancel and failure; Task 48: a publish's journal `publish.json` `{step, video, note}`, removed when the publish returns, so only a crash leaves one, which the startup sweep REPORTS and never deletes), `takes\` (Task 49: webcam takes — `.<takeId>.webm.part` while recording, then `<takeId>.webm`, the `-c copy` remux, or the raw recording kept as-is when ffmpeg is missing; recorded in `sources.json` as `{"store":"takes","file":…}`; a closing session removes its unfinished parts; a crash mid-take leaves the user's recording as an unswept `.part` — docs/Gaps.md GAP-197). **Outside every vault**, like staging. The link back is the PIN: `editorProjectId` in the staged capture's sidecar, written only AFTER the project exists (a crash in between leaves an unpinned orphan the next `editor_open_staged` adopts back by scanning `sources.json`). **The startup re-pin sweep** (Task 37, F34: `recovery::run_startup_repin` on the named `editor-recovery-sweep` thread, spawned in `setup` right after `run_screen_recovery`, holding the editor's `open` lock — spawn order only: the screen sweep runs on its own thread and is not awaited, which is safe because a capture it promotes is `recovered` and refused by `editor_open_staged` (F7), and because the screen sweep's pass ALSO holds the `open` lock (final review M6): listing a recovered stem rewrites a PUBLISHED capture's sidecar, the very file a pin lives in, so the two sweeps' files are not disjoint) repairs the orphans no one reopens: it re-pins a project whose staged capture still exists (sidecar + `.mp4`) when the sidecar's pin is absent or names a project that does not claim it, and only REPORTS (logs) a project whose capture is gone or whose capture another claiming project holds — it never deletes and never invents a pin. Removal is `store_io::remove_project` only — ownership proven (`project.json`'s own `project.id`, read from the JSON document), no-follow, never `remove_dir_all`, nested content first and `project.json` LAST so a removal that fails part way can be retried (final review I1). Every store read goes through `store_io::read_bounded` — no-follow, and bounded while reading, not only by the size it checked (final review M4): `project.json` and `sources.json` at 8 MiB, `workspace.json` at 64 KiB (an oversized one degrades to empty), the ledger at its own bound; a staged sidecar through the screen crate's `read_sidecar`, 1 MiB. The recovery journal writer refuses a journal over the 8 MiB bound `load_journal` enforces (M5). **A project-file import** (Task 39, `editor_import_package`) builds in a sibling `editor-projects\.<projectId>.importing\` and renames it into place last; the same `editor-recovery-sweep` thread first runs `recovery::sweep_stale_imports`, which removes only real directories named `.<valid id>.importing` whose last change is an hour old (`store_io::remove_dir_no_follow`), and nothing else in the store — `list_projects` and the re-pin sweep already skip such names, since a leading dot is not a valid project id |
+| Tutorial editor guide progress | `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-prefs\guide-progress.json` (Task 55; ADR R16) — the guided onboarding's app-wide progress: the current lesson id, reviewed/explored lesson ids, invitation/active/collapsed/completed flags and the dimming/motion preferences, nothing else (a closed schema of lesson ids, never a path, media or project detail). Written by `editor_save_guide_progress` (validated first, then `write_atomic_replacing`), read by `editor_get_guide_progress`. **Outside every project and every vault**, and never part of a project save, a render snapshot or Undo |
 | Logs / crash records / run marker | `%LOCALAPPDATA%\com.vaultbuddy.desktop\logs` — `vault-buddy.log` (5 MB rotate), `crash.log`, `.vault-buddy.run` |
 | Frontend settings | localStorage `vault-buddy.animations/.character/.dragging/.messages/.messageDuration/.checkUpdatesOnStart` |
 | Recent searches | localStorage `vault-buddy:recent-searches` (cap 5) |
@@ -329,11 +664,13 @@ actually subscribe.
 
 ## The window system (most invariant-heavy area)
 
-Three separate always-on-top transparent windows, so the buddy window never
-resizes. The old design was one window that grew from 88×88 to hold the
-panel; WebView2 repaints its stale last frame at the new bounds for a frame
-on resize, flashing the buddy to a corner. Splitting the concerns removed the
-resize entirely:
+Six windows. FIVE of them are the always-on-top transparent companions, so
+the buddy window never resizes. The old design was one window that grew from
+88×88 to hold the panel; WebView2 repaints its stale last frame at the new
+bounds for a frame on resize, flashing the buddy to a corner. Splitting the
+concerns removed the resize entirely. The sixth, `editor`, is deliberately
+none of those things — an ordinary decorated, resizable application window —
+and the rules below say so where they differ:
 
 - **`main`** — the buddy, fixed 88×88, the only window the user drags and the
   only one whose position is persisted. It never changes size, so it is
@@ -352,9 +689,91 @@ resize entirely:
   off-screen; the mixed-DPI cross-monitor corner of that clamp is a tracked
   gap), created hidden.
 - **`bubble`** — the greeting speech bubble (260×150), created hidden.
+- **`overlay`** — the region-selection surface (spec §5.2), created hidden.
+  Sized and positioned over ONE monitor **while hidden**, then shown, like
+  `panel` and `bubble` and for the same stale-frame reason. Covering exactly
+  one monitor is load-bearing, not a simplification: it makes the webview's
+  viewport origin the monitor's origin, which is the only arrangement
+  `core::screen_geometry::to_physical`'s single scale factor describes
+  correctly (its module doc says why a mixed-DPI virtual desktop cannot be),
+  so the overlay's coordinates are monitor-local by construction rather than
+  by a subtraction somebody has to remember. The webview's own
+  `devicePixelRatio` is carried across but never used in the arithmetic — the
+  monitor's `scale_factor` is the single authority, and a disagreement is
+  LOGGED so a mixed-DPI mis-scale is visible in a bug report instead of
+  silently halving a rectangle. `select_capture_region` holds `DIALOG_ACTIVE`
+  for the selection's whole duration — the overlay steals focus and the
+  panel's focus-out check would otherwise hide the picker mid-selection — and
+  every exit funnels through one cleanup function,
+  `finish_region_selection` (hide the overlay, drop the answer slot, clear
+  `DIALOG_ACTIVE`, refocus the panel), pinned by a structural test in the
+  `clear_active_screen` shape. The wait is bounded at 120 s so a webview that
+  never answers cannot strand a full-screen invisible always-on-top window.
+  The overlay is hidden and REUSED, never reloaded, so its component state
+  survives between selections — which is why `region:begin` exists (see the
+  Events table).
+- **`region-indicator`** — the region border (spec
+  `2026-09-20-region-capture-indicator-design.md`, GAP-165), created hidden.
+  Shown only while a REGION capture runs, over exactly the recorded
+  rectangle, and **click-through**: `set_ignore_cursor_events(true)` is
+  applied on EVERY show rather than once at startup, because one silent
+  failure at startup would otherwise turn every later capture's indicator
+  into a full-region window swallowing every click, with no retry. If that
+  call fails the window is **not shown at all** — a missing border returns
+  the user to today's behaviour, a click-swallowing one is worse than
+  nothing. Sized and positioned while hidden, like every companion. Never
+  focused (`focus: false`): taking focus would blur the panel and trip
+  `schedule_focus_out_check`. It is the app's SIXTH window and the second
+  entry in `EXCLUDED_LABELS`, which is the whole reason a border drawn over
+  the recorded area is free — the user sees it and the recording does not
+  contain it.
+- **`editor`** — the capture editor (spec §5.1, §8), 1280×820 (min 960×640 —
+  widened from a 960×640 default / 720×480 floor in tutorial-editor Task 15,
+  the old default becoming the new floor, since the new Rust-backed workspace
+  needs more room than the phase-4 timeline editor did), created hidden.
+  The odd one out in every respect, and each difference is load-bearing:
+  - It is **not transparent, not always-on-top, `decorations: true`,
+    `resizable: true` and `skipTaskbar: false`** — a real application window
+    the user alt-tabs to and sizes, not a companion pinned to the buddy. So it
+    is **never positioned-while-hidden**: it opens where the OS puts it at its
+    configured size, and there is no placement math to get wrong. It is in
+    `POSITION_DENYLIST` for that same reason — a restored position would be
+    junk that only buys a startup restore and a `Moved` handler contending for
+    the window-state plugin's cache lock.
+  - It is **exempt from `tray::hide_buddy`**: the hide walk reads
+    `COMPANION_LABELS`, which is `ALL_WINDOW_LABELS` minus the editor. Hiding
+    it from the OUTSIDE would strand an in-progress edit off-screen with no
+    way back — the GAP-82 class, applied to a window that can hold work. The
+    user clicking the editor's own titlebar X is a different thing entirely:
+    that IS an explicit instruction about that one window, and
+    `window_close.rs` answers it with `prevent_close()` and, since Task 37,
+    `editor:closeRequested` to the editor alone (see the Events table): the
+    webview's close guard offers Save project / Keep for later / Discard
+    changes when the session is dirty, and hides via `editor_hide_window`
+    otherwise; a failed emit falls back to `hide()`. Unsaved edits never block
+    that hide or a quit — the recovery journal is the durability mechanism,
+    and the next open offers Resume or Discard (`RecoveryDialog`).
+  - It **is** destroyed by `finish_quit`, which walks `ALL_WINDOW_LABELS`: a
+    live WebView2 window at process exit fails the `Chrome_WidgetWin_0` class
+    unregister, every time.
+  - Because it is hidden and reused rather than destroyed, its webview mounts
+    exactly ONCE per process — which is why `editor:open` exists (see the
+    Events table), the editor's counterpart to `region:begin`.
+  - Since tutorial-editor Task 15 it is no longer the store-free root the
+    "Frontend state" section used to describe — `EditorRoot.vue` itself uses
+    FOUR stores (`editorProject`, `editorWorkspace`, `editorOnboarding` and
+    the shared `notifications`; measured on the tree at Task 60, not the
+    plan's guess) and drives `editorProject` through `editor_open_staged` /
+    `editor_open_project` on every drained request; the shell it renders
+    adds `editorJobs`, `editorProducts` and `editorChecks` (six editor
+    stores in all) and, in the webcam dialog, `ffmpeg`. See "Frontend state"
+    below for what they own and why `RegionRoot`/`RegionIndicatorRoot`
+    remain the store-free pair.
 
-`panel` and `bubble` are *positioned while hidden, then shown* — a moved-only
-window has no stale-frame flash. Placement is one pure function,
+`panel`, `bubble` and `overlay` are *positioned while hidden, then shown* — a
+moved-only window has no stale-frame flash. (The overlay is also RESIZED while
+hidden, to its target monitor's full bounds, which is the same rule: the panel
+is only ever resized hidden for exactly this reason.) Placement is one pure function,
 `core::companion_placement::place_beside(buddy, work_area, w, h, prefer, vmode)
 -> (Point, Anchor)` (unit-tested on Linux): it sits the window on the `prefer`
 side of the buddy, flips to the other side when that overflows the screen edge,
@@ -401,8 +820,11 @@ Invariants:
 
 - **Window show/hide and the placement getters run on the MAIN thread only.**
   `toggle_panel`, `close_panel`, `close_bubble` are *synchronous* commands
-  (custom commands aren't capability-gated — only `core:`/`plugin:` are), so
-  they run on the main thread where the window getters, `set_position`,
+  (as of Task 11's exhaustive app manifest, every custom command in this app
+  needs a capability grant — these three are granted broadly via
+  `capabilities/default.json`'s `windows` list; see the IPC surface section's
+  capability-scoping note), so they run on the main thread where the window
+  getters, `set_position`,
   `show`/`hide` and `set_focus` are valid. `toggle_panel` positions the hidden
   panel, shows it, focuses it, emits `panel-shown`, and hides the bubble;
   opening never touches the buddy window. The show half is factored into
@@ -450,6 +872,15 @@ Invariants:
   import's `Converting…`/toast state, which render in the panel window) out
   from under the user. Unlike the timed pin it's a plain bool (a dialog stays
   open arbitrarily long), cleared in the frontend's `finally`; still only-hide.
+  **It now has TWO independent drivers** — `withDialogSuppressed` and
+  `region_commands::select_capture_region`, which holds it for the overlay's
+  whole selection — and a bool cannot count. Each driver pairs its own set and
+  clear at one scope, so neither can leave the flag stuck on; but the two
+  OVERLAP badly, because a bool has no depth: a native dialog opened DURING a
+  region selection clears the suppression when it closes, while the selection
+  is still live. It needs a counter; that is docs/Gaps.md GAP-128, deliberately
+  out of scope for phase 3 because it touches `lib.rs`'s shared flag and every
+  existing caller.
 - Buddy drags go through the `start_buddy_drag` command, never the raw
   `startDragging()` JS API. Being synchronous it runs on the main thread,
   where it re-checks the **logical (swap-aware) primary button** via
@@ -469,7 +900,9 @@ Invariants:
   geometry; the plugin's Moved listener takes the same lock on the main
   thread. An off-main save colliding with a drag's Moved flood deadlocked
   both threads and froze the app with no crash record (the original
-  "drag crash"). The 1s loop in `lib.rs` is therefore a pure metronome: it
+  "drag crash"). The 1s loop (its tick and the upkeep it
+  posts now live in `window_upkeep.rs`, split from `lib.rs` at the 800-line
+  cap — `run()` is unchanged) is therefore a pure metronome: it
   posts `window_upkeep_tick` (always-on-top re-assert + position
   checkpoint) to the main thread via `run_on_main_thread` with backpressure
   (at most one closure outstanding), and it warns when the main thread
@@ -489,16 +922,95 @@ Invariants:
   structurally cannot see (native faults, kills, power loss) — every
   graceful exit path (tray/buddy quit, Alt+F4 close, update install) must
   stamp `diagnostics::mark_clean_shutdown()`. All hide paths funnel through
-  `tray::hide_buddy`, which hides all three windows (`panel`, `bubble`,
-  `main`) and no-ops mid-recording (the buddy is the recording indicator).
+  `tray::hide_buddy`, which hides every COMPANION window and no-ops
+  mid-capture — the buddy is the capture indicator for BOTH kinds, so the
+  guard is `capture_commands::recording_blocks_shutdown ||
+  screen_commands::capture_blocks_shutdown`.
+
+  **There are FOUR window-label lists, and they are four on purpose.** The
+  hide walk and the destroy walk used to share one, `ALL_WINDOW_LABELS`;
+  Phase 4 split that in two because the editor has to be destroyed on quit
+  but must NOT be hidden with the companions (an outside hide strands an
+  in-progress edit off-screen — see the editor's own bullet above). So:
+  - `tray::ALL_WINDOW_LABELS` — every declared window; `finish_quit`'s
+    destroy walk. A live WebView2 window at exit fails the
+    `Chrome_WidgetWin_0` class unregister.
+  - `tray::COMPANION_LABELS` — `ALL_WINDOW_LABELS` minus `editor`; the
+    hide-to-tray walk.
+  - `tray::POSITION_DENYLIST` — `ALL_WINDOW_LABELS` minus `main`; the windows
+    whose position the window-state plugin must not persist.
+  - `capture_exclusion::EXCLUDED_LABELS` — **the windows a HARDWARE run has
+    cleared**, kept out of a recording's pixels by `WDA_EXCLUDEFROMCAPTURE`.
+    Today that is `["main", "region-indicator"]`: the buddy, and the region
+    border whose whole value depends on being invisible to the capture.
+    Through phases 3–5 it was every declared window and its test failed
+    until a new window was added. **GAP-166 inverted it on hardware**:
+    `SetWindowDisplayAffinity` on a WebView2-hosting window stopped the
+    editor painting AND stopped other applications' toolbars taking pointer
+    input until the process exited, and `main` alone was clean. So the
+    panel, bubble, overlay and editor are IN a recording now, by design, and
+    **a window declared in the config is NOT excluded until a hardware run
+    says it can be** — the allowlist lives in the TEST
+    (`HARDWARE_CLEARED_FOR_AFFINITY`, each label carrying its evidence) and
+    production is checked against it, so adding a seventh window cannot
+    quietly exclude it. `region-indicator` joined on GAP-165's premise probe
+    (a second window of its exact shape class, excluded across several
+    captures, with other applications' toolbars surviving); rows 44–52 are
+    its own verification and are unrun. Which property of the other four
+    made them hazardous is still not established; this is an empirically
+    cleared set, not a theory.
+
+  None of these may drift, and none of them is maintained by memory: unit
+  tests derive each from `tauri.conf.json` — `ALL_WINDOW_LABELS` and
+  `COMPANION_LABELS` directly, `POSITION_DENYLIST` transitively through
+  `ALL_WINDOW_LABELS`, `EXCLUDED_LABELS` the INVERSE way (the hardware-cleared labels —
+  `main`, `region-indicator` — in, every other declared window OUT, each
+  named in the failure) — with an
+  explicit assertion that `COMPANION_LABELS` does NOT contain `editor`, and
+  another that `lib.rs` feeds the window-state plugin the constant rather
+  than a literal list that drifted from it once already.
+
+  That discipline exists because the overlay was once added to the config
+  and to none of the lists: quit then failed the `Chrome_WidgetWin_0`
+  unregister every time, and hide-to-tray would have stranded a
+  full-monitor always-on-top window with the buddy gone.
+
+  The quit path carries the same pair — and, since Task 46 (R12), a THIRD
+  member that is handled differently: its `shutdown-finalize` worker first
+  CANCELS every editor render (`editor::render_jobs::cancel_all_bounded`,
+  5 s: the child is killed and its part deleted), then — since Task 48
+  (F19), the FOURTH — every publish (`editor::publish::cancel_all_bounded`,
+  5 s: the copy stops at its next chunk and removes its own temp, so nothing
+  half-written is left in the vault), then finalizes the audio recording and
+  the screen capture, then `finish_quit`. `close-finalize` (Alt+F4) runs the
+  same two cancels in the same order; a render or a publish that outlives
+  its bound is logged and stops counting in the gate (`RENDERS_ABANDONED`,
+  `PUBLISHES_ABANDONED`), so the re-triggered close cannot loop. The
+  updater's prepare step refuses while either runs. (Until Task 59 the
+  phase-5 export was a fifth member, cancelled first; it is retired, and
+  GAP-190 — the one term with no abandon latch — closed with it.) Cancel
+  rather than finalize because a render is repeatable and its project is
+  kept, where a recording is not; first because a cancel kills a child
+  process in seconds while the two finalizes are unbounded, and a job left
+  behind them would keep writing for as long as they take.
+  `tray::hide_buddy` deliberately does NOT gate on a render or a publish —
+  the buddy is the RECORDING indicator, and blocking hide-to-tray for the
+  minutes one runs would pin the app on screen during exactly the operation
+  a user walks away from. `shutdown_gate`'s
+  `shutdown_gate_composes_captures_and_renders` pins the composition, the
+  cancel order in both workers, and that the hide chokepoint consults
+  none of it.
 
 ## The vault domain (core crate + `vaults` store)
 
 Hard rule, amended by the Knowledge Intake increment: **the vault domain
 never writes into a vault** — opening notes and creating daily notes is
 delegated to Obsidian via `obsidian://` URIs, and every launched URI is
-logged (`uri::launch`) as the audit trail. Eight sanctioned write paths
-exist, each documented in its own domain section below:
+logged (`uri::launch`) as the audit trail. Ten sanctioned write paths
+have been numbered, and **nine are live**: path 9, the phase-5
+screen-capture export, was retired by tutorial-editor Task 59 and keeps
+its number only so the history (and the tenth's "the ninth's rails")
+stays readable. Each is documented in its own domain section below:
 
 1. the **capture** domain — recordings and companion notes;
 2. the **transcription** domain — the `<base>.transcript.md` sidecar;
@@ -531,7 +1043,34 @@ exist, each documented in its own domain section below:
    `(copy)` / status `new` / Task ID regenerated-or-stripped, non-scalar id
    left untouched);
 8. the **document-import** domain — a Pandoc-converted markdown note plus
-   its extracted-media sibling folder.
+   its extracted-media sibling folder;
+9. *(retired by tutorial-editor Task 59 — kept numbered so the tenth's
+   "the ninth's rails" still resolves)* the **screen-capture** domain's
+   phase-5 export — the exported `.mp4` and its companion
+   note, committed through `core::screen_capture_paths` on the same
+   never-clobber rails (PAIRWISE `.mp4`/`.md` reservation, then
+   `rename_noreplace` with ` (N)` retry at commit time), **video first and
+   note second**, with a note failure degrading to a warning rather than
+   rolling the video back — the video is irreplaceable, the note is
+   regenerable prose. It arrived in Phase 5 (Task 7, commit `09a5af5`) in
+   `src-tauri/src/export_worker/`; Task 59 deleted that module except its
+   `vault_dir.rs`, which the tenth write uses and which now lives at
+   `src-tauri/src/editor/vault_dir.rs`;
+10. the **tutorial-editor** domain — **publishing** a rendered product
+   (Task 48, ADR R13, `src-tauri/src/editor/publish.rs`): a COPY of the
+   immutable `products\<productId>.mp4` and its companion note, on the
+   ninth write's rails — `editor::vault_dir::prepare_export_dir` (containment before
+   and after `create_dir_all`) and `rollback_export_dir`, the PAIRWISE
+   reservation, `rename_noreplace` with ` (N)` retry (through
+   `core::editor::publish_io::copy_into_vault`, which streams into an owned
+   hidden temp in the destination folder and lands it with
+   `commit_screen_capture`), **video first and note second**, a note failure
+   a warning, and the note naming the file that actually LANDED (A21). It
+   differs from the ninth only where R13 says: it copies (the product stays
+   playable in its project and is never opened for writing) and deletes
+   nothing afterwards. A journal (`jobs\<jobId>\publish.json`) lets the next
+   start REPORT a publish a crash interrupted; it never resumes one
+   (GAP-192).
 
 They all ride the same never-clobber/atomic machinery in
 `core::capture_note` / `core::capture_paths` (exclusive-create temps,
@@ -540,7 +1079,12 @@ deliberate variant: `rename_task_list` REFUSES a collision instead of
 suffix-retrying (the name is user-chosen), `delete_task_list` removes
 an already-empty folder, and `delete_task` is a guarded REMOVE (not a create)
 — the one destructive path, which is why it re-validates identity at unlink
-time. Any other code touching vault contents
+time. The screen-capture write reserves its pair through
+`core::screen_capture_paths` rather than `capture_paths` directly, for one
+mechanical reason: the single collision-suffix minter, `capture_paths::
+candidate`, is `pub(crate)` to `core`, so anything that mints a name has to
+live in that crate — which is also why the tenth write's copy lives in
+`core::editor::publish_io` rather than the shell. Any other code touching vault contents
 directly is a design change, not a patch. Design specs:
 `docs/superpowers/specs/2026-07-04-increment-2-knowledge-intake-meeting-recording-design.md`,
 `docs/superpowers/specs/2026-07-04-increment-3-local-speech-to-text-design.md`,
@@ -552,7 +1096,8 @@ directly is a design change, not a patch. Design specs:
 `docs/superpowers/specs/2026-07-15-tasks-lists-first-drag-default-and-task-ids-design.md`,
 `docs/superpowers/specs/2026-07-18-vault-ux-and-configurable-templates-design.md`,
 `docs/superpowers/specs/2026-07-24-task-detail-surface-description-verbs-design.md`,
-`docs/superpowers/specs/2026-07-25-task-subtasks-and-parent-tasks-design.md`.
+`docs/superpowers/specs/2026-07-25-task-subtasks-and-parent-tasks-design.md`,
+`docs/superpowers/specs/2026-09-18-screen-capture-intake-design.md` (§9).
 
 Data flow: `%APPDATA%\obsidian\obsidian.json` → `discovery.rs` →
 `list_vaults` (open-flag scrub) → `vaults` Pinia store → `VaultList.vue` →
@@ -731,6 +1276,668 @@ found the failure it prevents:
 - Per-vault settings live app-side in `%APPDATA%\vault-buddy\config.json`
   (documented in `docs/DEVELOPMENT.md`); parsing is per-field defensive so
   one malformed value can never flip a vault's mode.
+
+### Screen capture (phases 2–5) — `src-tauri/screen/` + `screen_commands.rs` / `screen_capture_worker.rs` / `region_commands.rs` / `capture_exclusion.rs` / `editor_commands.rs` / `staged_commands.rs` / `screen_recovery/` / `ffmpeg.rs` / `window_close.rs` + `screenCapture` store
+
+The second capture provider: record a chosen monitor, window or REGION of a
+monitor, with any number of selected audio devices mixed into one stereo
+track, into a crash-survivable file — then open it in the tutorial editor,
+render it and publish the render into a vault.
+Spec: `docs/superpowers/specs/2026-09-18-screen-capture-intake-design.md`
+(phasing in §13).
+
+**Phase 5 broke the vault seal, and Task 59 moved it.** Phase 5's
+`src-tauri/src/export_worker/` was the one file in this feature that wrote
+into a vault (the vault domain's write path 9). Tutorial-editor Task 59
+retired it with the phase-4 editor: a staged capture now reaches a vault
+only through the tutorial editor's Render + Publish (write path 10,
+`src-tauri/src/editor/publish.rs`), and **nothing under this section's
+files writes into a vault**. `screen_recovery/` only ever deletes inside
+staging, and `editor_commands.rs` resolves no path at all. One file
+resolves a vault path and is worth knowing about precisely because it is
+NOT a write: `staged_commands::open_screen_capture` canonicalizes the
+vault, requires containment, and hands the relative path to `uri::launch`
+— the read-only Obsidian hand-off every `open_*` command makes (the
+Publish dialog's Open).
+
+- **Three threads, and why there are three.** Spec §6.1 lists two; the code
+  runs three because `IMFSample` is a COM interface pointer and is not
+  `Send`, so a sample built on the frame thread cannot be handed anywhere
+  else, and writing one `IMFSinkWriter` from two threads raises apartment
+  questions with a ten-minute feedback loop attached. So the channels carry
+  PLAIN BYTE VECTORS plus a timestamp, and **`screen-mux` is the only thread
+  that ever touches the sink**: the WGC frame callback (`frames.rs`, owned
+  by `windows-capture`) and `screen-audio` (`session/audio.rs`) are pure
+  producers. The cost is one memcpy of data already in RAM — the frame was
+  copied out of the GPU staging texture regardless. The shell adds four more
+  named threads around them: `screen-capture-device` (owns the `!Send` cpal
+  streams and the ready handshake), `screen-capture-monitor` (drains the
+  outcome — an explicit stop OR a self-finalize — and clears the
+  reservation either way), plus the advisory `screen-warn` and
+  `screen-stats` forwarders. **An optional FOURTH producer** (Task 52,
+  F-22): a webcam the user picked is read by `screen-webcam`
+  (`session/webcam_windows.rs`, an `IMFSourceReader` asked for NV12 then
+  YUY2) and written by `screen-webcam-mux`, the only owner of the webcam's
+  OWN video-only fragmented-MP4 sink (`.<base>.webcam.mp4.part` →
+  `<base>.webcam.mp4`), over its own bounded channel. It stamps from the
+  SAME `CaptureClock` (`session/webcam.rs`'s `WebcamClockMap`: reader time
+  minus the anchor's, plus the clock at the anchor; paused samples are
+  discarded AND the anchor dropped, so a resume re-anchors instead of billing
+  the pause), and its file is REBASED to its own first frame, whose clock
+  time is the sidecar's `offsetMs` (GAP-199). The device opens — and reads
+  its first frame — BEFORE the screen's clock starts, so a camera another
+  app holds refuses the start before any file exists (a start that fails
+  LATER, at the screen sink or WGC, leaves a header-only
+  `.<base>.webcam.mp4.part` for the recovery sweep, GAP-200); a webcam that
+  vanishes mid-capture raises `screen:warning`, finalizes what it holds, and
+  the screen capture continues; a failed webcam finalize retains its part
+  for the recovery sweep and warns with `webcam::webcam_stop_warning` — never
+  the `Retained` error's own "screen capture could not finish" text, since
+  the screen capture succeeded. `webcam: None` constructs none of it (structural
+  test `start_without_a_webcam_is_byte_identical_to_today`). No automated
+  test executes the Windows producer; checklist rows T37–T41 are its gate.
+  **Optional per-input audio STEMS** (Task 53, F-05; `screenAudioStems`,
+  default OFF). They are not a second recording: `screen-audio` cuts each
+  input's stem from the very post-resample slice the mixer sums
+  (`session/stems.rs`'s pure `Mixdown::round`, which the audio thread now
+  mixes through) and sends it over a bounded channel with the mixed chunk's
+  own `(ts, dur)` — so a stem and the mix cannot drift, and pause, the
+  pause-edge flush and a stalled source are inherited (a stalled input's stem
+  is padded with the silence the mixer pads it with). `screen-stems`
+  (`session/stems_windows.rs`) is the ONLY owner of the stems' audio-only
+  fragmented-MP4 sinks (`FragmentedSink::create_audio_only`: a null video
+  type, the one stream checked to be stream 0; never `Flush`). A stem NEVER
+  fails the capture: one that cannot be opened, written or finalized raises
+  `screen:warning` naming its input and is dropped; a writer that falls
+  behind is ABANDONED by the tee (`try_send`, never a block on the mixing
+  thread) with one warning; only COMPLETE stems are published (after the
+  screen file) and listed, so every stem spans the whole mixed track.
+  `stems: None` builds a no-stem `Mixdown` and no writer (structural +
+  behavioural test `stems::tests::stems_default_off`: the mixed track is
+  byte-identical either way). No automated test executes the writer; the
+  tutorial editor's checklist rows T42–T44 are its gate (docs/Gaps.md GAP-201).
+- **One clock (§6.2).** Both producers stamp from the same `CaptureClock`,
+  so A/V sync across a pause is structural rather than incidental: there is
+  no second time base to drift from. While paused, `output_ts` returns
+  `None` and producers **drain and discard** (§6.3) — the streams stay open,
+  because tearing down and recreating a WGC session on every pause drops
+  frames on resume and can fail outright if the target window changed state.
+  `Control { Stop, Pause, Resume }` rides one channel with one
+  interpretation point (`apply_control`), the audio domain's own rule; Stop
+  does NOT resume the clock, or a capture stopped while paused would claim
+  footage the file does not contain. (The audio side derives its timestamps
+  from the emitted sample count rather than the clock — see GAP-113 for the
+  drift that has not been measured.) Caveat: `VideoPacer` also owns a fixed
+  500 ms **still-screen heartbeat** that repeats the last frame, without
+  which a static screen recorded alongside a microphone would close no
+  fragments at all (GAP-112).
+- **The container is a FRAGMENTED MP4, and that is a measured decision
+  (§6.4).** A standard MP4 writes its `moov` index at finalize, so a capture
+  that crashes mid-recording is unopenable. Measured on a `windows-latest`
+  runner, killing the process with `abort()` after 300 frames: the
+  fragmented file decoded back **280 of 300** frames; the standard-MP4
+  control, holding a comparable amount of data, decoded **0**. The control
+  is what makes the result mean anything. `sink.rs` therefore builds
+  `MFCreateFMPEG4MediaSink` → `MFCreateSinkWriterFromMediaSink`, and its
+  module doc carries two rules learned expensively: **never call
+  `IMFSinkWriter::Flush`** (documented to *drop* pending samples — only
+  `Finalize` drains; two spike runs destroyed the footage they were
+  measuring) and **never infer anything from the file's size during
+  capture** (Windows updates a directory entry's size lazily while a handle
+  is open — a per-frame probe read 0 bytes across a capture that had written
+  59 KB). The spike that produced the numbers is kept re-runnable in
+  `fmp4_spike.rs` behind the non-default `fmp4-spike` feature; its per-build
+  CI step was retired once the question was answered, so `fmp4_spike` itself
+  is compiled by NO CI job — neither workspace clippy nor `tauri build`
+  enables non-default features. Re-check it by hand before re-running the
+  spike (GAP-120). **`mp4_boxes` is no longer in that position.** It was the
+  spike's only consumer through phase 4; phase 5 gave it a real one,
+  `screen_recovery::part_holds_footage`, so it is now compiled, clippied and
+  tested by `rust-core` like any other pure module.
+- **Staging lives OUTSIDE every vault (§10).** The staging dir is
+  `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures` — a hidden
+  dot-prefixed `.<base>.mp4.part` while recording, published on a clean stop by
+  `rename_noreplace` (never `std::fs::rename`, which replaces) to
+  `<base>.mp4` plus a `<base>.json` sidecar. An unedited, unapproved capture
+  is not knowledge; putting it in a vault would make discard leave litter in
+  the user's notes. `staging_title::sanitize_title` is a security boundary,
+  not cosmetics — a window title is whatever the recorded application put in
+  its title bar, and an unsanitized separator in it escapes the staging
+  directory. **It maps what is unsafe as a
+  PATH** (`: \ / ? * " < > |` and controls), and makes exactly one further
+  edit: a title ending in `EXPORT_PART_INFIX` is disambiguated, because a base
+  ending in `.export` is name-identical to an export temp and
+  `screen_recovery::classify` deletes those without a footage check (not
+  retroactive — an already-staged base keeps it): `#`, `^`, `[` and `]` are legal
+  file-name characters and deliberately SURVIVE into the base, because
+  mapping them would rename people's files and change the identity
+  `is_capture_base`, the sidecar's own `base` round-trip and
+  `screen_recovery::classify` all key on. They are wikilink metacharacters,
+  so the companion note's EMBED handles them instead — see
+  `core::screen_note::embed` and `core::obsidian_link` (the Tutorial note a
+  Publish writes embeds through it). **It produces a FRAGMENT, not a name**, which is its own module
+  (`staging_title.rs`) precisely so that stays visible: the name is
+  `capture_paths::base_name`'s `YYYY-MM-DD HHmm <fragment>`, minted by
+  `staging::reserve_base`. That prefix is why a window titled `CON` is not a
+  problem — `2026-09-21 1430 CON.mp4` is an ordinary file name — and the
+  Windows reserved-device guard therefore lives in `reserve_base`, where a
+  name is minted, rather than in the title path where it would rename
+  captures for no safety (GAP-108, whose original premise was the opposite
+  and is corrected there). A stop that fails AFTER real
+  footage was written returns `ScreenError::Retained { path, cause }` and
+  deliberately leaves the `.part` where it is — that file is still playable,
+  which is the whole point of the container choice — and the path travels as
+  TYPED data so the UI can offer it. **Phase 5 gave staging a recovery
+  sweep** (`screen_recovery::run_screen_recovery`, wired into `setup` after
+  `run_import_recovery`), which retires "Phase 2 has no staging recovery":
+  a stale orphaned `.part` whose prefix really holds footage is PROMOTED to
+  a staged capture rather than deleted, an abandoned `.export.mp4.part` (an
+  older build's; nothing writes one since Task 59) is deleted outright, and
+  anything that is not ours is left alone. There is no
+  staged-capture browser outstanding — spec §10's resume-or-discard surface
+  is `StagedCaptureList`, shipped in Phase 5, and the spec names a browser
+  only in its out-of-scope list (GAP-143). The size readout and the bulk
+  clear landed too: `screen::staging_files` measures what
+  a capture owns (no-follow, so a symlink wearing one of our names is neither
+  counted nor deleted) and `staging_commands` turns that into the two
+  commands behind the Buddy settings card.
+  **The sweep postpones while a capture runs** —
+  `decide::should_postpone(active)` reads `CaptureGuard::active()` (audio
+  means the app is writing elsewhere, screen means a `.part` right here is
+  live). From the 2026-09-20 fix wave until Task 59 it took a second
+  source, the phase-5 export's `ExportState` reservation (GAP-152): an
+  edited export of a long recording could leave its live temp untouched for
+  minutes, read stale, and be swept. The export is retired, so no live
+  export temp can exist and the second term went with it. The predicate is
+  pure and unit-tested; the CALL SITE is pinned by its own structural test,
+  because a correct predicate handed a hardcoded `None` postpones nothing
+  and the run loop needs a live `AppHandle`.
+  **The module is a directory module** — `screen_recovery/mod.rs` (the
+  `read_dir` walk, the actions, the retry loop) plus `screen_recovery/
+  decide.rs` (`classify`, `owned`, `part_holds_footage`, `should_postpone`,
+  `is_stale_at`, all pure) — split along the seam its own doc already named
+  when GAP-147 (800/800 nonblank) came due. `lib.rs` is unchanged.
+- **`CaptureGuard` is the one process-wide "what is capturing right now"
+  claim (§7.3).** A screen capture and an audio recording cannot run
+  concurrently: both contend for the same audio endpoints, and WASAPI
+  loopback capture of one endpoint from two sessions is a reliability
+  hazard. Two per-domain mutexes could not enforce that — each start would
+  see its own domain idle and proceed — so both domains claim this guard
+  before touching their own state, and the refusal names the running kind.
+  It sits in FRONT of `CaptureState`'s own double-start check rather than
+  replacing it. Every release is keyed on the kind, because the clear
+  chokepoints also run on paths where that domain never claimed and an
+  unkeyed release there would free the OTHER domain's live claim. The screen
+  side frees it from exactly ONE place, `clear_active_screen` (which drops
+  the reservation and releases the claim together — nine of the start
+  path's ten early returns call it directly, and the tenth, the ready
+  timeout, hands the release to `spawn_outcome_monitor`, which calls it once
+  the device thread ends, GAP-110); the audio side has `clear_active`
+  plus one defensive already-reserved arm. Both counts are pinned by
+  structural source scans that fail if a raw release site is ever added.
+  Its lock-ordering rule is in the tasks domain's concurrency note: the
+  guard's mutex is never held while another lock is taken.
+- **The buddy indicates BOTH capture kinds, and it must, because hide is
+  refused on both.** `tray::hide_buddy` no-ops while `capture_blocks_shutdown`
+  is true, so a user mid-screen-capture who asks to Hide gets nothing but a
+  log line. That is only tolerable if the buddy visibly says why, so
+  `BuddyRoot` binds its `recording` to `capture.status === 'recording' ||
+  'saving' || screenCapture.status !== 'idle'` and its `paused` to
+  `capture.paused || screenCapture.paused` — note the two stores do NOT share
+  a shape: the audio store has four named statuses plus a `paused` flag, the
+  screen store a tri-state (`idle`/`capturing`/`paused`) whose `paused` is a
+  getter over it, so neither arm can be copied from the other. The vault-row
+  dot is the same rule one layer up: `ActionPanel` passes
+  `capture.vaultId ?? screenCapture.vaultId`. This shipped unwired for five
+  commits with the claim standing in three places (the spec, this file, the
+  store's own comment) — if a later phase adds a third capture kind, wire the
+  indicator in the same commit as the guard.
+- **The stop notification must not claim a save (`stopped_toast_copy`), and
+  that rule outlives every phase.** A STOP stages the file; nothing reaches
+  a vault until the user renders it in the editor and publishes the render.
+  So the audio domain's "Screen capture saved" / "Saved {base}" wording —
+  which this copy was lifted from, and where it is true — would send the
+  user hunting through Obsidian for a file nobody has put there. The copy is
+  a pure function so a test can assert it (`the_stop_toast_never_claims_a_save`:
+  neither title nor body may contain "saved", both asserted whole). **The
+  trailing sentence has changed three times, each time because it had to**:
+  "Editing and saving into a vault arrive in a later update" (phases 2–4),
+  "Edit it from the capture bar to save it into a vault" (phase 5), and
+  since Task 59 retired that Save, "Recorded {base}. Open it in the editor to
+  render and publish it." `ScreenCaptureBar`'s finished row offers **Edit**
+  for the most recent capture ("Edit to render and publish", its label), and
+  `StagedCaptureList` in the Record Screen picker lists every one with Edit
+  and Discard. There is no size bound, and that is a deliberate non-goal
+  rather than outstanding phase work (GAP-115): nothing expires a completed
+  staged capture, because deleting a recording the user has not decided
+  about is the loss the design exists to prevent. The bulk clear lives in
+  Buddy settings → System.
+- **The start tail must not announce a capture that already ended.**
+  `start_screen_capture`'s async tail runs after the blocking start returns,
+  and the `screen-capture-monitor` thread is live before then — so spec §14's
+  self-finalize (the recorded window closes) can complete first. An
+  unconditional `set_capture_state(Recording)` there latched the tray into a
+  phantom recording: Pause/Stop rendered, "Show / Hide" DISABLED, and Stop
+  routed to the audio domain where it only logged "No recording is running."
+  The tail therefore goes through `tray_state_after_start(is_capturing(&app))`.
+  The audio domain shares the tail ordering but has no self-finalize path,
+  which is why this was reachable only here.
+- **Our own windows are filtered out of the picker by TITLE, not HWND**
+  (spec §7.2 says HWND), and as of Phase 4 that filter is LIVE rather than
+  theoretical (GAP-116). It was inert through phases 2–3: the four companion
+  windows are all `skipTaskbar: true`, which tao implements as
+  `WS_EX_TOOLWINDOW`, and `windows-capture`'s `Window::is_valid()` already
+  rejects those, so nothing ever reached the title comparison. The `editor`
+  window is `skipTaskbar: false` (verified in `tauri.conf.json`), so it
+  really enumerates, and the title filter is now the only thing keeping Vault
+  Buddy from offering its own editor as a capture source. **The mechanism
+  holds without a change**: `our_window_titles` walks
+  `app.webview_windows()` at call time rather than reading a hardcoded list,
+  so the editor is covered automatically, and its title is a static config
+  string — nothing calls `set_title` anywhere in this repo, so the exact
+  match cannot go stale under a runtime suffix. What remains open is the
+  filter's SHAPE, not its coverage: a title match can in principle hide a
+  USER's window that happens to carry the identical string, which is why
+  GAP-116 stays open for an HWND filter. `WDA_EXCLUDEFROMCAPTURE` does NOT
+  supersede any of this: the affinity keeps our windows out of a recording's
+  PIXELS, while this filter is about our windows being offered as SOURCES.
+  Two rules, two spec sections, neither closing the other.
+- **Region capture is an ID, not a parameter (phase 3).** A region is a
+  `SourceId::Region { monitor, rect }` — `region:<display>,<x>,<y>,<w>,<h>`,
+  PHYSICAL pixels relative to that monitor's own origin — so
+  `start_screen_capture` took NO new argument: the picker hands back a source
+  id like any other and `source::resolve`'s Region arm turns it into a crop.
+  The id crosses IPC as untrusted text and comes back, so `region::parse_payload`
+  demands a canonical round-trip (`encode_payload(parsed) == input`): `"+1"`,
+  `"01"` and `" 1"` differ in whether `u32::from_str` accepts them in ways
+  nobody remembers, and a lenient parse that resolved to *some* rectangle
+  would record something the user never drew. The payload is comma-separated
+  because `SourceId::parse` splits on the FIRST `:` and rejects a second one.
+  **`clamp_to_frame` runs TWICE, deliberately**: once in
+  `region_commands::region_from_pick` at selection time, where a rectangle off
+  the screen is a friendly refusal while the user is still looking at the
+  picker; and again in `source::resolve` at capture start, where it is the
+  correctness gate — the resolution can change in between, and only the second
+  one can be trusted. The geometry that survives it is derived by the pure
+  `source::region_dims`, extracted precisely because an inlined assignment was
+  pinned by nothing: a transposed crop axis or a swapped width/height captures
+  the wrong rectangle in silence, and the tests for it are deliberately
+  ASYMMETRIC, since a square fixture cannot distinguish a swap.
+- **The crop is a CPU crop, at the BGRA stage.** `convert::bgra_crop_to_nv12`
+  is the one implementation; the whole-frame path is literally its
+  zero-origin case (pinned by a test asserting the two agree byte-for-byte),
+  so a region and a full screen cannot drift apart. The crop origin is
+  deliberately NOT rounded to an even pixel: chroma is averaged from the
+  full-colour BGRA source *inside* the crop, so an odd origin reads the right
+  pixels rather than needing the destination to be re-aligned. Only the
+  output DIMENSIONS are forced even, which the encoder requires.
+  `pacing::usable_frame` measures the arriving frame against the crop's FAR
+  edge (origin + size), not against the output size — a region makes those
+  two different numbers for the first time, and `pacing::required_dims`
+  (saturating, so a wrapped sum can never report a requirement SMALLER than
+  the frame it just rejected) feeds the zero-video diagnostic so the message
+  the user actually sees is true too. That message is the one that REPLACES
+  an unactionable `HRESULT`; regions made it arithmetically false until it
+  was threaded through.
+- **`WDA_EXCLUDEFROMCAPTURE` keeps the BUDDY out of the FOOTAGE (spec §5.3,
+  amended 2026-09-21) — and since GAP-166, ONLY the buddy and the region
+  border.** Through phases
+  3–5 `EXCLUDED_LABELS` was every declared window; a one-variable rebuild on
+  the reporter's machine showed the affinity round-trip on WebView2-hosting
+  windows blanking the editor AND killing pointer input to Explorer's and
+  Notepad's toolbars until the process exited, and `main` alone clean. The
+  const is `["main", "region-indicator"]` — the buddy plus the region border
+  (GAP-165), the two hardware-cleared labels — and its config-pin test is
+  INVERTED: each cleared label in, every other declared window OUT, so a new window is not excluded until a hardware
+  run says it can be (see the window-system section).
+  `capture_exclusion::apply` sets the affinity on those labels from ONE
+  place, `screen_capture_worker`'s `start_screen_capture_blocking`, before the
+  session opens; `capture_exclusion::clear` lifts it from ONE place,
+  `screen_commands::clear_capture_window_effects`, which `clear_active_screen`
+  calls unconditionally and which the ready-timeout arm calls on its own (it
+  keeps the reservation but drops the window effects, GAP-110).
+  Both the count AND the enclosing function are pinned by a structural test,
+  because moving the apply into `start_screen_capture`'s async tail, or the
+  clear into `stop_screen_capture`, both leak permanently under §14's
+  self-finalize and both looked fine to a file-granular assertion. The
+  direction each wrapper carries is pinned too: `apply`/`clear` read
+  `EXCLUDE`/`INCLUDE` rather than bare `true`/`false`, and a test asserts
+  both the values and their placement, because swapping which wrapper carries
+  which constant is the whole failure this code exists to prevent and it is
+  one token. **Why a leak is invisible from inside the app:** the affinity
+  makes a window absent from OTHER applications' captures while remaining
+  perfectly visible to the user, so a clear that never runs shows no symptom
+  here — it shows up as Vault Buddy silently missing from a later Teams share
+  or OBS recording, with no error and no log line and no plausible bug
+  report. It is bounded only by the fact that `WDA_*` is per-HWND and dies
+  with the window, so a restart always clears it. The apply is
+  fire-and-forget on the main thread (a worker must not block the event
+  loop), so the first frame or two of a capture can still contain the buddy —
+  docs/Gaps.md GAP-124. Windows 10 before 2004 has no
+  `WDA_EXCLUDEFROMCAPTURE`: the call logs a warning and the capture proceeds
+  with the buddy in frame, by design.
+- **The region indicator (`region_indicator.rs`, GAP-165) is the one surface
+  that exists because Windows' own feedback LIES.** While a region capture
+  runs, Windows draws its yellow border around the whole monitor — truthfully,
+  because WGC really is capturing the whole monitor and
+  `convert::bgra_crop_to_nv12` crops on the CPU — so nothing on screen says
+  which rectangle is being recorded. `DrawBorderSettings::WithoutBorder` is
+  NOT the answer (it is gated behind a restricted capability an unpackaged app
+  lacks, and suppressing Windows' own "you are being recorded" affordance
+  would replace a misleading indicator with none), so the indicator is ours.
+  **Its show is SPLIT ACROSS TWO THREADS and the single-threaded reading
+  deadlocks**: it needs the monitor's origin, and `available_monitors`
+  marshals to the event loop and blocks with no timeout, so calling it inside
+  a `run_on_main_thread` closure is the main thread waiting on a reply only it
+  can produce — a hang on every region capture start, with no crash record.
+  Enumeration, the GDI display-number join (`region_commands::matches_display`,
+  reused and never copied) and the bounds arithmetic
+  (`core::screen_geometry::indicator_bounds`, pure and Linux-tested because
+  the offset fails silently by putting the border on the wrong monitor) all
+  run on the calling worker thread; only four numbers cross. One show site in
+  `start_screen_capture_blocking` beside the exclusion apply, gated on
+  `SourceId::Region`; one unconditional hide in `clear_capture_window_effects` beside
+  the exclusion clear. Both pinned to their enclosing functions, the
+  `capture_exclusion` discipline, because both natural relocations leak a
+  border the user cannot dismiss. **Nothing about it has been seen on
+  hardware** — checklist rows 44–52, all unrun.
+- **The phase-4 editor and the phase-5 export are RETIRED (tutorial-editor
+  Task 59).** `LegacyCaptureEditor` (with `CapturePreview`, `TimelineStrip`,
+  `ExportBar`, `useEditorTimeline`/`useEditorSelection`/`useEditorExport`
+  and `timelineGeometry.ts`), the commands `load_staged_capture`,
+  `save_capture_timeline`, `export_and_save_capture` and `cancel_export`,
+  the four `screen:export*` events, `export_commands.rs`,
+  `export_shutdown.rs`, `export_worker/` (except `vault_dir.rs`, now
+  `editor/vault_dir.rs`), `screen::export`, `screen::select`, the
+  edited-export graph (`filter_complex`/`reencode_args`) and
+  `core::screen_note::render_screen_note` are gone; a test,
+  `no_source_file_references_a_retired_command`, fails if any of the four
+  commands or four events is named anywhere under `src/` or `src-tauri/src`
+  again. **No capability was lost**: every staged capture opens in the
+  tutorial editor, and "save unchanged" is Render — an untouched capture is
+  R1's identity plan and renders as a lossless `-c copy` remux
+  (`identity_render_of_an_untouched_capture_is_lossless` compares the
+  encoded packets' md5 with the source's) — plus Publish. A staged capture
+  is no longer deleted by saving (R6); the project menu's **Discard
+  project…** unpins it, and the Record Screen list then discards it. What
+  stays, and why:
+  - **`core::timeline` is READ, never written.** Every saved phase-4 cut on
+    disk was made with it, and the tutorial editor's migration reads one
+    through `Timeline::from_sidecar_value` — the ONE reader of the
+    hand-editable sidecar field, which degrades anything malformed to the
+    WHOLE capture but keeps an EXPLICITLY empty segment list empty (the user
+    deleted everything; restoring their recording underneath them is the
+    failure). `Timeline::is_untouched(source_duration_ms)` — never
+    `Option::is_none()`, which the phase-4 editor's always-write rule made
+    false after the first edit — still answers the staged list's "edited"
+    label. `tests/fixtures/timeline-cases.json` stays, read by
+    `core/src/timeline.rs` alone (`include_str!`, size-guarded at 8 cases /
+    6 operations); its TypeScript reader and size guard were deleted with
+    the TypeScript twin of the algebra (GAP-136's TS half, retired).
+  - **The asset protocol's scope keeps `$APPLOCALDATA/screen-captures/*`.**
+    It is a security boundary (ADR R7), pinned EXACTLY by `tray.rs`'s
+    `the_asset_protocol_scope_is_pinned_to_staging_and_the_editor_project_media_dirs`,
+    and the staging entry is still needed: `editor_media_url` answers a
+    `staging` source (a staged capture a project adopted by reference) with
+    the capture's own staged path (`project_store::resolve_source`). The
+    other four entries are each project's `media`, `takes`, `products` and
+    `cache`; never `jobs`, never a store JSON file, never a vault path.
+  - **The preview is still an approximation of what ships** — GAP-145's
+    successor is GAP-173 (the webview preview versus the ffmpeg render),
+    bridged by the editor's range Review renders.
+  - **`ffmpeg_run` and `ffmpeg_args`' remux/encode tails** stay: the render
+    is their caller.
+- **Frontend.** `RecordMode.vue`'s chooser → `ScreenSourcePicker.vue`
+  (Screen / Window / Region tabs — the Region tab is the presentational
+  `ScreenRegionPicker.vue`, which lists the monitors as *targets* for
+  `select_capture_region` and renders the chosen region as a row;
+  `ScreenAudioPicker.vue` for the multi-select devices) on the
+  `screenCapture` panel view; the `screenCapture` Pinia
+  store mirrors Rust state from the eight `screen:*` events and re-reads
+  `screen_capture_status` rather than trusting event arrival order. One
+  picker surface still deliberately falls short of the spec — the per-device
+  audio level bars, which need a Rust-side emit first (GAP-111 item 1).
+  A selected region's MONITOR is snapshotted with the region
+  (`regionMonitorId`), never read back from the highlighted target row: the
+  two diverge on any click, and a target-keyed label would name a different
+  monitor than the Rust string the capture bar and the staging sidecar render
+  (`src/utils/regionLabel.ts`), while a target-keyed drop rule would both
+  clear a valid region when some OTHER monitor goes and keep one whose own
+  monitor went — the latter a §7.2 vanished-source violation. Start is gated
+  on a region selection in flight as well as on a start in flight, and the
+  select button on both: the overlay does NOT make the panel unclickable
+  (`select_capture_region` sets `DIALOG_ACTIVE`, so the panel does not even
+  auto-hide), so on a second monitor the user can press Start while still
+  drawing. `ScreenCaptureBar.vue` renders the store's live state on the
+  panel's LIST view beside `RecordingBar` — a sibling while both are LIVE
+  (the CaptureGuard forbids two live captures), but NOT never-a-stack: since
+  phase 4 this bar also covers a FINISHED capture, so an audio recording
+  started after a screen capture renders both bars, stacked. That pairing is
+  accepted and pinned by a test, because the staged row is the only handle on
+  that footage until phase 5's `StagedCaptureList` and hiding it would put the
+  editor out of reach for the length of the recording. The live row renders elapsed via
+  the store's own `elapsedMs` so the paused-time arithmetic has ONE
+  implementation, the source title, an inline `screen:warning` — which is why
+  the store withholds that toast while a capture is live, and correspondingly
+  why the inline line is gated on the LIVE row alone: the bar now outlives the
+  capture, so an ungated line showed a late warning twice, as a toast AND as a
+  sticky line nothing clears — a `dropped` chip only once frames have actually
+  dropped, and Pause/Resume/Stop. Its 1 Hz clock is gated too
+  (`useNowTicker(() => staged === null)`): the bar stays mounted for the rest
+  of the process after any capture and the panel window is hidden rather than
+  unmounted, so an ungated ticker ran forever for a row with no clock in it. Its label has THREE arms,
+  like `RecordingBar`'s: `status` stays `capturing` until `screen:stopped`
+  lands and the ticker keeps ticking, so a bar without the `stopping`-keyed
+  `Saving…` arm counts on through the whole finalize window (bounded at 30 s
+  by `STOP_TIMEOUT`) and claims seconds the file does not contain — the same
+  falsehood the paused-time arithmetic exists to prevent. The status dot is
+  a bespoke `h-2.5 w-2.5` span that turns amber while paused, matching
+  `RecordingBar`'s exactly rather than the `StatusDot` primitive (h-1.5, no
+  amber tone), for the same reason the dense buttons are bespoke: two live
+  bars on one view must not drift. Stop and Pause are both
+  disabled while the store's `stopping` flag is set: a stop can answer
+  `stillSaving` while finalize is still running, so the flag clears when the
+  capture really ends — or when the stop was REJECTED, which *usually* means
+  nothing is finalizing (the `is_capturing` refusal) but not always: the
+  command's `JoinError` arm can reject after `Control::Stop` already went
+  out, so a re-armed Stop there costs at worst a duplicate fire-and-forget
+  send — never on the command's own reply. The tray and buddy menus
+  drive the same three verbs (`tray.rs` routes them by `CaptureGuard::
+  active()`), so the bar is a surface, not the only way to control a
+  capture. **Since phase 4 the bar covers a SECOND state**, and `ActionPanel`
+  renders it for both: when nothing is capturing but `lastStaged` is set, the
+  live row is replaced by a finished row naming the capture plus an **Edit**
+  button ("Edit to render and publish") —
+  `invoke("open_capture_editor", { base })`. `StagedCaptureList` in the
+  Record Screen picker is the second way in, and it reaches EVERY staged
+  capture rather than only the most recent. Both go through the same one door,
+  `open_capture_editor`. That list IS spec §10's resume-or-discard surface;
+  nothing further is outstanding for it.
+  The two-state gate is not cosmetic: `applyStopped` calls `reset()` — which
+  sets `status` to `idle` — and THEN parks `lastStaged`, so the panel's own
+  `v-if` has to read `status !== "idle" || lastStaged !== null` or the bar is
+  absent at exactly the moment Edit exists, and the editor is unreachable
+  from the running app with every bar-level test still green. Pause and Stop
+  are not rendered in the finished state at all: that session is gone, so
+  both would address nothing. The finished row DOES keep naming the source:
+  `applyStopped` calls `reset()`, which nulls the store's `sourceTitle`, so
+  the row reads `lastStaged.sourceTitle ?? store.sourceTitle` rather than
+  dropping to the base name alone.
+
+  **Phase 5's frontend added three surfaces and one store rule; Task 59
+  retired one surface** — `ExportBar.vue`, the phase-4 editor's Save /
+  Discard footer. Its two-step in-component confirm (the `TaskSectionMenu`
+  precedent, deliberately NOT a native dialog: that steals focus, and
+  `DIALOG_ACTIVE` is a process-wide bool with two drivers already —
+  docs/Gaps.md GAP-128) lives on in `StagedCaptureList` and
+  `StagedCapturesCard`.
+  - **`StagedCaptureList.vue`** answers spec §10's "opening Record Screen
+    with staged captures present shows them first": a sibling block inside
+    `ScreenSourcePicker`'s root, between the error `Banner` and the
+    `<TabGroup>` — not a new panel view (six edit sites, and it would fork
+    the Record Screen entry point) and not a fourth tab (which would HIDE the
+    list behind a click, the opposite of "first"). Its header reads "Not
+    published yet" and an unpinned row's action "Edit to render and
+    publish" (Task 59). Each row carries its source, the length a phase-4
+    saved cut PRODUCES (`outputDurationMs`, not `durationMs` — they differ
+    exactly when that editor cut something), and its age via
+    `src/utils/relativeAge.ts`, whose `NaN` guard is load-bearing because
+    `recordedAt` comes from the hand-editable sidecar and a bare subtraction
+    renders `"NaN ago"`. **The Discard arming state is keyed on the BASE, and
+    that is the point rather than a detail**: a single shared `armed` boolean
+    passes every test written for this list while arming EVERY row at once,
+    so one click on row A then one click on row B permanently deletes B. It
+    can also be disarmed, because an armed confirm with no way out deletes
+    the recording on the next stray click. The list is **app-wide, not
+    filtered by the picker's vault**: it is the only way to reach abandoned
+    footage, and the editor's Publish defaults to the capture's OWN
+    recorded vault from its sidecar (A01), never the picker's. `list_staged_captures` is read leniently — a reply that is not
+    an array is ignored rather than blanking a list the user is reading.
+    **A RECOVERED capture is a different row, because it is a different
+    thing.** `screen_recovery::minimal_sidecar` rebuilds a sidecar with
+    `vault_id: ""` and `duration_ms: 0` — nothing on disk records either once
+    the real sidecar is gone — and marks it `recovered: true` in the
+    sidecar's flattened catch-all. The DTO dropped that marker, and
+    `summary_is_edited(None, 0)` answered TRUE (`Timeline::whole(0)` is the
+    EMPTY timeline, which `is_untouched` never matches), so the one surface
+    the recovery sweep exists to feed rendered `edited · 0:00` beside a
+    source title that was only the base name, and offered **Resume editing**
+    into a Save the (since retired) export refused outright. Since the
+    2026-09-20 fix wave: `summary_is_edited` returns false for an unknown
+    source duration — an arm kept OUT of `Timeline::is_untouched`, which
+    answers its own question correctly, and where the divergence is
+    unreachable because the editor refuses a recovered capture before its
+    timeline is ever migrated (`editor_open_staged`, F7) —
+    `StagedCaptureSummaryDto` carries `recovered`, the row reads "recovered
+    · length unknown", and Edit is not rendered at all. Discard is
+    the only BUTTON left — so the row also states that the video survived and
+    where it is (`%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures\<base>.mp4`,
+    rendered as selectable text because NO IPC command opens that folder:
+    `open_logs_folder` opens the sibling logs directory, `open_external_url`
+    is https-only, and `open_screen_capture` needs the vault id a recovered
+    capture lacks). Permanent deletion must never be the whole story a row
+    tells about a real recording.
+  - **`lastStaged` now has TWO clear sites, and the second is keyed on
+    IDENTITY rather than lifecycle.** `reset()` clears it as part of a
+    lifecycle transition; `forgetStaged(base)` clears it only when the base
+    matches, from the `screen:discarded` listener (the retired export's
+    `screen:exported` was the other, until Task 59: publishing never
+    deletes a staged capture, R6). That
+    is safe precisely because it fires only for the capture that genuinely no
+    longer exists — and it deliberately does NOT bump `seq`, because it is not
+    a capture-state transition and must not invalidate one.
+
+## The tutorial editor domain (`core/src/editor/` + `src-tauri/src/editor/` + `src/components/editor/` + `EditorRoot`)
+
+The tutorial editor turns a staged screen capture (and imported media and
+webcam Takes) into a Tutorial Project — Tracks of Clips, Teaching Cues,
+captions, chapters — then Renders immutable Products and Publishes one into
+a vault. It is the successor of the phase-4 editor and the phase-5 export,
+both retired by Task 59. Binding design:
+`docs/superpowers/specs/2026-09-21-tutorial-editor-integration-design.md`
+(the ADR; its §9 records where the shipped code amended it); plan:
+`docs/superpowers/plans/2026-09-21-tutorial-editor.md`; release evidence
+per F-ID: `docs/superpowers/specs/2026-09-21-tutorial-editor-acceptance-evidence.md`;
+manual gate: `docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md`.
+The per-command detail lives in the IPC table above (the `editor/*` rows),
+the on-disk layout in "Where state lives on disk", the window in the
+`editor` bullet of the window system, the stores in "Frontend state"; this
+section is the map between them.
+
+**Where each concern lives.**
+
+- `core::editor` (pure, tested on Linux) — the model (`model*.rs`, the
+  interchange spelling verbatim, R3), every edit command
+  (`commands/`), validation (`validate*.rs`), `session.rs`/`history.rs` (the
+  serial per-session queue: revision check, `commandId` replay, apply on a
+  clone, validate, install — all or nothing; 100 undo snapshots), time
+  mapping (`time.rs`, integer ms), staged-capture migration (`migrate*.rs`),
+  the render plan (`render_plan*.rs`), the before-you-share checks
+  (`checks*.rs`), the companion note (`note.rs`), the portable package
+  (`package*.rs`, the crate's one `zip` use), captions I/O, relink matching,
+  the take state machine and guide progress.
+- `screen::render` — the RenderPlan → one `filter_complex` argv (video, ASS
+  cues and captions, audio), and `render::run`, the one non-pure module
+  (capability refusal, run, verify). `screen::session` carries the optional
+  synchronized webcam producer and per-input stems (both `cfg(windows)`,
+  hardware-gated).
+- `src-tauri/src/editor/` (the shell) — the `editor_*` commands, the job
+  registry and its one `JobReporter`, the project store I/O (`store_io.rs`,
+  `project_store.rs`), recovery (`recovery.rs`: the journal and the startup
+  re-pin sweep), render jobs and the product ledger, publish (the tenth
+  write), webcam takes, diagnostics and `redact`, plus three structural test
+  modules: `authz_guard.rs`, `capability_guard.rs`, `redact_guard.rs`.
+- The webview — `src/editor/port.ts` is the ONLY place that calls `invoke`
+  for an `editor_*` command (decoders beside it). The window's other
+  `invoke`s are non-editor commands: `EditorRoot`'s drain of
+  `take_editor_request`, and the app's shared `src/stores/ffmpeg.ts`
+  (`detect_ffmpeg`), which `WebcamDialog` uses to pre-flight ffmpeg;
+  `src/editor/actions.ts` is the
+  one action registry every toolbar, menu and shortcut reads (a disabled
+  action always carries a reason); `src/editor/guide/` is the onboarding
+  content; the six editor stores are `editorProject`, `editorWorkspace`,
+  `editorJobs`, `editorProducts`, `editorChecks`, `editorOnboarding`.
+
+**The invariants (ADR §8), as shipped, with what pins each:**
+
+1. Rust (`core::editor`) is the only authority for committed edits. The
+   webview never applies an edit locally except as a transient drag/trim
+   preview that pointer-up turns into ONE `editor_execute` and Escape
+   discards; a reply is installed only if its session matches and its
+   revision advanced (`editorProject`).
+2. Every `editor_*` command takes `window: WebviewWindow`, calls
+   `require_editor_window` first and resolves its session
+   (`authz_guard.rs`), and is granted ONLY in `capabilities/editor.json`
+   (`capability_guard.rs`). The two panel-callable openers,
+   `list_tutorial_projects` and `open_project_editor`, are the documented
+   exception.
+3. The asset-protocol scope is R7's enumerated list — staging plus each
+   project's `media`, `takes`, `products`, `cache` — pinned exactly by
+   `tray.rs`; `jobs\`, the JSON files and every vault stay out.
+4. Project files are written only through `write_atomic_replacing` (store
+   files) or an owned same-directory temp + `rename_noreplace` (exports and
+   landed media); never `std::fs::write`, never `std::fs::rename` for a
+   first write; removal is owned-file-only and no-follow.
+5. Products are immutable: nothing opens a product file for writing after
+   `products.json` records it; Publish copies it, Restore reads its snapshot.
+6. A staged capture pinned by a project (`editorProjectId` in its sidecar)
+   is never discarded or cleared; discarding a project unpins it and never
+   deletes the recording.
+7. Job progress travels only on the caller's per-job `Channel`, emitted only
+   by `JobReporter` (strictly increasing `sequence`, exactly one terminal,
+   last); no `app.emit` for editor jobs. The editor's only events are
+   `editor:open` and `editor:closeRequested`, both `emit_to("editor")`.
+8. The render fast path keys on `RenderPlan::is_identity` (an untouched
+   capture remuxes losslessly), never on a field's absence.
+9. `tests/fixtures/editor-time-cases.json` holds the TS time mapping to
+   Rust's, size-guarded in both languages (with the fade, arrow and
+   presenter-placement tables beside it).
+10. Guide actions never execute editor commands: walking all 22 lessons
+    sends zero `editor_execute` calls (`tests/editorGuideCoach.test.ts`).
+
+**The shutdown gate after this domain** is four terms, composed once in
+`shutdown_gate.rs` and read by quit, Alt+F4 and the updater's prepare step:
+an audio recording, a screen capture, a RENDER job not yet ended
+(`render_jobs::blocks_shutdown`) and a PUBLISH job
+(`publish::blocks_shutdown`). The quit workers cancel renders, then
+publishes (each bounded at 5 s, with its own abandon latch), then finalize
+the captures. Unsaved edits never block a quit — the recovery journal is the
+durability mechanism. `tray::hide_buddy` gates on none of the editor's
+terms.
+
+**Vault writes.** The domain has exactly one: Publish, the tenth numbered
+write (see the vault domain). Everything else it writes — projects, media
+copies, takes, products, reviews, guide progress, project files, subtitle
+and diagnostics exports — lands outside every vault.
+
+**Verification status.** The automated evidence for all 50 F-IDs is listed
+in the acceptance-evidence file and checked by `tests/editorEvidence.test.ts`.
+What no gate can observe is the Windows checklist — 66 rows, none run — and
+the ADR's residual gates (R-H1–R-H5, R-A1, R-A2, R-M1, R-P1, R-P2), all
+OPEN; the concept bundle's final representative journey is checklist row
+T64, unwalked. Known limits: docs/Gaps.md GAP-170 (the ACL never run in a
+live app), GAP-173 (the preview approximates the render) and GAP-172
+through GAP-213 in general, each naming its task.
 
 ## The document-import domain (`core/src/document_import.rs` + `src-tauri/src/document_commands.rs` + `DocumentImportSettings.vue` / `ImportVaultPicker.vue`)
 
@@ -1068,7 +2275,7 @@ by type. Opening a row hands off to Obsidian via `open_recording` /
 `open_transcript` (`obsidian://`, read-only, `uri::launch`-logged) — it never
 writes.
 
-## The tasks domain (`core/src/tasks.rs` + `task_commands.rs` + `Tasks.vue`)
+## The tasks domain (`core/src/tasks/` + `task_commands.rs` + `Tasks.vue`)
 
 A per-vault todo list over `type: Task` markdown documents (v0.5.0). A Task is
 its own document — Obsidian-Properties/Dataview-compatible frontmatter, not an
@@ -1244,13 +2451,28 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   locks are strictly IN-PROCESS: neither serializes against Obsidian itself
   or a sync client (OneDrive/Dropbox/Syncthing) writing the same file from
   another process — a pre-existing, accepted reality of the whole vault
-  domain, unchanged by either lock.
+  domain, unchanged by either lock. **One more process-wide lock exists and
+  stands OUTSIDE this ordering by construction:** it is taken, consulted,
+  and dropped before its holder does anything else.
+  - `CaptureGuard` (`src-tauri/src/capture_guard.rs`), the audio/screen
+    mutual-exclusion claim, **is never held while any other lock is
+    acquired** — `try_claim` takes its mutex, decides, and drops it before
+    returning, so "claim the guard, then take the domain's own state lock"
+    needs no ordering rule to remember and cannot deadlock against the
+    reverse.
+  (Until Task 59 there was a second, the phase-5 export's `ExportState`
+  reservation, with the same take-decide-drop discipline; it is retired
+  with the export.)
+
+  Keep it that way: the moment it is held across a config or per-file
+  lock, this file gains a second ordering rule.  Keep both that way: the moment either is held across a config or per-file
+  lock, this file gains a second ordering rule.
 - **`list_tasks` walks the configured tasks folder RECURSIVELY** (v0.5.x) so
   tasks organized into subfolders are all surfaced. The recursive walk is the
   shared `core::vault_walk` helper — canonical containment (a
   symlink/junction escaping the folder is skipped), a walked-set bounding
   reparse cycles, dot-directory skips (`.obsidian`/`.trash`/`.git`) — with
-  the per-file `type: Task` filter in `tasks.rs`. The sort stays clock-free:
+  the per-file `type: Task` filter in `core::tasks`. The sort stays clock-free:
   open tasks (`status != "done"`) first, then due ascending (no/unparseable
   due sorts last), then priority tier (high < normal < low), then newest
   `created`, then title; done tasks ignore due and sort by newest `created`
@@ -1264,6 +2486,23 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   against `list_tasks`' canonical paths, notably Windows' `\\?\` form), then
   `uri::launch(uri::open_file_uri(...))` — logged like every other vault open,
   never writes.
+
+  **The `open_*` family no longer shares ONE extension rule, and the
+  difference is deliberate.** `open_task` and `open_recording` both go through
+  `uri::vault_relative_no_ext`, which strips the final extension
+  UNCONDITIONALLY — correct for them, because both target a `.md`
+  (`capture_commands::open_recording_note` calls `.with_extension("md")`
+  FIRST, so the path it hands over is already a note). Phase 5's
+  `staged_commands::open_screen_capture` must not: a saved screen capture is
+  opened as its `.md` note when the vault writes one and as its `.mp4` when
+  it does not, and an unconditional strip would ask Obsidian for
+  `Screen Captures/cap one` — a note that does not exist — instead of the
+  video. It uses `capture_file_param`, which strips only for exactly-`.md`
+  and keeps every other extension: **`core::search`'s rule** (its
+  `exactly_md` predicate in `search.rs`), not `uri::vault_relative_no_ext`'s.
+  Mirroring
+  `open_recording` here was a plan defect caught in phase 5 Task 8; do not
+  "unify" them back.
 - **Frontend** (`Tasks.vue`, self-contained like `Recordings.vue` — no new
   store): a `tasks` panel view reached from a per-row Tasks button; an
   add-task input with an optional due/priority row (the tasks-folder setting
@@ -2001,8 +3240,20 @@ Invariants — each exists because a review found the failure it prevents:
 ## Updater flow (`src/stores/updates.ts`, `UpdateView.vue`, `UpdateSettings.vue`)
 
 Check → download (panel stays open so spinner/errors are visible) →
-`close_panel` (hide the panel window) → `prepare_update_install` (Rust saves
-the buddy position and stamps a clean shutdown) → `install()` → `relaunch()`.
+`close_panel` (hide the panel window) → `prepare_update_install` → `install()`
+→ `relaunch()`. **The prepare step can REFUSE** (GAP-160): it returns
+`Result<(), String>` and, when `shutdown_gate::shutdown_is_blocked` says a
+recording, a screen capture, an editor render (Task 46, R12: any render job
+not yet ended) or a publish (Task 48) is live, it returns `Err` BEFORE
+closing the panel, saving the buddy position or stamping a clean shutdown —
+otherwise the updater would exit through a `.part`, through a render's
+ffmpeg child or through the tenth vault write. (The phase-5 export was a
+term here until Task 59 retired it.) Only when it returns `Ok` has Rust saved
+the position and stamped the marker. The store must NOT swallow that error
+(it once called this command `.catch(() => {})`, which would have installed
+anyway and protected nothing): a refusal aborts before `install()`, reopens
+the panel on the update view with the message, and keeps `available` so Retry
+works once the user stops what is running.
 The buddy window never shifts, so there is no home position to restore. On
 failure the panel reopens on the dedicated update view (`requestView("update")`)
 via `toggle_panel`, `available` is kept so the install button stays visible for
@@ -2033,7 +3284,13 @@ view too.
 ## Diagnostics invariants
 
 - Every spawned thread is named (`std::thread::Builder`) — crash records
-  must identify the dying thread.
+  must identify the dying thread. **One documented exception, and it is not
+  ours to fix:** `windows-capture`'s `start_free_threaded` spawns the WGC
+  frame worker with a bare `thread::spawn`, so a crash inside it is reported
+  unnamed. `screen/src/session/windows_session.rs` records why the blocking
+  alternative is worse (it offers no way to stop a session that is receiving
+  no frames, so a still screen would hang Stop). Any OTHER unnamed spawn is a
+  defect — see docs/Gaps.md GAP-119.
 - No swallowed error: anything caught-and-hidden goes through
   `log::warn!`/`log::error!` (Rust) or `src/logging.ts` (frontend);
   user-facing failures funnel through their domain chokepoint (e.g.
@@ -2054,16 +3311,111 @@ docs/DEVELOPMENT.md § Logs & crash reporting.
 Each window loads the same bundle and mounts a different root by its label:
 `main.ts` reads `getCurrentWindow().label` and `rootFor(label)`
 (`src/roots/index.ts`, a pure map, unit-tested) picks the component —
-`main` → `BuddyRoot`, `panel` → `PanelRoot`, `bubble` → `BubbleRoot`, any
+`main` → `BuddyRoot`, `panel` → `PanelRoot`, `bubble` → `BubbleRoot`,
+`overlay` → `RegionRoot`, `editor` → `EditorRoot`,
+`region-indicator` → `RegionIndicatorRoot`, any
 unexpected label → `BuddyRoot`. The roots are thin: `BuddyRoot` hosts
 `CompanionCharacter` and invokes `toggle_panel`/`close_panel`; `PanelRoot`
 hosts `ActionPanel` and closes via `close_panel` on Escape/gutter-click;
-`BubbleRoot` hosts the greeting and calls `close_bubble` on dismiss. Each
+`BubbleRoot` hosts the greeting and calls `close_bubble` on dismiss;
+`RegionRoot` paints the rubber band and answers with
+`resolve_region_selection` (a rectangle, or `null` for Escape / a click with
+no drag / a degenerate box); `EditorRoot` drains the Rust-owned stash
+(`take_editor_request`) and opens what it held — a staged base through
+`editorProject.openStaged` (`editor_open_staged`), a project id through
+`openProject` — rendering the tutorial editor's `EditorShell` only while the
+store's own reply matches the request it drained, and otherwise its own
+"No capture open" line or the refused open's role-worded reason (Task 59:
+the phase-4 `LegacyCaptureEditor` that said those things, with its window-
+level Ctrl+Z, its sidecar read and its export bar, is retired). It also
+hosts the dialogs a closed session would unmount: `CloseGuardDialog`,
+`RecoveryDialog` and (Task 59) `DiscardProjectDialog`, the project menu's
+**Discard project…** — `editor_close_session(discardProject)`, which unpins
+the staged capture and never deletes the recording (ADR invariant 6), then
+hides the window. A REFUSED discard keeps the editor usable (Task 59 fix
+round 1): the store drops its session before Rust answers while Rust keeps
+it, so the dialog hands the project id back to `EditorRoot`'s `reattach`,
+which reopens it (Rust reuses the live session) — the shell stays, the
+refusal is said, and Discard can be retried; the window's "could not be
+opened" line reads only an OPEN's own failure (`openError`), never the
+store's shared `lastError`. Every `EditorError` message loses its `<path:#hash8>` /
+`<name:#hash8>` redaction handle where it ENTERS the webview
+(`src/editor/errorCopy.ts`, applied by `decodeEditorError`, the port's
+fallback and the store's `toEditorError`), so no surface — the close guard,
+the discard dialog, a refused open — shows a user the log's correlation
+handle instead of the role wording.
+The tutorial editor's OWN shortcuts (Task 21) are deliberately NOT a second
+`window` listener: `EditorShell.vue` binds one `@keydown` on its root, routes
+it through `shortcuts.ts`' `shouldHandle` (text fields, and anything inside an
+open `role="menu"`/`role="dialog"`, are left alone) and the shared action
+registry, and `stopPropagation()`s only a keystroke it actually acted on — so
+a claimed Ctrl+Z reaches no `window`-level listener behind it, while
+a disabled or nothing-to-send combo (F6 with the guide closed; Ctrl+E with
+nothing on the timeline) bubbles on untouched. Ctrl+S runs the header's Save
+(no second save while one is in flight) and Ctrl+E asks the preview
+toolbar's Review through `revealBus`' `"review"` surface (Task 57 fix round
+1): every key the learning center's shortcut table lists does something,
+which `tests/editorShortcutsWired.test.ts` presses one by one. F1/? (start or resume the guide) and F6 (the guide's
+card ↔ control focus, Task 56) are answered by the same dispatcher — F6
+alone skips the text-field rule (it types nothing, and a lesson's control
+can be an input), still yielding to an open menu or dialog.
+Its clipboard (`src/editor/clipboard.ts`) is window-local, in-memory state,
+never sent to Rust and never persisted.
+**`RegionRoot` and `RegionIndicatorRoot` install no store** — the two roots
+that mirror no Rust state and need no per-window `init()` wiring; the
+indicator mirrors ONE boolean (paused or not) from four app-wide `screen:*`
+events, which is less machinery than the per-window wiring a store would
+need. **`EditorRoot` is no longer in that set** (it was, through phase 5):
+`editorProject` is a genuine Pinia store, but it needs no `init()` either,
+for a reason specific to it — it mirrors no BROADCAST Rust state the way
+`capture`/`screenCapture` do (there is no cross-window "an editor session
+opened elsewhere" event to listen for; only the ONE editor window ever opens
+one), so `EditorRoot` drives it directly — `openStaged` for a drained
+staged base, `openProject` for a drained project id (and for its reattach
+after a refused discard) — rather than subscribing to anything at mount.
+The editor's PREVIEW (Task 22) is the one piece of that window's state that
+is deliberately in NO store: `PreviewSurface.vue` holds its
+`PreviewController` (`src/editor/previewController.ts`) in a plain `let`,
+never in Pinia or a `ref`, because it owns live media elements, an
+`AudioContext` and a rAF loop — a reactive proxy around any of those breaks
+native identity, and a store would rebuild reactive state at frame rate.
+Vue sees only its low-rate reports (`playing`, and a 10 Hz time that drives
+`editorWorkspace.playheadMs`); monitoring mute and rate are
+`editorWorkspace` fields, never editor commands. Task 27 routes every layer's
+gain through ONE `AnalyserNode` so the controller can answer `readPeak()` —
+the preview output's SAMPLE PEAK, which the mixer (`MixerPopover`, opened
+from the transport row, `data-action="mixer"`) polls only while open and
+labels a peak in dBFS, never loudness. The mixer's track/master levels,
+mute and solo are render-affecting commands (`setTrackFlags`/
+`setMasterGain`); its "Mute preview (does not affect the video)" is the
+same `monitor_muted` flag as the transport's speaker. Solo has ONE copy on
+the frontend, `src/editor/mixRules.ts`'s `isTrackAudible` (the render's rule,
+`core::editor::render_plan_audio::track_is_audible`): the preview's
+`computeLayers` and the mixer's "Silenced by solo" label both call it, and
+`tests/fixtures/editor-audibility-cases.json` holds the two languages together
+(both suites read it, final review I4). The command union is held the same
+way: `tests/fixtures/editorCommandWire.ts` lists every `EditorCommand` kind,
+`satisfies EditorCommand[]` for `vue-tsc`, and the core crate's `wire_tests`
+round-trips each entry and counts the variants through an exhaustive match
+(I7); a Vitest reads `core::editor::checks`' enums to pin
+`editorCheckTypes.ts` (I5).
+
+**The editor window listens to TWO events** — `editor:open` (which carries
+no state; it is the edge that says "read the stash again") and
+`editor:closeRequested`, both on `EditorRoot` and both emitted to that
+window alone. Neither is state the app owns anywhere else, so there is
+nothing to `init()`. (Phase 5's four `screen:export*` events, which the
+retired phase-4 editor filtered by the capture it had open, went with it in
+Task 59.)
+`region:begin` is still the overlay's one stateless re-arm. Each
 window is its own webview with its own Pinia stores, so any store that mirrors
 Rust state must be wired up per window: **both** `BuddyRoot` and `PanelRoot`
 call `capture.init()` (or the panel never sees `capture:*` events — dead level
-meter, stuck "saving") and both install `useSettingsStorageSync` (or a tray
-toggle handled in one window is invisible to, and gets reverted by, the other).
+meter, stuck "saving"), both call `screenCapture.init()` for the same reason on
+the `screen:*` events (each `init()` also ends with a `resync()` against
+`screen_capture_status`, so a webview mounted or reloaded mid-capture reflects
+it), and both install `useSettingsStorageSync` (or a tray toggle handled in one
+window is invisible to, and gets reverted by, the other).
 
 Panel visibility is no longer a store flag — it IS the panel window's
 show/hide state, owned by Rust. So the `vaults` store lost `panelOpen`/
@@ -2084,14 +3436,17 @@ hidden/shown (never unmounted), `ActionPanel` watches `shownNonce` to clear
 transient UI a close used to reset (an open record dialog, the filter, a
 lingering rename prompt). The store still holds the list and the panel view
 state (`view: list | settings | captureSettings | recordings | recordMode |
-transcriptions | tasks | taskDetail | search | importPicker | documentImport |
-update`, with `captureSettingsVaultId` /
-`recordingsVaultId` / `recordModeVaultId` / `tasksVaultId` /
-`taskDetailTask` / `pendingImportPath`) because that must
+screenCapture | transcriptions | tasks | taskDetail | search | importPicker |
+documentImport | update`, with `captureSettingsVaultId` /
+`recordingsVaultId` / `recordModeVaultId` / `screenCaptureVaultId` /
+`tasksVaultId` / `taskDetailTask` / `pendingImportPath`) because that must
 survive the panel window being hidden. Views form a fixed one-parent-per-view
 tree (no history stack): the vault-row capture button `openRecordMode`s (titled
-"Capture knowledge" — Meeting / Voice Note / Import Document / Browse recordings,
-Browse last), `openRecordings`
+"Capture knowledge" — Meeting / Voice Note / Record Screen / Import Document /
+Browse recordings, Browse last), `screenCapture` (parent: `recordMode`) is that
+chooser's Record Screen destination — `openScreenCapture` renders
+`ScreenSourcePicker` against `screenCaptureVaultId`, and a successful start
+navigates back to the list — `openRecordings`
 opens the read-only list, the vault-row Tasks button `openTasks` opens the
 per-vault todo view, a plain click on a task's title `openTaskDetail`s the
 `taskDetail` view (parent: `tasks` — it keeps `tasksVaultId` so `back()`
@@ -2108,8 +3463,8 @@ the blocked Import gates (`RecordMode`'s Import action, `ImportVaultPicker`'s
 `DocumentImportSettings` — instead of dumping the user at the bottom of the
 Buddy-settings page, the header's magnifier `openSearch`es the cross-vault
 search view,
-and `back()` returns to the immediate parent (`recordings` → record view,
-everything else → the list) — the header renders the magnifier + cog (buddy
+and `back()` returns to the immediate parent (`recordings` and `screenCapture`
+→ the record view, everything else → the list) — the header renders the magnifier + cog (buddy
 settings) on the list and a ← back button on every other view.
 
 Other Pinia stores: `updates` (phase machine:
@@ -2120,8 +3475,73 @@ character/animation/message duration, persisted to localStorage), `capture`
 job map and active/queued state driven by the `capture:transcribe*` events),
 `documentImports` (the single in-flight document conversion — owns the
 `convert_document` lifecycle, rendered by `ImportProgress` on the intake
-views and the list view; see the document-import domain), and
-`notifications` (the toast queue rendered by `NotificationHost`).
+views and the list view; see the document-import domain), `screenCapture`
+(screen-capture state mirrored from Rust — `status` as one tri-state
+`idle | capturing | paused` rather than the audio store's two booleans, plus
+`sourceTitle`, `startedAtMs`, `pausedTotalMs`/`pausedSinceMs`, the advisory
+`fps`/`dropped`, `warning`, `retainedPath`, `vaultId`, and `lastStaged` (the
+finished capture's staged `.mp4`, which since phase 4 is what the capture
+bar's **Edit** action opens); driven by the
+nine `screen:*` events with a `seq` ticket so a stale reply never
+overwrites a newer locally-applied transition, and seeded/reconciled from
+`screen_capture_status`), `editorJobs` (editor window only, Task 25 — the
+background jobs of the open editor session, fed by each job's own Tauri
+`Channel` through `EditorPort.importMedia`, never an event: a message is
+installed only for the job and session its Channel was opened for, only with
+a strictly increasing `sequence`, and never after the job's terminal;
+messages that beat `importMedia`'s `{ jobId }` reply are held and replayed
+through the same guards; `reconcile()` installs Rust's `editor_get_jobs`
+registry OVER the Channel's story — and drops a running row it already
+held that the registry no longer lists, since Rust forgets a job only once
+its caller has the result (a Task 28 peaks decode answers in its command's
+reply); a terminal that imported assets asks
+`editorProject.refresh()` to re-read the projection, since no `execute`
+reply carries a job's `AddAssets`; since Task 47 it also starts renders and
+Reviews (`startRender`, the same Channel discipline via `track`), keeps a
+render's refusal in `renderError` — never `lastError`, the media library's
+line, and never `editorProject.saveError`, the header's "Save failed" — and
+a terminal naming a `productId` asks `editorProducts` to re-read the
+ledger), `editorProducts` (editor window only, Task 47 — the open session's
+product ledger from `editor_get_products`, scoped to the session it was
+read for; its one verb, Restore, goes through `editorProject.restoreProduct`,
+an acknowledged edit like `execute`), `editorChecks` (editor window only,
+Task 54 — the open session's before-you-share findings from
+`editor_get_checks`, scoped to the session and ticketed like
+`editorProducts`; a failed read is kept as an error, never shown as "nothing
+found"), `editorOnboarding` (editor window only, Task 55 — the guided
+onboarding's app-wide progress from `editor_get_guide_progress`, read once
+per window when `EditorShell` mounts and saved debounced through
+`editor_save_guide_progress`; lessons come from `src/editor/guide/`
+(`steps.json`/`chapters.json` verbatim from the concept bundle, `content.ts`
+mapping each to a typed `GuideTargetKey`), and each target is REGISTERED by
+the component that owns the control via `useGuideTarget` into
+`src/editor/guide/targets.ts`' registry — never a CSS selector; a closed
+library tab or inspector section is the fallback route to its panel, and a
+tool in a toolbar's overflow resolves to More with `revealed: "overflow"`.
+Storage failure sets `sessionOnly`, shown as "Session only" beside Help —
+and a failed READ also stops every save for that session (`readFailed`), so
+fresh progress never overwrites a file that exists but could not be read;
+`suspended` is a transient DEPTH (every `DialogHost` suspends on open and
+resumes on close, so stacked dialogs keep the coach down until the last
+closes) and is never persisted. Task 56 drives it: `GuideInvitation`
+(Show me around / Not now — nonmodal, never takes focus), `GuideCoach`
+(Back/Next/Pause/Collapse/Close/Start over; a click inside the highlighted
+control is `markExplored` and never advances the lesson), Help → Resume walkthrough and F1/?
+(`start()` resumes the exact lesson), F6 (card ↔ control, `guideFocus` in
+`shortcuts.ts`) and an Escape no menu answered (pause). The coach renders
+`lessonCopy(id)` — `steps.json`'s verbatim text with this app's
+corrections (`LESSON_COPY_OVERRIDES`, GAP-203) — and, before each lesson,
+`prepare.ts` reveals the tab, drawer or selection its control needs: view
+state only, never `editor_execute`. The debounced save is flushed when the
+window hides, when the shell unmounts and before the close guard hides
+the window. Task 57's learning center (Help → Learning center / Resume
+walkthrough / Keyboard shortcuts: `GuideHelpButton` → `LearningCenter`, a
+`DialogHost` modal) drives `jumpTo` (a lesson or chapter jump opens the
+coach there), `setPreferences`, `restart` behind the two-step confirm and
+`restoreFrom` (a restored progress file, installed paused); its progress
+line and "read every lesson" come from `reviewed` (`reviewedCount`,
+`hasFinished`), never `completed`, which a revisit clears), and `notifications`
+(the toast queue rendered by `NotificationHost`).
 
 Cross-window state travels two ways: Tauri events broadcast to every window
 (Rust-driven animation/dragging toggles from the menu handlers; capture
@@ -2153,6 +3573,43 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
   them without touching call sites. The white-opacity glass surfaces
   (`bg-white/5`, `bg-white/10`, `border-white/10`) stay literal — already
   consistent, and tokenizing them risks `color-mix` drift.
+- **The tutorial editor (`src/components/editor/shell/`, Task 16, F-48)
+  adds its own token set to the same `@theme` block** rather than reusing
+  the panel's palette wholesale — it reuses `fg`/`accent`/`focus`/`danger`/
+  `rounded-control`/`text-micro` but needs ten more the panel never did:
+  `--color-stage`/`-panel`/`-raised`/`-line` (workspace surfaces) and
+  `-video`/`-video-bg`/`-audio`/`-audio-bg`/`-gold`/`-gold-bg` (media-type
+  and fade-handle accents), mapped verbatim from
+  `docs/concepts/vault-buddy-editor/contracts/design-tokens.json`. Dark
+  values are the `@theme` defaults; `[data-theme="light"]` (set on
+  `document.documentElement` by `EditorShell`, watching the
+  `editorWorkspace` store's own `theme` field — Task 18 moved the STATE
+  there, persisted through `editor_save_workspace`; `EditorShell` keeps only
+  the one thing that stays view-local, applying the `data-theme` attribute)
+  overrides all ten — and, since Task 58 (GAP-206), the TEXT tokens too:
+  `fg`/`fg-secondary`/`fg-muted`/`fg-subtle`, `accent`/`accent-fg`,
+  `danger`/`danger-fg`, `focus`, `color-scheme: light` and `--color-app`
+  (the window backdrop, `bg-app` on `EditorRoot`'s `main`), so every text
+  reads at 4.5:1 or more on every light surface —
+  `tests/e2e/editorKeyboard.spec.ts` measures it. A surface in the editor
+  must therefore use a token background (`bg-panel`/`bg-raised`/`bg-stage`,
+  never a literal `bg-slate-800`), or the light ladder puts dark text on it.
+  `[data-theme="dark"]` (fix round 1, GAP-209) overrides only
+  `--color-fg-subtle` (#8e98aa) and `--color-video` (#b39ef0) in the editor
+  window — the `@theme` defaults stay the bundle's — and AppButton's primary
+  is `bg-accent-strong` app-wide (white on violet-500 read 4.40:1); the
+  contrast e2e check runs in both themes. **Forced colours** (Windows
+  contrast themes) drop every box-shadow, which is how `ring-*` focus rings
+  and the selected clip were drawn: `style.css`' unlayered
+  `@media (forced-colors: active)` block gives `:focus-visible` and
+  `[role="option"][aria-selected="true"]` an outline, and the `vb-playhead`/
+  `vb-handle` classes (the playhead; trim, fade and layout handles) keep a
+  system colour of their own. Four
+  more custom properties — `--editor-sidebar` (244px) / `--editor-inspector`
+  (276px) / `--editor-timeline` (400px) / `--editor-label` (196px) — are
+  region sizes, not colors, so Tailwind emits them as plain CSS variables
+  with no matching utility class; `EditorShell`'s own scoped `<style>`
+  reads them via `var(...)` for its grid-template-columns.
 - **Primitives** are presentational and each unit-tested: `IconButton`
   (icon-only; owns the focus/hover/disabled treatment; sizes `sm` = p-1,
   `md` = p-1.5), `AppButton` (primary/secondary/ghost/danger text button),
@@ -2213,6 +3670,39 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
   Tauri IPC is mocked with `mockIPC` from `@tauri-apps/api/mocks`; plugin
   modules are mocked with `vi.mock` + `vi.hoisted`. Tests must never require
   a real Tauri runtime.
+- **`tests/e2e/` is Playwright, not Vitest, and it exists for the ONE thing
+  the suite above structurally cannot do: measure.** happy-dom has no layout
+  engine, so every geometry assertion in `tests/*.test.ts` is really a class
+  assertion — and two window-sizing defects shipped through exactly that
+  (docs/Gaps.md GAP-162). `tests/e2e/editorShell.spec.ts` (which absorbed
+  the retired phase-4 layout's `editorLayout.spec.ts` in Task 59) drives the BUILT
+  `dist/` in real Chromium at four viewport sizes and reads real bounding
+  boxes. `vite.config.ts` excludes `tests/e2e/**` from Vitest (it collected
+  the spec once and failed trying to reach a dev server); `npm run test:e2e`
+  runs it, after `npm run build`, and the `frontend` CI job does both.
+  Four rules for anything added here, each one a defect this suite already
+  had:
+  - **Serve `dist/`, never the dev server.** Tailwind's purge runs only in
+    the build, so a class that survives in dev and is purged in the bundle
+    would pass a dev check and fail the app.
+  - **Give the layout real content to be wrong about.** The preview
+    `<video>` is fed a VP9/WebM fixture because an empty `<video>` has no
+    intrinsic aspect ratio and renders at the CSS default 300x150, where the
+    defect under test cannot reproduce at all — the first draft of the suite
+    passed against the unfixed layout for precisely that reason. VP9 and not
+    H.264: Playwright's Chromium carries no proprietary codecs, and an H.264
+    clip fails with `video.error = 4` and no other symptom.
+  - **Measure the real scroll container.** `EditorRoot`'s is `main`
+    (`h-screen` + `overflow-y-auto`), so `document.documentElement.scrollHeight
+    - window.innerHeight` reads 0 at every size and cannot fail. Two
+    assertions were written that way.
+  - **Mutate before trusting it.** Every assertion here was run against the
+    pre-fix files (`git show <fix>^:<path>`) and required to fail with a
+    message naming the defect. Three did not and were re-pointed or deleted,
+    one of them because it asserted a Chromium UA default.
+  It is Chromium, and the app ships on WebView2 — related, not identical. A
+  green run is evidence, not the desktop-behavior gate; that is still the
+  manual checklist.
 - Rust unit tests sit next to the code in `src-tauri/core/`,
   `src-tauri/capture/`, `src-tauri/transcribe/`, and the shell
   (`src-tauri/src/transcription.rs` carries the queue's tests); keep new
@@ -2248,10 +3738,10 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
 
 | Job | Runner | Gates |
 | --- | --- | --- |
-| `frontend` | Linux | ESLint, LOC guard (frontend + Rust files), fallow quality ratchet, version-file agreement, `vue-tsc` typecheck + build, Vitest suite with coverage floors |
-| `rust-core` | Linux | `cargo fmt --check` (whole workspace), clippy `-D warnings` + tests on `core`, `capture`, `transcribe`, `mcp` — including `--features whisper` (the only place the whisper FFI tests execute) — plus `cargo machete` (unused deps), a `cargo llvm-cov` line-coverage floor (94) over the member crates, and `cargo deny check` (RustSec advisories + license policy, `src-tauri/deny.toml`) |
+| `frontend` | Linux | ESLint, LOC guard (frontend + Rust files), fallow quality ratchet, version-file agreement, `vue-tsc` typecheck + build, the **Playwright layout check** against the just-built `dist/` (`tests/e2e/`, chromium only — see Testing conventions), then the Vitest suite with coverage floors. The e2e step sits between the build and `test:coverage` because it needs `dist/` and must not disturb the coverage ordering |
+| `rust-core` | Linux | `cargo fmt --check` (whole workspace), clippy `-D warnings` + tests on `core`, `capture`, `transcribe`, `mcp`, `screen` — including `--features whisper` (the only place the whisper FFI tests execute) — plus `cargo machete` (unused deps), a `cargo llvm-cov` line-coverage floor (94) over `core`/`capture`/`transcribe`/`screen`, and `cargo deny check` (RustSec advisories + license policy, `src-tauri/deny.toml`). **It also installs ffmpeg**, explicitly rather than trusting the runner image, because the screen crate's render round-trip tests (`render_roundtrip.rs`, `render_graph_roundtrip.rs` — the retired `export_roundtrip.rs`'s successors, Task 59) SKIP when ffmpeg is absent — an image that quietly dropped it would turn the editor's only executable end-to-end render proof into a silent no-op with the job still green |
 | `linux-app` | Linux (after the two above) | `npx tauri build --no-bundle` — shell compile gate, never released — then **workspace clippy incl. the shell** and the **shell crate's unit tests** (`cargo test -p vault-buddy --lib`; both need the GUI libs + built `dist/` this job has) |
-| `windows-app` | Windows (after the two above) | Full `npx tauri build`, MSI/NSIS installers as artifacts; leaves updater artifacts unsigned on every PR event by design (the signing secrets are injected only on push to `main`, never on PRs — GAP-36); + `cargo test` for core/capture/transcribe (incl. `--features whisper`) after the build to exercise platform-sensitive code (process detection, GetKeyState, WASAPI gates, MoveFileExW fallback) |
+| `windows-app` | Windows (after the two above) | Full `npx tauri build`, MSI/NSIS installers as artifacts; leaves updater artifacts unsigned on every PR event by design (the signing secrets are injected only on push to `main`, never on PRs — GAP-36); + `cargo test` for core/capture/transcribe/screen (incl. `--features whisper`, and `--features whisper-vulkan` for transcribe) after the build to exercise platform-sensitive code (process detection, GetKeyState, WASAPI gates, MoveFileExW fallback) |
 
 ## Releases
 

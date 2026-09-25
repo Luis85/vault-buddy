@@ -1,0 +1,67 @@
+[package]
+name = "vault_buddy_screen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = []
+# Spec 6.4's gating spike, RESOLVED 2026-09-19 and kept re-runnable. It no
+# longer pulls a dependency in (the `windows` crate is now a real Windows
+# dependency of this crate), so this is just a switch on the module.
+fmp4-spike = []
+
+[dependencies]
+vault_buddy_core = { path = "../core" }
+# The audio side of a screen capture reuses the existing capture domain
+# wholesale: SourceInput/SourceMsg for the already-opened endpoints and the
+# mixer's downmix/resample/mix. Re-growing either here would give screen
+# captures a second, silently-diverging mix.
+vault_buddy_capture = { path = "../capture" }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The webcam id is a sha256 of the device's symbolic link (source_webcam.rs).
+# Already in the workspace lockfile through `core`, so it pins no new version.
+sha2 = "0.10"
+
+# NOTE: no `chrono` dependency yet. Task 2's `StagedSidecar::recorded_at` is
+# a plain `String` (the timestamp is formatted by whichever task produces
+# it), so nothing here calls into chrono; `cargo machete` (a rust-core CI
+# gate) fails on a declared-but-unused dependency. Add it back in the task
+# that first formats/parses a timestamp with it.
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+# 0.62 is already in the workspace lockfile transitively via tauri, so this
+# pins no new version. windows-capture 2.0.1 requires ^0.62.2, the same one.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    # DwmGetWindowAttribute/DWMWA_EXTENDED_FRAME_BOUNDS: the DWM-composed
+    # size WGC actually delivers for a window, which GetWindowRect (what
+    # windows-capture's Window::width/height use) over-reports by the
+    # invisible resize border. See source.rs's window_capture_dims.
+    "Win32_Graphics_Dwm",
+    "Win32_Media_MediaFoundation",
+    # GetDiskFreeSpaceExW: the free-space probe the ninth vault write runs
+    # before an export, so a save is refused with a clear message instead of
+    # filling the user's disk. See disk.rs -- the probe returns Option, not
+    # Result, so an unmeasurable volume never reads as a full one.
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    # SetWindowDisplayAffinity + WDA_EXCLUDEFROMCAPTURE (spec 5.3): keeping
+    # our own windows out of a screen recording. The shell cannot host this
+    # call -- it cannot be cross-compiled to Windows on Linux at all (ring
+    # needs MSVC's lib.exe), so a cfg(windows) FFI written there would have
+    # no local type-check whatsoever.
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# MIT, crates.io (verified against the registry: 2.0.1, not yanked), and it
+# requires `windows` ^0.62.2 -- the exact version already in the workspace
+# lockfile, so it pins nothing new. deny.toml's licence allow-list already
+# permits MIT and `[sources] unknown-git = "deny"` is satisfied, so no
+# deny.toml entry is needed.
+windows-capture = "2.0.1"

@@ -1,11 +1,16 @@
-//! Companion markdown note: frontmatter metadata + an ![[…]] embed of the
+//! Companion markdown note: frontmatter metadata + an embed of the
 //! recording, plus an optional `## Transcript` embed of the transcript
-//! sidecar when transcription is enabled. Written atomically (temp +
+//! sidecar when transcription is enabled. Both embed lines are built by
+//! `crate::capture_embed::embed_line`, which picks the wikilink or the
+//! percent-encoded markdown shape (GAP-153) and owns the retarget that must
+//! keep matching whichever one it wrote. Written atomically (temp +
 //! fsync + non-replacing rename) so a crash can truncate only a hidden
 //! temp file, never a note in the vault.
 
 use std::io::Write;
 use std::path::Path;
+
+use crate::capture_embed::{embed_line, TRANSCRIPT_LINK_SUFFIX};
 
 pub struct NoteMeta {
     pub recorded_at: String,
@@ -135,7 +140,8 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
         ));
     }
     out.push_str("---\n\n");
-    out.push_str(&format!("![[{mp3_file_name}]]\n"));
+    out.push_str(&embed_line(mp3_file_name));
+    out.push('\n');
     // Body: a non-empty body template replaces the scaffold; otherwise the
     // legacy follow-up scaffold renders when opted in.
     match meta.body_template.as_deref().map(str::trim) {
@@ -150,7 +156,7 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
         _ if meta.follow_up => {
             // A follow-up scaffold above the (possibly long) transcript embed
             // so the actionable part is visible without scrolling. Static
-            // text — the rename retarget only rewrites the ![[…]] embed
+            // text — the rename retarget only rewrites the embed
             // line, never this.
             out.push_str(
                 "\n## Follow-up\n\n### Action items\n\n- [ ] \n\n### Decisions\n\n### Notes\n",
@@ -164,30 +170,14 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
         // (a "transcribing…" placeholder is written immediately so it never
         // shows "file not found").
         let stem = mp3_file_name.strip_suffix(".mp3").unwrap_or(mp3_file_name);
-        out.push_str(&format!("\n## Transcript\n\n![[{stem}.transcript]]\n"));
+        out.push_str("\n## Transcript\n\n");
+        out.push_str(&embed_line(&format!("{stem}{TRANSCRIPT_LINK_SUFFIX}")));
+        out.push('\n');
     }
     out
 }
 
-/// Rewrite exactly the `![[old]]` embed line(s) to point at the new file
-/// name. Line-anchored on purpose: the user may have written prose
-/// mentioning the old name, and only the embed our own render_note wrote
-/// may change.
-pub fn retarget_embed(note: &str, old_mp3: &str, new_mp3: &str) -> String {
-    let old_line = format!("![[{old_mp3}]]");
-    let new_line = format!("![[{new_mp3}]]");
-    let mut out = String::with_capacity(note.len());
-    for line in note.split_inclusive('\n') {
-        let body = line.trim_end_matches(['\n', '\r']);
-        if body == old_line {
-            out.push_str(&new_line);
-            out.push_str(&line[body.len()..]);
-        } else {
-            out.push_str(line);
-        }
-    }
-    out
-}
+pub use crate::capture_embed::retarget_embed;
 
 /// Ownership marker for our note temp files: recovery's cleanup filter
 /// deletes ONLY temps carrying this suffix — never another tool's
@@ -543,37 +533,6 @@ mod tests {
         let body = note.find("## Summary").unwrap();
         let tr = note.find("## Transcript").unwrap();
         assert!(audio < body && body < tr, "{note}");
-    }
-
-    #[test]
-    fn retarget_rewrites_only_the_embed_line() {
-        let note = "---\nvault: \"W\"\n---\n\nSee old.mp3 in prose.\n![[old.mp3]]\n";
-        let out = retarget_embed(note, "old.mp3", "new.mp3");
-        assert!(out.contains("![[new.mp3]]"));
-        assert!(!out.contains("![[old.mp3]]"));
-        assert!(
-            out.contains("See old.mp3 in prose."),
-            "prose mention untouched: {out}"
-        );
-    }
-
-    #[test]
-    fn retarget_preserves_crlf_line_endings() {
-        let note = "a\r\n![[old.mp3]]\r\nb\r\n";
-        let out = retarget_embed(note, "old.mp3", "new.mp3");
-        assert_eq!(out, "a\r\n![[new.mp3]]\r\nb\r\n");
-    }
-
-    #[test]
-    fn retarget_without_a_match_returns_the_note_unchanged() {
-        let note = "no embed here\n![[other.mp3]]\n";
-        assert_eq!(retarget_embed(note, "old.mp3", "new.mp3"), note);
-    }
-
-    #[test]
-    fn retarget_handles_a_note_without_trailing_newline() {
-        let out = retarget_embed("![[old.mp3]]", "old.mp3", "new.mp3");
-        assert_eq!(out, "![[new.mp3]]");
     }
 
     #[test]

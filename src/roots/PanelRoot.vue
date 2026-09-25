@@ -8,10 +8,12 @@ import { useSettingsStorageSync } from "../composables/useSettingsStorageSync";
 import { useStartupUpdateCheck } from "../composables/useStartupUpdateCheck";
 import { useSuppressContextMenu } from "../composables/useSuppressContextMenu";
 import { useCaptureStore } from "../stores/capture";
+import { useScreenCaptureStore } from "../stores/screenCapture";
 import { useVaultsStore } from "../stores/vaults";
 
 const store = useVaultsStore();
 const capture = useCaptureStore();
+const screenCapture = useScreenCaptureStore();
 useSuppressContextMenu();
 useSettingsStorageSync();
 // Quiet startup update check (panel window only — mounts once, hidden, and
@@ -45,6 +47,12 @@ onMounted(async () => {
   // stuck on "saving" after stop, no rename prompt). See BuddyRoot for the
   // buddy window's own copy — each window listens independently.
   void capture.init();
+  // Same per-window rule for the screen-capture store: the panel is where the
+  // capture bar and the source picker live, so without its own init() the
+  // panel never sees screen:* events (a capture started from here would show
+  // no bar, and Stop would have nothing to drive). BuddyRoot carries the
+  // other copy.
+  void screenCapture.init();
   // The panel window is created once and only shown/hidden thereafter, so
   // onMounted fires a single time — discovering on mount would read
   // obsidian.json while the panel is still hidden and never refresh again.

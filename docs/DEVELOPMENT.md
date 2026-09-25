@@ -11,8 +11,9 @@ where it's going, see the [PRD](PRD.md).
 1. [Node.js 22+](https://nodejs.org)
 2. [Rust stable](https://rustup.rs) — the default MSVC toolchain; rustup will
    prompt you to install the Visual Studio C++ Build Tools if missing
-3. WebView2 runtime — preinstalled on Windows 11; on Windows 10 see the
-   [Tauri prerequisites](https://tauri.app/start/prerequisites/)
+3. WebView2 runtime — preinstalled on Windows 11, which is what this app
+   targets (see [Tauri prerequisites](https://tauri.app/start/prerequisites/)
+   if you are on an older build; nothing here is tested against one)
 4. **LLVM (libclang) and CMake** — the app statically links whisper.cpp for
    local speech-to-text, so the `whisper` feature is always on for the shell
    and *every* app build compiles `whisper-rs-sys`, whose build runs `bindgen`
@@ -78,15 +79,37 @@ Alternatively, every push through CI builds Windows installers — download the
 npm run test                       # Vitest component/store tests
 npm run build                      # vue-tsc typecheck + production build
 
+# The layout check. Vitest runs on happy-dom, which has no layout engine, so
+# it can only assert the CLASSES that produce a layout. This drives the
+# BUILT dist/ in real Chromium and measures actual pixels, which is why
+# `npm run build` has to come first.
+npx playwright install chromium    # once per machine
+npm run test:e2e
+
 # from src-tauri/ — mirrors the CI "Rust core" job (Linux needs ALSA's
 # headers first: sudo apt-get install -y libasound2-dev)
 cargo fmt --check
 cargo clippy -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp --all-targets -- -D warnings
 cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp
 cargo test -p vault_buddy_transcribe --features whisper   # the only place the whisper FFI tests run
+cargo test -p vault_buddy_screen   # the screen/render crate — its ffmpeg round trips need ffmpeg (below)
+cargo test -p vault_buddy_screen --test render_roundtrip -- --nocapture   # shows any SKIP line
 ```
 
-The Rust workspace is split into four member crates plus the shell.
+**The render round trips need ffmpeg, with libass.** `src-tauri/screen/tests/render_roundtrip.rs`
+and `render_graph_roundtrip.rs` render real tutorial projects through the
+`ffmpeg`/`ffprobe` on PATH and decode the result; the tutorial editor's
+cues, cards and burned-in captions go through ffmpeg's `ass` filter, so the
+build should be compiled with libass (the usual Windows "full" builds and
+distro packages are; `ffmpeg -filters | grep ass` shows it). Without ffmpeg
+those round trips print a `SKIPPED <test>: …` line and pass (the shell's
+`*_round_trip_through_real_ffmpeg` waveform and thumbnail tests print
+`SKIP: …`), which proves nothing: read the output. A build WITHOUT libass
+skips only `text_cue_is_burned_in` (`SKIPPED text_cue_is_burned_in: …`);
+the rest still run. CI's `rust-core` job installs ffmpeg explicitly so they
+run.
+
+The Rust workspace is split into five member crates plus the shell.
 `src-tauri/core/` (`vault_buddy_core`) is a pure crate with all Obsidian
 logic (config parsing, daily-note resolution, URI building) and no GUI or
 audio dependencies — it tests on any machine, including CI containers.
@@ -98,7 +121,11 @@ build: `sudo apt-get install -y libasound2-dev`. `src-tauri/transcribe/`
 decode + whisper.cpp behind the `whisper` feature); its FFI regression
 tests run on Linux under `--features whisper`. `src-tauri/mcp/`
 (`vault_buddy_mcp`) is the Tauri-free embedded MCP server; its unit and
-real-socket integration tests run on Linux too. `src-tauri/` itself is the
+real-socket integration tests run on Linux too. `src-tauri/screen/`
+(`vault_buddy_screen`) is the screen-capture engine and the tutorial
+editor's render (the RenderPlan → ffmpeg argv, and the runner); its pure
+modules and ffmpeg round trips test on Linux, while its Media Foundation
+capture code is Windows-only and runs in no automated test. `src-tauri/` itself is the
 thin Tauri shell (window, tray, command wrappers) and needs platform
 WebView libraries to compile — on Windows that works out of the box; on
 Linux it needs the WebView/GTK/tray system libraries (see the compile-gate
@@ -132,7 +159,7 @@ CI runs on every push to `main` and every pull request
 
 | Job | Runner | What it gates |
 | --- | --- | --- |
-| Frontend | Linux | ESLint, LOC guard, fallow quality ratchet, `vue-tsc` typecheck + production build, Vitest with coverage floors |
+| Frontend | Linux | ESLint, LOC guard, fallow quality ratchet, `vue-tsc` typecheck + production build, the Playwright layout check against that build, Vitest with coverage floors |
 | Rust core | Linux | `cargo fmt --check`, `clippy -D warnings`, core unit tests |
 | Linux app | Linux | `tauri build --no-bundle` compile gate (no installer, never released) |
 | Windows app | Windows | Full Tauri compile + MSI/NSIS installers, uploaded as artifacts (14-day retention) |
@@ -409,6 +436,13 @@ ever written into your vaults except recordings and their notes.
       "documentsFolder": "Documents", // optional — vault-relative home of imported documents
       "documentDateFolders": true, // optional — omit → true; same dated/flat toggle as recordings, for imports
       "documentExtractImages": true, // optional — omit → true; false = import text only (drop images, no media folder)
+      "screenCaptureFolder": "Screen Captures", // optional — vault-relative home of saved screen captures
+      "screenCaptureDateFolders": true, // optional — omit → false; same dated/flat toggle as recordings
+      "screenQuality": "balanced", // "low" | "balanced" | "high" — an EDITED save only; an untouched one is copied as recorded
+      "screenFps": 30,             // 30 | 60 — applies to the NEXT recording
+      "screenCreateNote": true,    // companion .md embedding the saved .mp4
+      "screenExtraFrontmatter": "area: Demos", // optional — added to that note's frontmatter
+      "screenBodyTemplate": "## Notes", // optional — added below the video embed
       "defaultList": "Inbox",      // optional — the list (folder under tasksFolder) new tasks land in when none is picked
       "listOrder": ["Inbox", "Next"] // optional — display order for list sections/pickers; unlisted folders append alphabetically
     }
@@ -423,14 +457,14 @@ ever written into your vaults except recordings and their notes.
   for whichever of the two keys is absent, so an upgrade seeds both modes
   from the old value with no data loss. Saving the vault's Recording settings
   writes only the two new keys — `recordingFolder` never reappears.
-- `recordingDateFolders` / `documentDateFolders` (bool, default `true`) —
+- `recordingDateFolders` / `documentDateFolders` (bool, default `false`) —
   whether NEW recordings/imports land in a dated `YYYY/MM` subfolder (the
   long-standing layout) or flat, directly in the folder. Existing files are
   always found in **either** layout regardless of the current setting —
   flipping it only changes where the next capture/import lands, it never
-  moves or rewrites what's already there. Omitted when `true` (the default);
-  written only when `false`, so existing configs stay untouched until a user
-  opts into the flat layout.
+  moves or rewrites what's already there. Omitted when `false` (the default);
+  written only when `true`, so existing configs stay untouched until a user
+  opts into the dated layout.
 - `documentExtractImages` (bool, default `true`) — whether a document import
   extracts the source's images into a media folder beside the note (the
   default) or produces a **text-only** note with images dropped. When off, the
@@ -438,6 +472,40 @@ ever written into your vaults except recordings and their notes.
   `--extract-media`, so no media folder is created and no dangling image links
   remain. Per-vault, changes only NEW imports, omitted when `true` — the same
   discipline as `documentDateFolders`.
+- The eight `screen*` keys — the per-vault **Screen Capture** settings, edited
+  in Vault settings → **Screen** (they were `config.json` hand-edits until
+  GAP-103 closed). Since tutorial-editor Task 59 retired the phase-5 export,
+  a capture reaches a vault through the editor's **Render** + **Publish**;
+  the notes below say which keys that still reads.
+  - `screenCaptureFolder` (string or omit, default `"Screen Captures"`) — the
+    vault-relative folder a Publish lands a video and its note in when the
+    Publish dialog's folder is left blank.
+  - `screenCaptureDateFolders` (bool, default `false`) — the dated `YYYY/MM`
+    vs flat toggle, as the Publish dialog's DEFAULT for this vault (the user
+    can change it per publish).
+  - `screenQuality` (`"low"` | `"balanced"` | `"high"`, default
+    `"balanced"`) — the capture's recording bitrate, applied when the
+    **next** recording starts. A render picks its own quality in the
+    editor's Render dialog.
+  - `screenFps` (30 | 60, default 30) — the capture frame rate, applied when
+    the **next** recording starts; a capture already staged keeps the rate it
+    was recorded at. A value that is neither is normalized to 30 on read, so
+    a hand-edited file still opens the app — but the settings command
+    **refuses** it rather than normalizing, because a control the user is
+    looking at must not quietly become something else.
+  - `screenCreateNote` (bool, default `true`) — whether a Publish writes the
+    companion note, as the Publish dialog's DEFAULT for this vault (the user
+    can change it per publish).
+  - `screenAudioStems` (bool, default `false`) — keep each audio input as its
+    own stem beside the mixed track (new recordings only).
+  - `screenExtraFrontmatter` / `screenBodyTemplate` (string or omit) — the
+    additive per-vault template of the Tutorial note a Publish writes, the
+    same machinery as the capture and document templates. Placeholders for
+    both: `{{date}}`, `{{recordedAt}}`, `{{duration}}`, `{{product}}`,
+    `{{revision}}`, `{{range}}`. The managed identity keys (`type`,
+    `created-by`, `recorded`, `duration`, `product`, `revision`, `range`,
+    `chapters`) are always written and cannot be overridden; the body
+    template is appended **below** the video embed.
 - `followUpTemplate` (bool, default `true`) — append a `## Follow-up`
   scaffold (action items, decisions, notes) to each recording's companion
   note. Only applies when `createNote` is on.
@@ -494,6 +562,37 @@ by Buddy settings → *Integrations — Transcription — GPU*:
   context init). Toggle applies from the next transcription job (the worker
   reloads the cached model; no restart needed). Omitted when `true` (the
   default), written only when `false` — the hand-editable file stays minimal.
+
+## Tutorial editor project store
+
+The tutorial editor keeps everything it writes outside every vault, under
+the app's local data folder `%LOCALAPPDATA%\com.vaultbuddy.desktop\`
+(AGENTS.md § "Where state lives on disk" has the full contract):
+
+```
+editor-projects\<projectId>\
+  project.json      the project envelope (schema vault-buddy-video-project/3), written by Save project
+  sources.json      asset id -> where its bytes live (a staged capture is referenced, never moved)
+  workspace.json    view preferences (selection, playhead, panels, theme); never part of Undo
+  recovery.json     the unsaved-edit journal of a dirty session (Resume / Discard on next open)
+  products.json     the immutable product ledger, committed when a render lands
+  media\            imported originals, copied in as <assetId>.<ext>
+  takes\            webcam takes (<takeId>.webm; .part while recording)
+  products\         rendered videos, <productId>.mp4
+  cache\            derived and deletable: waveforms, thumbnails, the latest Review render
+  jobs\<jobId>\     a render's scratch or a publish's journal, removed when the job ends
+editor-prefs\guide-progress.json   the guided walkthrough's app-wide progress
+```
+
+A staged capture a project uses is **pinned**: its sidecar in
+`screen-captures\` carries `editorProjectId`, and it cannot be discarded or
+cleared until the project is discarded (the editor's **Discard project…**).
+To start from a clean slate while developing, quit the app and delete
+`editor-projects\` and `editor-prefs\`; a staged capture whose sidecar still
+names a deleted project is re-adopted or migrated afresh the next time it is
+opened in the editor (`editor_open_staged` logs "pinned to missing project").
+Nothing here is ever written into a vault; only **Publish to
+vault…** copies a product (and its note) into one.
 
 ## MCP server configuration
 

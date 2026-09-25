@@ -51,10 +51,59 @@
         "skipTaskbar": true,
         "shadow": false,
         "focus": false
+      },
+      {
+        "label": "overlay",
+        "title": "Vault Buddy — Select Region",
+        "visible": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "focus": true
+      },
+      {
+        "label": "editor",
+        "title": "Vault Buddy — Edit Capture",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 640,
+        "visible": false,
+        "resizable": true,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "shadow": true
+      },
+      {
+        "label": "region-indicator",
+        "title": "Vault Buddy — Recording Region",
+        "visible": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "focus": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; media-src 'self' asset: http://asset.localhost blob: mediastream:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPLOCALDATA/screen-captures/*",
+          "$APPLOCALDATA/editor-projects/*/media/*",
+          "$APPLOCALDATA/editor-projects/*/takes/*",
+          "$APPLOCALDATA/editor-projects/*/products/*",
+          "$APPLOCALDATA/editor-projects/*/cache/*"
+        ]
+      }
     }
   },
   "bundle": {

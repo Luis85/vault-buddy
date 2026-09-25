@@ -1,0 +1,144 @@
+/**
+ * The tutorial editor's keyboard shortcut map (Task 17; F-15, F-49).
+ * Deliberately pure and DOM-listener-free — this module exports a lookup
+ * table plus a couple of pure predicates over a `KeyboardEvent`; nothing
+ * here calls `window.addEventListener`. A future task wires the actual
+ * `window`-level dispatcher once there is a real timeline/canvas to bind it
+ * against and a real selection to act on (`editorWorkspace`, Task 18) —
+ * wiring one now, with nothing yet to select and nothing yet listening for
+ * its result, would just be an untestable no-op with an extra failure mode
+ * (a leaked listener) for no behavior. `shouldHandle` is what that future
+ * dispatcher must call before acting on any key — see its own doc below.
+ *
+ * `SHORTCUTS` binds a normalized key combo directly to an `ActionId`
+ * (`resolveActions`/`commandFor` in `actions.ts` decide whether that action
+ * is actually available). Two of the Behavior section's bindings do NOT
+ * name an `ActionId` at all and are exposed as their own predicates instead
+ * of table entries:
+ *   - `Shift+F10` / the Menu key opens the CONTEXT MENU at whatever is
+ *     focused — that is a menu-visibility event, not an edit, so it has no
+ *     `ActionId` to resolve. `isContextMenuShortcut` is what a focused
+ *     clip's own keydown handler (a later task, once clips render) checks.
+ *
+ * `F1`/`?` (`help`) and `F6` (`guideFocus`) are the guide's (Task 56;
+ * ONBOARDING.md: "F1 and ? open learning. F6 switches focus between the
+ * guide and its highlighted target"). Task 17 had bound F6 to
+ * `focusPreview` for want of a guide id; the guide took it back.
+ * `EditorShell`'s dispatcher answers both itself — neither sends a
+ * command — and Escape, which dismisses the guide only when no menu or
+ * popover is open (`isGuideDismissKey`, below).
+ */
+import type { ActionId } from "./actions";
+
+// The human-readable "Ctrl+Z" display string (`SHORTCUT_DISPLAY`) lives in
+// `actions.ts`, not here: `resolveActions` needs it synchronously while
+// building its result, and `actions.ts` must not import FROM this file
+// (the reverse import already runs the other way, and a back-edge would be
+// the exact cycle `circularDependencies 0` exists to catch) — so the
+// shared data sits in the file the two share a one-way edge toward. Import
+// it from `./actions` directly rather than through here.
+
+/** Normalized-combo -> action id. Combo grammar: lowercase modifiers in
+ * `ctrl+shift+` order, then the key exactly as `shortcutKey` normalizes it
+ * below — see that function's own doc for why punctuation keys never carry
+ * an explicit `shift+` prefix. */
+export const SHORTCUTS: ReadonlyMap<string, ActionId> = new Map<string, ActionId>([
+  ["s", "split"],
+  ["delete", "delete"],
+  ["backspace", "delete"],
+  ["shift+delete", "deleteClose"],
+  ["shift+backspace", "deleteClose"],
+  ["ctrl+z", "undo"],
+  ["ctrl+shift+z", "redo"],
+  ["ctrl+y", "redo"],
+  ["ctrl+c", "copy"],
+  ["ctrl+x", "cut"],
+  ["ctrl+v", "paste"],
+  ["ctrl+d", "duplicate"],
+  ["ctrl+g", "group"],
+  ["ctrl+shift+g", "ungroup"],
+  ["ctrl+s", "save"],
+  ["ctrl+e", "render"],
+  ["f1", "help"],
+  ["?", "help"],
+  ["f6", "guideFocus"],
+]);
+
+/**
+ * Normalizes a `KeyboardEvent` into `SHORTCUTS`' combo grammar.
+ *
+ * `shift+` is added explicitly in two cases, both because `event.key` alone
+ * cannot be trusted to carry the modifier there:
+ *   - `event.ctrlKey` is also held. Browsers suppress the ordinary
+ *     shift-driven case change while Ctrl is down — `Ctrl+Shift+Z` still
+ *     reports `key: "z"` (lowercase), the same as plain `Ctrl+Z` — so
+ *     `shiftKey` is the ONLY signal distinguishing undo from redo, and it
+ *     has to be read explicitly.
+ *   - `event.key` is a NAMED, multi-character key (`Delete`, `F1`…`F12`,
+ *     `ContextMenu`, arrows — `key.length > 1`). Named keys are never
+ *     case-shifted, so `Shift+Delete` and plain `Delete` both report
+ *     `key: "Delete"` — again, only `shiftKey` tells them apart.
+ *
+ * Every OTHER case — a single printable character with no Ctrl held (a
+ * plain letter, or a shifted punctuation character like `?`) — is left
+ * alone: the browser already folds Shift into `event.key` for those
+ * (`Shift+/` arrives as `event.key === "?"`, `Shift+s` arrives as
+ * `event.key === "S"`), so adding an explicit `shift+` prefix on top would
+ * double-count the modifier and produce a combo (`"shift+?"`) nothing in
+ * `SHORTCUTS` binds — and plain `s` is what `split` is bound to, not
+ * `Shift+s` (`"S"` lower-cased is still `"s"`, so an unshifted `s` and an
+ * accidental `Shift+s` deliberately collide onto the same binding here;
+ * Rust's own split refusal at a clip boundary is the real guard against a
+ * stray keypress, not this normalization).
+ */
+export function shortcutKey(event: KeyboardEvent): string {
+  const key = event.key;
+  const isNamedKey = key.length > 1;
+  const includeShift = event.shiftKey && (event.ctrlKey || isNamedKey);
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push("ctrl");
+  if (includeShift) parts.push("shift");
+  parts.push(key.toLowerCase());
+  return parts.join("+");
+}
+
+/** The action id `event` is bound to, or `null` when it matches nothing. */
+export function matchShortcut(event: KeyboardEvent): ActionId | null {
+  return SHORTCUTS.get(shortcutKey(event)) ?? null;
+}
+
+/**
+ * Whether a global shortcut dispatcher should act on `event` at all — the
+ * gate every caller of `matchShortcut` must apply FIRST. False inside any
+ * text-entry surface (a plain `<input>`/`<textarea>` or a `contenteditable`
+ * region — typing "s" into a rename field must not split a clip), and false
+ * whenever a menu/dialog has already claimed the keyboard
+ * (`opts.menuOwnsKeys` — e.g. `ContextMenu.vue`'s own open popover) so two
+ * owners can never both react to the same keypress. (The retired phase-4
+ * editor bound its own Ctrl+Z on `window` until Task 59; this gate is why
+ * the two never double-handled a combo while both were mounted.)
+ */
+export function shouldHandle(event: KeyboardEvent, opts?: { menuOwnsKeys?: boolean }): boolean {
+  if (opts?.menuOwnsKeys) return false;
+  const target = event.target as HTMLElement | null;
+  if (!target) return true;
+  if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return false;
+  if (target.isContentEditable) return false;
+  return true;
+}
+
+/** Shift+F10 or the Menu/Application key — the two "open the context menu
+ * here" bindings (SCREENS-AND-INTERACTIONS.md §03). Not in `SHORTCUTS`: it
+ * names no `ActionId`, only a menu to open. */
+export function isContextMenuShortcut(event: KeyboardEvent): boolean {
+  return (event.key === "F10" && event.shiftKey) || event.key === "ContextMenu";
+}
+
+/** Escape, as the guide's dismiss key: only when nothing else already
+ * answered it (a menu, a drag being cancelled) and no menu or non-modal
+ * popover is open — "Menu Escape closes the menu before dismissing the
+ * guide" (ONBOARDING.md). A modal dialog suspends the guide instead. */
+export function isGuideDismissKey(event: KeyboardEvent): boolean {
+  if (event.key !== "Escape" || event.defaultPrevented) return false;
+  return document.querySelector('[role="menu"], [role="dialog"]:not([aria-modal="true"])') === null;
+}

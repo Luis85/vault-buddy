@@ -35,13 +35,21 @@ export const useVaultsStore = defineStore("vaults", {
       | "importPicker"
       | "documentImport"
       | "update"
-      | "taskDetail",
+      | "taskDetail"
+      | "screenCapture",
+    // Which tab the Buddy-settings view opens on, when a route cares. null =
+    // the view's own default (Buddy). A deep link that only reached the view
+    // would land the user on the Buddy tab with the card they were sent to
+    // fetch two clicks away — GAP-144's failure scenario exactly.
+    settingsTab: null as string | null,
     // Which vault the captureSettings view edits.
     captureSettingsVaultId: null as string | null,
     // Which vault the recordings view lists.
     recordingsVaultId: null as string | null,
     // Which vault the recordMode view shows.
     recordModeVaultId: null as string | null,
+    // Which vault a screen capture will be filed into (the source picker).
+    screenCaptureVaultId: null as string | null,
     // Which vault the tasks view lists.
     tasksVaultId: null as string | null,
     // The task whose detail surface is showing (its own vaultId decides which
@@ -200,6 +208,10 @@ export const useVaultsStore = defineStore("vaults", {
       this.pendingCaptureVaultId = captureVaultId;
       this.view = view;
       this.captureSettingsVaultId = captureVaultId;
+      // A requestView never means a particular tab (it is the failed-install
+      // reopen and the panel-resize re-show), so it clears one an earlier
+      // deep link left behind.
+      this.settingsTab = null;
     },
     // The gentle variant: arm the NEXT open only, without flipping the live
     // view — the startup update check must not yank an already-open panel to
@@ -241,14 +253,20 @@ export const useVaultsStore = defineStore("vaults", {
       this.captureSettingsVaultId = null;
       this.recordingsVaultId = null;
       this.recordModeVaultId = null;
+      this.screenCaptureVaultId = null;
       this.tasksVaultId = null;
       this.taskDetailTask = null;
       this.pendingImports = [];
       // Invalidate any in-flight conversion's claim on the queue (see importEpoch).
       this.importEpoch++;
     },
-    openSettings() {
+    // `tab` deep-links to a Buddy-settings tab (currently only
+    // "integrations", where the external-tool cards live). Omitted means the
+    // view's own default — and RESETS any tab a previous route asked for, so a
+    // stale deep link can't redirect an ordinary Settings click later.
+    openSettings(tab: string | null = null) {
       this.view = "settings";
+      this.settingsTab = tab;
     },
     openUpdate() {
       this.view = "update";
@@ -264,6 +282,12 @@ export const useVaultsStore = defineStore("vaults", {
     openRecordMode(vaultId: string) {
       this.view = "recordMode";
       this.recordModeVaultId = vaultId;
+    },
+    /** The screen/window source picker. Its parent is the record chooser it
+     * was reached from, so `back()` returns there rather than to the list. */
+    openScreenCapture(vaultId: string) {
+      this.view = "screenCapture";
+      this.screenCaptureVaultId = vaultId;
     },
     openTranscriptions() {
       this.view = "transcriptions";
@@ -333,6 +357,12 @@ export const useVaultsStore = defineStore("vaults", {
     back() {
       if (this.view === "recordings" && this.recordingsVaultId) {
         this.openRecordMode(this.recordingsVaultId);
+      } else if (this.view === "screenCapture" && this.screenCaptureVaultId) {
+        // Same shape as `recordings` above: the source picker is reached from
+        // the record chooser, so back() returns there. Without this branch it
+        // falls through to the final else and lands on the vault list,
+        // skipping a level and contradicting the one-parent-per-view tree.
+        this.openRecordMode(this.screenCaptureVaultId);
       } else if (this.view === "transcriptions") {
         return this.showList();
       } else if (this.view === "tasks") {

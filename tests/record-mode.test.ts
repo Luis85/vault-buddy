@@ -61,6 +61,40 @@ describe("RecordMode", () => {
     expect(transcribe).toBeGreaterThan(browse);
   });
 
+  it("offers Record Screen between Voice Note and Import Document", async () => {
+    // Spec 7.1's ordering: capture actions first (meeting, voice note,
+    // screen), import next, browse last. Placing it after Import Document
+    // would split the capture actions around an import.
+    const { wrapper } = await mountView();
+    const html = wrapper.html();
+    const voiceNote = html.indexOf('data-testid="mode-voice-note"');
+    const screen = html.indexOf('data-testid="mode-screen"');
+    const importDoc = html.indexOf('data-testid="import-document"');
+    expect(screen).toBeGreaterThan(voiceNote);
+    expect(importDoc).toBeGreaterThan(screen);
+  });
+
+  // GAP-111 item 3: the chooser must not under-advertise a capability the
+  // picker now has. Pinned in both directions so a revert is visible.
+  it("advertises region capture in the intake chooser", async () => {
+    const { wrapper } = await mountView();
+    const screen = wrapper.get('[data-testid="mode-screen"]');
+    expect(screen.text()).toContain("Screen, window, or region");
+    expect(screen.attributes("aria-label")).toContain("region");
+  });
+
+  it("routes Record Screen to the source picker instead of starting a recording", async () => {
+    // A screen capture needs a source chosen first, so this entry point
+    // navigates. Falling through to start_capture would start an AUDIO
+    // recording from a button labelled Record Screen.
+    const { wrapper, calls } = await mountView();
+    await wrapper.get('[data-testid="mode-screen"]').trigger("click");
+    const store = useVaultsStore();
+    expect(store.view).toBe("screenCapture");
+    expect(store.screenCaptureVaultId).toBe("v1");
+    expect(calls.map((c) => c.cmd)).not.toContain("start_capture");
+  });
+
   it("orders Import Document before Browse recordings (Browse is the last action)", async () => {
     // Since import joined the chooser, Browse recordings belongs at the bottom
     // — the two capture actions (record + import) come first.

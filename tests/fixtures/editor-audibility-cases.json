@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "about": "Shared by core::editor::render_plan_audio (track_is_audible: what the render mixes) and src/editor/mixRules.ts (isTrackAudible: what the preview plays and the mixer labels). Each case is three tracks, {muted, solo} each, and which of them reach the mix. Asymmetric on purpose, so an index swap fails.",
+  "cases": [
+    {
+      "name": "nothing_muted_or_soloed",
+      "tracks": [{ "muted": false, "solo": false }, { "muted": false, "solo": false }, { "muted": false, "solo": false }],
+      "audible": [true, true, true]
+    },
+    {
+      "name": "a_muted_track_is_silent",
+      "tracks": [{ "muted": true, "solo": false }, { "muted": false, "solo": false }, { "muted": false, "solo": false }],
+      "audible": [false, true, true]
+    },
+    {
+      "name": "one_solo_silences_the_rest",
+      "tracks": [{ "muted": false, "solo": false }, { "muted": false, "solo": true }, { "muted": false, "solo": false }],
+      "audible": [false, true, false]
+    },
+    {
+      "name": "two_solos_both_play",
+      "tracks": [{ "muted": false, "solo": true }, { "muted": false, "solo": false }, { "muted": false, "solo": true }],
+      "audible": [true, false, true]
+    },
+    {
+      "name": "a_soloed_tracks_own_mute_still_wins",
+      "tracks": [{ "muted": false, "solo": false }, { "muted": true, "solo": true }, { "muted": false, "solo": false }],
+      "audible": [false, false, false]
+    },
+    {
+      "name": "a_muted_solo_beside_a_live_solo",
+      "tracks": [{ "muted": false, "solo": true }, { "muted": true, "solo": true }, { "muted": false, "solo": false }],
+      "audible": [true, false, false]
+    },
+    {
+      "name": "every_track_muted",
+      "tracks": [{ "muted": true, "solo": false }, { "muted": true, "solo": false }, { "muted": true, "solo": false }],
+      "audible": [false, false, false]
+    },
+    {
+      "name": "a_muted_track_while_another_is_soloed",
+      "tracks": [{ "muted": true, "solo": false }, { "muted": false, "solo": false }, { "muted": false, "solo": true }],
+      "audible": [false, false, true]
+    }
+  ]
+}

@@ -1,0 +1,502 @@
+/**
+ * The tutorial editor's single action registry (Task 17; F-15, F-49, F-12,
+ * F-48). Every surface that lets the user trigger an edit — the preview
+ * toolbar, the keyboard shortcut map (`shortcuts.ts`), and the context menu
+ * — reads the SAME `resolveActions`/`commandFor` pair, so "is this action
+ * available right now, and why not" is answered in exactly one place
+ * (SCREENS-AND-INTERACTIONS.md §03: "The same actions are reachable from
+ * Edit actions/More and Shift+F10"). Both functions are PURE — they read an
+ * `ActionContext` snapshot and never touch a store, a DOM node or
+ * `Date.now()` — so a caller (a Vue component today, a future keyboard
+ * dispatcher) can call them synchronously from a computed property.
+ *
+ * Static reference data (every `ActionId`, labels, reasons, the wire-kind
+ * lookup, `UNIMPLEMENTED_KINDS`) lives in `./actionMeta` (fix round 1, split
+ * at this file's own 500-line cap), and WHO an action acts on — the
+ * `ActionContext`/`PointerTarget` shapes and the target/lock helpers every
+ * resolver shares — in `./actionTargets` (Task 30, the same cap); the
+ * public names are re-exported below, so nothing outside these files needs
+ * to know either split exists.
+ *
+ * **Which commands this task can send.** Thirty-two `EditorCommand` kinds
+ * are implemented in Rust today (`core::editor::commands::mod.rs`'s own
+ * count, as of Task 32's `setAdjustments`/`setCanvas`); the other fourteen
+ * are rejected with `invalidRequest` and a message of the shape
+ * `"<kind> is not available yet"`
+ * (`unimplemented_kinds_are_invalid_request_not_panic`, that module's own
+ * test — its own module doc names `UNIMPLEMENTED_KINDS` back as the
+ * frontend twin a task implementing a kind must also update). That message
+ * shape is Rust's OWN wire-level text, read by nothing user-facing here —
+ * `actionMeta.ts`'s `unavailableReason` builds the actual UI copy from the
+ * action's own label instead (fix round 1, finding 1).
+ *
+ * **Actions with no wire command.** `copy`/`save`/`render`/`checks`/`help`/
+ * `importMedia`/`webcam`/`toggleLibrary`/`toggleInspector`/`focusPreview`/`guideFocus`/
+ * `ratio` never appear in `ACTION_KIND` — `save` goes through
+ * `editorProject.save()` (a distinct IPC call, not `editor_execute`),
+ * `render` (the toolbar's Review, Task 47) opens `ReviewDialog` — a render
+ * job, not an edit — the `checks`/`help`/`importMedia`/`webcam` surfaces and
+ * the panel/focus toggles are a later task's job or local view state, and `ratio`
+ * needs an extra user choice (which of the four canvas presets) this
+ * table cannot pre-build — `resolveActions` still gates it (its own
+ * `RESOLVERS` entry, `resolveProjectGated`: enabled whenever a project is
+ * open), but Task 32's ratio control in `PreviewToolbar.vue` sends
+ * `setCanvas` directly, never through `commandFor`. `commandFor` returns
+ * `null` for all of these — a caller must special-case them (see
+ * `PreviewToolbar.vue`'s `onActivate`), never send a `null` command to
+ * Rust.
+ *
+ * **`copy`/`paste` and the clipboard.** `ActionContext` carries the
+ * clipboard as TWO fields on purpose: `hasClipboard` is the literal
+ * "clipboard presence" flag this task's brief names, cheap for
+ * `resolveActions` to gate `paste` on without a caller building real
+ * fragment data just to ask "is there anything to paste"; `clipboardFragment`
+ * carries the actual `ClipboardFragment` `commandFor` needs to build a real
+ * `pasteFragment` command, which `hasClipboard` alone cannot do. The two are
+ * kept in sync by whoever assembles `ActionContext` (`hasClipboard =
+ * clipboardFragment !== null`). `copy` never appears in `ACTION_KIND` at
+ * all — there is no `copyClips` wire command (F-12's copy is a local,
+ * uncommitted read via `fragment.ts`'s `buildFragment`, never sent to
+ * Rust) — so `commandFor("copy", ctx)` always returns `null`; a caller
+ * reads `resolveActions(ctx).copy.enabled` and builds the fragment itself.
+ *
+ * **The keyboard dispatcher and the Shift+F10 invoker are NOT this task's
+ * job** (controller ruling): `shortcuts.ts` exports the pure map/predicates
+ * this task's brief asks for, but wiring a `window` keydown listener and
+ * wiring a focused clip's Shift+F10/Menu-key handler are carried to Tasks
+ * 20/21, once there is a real timeline/canvas to bind either to.
+ */
+import type { Clip, ClipboardFragment, Project } from "../editorTypes";
+import type { ActionId } from "./actionMeta";
+import {
+  ACTION_IDS,
+  ACTION_KIND,
+  ACTION_LABELS,
+  CLIP_BOUNDARY,
+  lockedReason,
+  NO_CLIP,
+  NO_PROJECT,
+  NOTHING_TO_REVIEW,
+  SHORTCUT_DISPLAY,
+  unavailableReason,
+  UNIMPLEMENTED_KINDS,
+} from "./actionMeta";
+import type { ActionContext, Verdict } from "./actionTargets";
+import {
+  clipSpanOf,
+  lockedTrackName,
+  OK,
+  primaryTargetClip,
+  requireUnlockedTargetClip,
+  targetClipIds,
+  targetGroupId,
+  targetTrackId,
+} from "./actionTargets";
+import { buildAddCaption, buildAddMarker, resolveAddCaption, resolveAddMarker } from "./captionRules";
+import { buildCue, resolveCue } from "./cueActions";
+import type { EditorCommand } from "./editorCommandTypes";
+import { detachRefusal, freeAudioTrackFor } from "./mixRules";
+import { clipOutputEnd } from "./timeMap";
+import { addTransitionCommand, transitionRefusal } from "./transitionRules";
+
+export type { ActionId } from "./actionMeta";
+export { ACTION_IDS, SHORTCUT_DISPLAY, UNIMPLEMENTED_KINDS } from "./actionMeta";
+export type { ActionContext, PointerTarget } from "./actionTargets";
+export { targetClipIds } from "./actionTargets";
+
+export interface ResolvedAction {
+  enabled: boolean;
+  reason: string | null;
+  label: string;
+  shortcut: string | null;
+}
+
+// ---- per-action resolvers (only for actions NOT gated as unimplemented) ---
+
+function resolveSplit(ctx: ActionContext): Verdict {
+  const target = requireUnlockedTargetClip(ctx);
+  if (!("clip" in target)) return target;
+  const { clip } = target;
+  const atMs = ctx.pointerTarget?.timeMs ?? ctx.playheadMs;
+  const end = clipOutputEnd(clipSpanOf(clip));
+  if (atMs <= clip.start_ms || atMs >= end) return { enabled: false, reason: CLIP_BOUNDARY };
+  return OK;
+}
+
+/** Shared shape for delete/deleteClose/cut/duplicate: any non-empty clip
+ * target, refused when any target clip's track is locked (R14/AGENTS.md:
+ * "locked track refuses every clip mutation"). */
+function resolveClipMutation(ctx: ActionContext): Verdict {
+  const ids = targetClipIds(ctx);
+  if (ids.length === 0) return { enabled: false, reason: NO_CLIP };
+  const locked = lockedTrackName(ctx.project, ids);
+  if (locked) return { enabled: false, reason: lockedReason(locked) };
+  return OK;
+}
+
+/** Copy is read-only (F-12: a local, uncommitted snapshot) — a locked track
+ * may still be copied FROM, only mutated. */
+function resolveCopy(ctx: ActionContext): Verdict {
+  return targetClipIds(ctx).length === 0 ? { enabled: false, reason: NO_CLIP } : OK;
+}
+
+function resolvePaste(ctx: ActionContext): Verdict {
+  if (!ctx.hasClipboard) return { enabled: false, reason: "Clipboard is empty" };
+  const trackId = targetTrackId(ctx);
+  if (!trackId) return { enabled: false, reason: "Select a track first" };
+  const track = ctx.project?.tracks.find((t) => t.id === trackId);
+  if (track?.locked) return { enabled: false, reason: lockedReason(track.name) };
+  return OK;
+}
+
+function resolveGroup(ctx: ActionContext): Verdict {
+  const ids = targetClipIds(ctx);
+  if (ids.length < 2) return { enabled: false, reason: "Select at least two clips" };
+  const locked = lockedTrackName(ctx.project, ids);
+  if (locked) return { enabled: false, reason: lockedReason(locked) };
+  return OK;
+}
+
+function resolveUngroup(ctx: ActionContext): Verdict {
+  const groupId = targetGroupId(ctx);
+  if (!groupId) return { enabled: false, reason: "Select a clip in a group" };
+  const memberIds = (ctx.project?.clips ?? []).filter((c) => c.group_id === groupId).map((c) => c.id);
+  const locked = lockedTrackName(ctx.project, memberIds);
+  if (locked) return { enabled: false, reason: lockedReason(locked) };
+  return OK;
+}
+
+function resolveReorder(ctx: ActionContext, direction: "earlier" | "later"): Verdict {
+  const target = requireUnlockedTargetClip(ctx);
+  if (!("clip" in target)) return target;
+  const { clip } = target;
+  const sameTrack = (ctx.project?.clips ?? [])
+    .filter((c) => c.track_id === clip.track_id)
+    .sort((a, b) => a.start_ms - b.start_ms);
+  const idx = sameTrack.findIndex((c) => c.id === clip.id);
+  if (direction === "earlier" && idx <= 0) {
+    return { enabled: false, reason: "Already the first clip on this track" };
+  }
+  if (direction === "later" && idx >= sameTrack.length - 1) {
+    return { enabled: false, reason: "Already the last clip on this track" };
+  }
+  return OK;
+}
+
+/** `detachAudio` (Task 27): the single target clip, then `mixRules`'
+ * graph-side refusals. Whether the source HAS sound is Rust's to answer
+ * (`sources.json`), so an enabled Detach can still come back refused. */
+function resolveDetach(ctx: ActionContext): Verdict {
+  const target = requireUnlockedTargetClip(ctx);
+  if (!("clip" in target)) return target;
+  const reason = detachRefusal(ctx.project as Project, target.clip);
+  return reason ? { enabled: false, reason } : OK;
+}
+
+/** `fadeIn`/`fadeOut` (Task 29): needs only an unlocked target clip -- `FadesSection`/`ClipItem` call `execute` directly, never this registry. */
+function resolveFade(ctx: ActionContext): Verdict {
+  const target = requireUnlockedTargetClip(ctx);
+  return "clip" in target ? OK : target;
+}
+
+/** `transition` (Task 30): the target clip into the clip that starts where
+ * it ends, refused for `transitionRules`' graph-side reasons. */
+function resolveTransition(ctx: ActionContext): Verdict {
+  const target = requireUnlockedTargetClip(ctx);
+  if (!("clip" in target)) return target;
+  const reason = transitionRefusal(ctx.project as Project, target.clip);
+  return reason ? { enabled: false, reason } : OK;
+}
+
+function resolveUndo(ctx: ActionContext): Verdict {
+  return ctx.snapshot?.canUndo ? OK : { enabled: false, reason: "Nothing to undo" };
+}
+function resolveRedo(ctx: ActionContext): Verdict {
+  return ctx.snapshot?.canRedo ? OK : { enabled: false, reason: "Nothing to redo" };
+}
+function resolveProjectGated(ctx: ActionContext): Verdict {
+  return ctx.snapshot ? OK : { enabled: false, reason: NO_PROJECT };
+}
+function resolveAlways(): Verdict {
+  return OK;
+}
+/** Review (Task 47): a real render of part of the output, so it needs a
+ * project with something on its timeline. */
+function resolveRender(ctx: ActionContext): Verdict {
+  if (!ctx.snapshot) return { enabled: false, reason: NO_PROJECT };
+  return ctx.snapshot.durationMs > 0 ? OK : { enabled: false, reason: NOTHING_TO_REVIEW };
+}
+
+/**
+ * `addTrackVideo`/`addTrackAudio` (Task 26): each maps to a wire kind
+ * (`addTrack`) Rust NOW accepts (a real caller sends it --
+ * `TimelineView.vue`'s below-the-last-lane asset drop, `editorProject.
+ * execute` directly, the `TrackHeader.vue` precedent, never through this
+ * registry), but neither `ActionId` has a keyboard/menu/toolbar surface of
+ * its own yet. Without an explicit resolver they would fall through
+ * `RESOLVERS[actionId]?.(ctx) ?? {enabled:false, reason:null}` in
+ * `resolveActions` below -- disabled with NO reason, which
+ * `editorActions.test.ts`'s "every disabled action carries a reason"
+ * invariant exists precisely to catch. Reusing `unavailableReason` keeps
+ * the user-facing text identical to what `UNIMPLEMENTED_KINDS`'s gate
+ * showed before. (Task 34 parked the seven teaching-cue actions here too;
+ * Task 35 replaced them with the real `cueActions.ts` pair below.)
+ */
+function resolveNoSurfaceYet(actionId: ActionId): Verdict {
+  return { enabled: false, reason: unavailableReason(actionId) };
+}
+
+const RESOLVERS: Partial<Record<ActionId, (ctx: ActionContext) => Verdict>> = {
+  split: resolveSplit,
+  delete: resolveClipMutation,
+  deleteClose: resolveClipMutation,
+  undo: resolveUndo,
+  redo: resolveRedo,
+  copy: resolveCopy,
+  cut: resolveClipMutation,
+  paste: resolvePaste,
+  duplicate: resolveClipMutation,
+  group: resolveGroup,
+  ungroup: resolveUngroup,
+  earlier: (ctx) => resolveReorder(ctx, "earlier"),
+  later: (ctx) => resolveReorder(ctx, "later"),
+  detachAudio: resolveDetach,
+  fadeIn: resolveFade,
+  fadeOut: resolveFade,
+  transition: resolveTransition,
+  save: resolveProjectGated,
+  render: resolveRender,
+  checks: resolveProjectGated,
+  help: resolveAlways,
+  importMedia: resolveProjectGated,
+  webcam: resolveProjectGated,
+  // Task 32: no wire kind gates `ratio` any more (see the module doc) --
+  // it needs only a project to change canvas of, the `checks`/`importMedia`
+  // precedent.
+  ratio: resolveProjectGated,
+  toggleLibrary: resolveAlways,
+  toggleInspector: resolveAlways,
+  focusPreview: resolveAlways,
+  guideFocus: resolveAlways,
+  addTrackVideo: () => resolveNoSurfaceYet("addTrackVideo"),
+  addTrackAudio: () => resolveNoSurfaceYet("addTrackAudio"),
+  // Task 35: the teaching tools (`cueActions.ts` -- which clip, which
+  // source span, the default length).
+  addText: resolveCue,
+  addArrow: resolveCue,
+  addHighlight: resolveCue,
+  addSpotlight: resolveCue,
+  addZoom: resolveCue,
+  addStep: resolveCue,
+  addMask: resolveCue,
+  // Task 36: the clip under the playhead (`captionRules.ts`, shared with
+  // CaptionsLibrary/ChaptersLibrary's own "at the playhead" buttons).
+  addCaption: resolveAddCaption,
+  addMarker: resolveAddMarker,
+};
+
+function labelFor(actionId: ActionId, ctx: ActionContext): string {
+  if (actionId === "undo") return ctx.snapshot?.undoLabel ? `Undo ${ctx.snapshot.undoLabel}` : "Undo";
+  if (actionId === "redo") return ctx.snapshot?.redoLabel ? `Redo ${ctx.snapshot.redoLabel}` : "Redo";
+  return ACTION_LABELS[actionId];
+}
+
+/**
+ * Resolve every action id against one context — the toolbar/shortcuts/
+ * context-menu's single source for "enabled, and if not, why". An action
+ * whose `ACTION_KIND` names a still-unimplemented wire kind is gated FIRST,
+ * before any of its own selection/lock checks run — a kind Rust rejects
+ * outright is disabled unconditionally, never "disabled for the wrong
+ * reason" because nothing was selected.
+ */
+export function resolveActions(ctx: ActionContext): Record<ActionId, ResolvedAction> {
+  const out = {} as Record<ActionId, ResolvedAction>;
+  for (const actionId of ACTION_IDS) {
+    const kind = ACTION_KIND[actionId];
+    // `kind` (Rust's own wire vocabulary, e.g. "addEffect") is diagnostic
+    // only — `unavailableReason` builds the user-facing sentence from the
+    // action's own label instead (fix round 1, finding 1: a button
+    // labelled "Text" must never show the raw string "addEffect").
+    const gateReason = kind && UNIMPLEMENTED_KINDS.has(kind) ? unavailableReason(actionId) : null;
+    const verdict = gateReason
+      ? { enabled: false, reason: gateReason }
+      : (RESOLVERS[actionId]?.(ctx) ?? { enabled: false, reason: null });
+    out[actionId] = {
+      enabled: verdict.enabled,
+      reason: verdict.reason,
+      label: labelFor(actionId, ctx),
+      shortcut: SHORTCUT_DISPLAY[actionId] ?? null,
+    };
+  }
+  return out;
+}
+
+// ---- command builders (one per action that has a wire command) ------------
+// Table-driven, the `RESOLVERS` precedent above: a ~30-branch switch here
+// once pushed `commandFor` over the fallow complexity ceiling (25) by
+// itself, so it stays a plain lookup instead.
+//
+// None of these re-check the target/lock/clipboard preconditions their own
+// `RESOLVERS` entry already checked: `commandFor` calls a builder only
+// AFTER confirming `resolveActions(ctx)[actionId].enabled`, and every
+// resolver above is the SAME pure lookup a builder repeats over the same
+// `ctx` -- re-deriving it can only re-confirm what already held. A second
+// silent-`null` guard for a precondition that can no longer fail is not
+// defensive, it is an untestable branch masquerading as one; trusting the
+// invariant is what Rust's own `find_clip(...).expect(...)` calls do
+// (`core::editor::commands::clips.rs`) for exactly this shape of guarantee.
+
+type Builder = (ctx: ActionContext, actionId: ActionId) => EditorCommand;
+
+function buildSplit(ctx: ActionContext): EditorCommand {
+  const clip = primaryTargetClip(ctx) as Clip;
+  return { kind: "splitClip", clipId: clip.id, atMs: ctx.pointerTarget?.timeMs ?? ctx.playheadMs };
+}
+
+function buildDelete(ctx: ActionContext, actionId: ActionId): EditorCommand {
+  return { kind: "deleteClips", clipIds: targetClipIds(ctx), closeGap: actionId === "deleteClose" };
+}
+
+function buildCut(ctx: ActionContext): EditorCommand {
+  // Ripple by default (closeGap: true) -- a cut removes its content from
+  // the timeline the way delete-and-ripple does, distinct from the
+  // leave-a-gap default of a plain Delete keypress.
+  return { kind: "cutClips", clipIds: targetClipIds(ctx), closeGap: true };
+}
+
+/**
+ * `duplicate`'s `offsetMs`. **Fix round 1, finding 2**: the first cut used
+ * the LONGEST target clip's own output duration, but Rust's
+ * `duplicateClips` adds ONE uniform `offsetMs` to every selected clip's
+ * `start_ms` and then refuses the whole command if any duplicate overlaps
+ * ANY existing clip on its track (`check_no_overlap`) — including the
+ * other UNTOUCHED originals in the selection. A per-clip duration can be
+ * smaller than the gap one target clip needs to clear another target
+ * clip's own original span (this task's fixture: c1 `0..2000`, c2
+ * `3000..3500` — offsetting by c1's own 2000ms duration lands c1's
+ * duplicate at `2000..4000`, which overlaps c2's UNTOUCHED original at
+ * `3000..3500`; Rust would reject it).
+ *
+ * The correct offset is the SELECTION's own span — `max(every target
+ * clip's output end) - min(every target clip's start)` — so the entire
+ * duplicated block lands immediately after the last originally-occupied
+ * instant across the WHOLE selection, never overlapping any original
+ * clip regardless of gaps between the selected clips.
+ */
+function buildDuplicate(ctx: ActionContext): EditorCommand {
+  const ids = targetClipIds(ctx);
+  const project = ctx.project as Project;
+  const targetClips = ids
+    .map((id) => project.clips.find((c) => c.id === id))
+    .filter((c): c is Clip => c !== undefined);
+  // Task 20's own carried finding: `resolveClipMutation` only checks
+  // `targetClipIds(ctx).length > 0` -- it never confirms those ids still
+  // RESOLVE against `ctx.project.clips`. A stale id (a delete landing from
+  // another surface between resolving actions and this builder running)
+  // makes `targetClips` empty while `ids` is not, and `Math.min(...[])` /
+  // `Math.max(...[])` are `Infinity`/`-Infinity` -- an `offsetMs` of
+  // `-Infinity` sent straight to Rust. `0` for an empty resolved set is
+  // honest: nothing here can compute a real offset for zero real clips, and
+  // `0` at least fails Rust's own overlap/range validation cleanly instead
+  // of shipping a non-finite number over IPC.
+  const offsetMs =
+    targetClips.length === 0
+      ? 0
+      : Math.max(...targetClips.map((c) => clipOutputEnd(clipSpanOf(c)))) -
+        Math.min(...targetClips.map((c) => c.start_ms));
+  return { kind: "duplicateClips", clipIds: ids, offsetMs };
+}
+
+function buildGroup(ctx: ActionContext): EditorCommand {
+  return { kind: "groupClips", clipIds: targetClipIds(ctx) };
+}
+
+function buildUngroup(ctx: ActionContext): EditorCommand {
+  return { kind: "ungroupClips", groupId: targetGroupId(ctx) as string };
+}
+
+function buildReorder(ctx: ActionContext, actionId: ActionId): EditorCommand {
+  const clip = primaryTargetClip(ctx) as Clip;
+  return { kind: "reorderClip", clipId: clip.id, direction: actionId as "earlier" | "later" };
+}
+
+function buildUndo(): EditorCommand {
+  return { kind: "undo" };
+}
+function buildRedo(): EditorCommand {
+  return { kind: "redo" };
+}
+
+function buildPaste(ctx: ActionContext): EditorCommand {
+  return {
+    kind: "pasteFragment",
+    fragment: ctx.clipboardFragment as ClipboardFragment,
+    trackId: targetTrackId(ctx) as string,
+    atMs: ctx.pointerTarget?.timeMs ?? ctx.playheadMs,
+  };
+}
+
+/** Lands on the first free unlocked audio track, or asks Rust for a new
+ * one (`audioTrackId: null`) — never onto a track the clip would overlap. */
+function buildDetach(ctx: ActionContext): EditorCommand {
+  const clip = primaryTargetClip(ctx) as Clip;
+  return { kind: "detachAudio", clipId: clip.id, audioTrackId: freeAudioTrackFor(ctx.project as Project, clip) };
+}
+
+/** The toggle's default when turning a fade ON, clamped to the half-duration limit below. */
+const DEFAULT_FADE_MS = 500;
+
+/** `fadeIn`/`fadeOut` (Task 29, the `setClipMix` mute-toggle precedent): nonzero turns OFF, zero turns ON at `DEFAULT_FADE_MS`. */
+function buildFade(ctx: ActionContext, edge: "fadeIn" | "fadeOut"): EditorCommand {
+  const clip = primaryTargetClip(ctx) as Clip;
+  const durationMs = clipOutputEnd(clipSpanOf(clip)) - clip.start_ms;
+  const limitMs = Math.floor(durationMs / 2);
+  const current = edge === "fadeIn" ? clip.fade_in_ms : clip.fade_out_ms;
+  const next = current > 0 ? 0 : Math.min(DEFAULT_FADE_MS, limitMs);
+  return edge === "fadeIn"
+    ? { kind: "setFades", clipId: clip.id, fadeInMs: next }
+    : { kind: "setFades", clipId: clip.id, fadeOutMs: next };
+}
+
+const BUILDERS: Partial<Record<ActionId, Builder>> = {
+  split: buildSplit,
+  delete: buildDelete,
+  deleteClose: buildDelete,
+  cut: buildCut,
+  duplicate: buildDuplicate,
+  group: buildGroup,
+  ungroup: buildUngroup,
+  earlier: buildReorder,
+  later: buildReorder,
+  undo: buildUndo,
+  redo: buildRedo,
+  paste: buildPaste,
+  detachAudio: buildDetach,
+  fadeIn: (ctx) => buildFade(ctx, "fadeIn"),
+  fadeOut: (ctx) => buildFade(ctx, "fadeOut"),
+  transition: (ctx) => addTransitionCommand(ctx.project as Project, primaryTargetClip(ctx) as Clip),
+  addText: buildCue,
+  addArrow: buildCue,
+  addHighlight: buildCue,
+  addSpotlight: buildCue,
+  addZoom: buildCue,
+  addStep: buildCue,
+  addMask: buildCue,
+  addCaption: buildAddCaption,
+  addMarker: buildAddMarker,
+};
+
+/**
+ * Build the `EditorCommand` for one action, or `null` when it has no wire
+ * command (falls through `BUILDERS` — see the module doc), is currently
+ * DISABLED per `resolveActions` (a locked track, a clip boundary, too few
+ * clips, an empty clipboard — every verdict this shares with the toolbar/
+ * context menu), or the context names no valid target. A caller must treat
+ * `null` as "nothing to send", never retry with a guessed target. `atMs`
+ * always prefers the POINTER's own time over the playhead (A14) — the one
+ * rule this task's mutation check exists to pin.
+ */
+export function commandFor(actionId: ActionId, ctx: ActionContext): EditorCommand | null {
+  if (!resolveActions(ctx)[actionId].enabled) return null;
+  return BUILDERS[actionId]?.(ctx, actionId) ?? null;
+}

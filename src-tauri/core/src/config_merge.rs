@@ -16,8 +16,11 @@ use crate::vault_config::VaultCaptureConfig;
 /// document_extract_images/document_extra_frontmatter/document_body_template;
 /// `set_tasks_config`: tasks_folder; `set_task_lists_config`:
 /// default_list/list_order/archived_lists; `set_task_id_config`:
-/// task_id_enabled/task_id_property; and set_task_template_config:
-/// task_extra_frontmatter/task_body_template). The preserved fields
+/// task_id_enabled/task_id_property; set_task_template_config:
+/// task_extra_frontmatter/task_body_template;
+/// and `set_screen_capture_config`: screen_capture_folder/
+/// screen_capture_date_folders/screen_quality/screen_fps/screen_create_note/
+/// screen_extra_frontmatter/screen_body_template/screen_audio_stems). The preserved fields
 /// are listed explicitly and everything else comes from `incoming` via `..`
 /// (which is how the capture-owned note_extra_frontmatter/note_body_template
 /// pair flows through), so a capture save can never transpose an owned field
@@ -45,6 +48,18 @@ pub fn merge_capture_owned(
         task_body_template: existing.task_body_template.clone(),
         document_extra_frontmatter: existing.document_extra_frontmatter.clone(),
         document_body_template: existing.document_body_template.clone(),
+        // Screen Capture is owned by set_screen_capture_config (phase 6).
+        // These MUST be listed: `..incoming` would otherwise take them from
+        // the capture settings payload, which knows nothing about them, and
+        // every capture save would reset the vault's screen settings.
+        screen_capture_folder: existing.screen_capture_folder.clone(),
+        screen_capture_date_folders: existing.screen_capture_date_folders,
+        screen_quality: existing.screen_quality,
+        screen_fps: existing.screen_fps,
+        screen_create_note: existing.screen_create_note,
+        screen_extra_frontmatter: existing.screen_extra_frontmatter.clone(),
+        screen_body_template: existing.screen_body_template.clone(),
+        screen_audio_stems: existing.screen_audio_stems,
         ..incoming
     }
 }
@@ -71,10 +86,138 @@ pub fn merge_documents_owned(
     }
 }
 
+/// The eight screen-capture-owned values, NAMED.
+///
+/// A struct rather than eight positional parameters, and not only to satisfy
+/// `clippy::too_many_arguments`: `date_folders` and `create_note` are both
+/// `bool` with two unrelated fields between them, so a positional call that
+/// transposed them would compile, pass every type check, and quietly write
+/// each user's choice into the other's setting.
+#[derive(Debug, Clone)]
+pub struct ScreenOwned {
+    pub folder: Option<String>,
+    pub date_folders: bool,
+    pub quality: crate::screen_capture_config::ScreenQuality,
+    pub fps: u32,
+    pub create_note: bool,
+    pub extra_frontmatter: Option<String>,
+    pub body_template: Option<String>,
+    /// Keep each audio input as its own stem (Task 53); new recordings only.
+    pub audio_stems: bool,
+}
+
+/// The SCREEN-CAPTURE-owned fields, preserving every other domain's.
+///
+/// The seventh merge helper and the same split as its siblings: a screen
+/// settings save must not reset the recording mode, the tasks folder or the
+/// documents templates, and none of theirs may reset these. The fields it
+/// writes are exactly the eight `screen_*` fields on `VaultCaptureConfig` --
+/// a test pins that count, because a ninth added to the struct and
+/// forgotten here would be silently unwritable through the only surface that
+/// offers it, with every save restoring the old value.
+pub fn merge_screen_owned(existing: &VaultCaptureConfig, owned: ScreenOwned) -> VaultCaptureConfig {
+    VaultCaptureConfig {
+        screen_capture_folder: owned.folder,
+        screen_capture_date_folders: owned.date_folders,
+        screen_quality: owned.quality,
+        screen_fps: owned.fps,
+        screen_create_note: owned.create_note,
+        screen_extra_frontmatter: owned.extra_frontmatter,
+        screen_body_template: owned.body_template,
+        screen_audio_stems: owned.audio_stems,
+        ..existing.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vault_config::RecordingMode;
+
+    // The failure this split exists to prevent, in the direction that
+    // actually bit the documents surface once: saving one domain's settings
+    // silently reverting another's.
+    #[test]
+    fn merge_screen_owned_writes_owned_and_preserves_the_rest() {
+        let existing = VaultCaptureConfig {
+            tasks_folder: Some("Inbox/Tasks".into()),
+            documents_folder: Some("Inbox/Docs".into()),
+            meeting_folder: Some("Calls".into()),
+            note_body_template: Some("keep me".into()),
+            recording_date_folders: true,
+            screen_capture_folder: Some("Old".into()),
+            screen_fps: 60,
+            ..Default::default()
+        };
+        let merged = merge_screen_owned(
+            &existing,
+            ScreenOwned {
+                folder: Some("Screen Captures".into()),
+                date_folders: true,
+                quality: crate::screen_capture_config::ScreenQuality::High,
+                fps: 30,
+                create_note: false,
+                extra_frontmatter: Some("area: demo".into()),
+                body_template: Some("body".into()),
+                audio_stems: true,
+            },
+        );
+
+        // written
+        assert_eq!(
+            merged.screen_capture_folder.as_deref(),
+            Some("Screen Captures")
+        );
+        assert!(merged.screen_capture_date_folders);
+        assert_eq!(
+            merged.screen_quality,
+            crate::screen_capture_config::ScreenQuality::High
+        );
+        assert_eq!(merged.screen_fps, 30);
+        assert!(!merged.screen_create_note);
+        assert_eq!(
+            merged.screen_extra_frontmatter.as_deref(),
+            Some("area: demo")
+        );
+        assert_eq!(merged.screen_body_template.as_deref(), Some("body"));
+        assert!(
+            merged.screen_audio_stems,
+            "the stems toggle is screen-owned"
+        );
+
+        // preserved -- every one of these belongs to another command
+        assert_eq!(merged.tasks_folder.as_deref(), Some("Inbox/Tasks"));
+        assert_eq!(merged.documents_folder.as_deref(), Some("Inbox/Docs"));
+        assert_eq!(merged.meeting_folder.as_deref(), Some("Calls"));
+        assert_eq!(merged.note_body_template.as_deref(), Some("keep me"));
+        assert!(merged.recording_date_folders);
+    }
+
+    // An eighth screen_* field added to VaultCaptureConfig and forgotten here
+    // would be unwritable through the only surface that offers it, and the
+    // merge would keep silently restoring the old value on every save. A
+    // struct-literal merge cannot catch that; counting the declarations can.
+    #[test]
+    fn every_screen_field_on_the_struct_is_one_this_merge_writes() {
+        let declared = include_str!("vault_config.rs")
+            .lines()
+            .filter(|l| l.trim_start().starts_with("pub screen_"))
+            .count();
+        let written = include_str!("config_merge.rs")
+            .split("pub fn merge_screen_owned")
+            .nth(1)
+            .expect("the merge")
+            .split("..existing.clone()")
+            .next()
+            .expect("its body")
+            .matches("        screen_")
+            .count();
+        assert!(written > 0, "the scan found no assignments at all");
+        assert_eq!(
+            declared, written,
+            "vault_config declares {declared} screen_* fields, merge_screen_owned writes {written}"
+        );
+    }
 
     #[test]
     fn merge_capture_owned_writes_owned_and_preserves_the_rest() {
@@ -187,5 +330,68 @@ mod tests {
         assert_eq!(merged.mode, RecordingMode::VoiceNote);
         assert!(!merged.recording_date_folders);
         assert_eq!(merged.tasks_folder.as_deref(), Some("T"));
+    }
+
+    // Each settings surface owns its own fields. `merge_capture_owned` fills
+    // unlisted fields from `..incoming`, so a field it does not name
+    // explicitly is taken from whatever the capture settings card sent —
+    // which for the screen fields means a capture save silently resets
+    // them. They must be preserved by name.
+    #[test]
+    fn a_capture_save_preserves_the_screen_fields() {
+        use crate::screen_capture_config::ScreenQuality;
+        let existing = VaultCaptureConfig {
+            screen_capture_folder: Some("Demos".into()),
+            screen_capture_date_folders: true,
+            screen_quality: ScreenQuality::High,
+            screen_fps: 60,
+            screen_create_note: false,
+            screen_extra_frontmatter: Some("project: acme".into()),
+            screen_body_template: Some("## Notes".into()),
+            screen_audio_stems: true,
+            ..VaultCaptureConfig::default()
+        };
+        // The capture settings card knows nothing about screen capture, so it
+        // sends defaults for those fields.
+        let incoming = VaultCaptureConfig::default();
+
+        let merged = merge_capture_owned(&existing, incoming);
+        assert_eq!(merged.screen_capture_folder.as_deref(), Some("Demos"));
+        assert!(merged.screen_capture_date_folders);
+        assert_eq!(merged.screen_quality, ScreenQuality::High);
+        assert_eq!(merged.screen_fps, 60);
+        assert!(!merged.screen_create_note);
+        assert_eq!(
+            merged.screen_extra_frontmatter.as_deref(),
+            Some("project: acme")
+        );
+        assert_eq!(merged.screen_body_template.as_deref(), Some("## Notes"));
+        assert!(
+            merged.screen_audio_stems,
+            "a capture save must not switch the vault's audio stems back off"
+        );
+    }
+
+    // merge_documents_owned builds from `..existing.clone()`, so the screen
+    // fields are preserved by construction. This pins that, so a future
+    // refactor to `..incoming` cannot silently break it.
+    #[test]
+    fn a_documents_save_preserves_the_screen_fields() {
+        use crate::screen_capture_config::ScreenQuality;
+        let existing = VaultCaptureConfig {
+            screen_capture_folder: Some("Demos".into()),
+            screen_quality: ScreenQuality::High,
+            screen_fps: 60,
+            ..VaultCaptureConfig::default()
+        };
+        let merged = merge_documents_owned(&existing, Some("Docs".into()), true, true, None, None);
+        assert_eq!(merged.screen_capture_folder.as_deref(), Some("Demos"));
+        assert_eq!(merged.screen_quality, ScreenQuality::High);
+        assert_eq!(merged.screen_fps, 60);
+        assert_eq!(
+            merged.documents_folder.as_deref(),
+            Some("Docs"),
+            "the owned field still writes"
+        );
     }
 }

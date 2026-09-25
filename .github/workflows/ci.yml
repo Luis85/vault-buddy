@@ -46,6 +46,17 @@ jobs:
       # next bump attempt (docs/Gaps.md GAP-44).
       - run: node scripts/bump-version.mjs --check
       - run: npm run build
+      # The real-browser layout check (docs/Gaps.md GAP-162). It drives the
+      # `dist/` the step above just built, in Chromium, and measures pixels —
+      # the thing Vitest cannot do, because happy-dom has no layout engine.
+      # Two window-sizing defects shipped through the class-contract tests
+      # that stand in for it.
+      #
+      # `--with-deps chromium` and nothing else: one browser is what the
+      # suite runs, and the app ships on WebView2 anyway, so Firefox and
+      # WebKit would cost minutes to prove nothing about the product.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
       - run: npm run test:coverage
 
   rust-core:
@@ -64,12 +75,44 @@ jobs:
         working-directory: src-tauri
       - name: Install ALSA headers (cpal build dependency on Linux)
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      # The export shells out to a USER-INSTALLED ffmpeg, so this job is the
+      # only place in the whole repository where the screen-capture feature's
+      # end-to-end claim executes: `screen::export`'s round-trip tests
+      # synthesize a clip, apply a real Timeline, and read the OUTPUT back,
+      # checking both the length AND that each block still carries its own
+      # colour and its own tone. Everything before phase 5 rested on a manual
+      # Windows checklist nobody has run (GAP-117). The tutorial editor's
+      # render rides the same install: `screen/tests/render_graph_roundtrip.rs`
+      # and `screen/tests/render_roundtrip.rs` (real projects rendered end to
+      # end and decoded back -- layering, mixing, fades, a dissolve, a burned
+      # cue, a range, speed, the remux) run under the `cargo test -p
+      # vault_buddy_screen` step below, and skip the same visible way. Ubuntu's
+      # packaged ffmpeg is a full (GPL, libass) build, so every filter the
+      # render uses -- `perspective`, `eq`, `geq` and `ass` among them -- is
+      # present and nothing is refused.
+      #
+      # Installed EXPLICITLY rather than relying on the runner image happening
+      # to carry it: those tests skip when ffmpeg is absent, so an image that
+      # quietly dropped it would turn the feature's only executable proof into
+      # a silent no-op with the job still green. The skip line names the test
+      # in the log, which is the alarm if this step is ever removed.
+      #
+      # Self-contained (its own apt-get update) rather than leaning on the
+      # step above having just run one: a reorder would otherwise leave this
+      # installing against a stale index, and the failure mode of that is the
+      # silent skip this step exists to prevent. The version is echoed
+      # unpiped -- piping it through `head` would report the PIPE's exit code
+      # instead of ffmpeg's.
+      - name: Install ffmpeg (the export's and the render's round-trip tests)
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          ffmpeg -version
       # mcp is listed explicitly like the others: the tauri-build jobs compile
       # it (the shell depends on it) but never run its TESTS — including the
       # real-socket round-trip suite that proves the guarded endpoint and the
       # shutdown property. Without this line those tests wouldn't run anywhere.
-      - name: clippy (core + capture + transcribe + mcp crates)
-        run: cargo clippy -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp --all-targets -- -D warnings
+      - name: clippy (core + capture + transcribe + mcp + screen crates)
+        run: cargo clippy -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp -p vault_buddy_screen --all-targets -- -D warnings
         working-directory: src-tauri
       # `whisper` isn't a default feature (the real engine only builds where
       # whisper.cpp does), so the plain invocation above never compiles
@@ -84,8 +127,8 @@ jobs:
       - name: clippy (transcribe crate, whisper feature)
         run: cargo clippy -p vault_buddy_transcribe --all-targets --features whisper -- -D warnings
         working-directory: src-tauri
-      - name: tests (core + capture + transcribe + mcp crates)
-        run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp
+      - name: tests (core + capture + transcribe + mcp + screen crates)
+        run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp -p vault_buddy_screen
         working-directory: src-tauri
       - name: tests (transcribe crate, whisper feature)
         run: cargo test -p vault_buddy_transcribe --features whisper
@@ -102,8 +145,8 @@ jobs:
       # vite.config.ts: when coverage rises, raise the floor in the same PR;
       # lowering it is a reviewed decision. Floored from the 2026-07-10
       # adoption run (see docs/DEVELOPMENT.md § Quality pipeline).
-      - name: coverage floor (core + capture + transcribe, cargo-llvm-cov)
-        run: cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe --fail-under-lines 94
+      - name: coverage floor (core + capture + transcribe + screen, cargo-llvm-cov)
+        run: cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_screen --fail-under-lines 94
         working-directory: src-tauri
       # RustSec advisories + license/source policy (src-tauri/deny.toml).
       # Runs from src-tauri so the config is found by the same path as the
@@ -179,12 +222,66 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "no signing key available — building without updater artifacts"
-            npx tauri build --features gpu --config '{"bundle":{"createUpdaterArtifacts":false}}'
-          else
-            npx tauri build --features gpu
-          fi
+          # GAP-167: the bundler fetches three artifacts from github.com at
+          # bundle time that we do not pin and do not cache —
+          # wix314-binaries.zip (wixtoolset/wix3), nsis-3.11.zip and
+          # nsis_tauri_utils.dll (tauri-apps) — with a hash check but no
+          # retry. A transient 504 on any of them reddens this job on a diff
+          # that cannot have caused it; it was first seen on a docs-only
+          # commit, after the release compile had already succeeded and the
+          # MSI had been written. This job is the release + desktop-behaviour
+          # gate, so an unexplained red here trains the next reader to re-run
+          # rather than read, and that eroded signal is the real cost.
+          #
+          # The retry is SIGNATURE-GATED, deliberately not blanket. GAP-167
+          # rejected a step-level retry on the grounds that `tauri build` is
+          # a ~4 min release compile before it ever reaches the bundler —
+          # true of the wall clock on attempt 1, but cargo is incremental, so
+          # a second invocation over an unchanged tree recompiles nothing and
+          # returns to the bundler almost immediately. What a BLANKET retry
+          # would genuinely cost is three attempts at a real compile error,
+          # so the loop re-runs only when the build failed AND the log
+          # carries the bundler's own transport failure. A compile error, a
+          # failed assertion or a signing problem still exits on attempt 1,
+          # exactly as today.
+          #
+          # This does not remove the exposure, it bounds it: three 5xx in a
+          # row still fails, and release.yml's tauri-action step is untouched
+          # because it is not a shell invocation we can wrap. The durable fix
+          # is `bundle.useLocalToolsDir` — see GAP-167.
+          build_once() {
+            if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+              echo "no signing key available — building without updater artifacts"
+              npx tauri build --features gpu --config '{"bundle":{"createUpdaterArtifacts":false}}'
+            else
+              npx tauri build --features gpu
+            fi
+          }
+          log=tauri-build.log
+          for attempt in 1 2 3; do
+            # `shell: bash` runs with -eo pipefail, so a failing build_once
+            # would abort the step before its status could be read; the
+            # status is taken from PIPESTATUS because the pipe ends in tee.
+            set +e
+            build_once 2>&1 | tee "$log"
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::tauri build failed after 3 attempts"
+              exit "$status"
+            fi
+            if grep -qE 'failed to bundle project' "$log" &&
+               grep -qiE 'http status: (408|429|5[0-9][0-9])|error sending request|connection (reset|closed|refused)|timed out' "$log"; then
+              delay=$((attempt * 10))
+              echo "::warning::bundler artifact download failed transiently (GAP-167); retrying in ${delay}s"
+              sleep "$delay"
+              continue
+            fi
+            exit "$status"
+          done
       # The most platform-sensitive code (process detection, GetKeyState,
       # WASAPI loopback gates, MoveFileExW's non-replacing fallback, whisper
       # on MSVC) is Windows-only, yet this job was build-only — the
@@ -193,8 +290,15 @@ jobs:
       # different target/ subtree), so whisper.cpp rebuilds once for tests
       # — an accepted wall-clock cost, same trade the Linux rust-core job
       # makes for its own whisper-feature step.
-      - name: tests (core + capture + transcribe crates, Windows)
-        run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe
+      # vault_buddy_screen joined this line with phase 2's cfg(windows)
+      # split (docs/Gaps.md GAP-102, closed here on the terms it set):
+      # sink.rs, source.rs and session/ now hold real capture logic that
+      # Windows is the ONLY place able to execute. Before that split there
+      # was nothing Windows-specific to exercise, which is why the gap asked
+      # for this edit in the phase-2 PR and not earlier. rust-core still runs
+      # the same crate on Linux; this is the arm that job cannot reach.
+      - name: tests (core + capture + transcribe + screen crates, Windows)
+        run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_screen
         working-directory: src-tauri
       - name: tests (transcribe crate, whisper feature, Windows)
         run: cargo test -p vault_buddy_transcribe --features whisper
