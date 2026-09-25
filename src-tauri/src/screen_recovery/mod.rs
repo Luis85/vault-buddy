@@ -425,6 +425,12 @@ pub fn run_screen_recovery(app: &AppHandle) {
                 if !dir.is_dir() {
                     return false; // nothing has ever been staged
                 }
+                // Final review M6: listing a recovered stem rewrites a
+                // published capture's sidecar, the file an editor open pins
+                // under this same lock (the outermost editor lock; nothing
+                // else is held with it here).
+                let editor = app.state::<crate::editor::EditorState>();
+                let _open = vault_buddy_core::sync_util::lock_ignoring_poison(&editor.open);
                 let sweep = sweep_staging_dir(&dir, SystemTime::now(), STALE_AFTER);
                 if !sweep.actions.is_empty() {
                     log::info!("screen-recovery: {} action(s)", sweep.actions.len());
@@ -448,6 +454,22 @@ mod tests {
     use super::decide::fixtures::*;
     use super::*;
     use vault_buddy_screen::staging::EXPORT_PART_INFIX;
+
+    // Final review M6: the sweep read-modify-writes a PUBLISHED capture's
+    // sidecar when it lists a recovered stem, and `editor_open_staged`
+    // writes the pin into that same sidecar under `EditorState::open`. Two
+    // writers of one file must share that lock, or one of them loses the
+    // other's field.
+    #[test]
+    fn the_sweep_pass_runs_under_the_editors_open_lock() {
+        use crate::structural_scan::{fn_body, offset_of, production_code};
+        let code = production_code(include_str!("mod.rs"));
+        let body = fn_body(&code, "pub fn run_screen_recovery(");
+        assert!(body.contains("app.state::<crate::editor::EditorState>()"));
+        let locked = offset_of(body, "lock_ignoring_poison(&editor.open)");
+        let swept = offset_of(body, "sweep_staging_dir(");
+        assert!(locked < swept, "the pass must hold `open` while it sweeps");
+    }
 
     // The one staleness rule spec 10 asks for: a drift here would have two
     // janitors sweeping the same crash disagree about what "stale" means.

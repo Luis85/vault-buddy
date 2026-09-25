@@ -532,12 +532,13 @@ pub(crate) fn sweep_stale_imports(root: &Path, now: std::time::SystemTime) -> Ve
 /// Run `sweep_stale_imports` (Task 39), then `run_startup_repin`, on the named `editor-recovery-sweep` thread
 /// (wired into `lib.rs`'s `setup`, right after `run_screen_recovery`). That
 /// is SPAWN order only: the screen sweep runs on its own thread with its own
-/// retry loop and is not awaited. It does not need to be — it acts only on
-/// `.part` files, whose base was never published and so is named by no
-/// project, and a capture it promotes is `recovered`, which
-/// `editor_open_staged` refuses (F7), so no project can reference it. It holds the editor's `open` lock for the whole pass: an editor
-/// opening a capture in the same instant pins under that lock too, so the
-/// two can never write one sidecar's pin at once.
+/// retry loop and is not awaited. It does not need to be: a capture it
+/// promotes is `recovered`, which `editor_open_staged` refuses (F7), so no
+/// project can reference it — but its files are NOT disjoint from this
+/// sweep's (final review M6): listing a recovered stem rewrites a PUBLISHED
+/// capture's sidecar, the file a pin lives in. Both sweeps therefore hold
+/// the editor's `open` lock for their whole pass, as an editor open does
+/// while it pins, so no two of them ever write one sidecar at once.
 pub fn spawn_startup_repin(app: &AppHandle) {
     let app = app.clone();
     let spawned = std::thread::Builder::new()

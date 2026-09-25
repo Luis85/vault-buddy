@@ -23,12 +23,15 @@
 //! diverge from the single discard, which refuses on a pin alone.
 
 use std::path::Path;
+use std::sync::Mutex;
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use vault_buddy_screen::staging_files::{self, StagingUsage};
 
+use crate::editor::EditorState;
 use crate::staged_commands::{
-    discard_conflict, discard_staged_files, emit_discarded, staged_summaries, staging_dir_for,
+    discard_conflict, discard_staged_files, emit_discarded, pinned_project_of, staged_summaries,
+    staging_dir_for,
 };
 
 /// What a bulk clear actually did. Four numbers rather than a bare success,
@@ -53,12 +56,16 @@ pub struct ClearStagedResultDto {
 /// `discard_staged_files`/`discard_conflict` precedent. Every rule is
 /// borrowed (see the module doc): which captures exist, whether one may go,
 /// and the removal itself are all somebody else's function.
-fn clear_staged(dir: &Path) -> (ClearStagedResultDto, Vec<String>) {
+///
+/// Each capture's pin is re-read, and the capture removed, under
+/// `EditorState::open` (final review I2) — `discard_unpinned`'s rule: the
+/// list is read once, but an open can pin a capture while the loop runs.
+fn clear_staged(open: &Mutex<()>, dir: &Path) -> (ClearStagedResultDto, Vec<String>) {
     let mut result = ClearStagedResultDto::default();
     let mut cleared = Vec::new();
     for summary in staged_summaries(dir) {
-        let pinned = summary.project_id.as_deref();
-        if discard_conflict(pinned).is_some() {
+        let _open = vault_buddy_core::sync_util::lock_ignoring_poison(open);
+        if discard_conflict(pinned_project_of(dir, &summary.base).as_deref()).is_some() {
             result.skipped_pinned += 1;
             continue;
         }
@@ -124,7 +131,11 @@ pub async fn staging_usage(app: AppHandle) -> StagingUsage {
 #[tauri::command]
 pub async fn clear_staged_captures(app: AppHandle) -> Result<ClearStagedResultDto, String> {
     let dir = staging_dir_for(&app)?;
-    let worked = tauri::async_runtime::spawn_blocking(move || clear_staged(&dir)).await;
+    let editor = app.clone();
+    let worked = tauri::async_runtime::spawn_blocking(move || {
+        clear_staged(&editor.state::<EditorState>().open, &dir)
+    })
+    .await;
 
     let (result, cleared) = worked.map_err(|e| format!("Staging could not be cleared: {e}"))?;
     // One `screen:discarded` per capture actually removed. Without it the
@@ -179,6 +190,35 @@ mod tests {
         std::fs::write(dir.join(staging::mp4_file_name(base)), b"footage").unwrap();
     }
 
+    // Final review I2: `editor_open_staged` holds `EditorState::open` across
+    // read-sidecar -> create the project -> PIN. A clear that listed the
+    // pins once and then unlinked in a loop, without that lock, deleted a
+    // capture an open was pinning at that moment — a live project's only
+    // source. The clear now takes `open` around each capture and re-reads
+    // the pin inside it.
+    #[test]
+    fn clear_waits_for_an_open_in_progress_and_keeps_what_it_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        stage(dir.path(), "A", None);
+        stage(dir.path(), "B", None);
+        let open = Mutex::new(());
+        let opening = open.lock().unwrap();
+        let (result, cleared) = std::thread::scope(|scope| {
+            let clearing = scope.spawn(|| clear_staged(&open, dir.path()));
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            // The open lands its pin, then lets go of the lock.
+            crate::editor::project_store::pin_staged(dir.path(), "A", "proj-a").unwrap();
+            drop(opening);
+            clearing.join().unwrap()
+        });
+        assert_eq!((result.cleared, result.skipped_pinned), (1, 1));
+        assert_eq!(cleared, vec!["B".to_string()]);
+        assert!(
+            dir.path().join(staging::mp4_file_name("A")).is_file(),
+            "Clear deleted the capture an open had just pinned"
+        );
+    }
+
     // Mutation check: drop the pin arm in `discard_conflict` and this test
     // goes red because the pinned capture is cleared along with the plain
     // one, landing `cleared == 2` instead of `1`.
@@ -188,7 +228,7 @@ mod tests {
         stage(dir.path(), "A", Some("proj1"));
         stage(dir.path(), "B", None);
 
-        let (result, cleared) = clear_staged(dir.path());
+        let (result, cleared) = clear_staged(&Mutex::new(()), dir.path());
 
         assert_eq!(result.cleared, 1);
         assert_eq!(result.skipped_pinned, 1);
@@ -230,7 +270,7 @@ mod tests {
         stage(dir.path(), "B", None);
         let webcam_b = dir.path().join(staging::webcam_file_name("B"));
         std::fs::write(&webcam_b, b"more webcam footage").unwrap();
-        let (result, _) = clear_staged(dir.path());
+        let (result, _) = clear_staged(&Mutex::new(()), dir.path());
         assert_eq!(result.cleared, 1);
         assert!(!webcam_b.exists(), "Clear left the webcam file behind");
 
@@ -290,7 +330,7 @@ mod tests {
         std::fs::remove_file(stem("A", 3)).unwrap();
 
         with_stems("B");
-        let (result, _) = clear_staged(dir.path());
+        let (result, _) = clear_staged(&Mutex::new(()), dir.path());
         assert_eq!(result.cleared, 1);
         assert!(
             !stem("B", 1).exists() && !stem("B", 2).exists(),

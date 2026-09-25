@@ -636,8 +636,9 @@ pub fn run() {
             screen_recovery::run_screen_recovery(app.handle());
             // Task 37 (F34): re-pin the editor's project store against
             // staging, then start journaling. Spawn order only -- the screen
-            // sweep above runs on its own thread and is not awaited; the two
-            // touch disjoint files (`recovery::spawn_startup_repin`'s doc).
+            // sweep above runs on its own thread and is not awaited; both
+            // hold the editor's `open` lock while they write a sidecar
+            // (`recovery::spawn_startup_repin`'s doc).
             editor::recovery::spawn_startup_repin(app.handle());
             editor::recovery::spawn_journal_worker(app.handle());
             transcription::run_transcription(app.handle());
