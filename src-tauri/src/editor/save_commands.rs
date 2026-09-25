@@ -386,6 +386,7 @@ pub(crate) fn open_project_session(
     use_recovery: bool,
 ) -> Result<EditorOpenResult, EditorError> {
     let _open = lock_ignoring_poison(&state.open);
+    super::discard::refuse_if_project_closing(state, project_file_id)?;
     let (envelope, sources) = load_project(root, project_file_id)?;
     let workspace = sanitize(&envelope.workspace);
     let committed = envelope.record.revision;

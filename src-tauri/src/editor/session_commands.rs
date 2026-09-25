@@ -478,6 +478,7 @@ pub(crate) fn open_staged_session(
     // `EditorState`) serializes find-or-mint + pin + register.
     let _open = lock_ignoring_poison(&state.open);
     let opened = open_staged_in(root, staging_dir, base)?;
+    super::discard::refuse_if_project_closing(state, &opened.envelope.project.id)?;
     let workspace = sanitize(&opened.envelope.workspace);
     let revision = opened.envelope.record.revision;
     let projection = register_session(state, opened.envelope.project, revision);

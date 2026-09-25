@@ -12,10 +12,9 @@ use vault_buddy_core::editor::{EditorError, EditorErrorCode};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::prefs_commands::project_id_for;
-use super::project_store::{unpin_staged, SourceLocator};
 use super::recovery;
 use super::session_commands::CloseDisposition;
-use super::store_io::{load_sources, remove_project};
+use super::store_io::remove_project;
 use super::EditorState;
 
 fn internal(message: impl Into<String>) -> EditorError {
@@ -73,6 +72,13 @@ fn drop_session(state: &EditorState, session_id: &str) {
 /// capture refuses Discard. The recording itself is never touched (R6).
 /// On any failure the session stays open so the user can retry.
 ///
+/// **`discardProject` holds `EditorState::open`** (review finding I-1) from
+/// before its closing mark until the project is gone — the lock every open,
+/// every other pin writer and every other project remover holds — and finds
+/// the pins to clear by scanning the staging sidecars, never through
+/// `sources.json` (GAP-214 item 7), so a pin an open in progress lands is
+/// seen, and a project whose `sources.json` is damaged can still go.
+///
 /// **Every disposition holds the per-session SAVE lock** (Task 12 fix round
 /// 2 for `discardProject`; Task 37 for `keep` and `discardRecovery`) — the
 /// lock `editor_save_project` holds for its whole read-through-write
@@ -94,6 +100,24 @@ pub(crate) fn close_in(
     disposition: CloseDisposition,
 ) -> Result<(), EditorError> {
     let project_id = project_id_for(state, session_id)?;
+    // Review finding I-1: a discard takes `EditorState::open` — the lock
+    // every other pin writer and project remover holds — BEFORE its closing
+    // mark, and keeps it until the project is gone (`_open` is declared
+    // first, so it is released last). An open in progress therefore lands
+    // its pin before this discard scans for pins, and no open can reuse
+    // this session while it is being removed. Keep and discardRecovery
+    // neither unpin nor remove anything, so they do not wait on opens.
+    let _open = match disposition {
+        CloseDisposition::DiscardProject => {
+            #[cfg(test)]
+            state
+                .test_hooks
+                .discard_waiting_for_open
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Some(lock_ignoring_poison(&state.open))
+        }
+        _ => None,
+    };
     // Final review I1/C2: a discard first marks the session closing (every
     // start path refuses it from here on), then stops or waits for what is
     // still writing into the project — derived media, renders, publishes,
@@ -142,14 +166,11 @@ pub(crate) fn close_locked(
                 .map_err(|e| internal(format!("Could not discard the unsaved changes: {e}")))?;
         }
         CloseDisposition::DiscardProject => {
-            let sources = load_sources(root, project_id)?;
-            for record in sources.values() {
-                if let SourceLocator::Staging { base } = &record.locator {
-                    unpin_staged(staging_dir, base, project_id).map_err(|e| {
-                        internal(format!("Could not unlink the capture {base:?}: {e}"))
-                    })?;
-                }
-            }
+            // GAP-214 item 7: the pins are found where they live — the
+            // staging sidecars — never through `sources.json`, which may be
+            // exactly what is damaged (and a hand-edited pin may name this
+            // project from a capture `sources.json` does not list).
+            super::project_discard::unpin_everywhere(staging_dir, project_id)?;
             remove_project(root, project_id)?;
         }
     }
@@ -163,3 +184,7 @@ pub(crate) fn close_locked(
     drop_session(state, session_id);
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "session_close_tests.rs"]
+mod tests;

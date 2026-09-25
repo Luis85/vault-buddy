@@ -62,15 +62,26 @@ use vault_buddy_core::editor::EditorSession;
 /// id to the one session open on it, so a second open of the same project
 /// reuses that session instead of forking a second, racing one.
 ///
-/// `open` serializes every open (find-or-mint + pin + register): without
-/// it two opens of one unpinned capture both miss the pin and the orphan
-/// scan and mint two projects, the second pin silently orphaning the first.
+/// `open` is taken by every open (find-or-mint + pin + register), every
+/// project removal and every pin writer — including a session's
+/// `discardProject` (`session_close::close_in`, review finding I-1), which
+/// holds it from before its closing mark until the project is gone, and the
+/// staged-capture Discard/Clear, the no-session project discard, a package
+/// import and both startup sweeps. Without it two opens of one unpinned
+/// capture both miss the pin and the orphan scan and mint two projects, the
+/// second pin silently orphaning the first — and a discard could scan for
+/// pins before an open in progress landed one, leaving a pin to a deleted
+/// project. Both open paths refuse a project whose session is being
+/// discarded (`discard::refuse_if_project_closing`).
 ///
-/// **Lock order: `open`, then `by_project`, then `sessions`.** `open` is the
-/// OUTERMOST lock — never taken while holding either map — and, unlike the
-/// maps, it IS held across disk I/O by design (the sidecar read, the store
-/// scan, the create and the pin are exactly what it serializes). Only opens
-/// wait on it; execute/snapshot/close never take it. The maps are never held
+/// **Lock order: `open` → `jobs` → `closing` → the per-session save lock →
+/// `by_project` → `sessions`.** `open` is the OUTERMOST lock — never taken
+/// while holding any other — and, unlike the maps, it IS held across disk
+/// I/O by design (the sidecar read, the store scan, the create, the pin and
+/// a discard's quiesce and removal are exactly what it serializes). No
+/// holder of `open` other than a discard takes a save lock, and nothing a
+/// discard's quiesce waits for takes `open`. Execute, snapshot, save and a
+/// `keep`/`discardRecovery` close never take it. The maps are never held
 /// across disk I/O.
 ///
 /// `save_locks` (Task 12) is TWO DIFFERENT LOCKS wearing one field, and the
@@ -82,11 +93,11 @@ use vault_buddy_core::editor::EditorSession;
 ///   `session_close::close_in`'s `discardProject` holds the SAME one
 ///   across its unpin-then-remove sequence (fix round 2), so a save and a
 ///   discard on the SAME session can never interleave either. This lock is
-///   NEVER taken while holding `by_project` or `sessions` — it sits outside
-///   that trio entirely (`open` covers minting/registering a session, this
-///   covers saving or discarding an already-registered one, and the two
-///   never overlap for the same session); `sessions` is taken only BRIEFLY
-///   *inside* it, the same posture `open` has toward the maps.
+///   NEVER taken while holding `by_project` or `sessions`; a discard takes
+///   it while holding `open` (the order above), nothing else holding `open`
+///   takes it, and it is never held while `open` is taken. `sessions` is
+///   taken only BRIEFLY *inside* it, the same posture `open` has toward the
+///   maps.
 /// - **The map's OWN outer `Mutex` — `Mutex<HashMap<String,
 ///   Arc<Mutex<()>>>>` itself** — is a plain LEAF lock: `session_save_lock`
 ///   takes it only to look up or insert one entry and clone the `Arc` out,
@@ -150,4 +161,16 @@ pub struct EditorState {
     pub journal: recovery::JournalQueue,
     pub takes: webcam_registry::TakeRegistry,
     pub closing: Mutex<HashSet<String>>,
+    #[cfg(test)]
+    pub test_hooks: TestHooks,
+}
+
+/// Test-only handshakes that let a race test wait for a thread to reach a
+/// named point instead of sleeping and hoping it has.
+#[cfg(test)]
+#[derive(Default)]
+pub struct TestHooks {
+    /// Set by a session's `discardProject` immediately BEFORE it locks
+    /// `open` (`session_close::close_in`).
+    pub discard_waiting_for_open: std::sync::atomic::AtomicBool,
 }

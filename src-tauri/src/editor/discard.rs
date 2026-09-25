@@ -24,7 +24,9 @@
 //! AFTER marking, so of any start racing a discard, one of the two sees
 //! the other. The mark is dropped when the close returns, success or not —
 //! after a successful discard the session is gone, so later calls get
-//! `sessionGone` anyway.
+//! `sessionGone` anyway. A session's discard takes the mark only while it
+//! holds `EditorState::open` (review finding I-1), and both open paths
+//! refuse a project whose session carries it (`refuse_if_project_closing`).
 //!
 //! **Lock order**: `jobs`, then `closing` — both leaves; `closing` is
 //! never held while any other lock is taken.
@@ -62,6 +64,29 @@ pub(crate) fn refuse_if_closing(state: &EditorState, session_id: &str) -> Result
         ));
     }
     Ok(())
+}
+
+/// Refuse to open (and so reuse the live session of) a project a discard
+/// is removing (review finding I-1): the editor would be handed a session
+/// the discard is about to drop. Called by both open paths under
+/// `EditorState::open`; a session's discard marks itself closing only while
+/// it holds that same lock, so this is belt and braces rather than the
+/// only thing between an open and a dying session.
+pub(super) fn refuse_if_project_closing(
+    state: &EditorState,
+    project_id: &str,
+) -> Result<(), EditorError> {
+    // `by_project` is released at the end of this statement, before
+    // `closing` is taken — `closing` stays a leaf.
+    let session = lock_ignoring_poison(&state.by_project)
+        .get(project_id)
+        .cloned();
+    match session {
+        Some(session_id) if is_closing(state, &session_id) => {
+            Err(refusal("This project is being discarded."))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// The session's closing mark, removed when dropped.

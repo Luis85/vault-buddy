@@ -6800,7 +6800,7 @@ the old value is the user's file and is left alone (a vault write never
 rewrites an existing note), so the fix note should say that old notes keep
 `vault-buddy`. Not done in Task 60 because that task changes no behaviour.
 
-### GAP-214 · Low · What the final review's damaged-project fixes still cannot reach
+### GAP-214 · Low (item 7 CLOSED 2026-09-25, hardening Task 2) · What the final review's damaged-project fixes still cannot reach
 `src-tauri/src/editor/project_discard.rs`, `session_commands.rs`
 (`open_staged_in`), `store_io.rs` (`remove_project`, `list_projects`),
 `recovery.rs` (`run_startup_repin`), `discard.rs` (final whole-branch review
@@ -6842,13 +6842,22 @@ editor's "could not be opened" line for an `invalidProject` project) and
    refused, the take has stopped recording for nothing. Fix: refuse the
    chunk without marking the take failed, or refuse the discard before the
    closing mark while a take is recording.
-7. **`remove_project` still deletes `sources.json` before `project.json`**
+7. ~~**`remove_project` still deletes `sources.json` before `project.json`**
    (N3, `store_io.rs`), and the session discard reads `sources.json` first
    to unpin — a removal that fails after `sources.json` is gone makes every
    retry fail with a generic error, and the editor's "Discard this
    project…" offer does not appear (that failure is not `invalidProject`).
    Unlikely (nested folders go first). Fix: remove `sources.json` last but
-   one, or let the unpin step tolerate its absence.
+   one, or let the unpin step tolerate its absence.~~ **CLOSED 2026-09-25
+   (hardening Task 2).** The session discard (`session_close::close_locked`)
+   no longer reads `sources.json`: it finds the pins to clear by scanning the
+   staging sidecars (`project_discard::unpin_everywhere`, the sessionless
+   discard's own scan), so a retry after a removal that lost `sources.json`
+   unpins nothing further and finishes the removal. It also now holds
+   `EditorState::open` for the whole discard (review finding I-1), so a pin
+   an open in progress lands is seen by that scan. Pinned by
+   `session_close::tests::a_session_discard_unpins_by_sidecar_when_sources_json_is_gone`
+   and `…::a_session_discard_waits_for_an_open_in_progress`.
 8. **The sessionless discard unpins before ownership is proven** (N4,
    `project_discard.rs`): a discard that `remove_project` then refuses has
    still released the captures' pins, and its refusal text carries a

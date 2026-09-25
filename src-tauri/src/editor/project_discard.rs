@@ -42,8 +42,10 @@ fn err(code: EditorErrorCode, message: &str) -> EditorError {
     EditorError::new(code, message)
 }
 
-/// Clear every staged capture's pin that names `project_id`.
-fn unpin_everywhere(staging_dir: &Path, project_id: &str) -> Result<(), EditorError> {
+/// Clear every staged capture's pin that names `project_id` — shared with a
+/// session's `discardProject` (`session_close::close_locked`, GAP-214 item
+/// 7). The caller holds `EditorState::open`, like every pin writer.
+pub(super) fn unpin_everywhere(staging_dir: &Path, project_id: &str) -> Result<(), EditorError> {
     let Ok(entries) = std::fs::read_dir(staging_dir) else {
         // No staging directory: nothing can be pinned to anything.
         return Ok(());
@@ -62,7 +64,7 @@ fn unpin_everywhere(staging_dir: &Path, project_id: &str) -> Result<(), EditorEr
         }
         unpin_staged(staging_dir, base, project_id).map_err(|e| {
             log::warn!(
-                "editor_discard_project: could not unlink {} from its project: {e}",
+                "project discard: could not unlink {} from its project: {e}",
                 redact_name(base)
             );
             err(
