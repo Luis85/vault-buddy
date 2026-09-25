@@ -3156,18 +3156,42 @@ deleting footage.
 > step of the fix dissolved with the file. Paths (2)–(4) stand: they are the
 > recovery sweep's, and their fix is unchanged.
 
-> **2026-09-25 — path (4) is CLOSED by hardening Task 8**: the sweep now
-> decides every capture's own part FIRST (`companions::parts_first`, its own
-> order rather than `read_dir`'s) and records where it landed
-> (`PartFate::Landed`), and a webcam or stem part is promoted under THAT base
-> — `.<base>.webcam.mp4.part` beside a capture promoted to `<base> (2)`
-> becomes `<base> (2).webcam.mp4`, and its stem is listed in
+> **2026-09-25 — path (4) is CLOSED by hardening Task 8** (with its fix
+> round 1): a capture's own part and its companions are decided as ONE group
+> per base (`companions::Owners`). The part is decided first
+> (`companions::parts_first`, the sweep's own order rather than
+> `read_dir`'s), and it WAITS, counted pending, while any of its webcam or
+> stem parts is still fresh — so it is never promoted to a ` (N)` in one pass
+> while its companions are decided in another
+> (`a_captures_part_waits_for_its_fresh_companions`). Where it landed is
+> recorded (`PartFate::Landed`), and a webcam or stem part is promoted under
+> THAT base — `.<base>.webcam.mp4.part` beside a capture promoted to
+> `<base> (2)` becomes `<base> (2).webcam.mp4`, and its stem is listed in
 > `<base> (2).json`, never beside or in the other capture
 > (`companions_land_beside_the_name_their_capture_landed_on`). A companion
 > whose capture's part is still undecided (not yet stale, unreadable, or its
 > promotion failed) waits for the pass that decides it
-> (`a_companion_waits_for_its_captures_part_to_be_decided`). Not covered: a
-> ` (N)` name whose webcam or stem file is ALREADY taken by an older orphan —
+> (`a_companion_waits_for_its_captures_part_to_be_decided`). As a backup for a
+> companion decided in a LATER pass than its capture (one that was unreadable
+> when the capture was promoted), a recovered capture's sidecar records its
+> original base as `recoveredFrom` in its flattened `extra`, and a companion
+> with no part to follow looks for exactly one staged capture whose own
+> sidecar is `recovered` AND names that base — only ever compared, never
+> used as a path; two claims leave the companion in place
+> (`a_companion_finds_where_its_capture_landed_in_an_earlier_pass`, which also
+> proves a forged `recoveredFrom` on a non-recovered sidecar and one on a
+> sidecar whose footage is gone are both ignored). A capture recovered before
+> this build has no stamp, so a companion of one that was left behind in an
+> earlier build still keeps its own base. **An empty part** (no footage) whose
+> base `<base>.mp4` or `<base>.json` belongs to another capture is now KEPT,
+> with its companions left in place (`PartFate::Held`,
+> `an_empty_part_keeps_its_companions_off_another_capture`): deleting it
+> would leave nothing to tell those companions from a capture's retained
+> webcam part (GAP-200 item 5), and a later pass would attach them to the
+> other capture. The cost is the header-only part and the companion
+> footage staying as hidden parts in staging, counted nowhere — the path (2)
+> class, recorded rather than guessed at. Not covered: a ` (N)` name whose
+> webcam or stem file is ALREADY taken by an older orphan —
 > `promote_into_free_name` checks only the `.mp4` and the sidecar, so the
 > capture lands there and its companion's `rename_noreplace` refuses, leaving
 > the part in place (kept, never clobbered). Paths (2) and (3) stand.
@@ -3271,8 +3295,10 @@ unlisted.** The recovery sweep promotes a stale `.<base>.stem-<n>.m4a.part`
 and LISTS it in `<base>.json` — but ~~when the capture's own part was promoted
 to a ` (N)` name, or~~ **(the ` (N)` half CLOSED 2026-09-25, hardening
 Task 8: the stem is promoted as `<base> (N).stem-<n>.m4a` and listed in
-`<base> (N).json`, beside the name its capture landed on — see GAP-198
-path 4)** when the capture is gone, there is no sidecar to list it in,
+`<base> (N).json`, beside the name its capture landed on, whether the
+capture was promoted in the same pass or — through its sidecar's
+`recoveredFrom` — an earlier one; see GAP-198 path 4)** when the capture is
+gone, there is no sidecar to list it in,
 and a stem that is not listed is owned by nothing: discard and Clear leave it
 as litter in staging (logged, never deleted). A crash-free capture never
 reaches this path. Such a leftover can no longer hurt the NEXT capture:
@@ -3299,6 +3325,16 @@ one clip per legacy segment per stem, so a heavily cut legacy timeline with
 several stems could exceed `MAX_CLIPS` (600) and `editor_open_staged` refused
 it outright. It now degrades like the track limit: the stems are dropped
 (logged), the mix stays audible, and the project validates.
+(2b) ~~**A stem part whose index is not this app's own text.**~~ **CLOSED
+2026-09-25 (hardening Task 8, fix round 1).** A hand-made or foreign
+`.<base>.stem-01.m4a.part` matches the sweep's stem PATTERN (`\d+`), so it
+used to be promoted as `<base>.stem-01.m4a` and then listed as
+`<base>.stem-1.m4a` — a listed file that does not exist, and a promoted one
+`staging_files::capture_file_names` never owns. A stem part whose index is
+not `u32`'s own text (a leading zero, or a run no `u32` holds) is now left
+exactly as it is and logged
+(`a_stem_part_with_a_non_canonical_index_is_left_alone`); this app never
+writes one.
 (5) **A stem is mono.** An input recorded in stereo (a loopback device) is
 downmixed before the mixer and so before the tee; its stem carries that mono
 downmix, exactly what the mix carries of it — never the device's own stereo.
