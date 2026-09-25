@@ -29,6 +29,7 @@ use vault_buddy_core::editor::{sanitize, EditorError, EditorErrorCode};
 
 use super::authz::{require_editor_window, require_session};
 use super::project_store::project_dir;
+use super::redact::redact_path;
 use super::EditorState;
 
 pub(crate) const WORKSPACE_FILE: &str = "workspace.json";
@@ -86,7 +87,7 @@ pub(crate) fn read_workspace(root: &Path, project_id: &str) -> Result<Value, Edi
         Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
             log::warn!(
                 "editor workspace: {} is not valid JSON, degrading to empty ({e})",
-                path.display()
+                redact_path(&path)
             );
             Value::Object(serde_json::Map::new())
         }),

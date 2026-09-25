@@ -55,6 +55,7 @@ function onChange(event: Event): void {
     ref="selectEl"
     :data-testid="testid"
     :tabindex="selectTabindex"
+    aria-label="Canvas ratio"
     :disabled="disabled"
     :title="title"
     class="shrink-0 cursor-pointer rounded border-0 bg-transparent px-1 py-0.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed"

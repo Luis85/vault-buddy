@@ -306,7 +306,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main
-    class="flex h-screen w-screen flex-col gap-3 overflow-y-auto bg-slate-900 p-4 text-fg"
+    class="flex h-screen w-screen flex-col gap-3 overflow-y-auto bg-app p-4 text-fg"
   >
     <!-- Task 16 (F-48): the real responsive shell/header, replacing Task
          15's temporary title/duration/dirty/vault bar. Gated on

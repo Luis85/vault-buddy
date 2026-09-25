@@ -75,7 +75,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onPointerDown)
       v-if="open"
       role="menu"
       aria-label="Save project"
-      class="absolute right-0 top-full z-20 mt-1 flex min-w-52 flex-col gap-0.5 rounded-control border border-white/10 bg-slate-800 p-1 shadow-lg"
+      class="absolute right-0 top-full z-20 mt-1 flex min-w-52 flex-col gap-0.5 rounded-control border border-line bg-panel p-1 shadow-lg"
     >
       <button
         v-for="item in ITEMS"

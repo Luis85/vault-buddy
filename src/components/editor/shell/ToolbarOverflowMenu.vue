@@ -35,7 +35,7 @@ function itemClass(id: ActionId): string {
     role="menu"
     aria-label="More tools"
     data-testid="preview-toolbar-more-menu"
-    class="absolute right-0 top-full z-10 mt-1 flex min-w-36 flex-col gap-0.5 rounded-control border border-white/10 bg-slate-800 p-1 shadow-lg"
+    class="absolute right-0 top-full z-10 mt-1 flex min-w-36 flex-col gap-0.5 rounded-control border border-line bg-panel p-1 shadow-lg"
     @click.stop
   >
     <template

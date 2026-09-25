@@ -139,7 +139,7 @@ const menuLabel = computed(() => {
       :aria-label="menuLabel"
       tabindex="-1"
       data-testid="editor-context-menu"
-      class="flex min-w-44 flex-col gap-0.5 rounded-control border border-white/10 bg-slate-800 p-1 text-micro text-fg shadow-lg focus:outline-none"
+      class="flex min-w-44 flex-col gap-0.5 rounded-control border border-line bg-panel p-1 text-micro text-fg shadow-lg focus:outline-none"
       @click.stop
       @keydown="onItemsKeydown"
     >

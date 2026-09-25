@@ -28,7 +28,7 @@ const cls: Record<string, string> = {
   error: "bg-red-900 text-red-50 ring-1 ring-red-500/50",
   warning: "bg-amber-900 text-amber-50 ring-1 ring-amber-500/50",
   success: "bg-emerald-900 text-emerald-50 ring-1 ring-emerald-500/50",
-  info: "bg-slate-800 text-fg ring-1 ring-white/15",
+  info: "bg-slate-800 text-slate-100 ring-1 ring-white/15",
 };
 </script>
 <template>

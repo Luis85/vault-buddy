@@ -46,6 +46,7 @@ use vault_buddy_screen::staging;
 use super::package_import::importing_project_id;
 use super::project_store::{pin_staged, pinned_project, project_dir, store_dir, SourceLocator};
 use super::publish::{PublishJournal, PublishStep, PUBLISH_JOURNAL};
+use super::redact::redact_name;
 use super::render_jobs::JOBS_DIR;
 use super::save_commands::session_save_lock;
 use super::store_io::{load_sources, read_bounded, remove_dir_no_follow, RECOVERY_FILE};
@@ -517,7 +518,10 @@ pub(crate) fn sweep_stale_imports(root: &Path, now: std::time::SystemTime) -> Ve
         }
         match remove_dir_no_follow(&path) {
             Ok(()) => removed.push(name),
-            Err(e) => log::warn!("editor-recovery-sweep: could not remove {name}: {e}"),
+            Err(e) => log::warn!(
+                "editor-recovery-sweep: could not remove {}: {e}",
+                redact_name(&name)
+            ),
         }
     }
     removed

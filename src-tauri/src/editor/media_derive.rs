@@ -72,6 +72,7 @@ use super::media_commands::{resolve_asset, ResolvedAsset};
 use super::media_jobs::{start_job_in, JobKind, JobPhase, JobReporter, JobTerminal, NoSubscriber};
 use super::prefs_commands::project_id_for;
 use super::project_store::{project_dir, SourceMediaKind};
+use super::redact::redact_path;
 use super::save_commands::session_save_lock;
 use super::EditorState;
 use crate::external_stream::{run_streaming, Streamed};
@@ -387,7 +388,10 @@ pub(crate) fn decode_peaks(
         Ok(Streamed::Finished { success: false, .. }) => {
             // stderr is nulled (it names the source's path, and an unread
             // pipe could wedge the child), so say at least which file.
-            log::warn!("editor peaks: ffmpeg exited with an error decoding {src:?}");
+            log::warn!(
+                "editor peaks: ffmpeg exited with an error decoding {}",
+                redact_path(src)
+            );
             Err(err(
                 EditorErrorCode::UnsupportedMedia,
                 "ffmpeg could not decode this asset's sound.",
@@ -641,14 +645,20 @@ fn render_thumbnail(
     );
     let result = match outcome {
         Ok(Streamed::Finished { success: true, .. }) => read_frame(&tmp).ok_or_else(|| {
-            log::warn!("editor thumbnail: ffmpeg made no frame of {src:?} at {at_ms} ms");
+            log::warn!(
+                "editor thumbnail: ffmpeg made no frame of {} at {at_ms} ms",
+                redact_path(src)
+            );
             err(
                 EditorErrorCode::UnsupportedMedia,
                 "ffmpeg could not read a picture at this time.",
             )
         }),
         Ok(Streamed::Finished { success: false, .. }) => {
-            log::warn!("editor thumbnail: ffmpeg exited with an error on {src:?}");
+            log::warn!(
+                "editor thumbnail: ffmpeg exited with an error on {}",
+                redact_path(src)
+            );
             Err(err(
                 EditorErrorCode::UnsupportedMedia,
                 "ffmpeg could not read a picture at this time.",

@@ -17,6 +17,7 @@ mod authz_guard;
 mod capability_guard;
 pub mod caption_commands;
 pub mod checks_commands;
+pub mod diagnostics;
 pub mod guide_commands;
 pub mod media_commands;
 pub mod media_derive;
@@ -31,6 +32,9 @@ pub mod prefs_commands;
 pub mod project_store;
 pub mod publish;
 pub mod recovery;
+pub mod redact;
+#[cfg(test)]
+mod redact_guard;
 pub mod relink_commands;
 pub mod relink_media;
 pub mod render_commands;

@@ -389,14 +389,14 @@ function onKeydown(event: KeyboardEvent) {
          the grab target exists even when there is nothing to see yet. -->
     <span
       :data-testid="`clip-${clip.id}-fade-in-handle`"
-      class="absolute -top-0.5 left-0 z-10 h-2 w-2 -translate-x-0.5 cursor-ew-resize rounded-full bg-gold"
+      class="vb-handle absolute -top-0.5 left-0 z-10 h-2 w-2 -translate-x-0.5 cursor-ew-resize rounded-full bg-gold"
       @pointerdown.stop="onFadePointerDown($event, 'in')"
       @pointermove.stop="onFadePointerMove"
       @pointerup.stop="onFadePointerUp"
     />
     <span
       :data-testid="`clip-${clip.id}-fade-out-handle`"
-      class="absolute -top-0.5 right-0 z-10 h-2 w-2 translate-x-0.5 cursor-ew-resize rounded-full bg-gold"
+      class="vb-handle absolute -top-0.5 right-0 z-10 h-2 w-2 translate-x-0.5 cursor-ew-resize rounded-full bg-gold"
       @pointerdown.stop="onFadePointerDown($event, 'out')"
       @pointermove.stop="onFadePointerMove"
       @pointerup.stop="onFadePointerUp"
@@ -432,14 +432,14 @@ function onKeydown(event: KeyboardEvent) {
 
     <span
       :data-testid="`clip-${clip.id}-trim-start`"
-      class="absolute inset-y-0 left-0 w-1 cursor-ew-resize bg-white/10"
+      class="vb-handle absolute inset-y-0 left-0 w-1 cursor-ew-resize bg-white/10"
       @pointerdown.stop="onTrimPointerDown($event, 'start')"
       @pointermove.stop="onTrimPointerMove"
       @pointerup.stop="onTrimPointerUp"
     />
     <span
       :data-testid="`clip-${clip.id}-trim-end`"
-      class="absolute inset-y-0 right-0 w-1 cursor-ew-resize bg-white/10"
+      class="vb-handle absolute inset-y-0 right-0 w-1 cursor-ew-resize bg-white/10"
       @pointerdown.stop="onTrimPointerDown($event, 'end')"
       @pointermove.stop="onTrimPointerMove"
       @pointerup.stop="onTrimPointerUp"

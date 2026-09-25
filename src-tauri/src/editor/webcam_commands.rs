@@ -74,6 +74,7 @@ use super::authz::{require_editor_window, require_session};
 use super::media_probe::probe_media;
 use super::prefs_commands::{blocking, local_data, project_id_for};
 use super::project_store::{project_dir, SourceLocator, SourceMediaKind, SourceRecord};
+use super::redact::redact_path;
 use super::save_commands::session_save_lock;
 use super::store_io::{load_sources, write_sources};
 use super::EditorState;
@@ -624,7 +625,10 @@ fn land_raw(state: &EditorState, root: &Path, slot: &TakeSlot) -> Result<Landed,
             // Back to a `.part`, so the take can still be finished or
             // discarded — the recording is never left nameless.
             if let Err(back) = rename_noreplace(&out, &part) {
-                log::warn!("webcam take: could not restore {}: {back}", part.display());
+                log::warn!(
+                    "webcam take: could not restore {}: {back}",
+                    redact_path(&part)
+                );
             }
             Err(e)
         }
@@ -807,15 +811,15 @@ fn remove_owned(path: &Path) {
     match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.is_file() => {
             if let Err(e) = std::fs::remove_file(path) {
-                log::warn!("webcam take: could not remove {}: {e}", path.display());
+                log::warn!("webcam take: could not remove {}: {e}", redact_path(path));
             }
         }
         Ok(_) => log::warn!(
             "webcam take: {} is not a plain file; left in place",
-            path.display()
+            redact_path(path)
         ),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => log::warn!("webcam take: cannot inspect {}: {e}", path.display()),
+        Err(e) => log::warn!("webcam take: cannot inspect {}: {e}", redact_path(path)),
     }
 }
 

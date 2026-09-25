@@ -49,6 +49,9 @@
   --color-audio-bg: #263e3d;
   --color-gold: #ebc582;
   --color-gold-bg: #493d2c;
+  /* The editor window's own backdrop behind the shell (Task 58): the
+     slate-900 it always had, a light grey in the light theme. */
+  --color-app: var(--color-slate-900);
 
   /* Editor shell region sizes (brief's exact values — the CONTRACT sidebar/
      inspector widths, 244/276, not `reference/editor.css`'s own 220/282,
@@ -62,15 +65,32 @@
   --editor-label: 196px;
 }
 
-/* Tutorial editor light theme (Task 18 will let the user persist this choice
-   in the `editorWorkspace` store; for now `EditorShell` sets `data-theme` on
-   `document.documentElement` from local state seeded by
-   `prefers-color-scheme`). Only the ten tokens above vary — every other
-   token in this file (fg/accent/focus/danger/radius/micro) is shared between
-   themes by design (DESIGN-SYSTEM.md: "Theme changes use semantic tokens").
-   Values from `reference/editor.css`'s `[data-theme=light]` block, the same
-   contract's executable reference. */
+/* Tutorial editor light theme (`EditorShell` sets `data-theme` on the
+   editor window's `document.documentElement` from `editorWorkspace.theme`;
+   no other window sets it). The ten surface/media tokens come from
+   `reference/editor.css`'s `[data-theme=light]` block, the same contract's
+   executable reference.
+
+   Task 58 (GAP-206): the TEXT tokens vary too. They used to be shared "by
+   design", which left slate-100 text on a white panel (1.1:1). The ladder
+   below is the reference's ink/sub/muted, with `fg-subtle` the one value
+   the reference lacks, chosen to clear 4.5:1 on the darkest light surface
+   (`stage`, 4.75:1); accent-fg/danger-fg/accent are the reference's
+   accent-ink/danger/accent, so a violet label, a red line and white text
+   on a primary button all read at 4.5:1 or more. Measured on every
+   surface by `tests/e2e/editorKeyboard.spec.ts`. */
 [data-theme="light"] {
+  color-scheme: light;
+  --color-fg: #292632;
+  --color-fg-secondary: #504b5d;
+  --color-fg-muted: #5f5969;
+  --color-fg-subtle: #696274;
+  --color-accent: #7250ad;
+  --color-accent-fg: #603696;
+  --color-danger: #b63854;
+  --color-danger-fg: #a4304b;
+  --color-focus: #7853b8;
+  --color-app: #f3f3f7;
   --color-stage: #e8e7ef;
   --color-panel: #fff;
   --color-raised: #f1f0f5;
@@ -112,6 +132,32 @@ body,
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* Forced colours (Windows high-contrast themes; Task 58, F-49). The
+   browser repaints every colour with the theme's system colours and drops
+   box-shadows, which is how this app draws its focus rings (`ring-*`) and
+   a selected clip — so both would vanish. Outlines survive, so they carry
+   both here; the playhead and the timeline/layout handles keep a system
+   colour of their own instead of being painted over with the page colour.
+   Unlayered, so it wins over Tailwind's `focus:outline-none` utility. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+  [role="option"][aria-selected="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: 1px;
+  }
+  .vb-playhead {
+    forced-color-adjust: none;
+    background-color: Highlight;
+  }
+  .vb-handle {
+    forced-color-adjust: none;
+    background-color: ButtonText;
   }
 }
 

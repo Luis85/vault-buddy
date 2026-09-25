@@ -91,6 +91,7 @@ function onPitch(event: Event): void {
         type="button"
         :data-testid="`speed-preset-${p}`"
         :aria-pressed="p === speed"
+        :aria-label="`${p}× speed`"
         :disabled="lockReason !== null"
         :title="lockReason ?? `Play at ${p}×`"
         class="cursor-pointer rounded border border-line px-1.5 py-0.5 hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"

@@ -214,7 +214,7 @@ function onKeydown(event: KeyboardEvent): void {
         v-for="h in HANDLES"
         :key="h"
         :data-testid="`layout-handle-${h}`"
-        class="absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-accent bg-fg"
+        class="vb-handle absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-accent bg-fg"
         :style="handleStyle(h)"
         @pointerdown.stop="begin($event, h)"
         @pointermove.stop="update"

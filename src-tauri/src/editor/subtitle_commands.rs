@@ -105,7 +105,9 @@ fn with_extension(chosen: &Path, format: SubtitleFormat) -> Result<PathBuf, Edit
 
 /// Write `text` to an owned `.<name>.<id>.part` beside `target`, fsync it,
 /// and land it with `rename_noreplace`; the temp never outlives a failure.
-fn write_new_file(target: &Path, text: &str) -> Result<(), EditorError> {
+/// Shared with the diagnostics export (Task 58), the other new file a user
+/// picks the name of.
+pub(crate) fn write_new_file(target: &Path, text: &str) -> Result<(), EditorError> {
     let name = target
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -125,7 +127,7 @@ fn write_new_file(target: &Path, text: &str) -> Result<(), EditorError> {
     };
     if let Err(remove) = std::fs::remove_file(&temp) {
         if remove.kind() != std::io::ErrorKind::NotFound {
-            log::warn!("editor subtitles: could not remove a temporary file: {remove}");
+            log::warn!("editor export: could not remove a temporary file: {remove}");
         }
     }
     if e.kind() == std::io::ErrorKind::AlreadyExists {

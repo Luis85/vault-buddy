@@ -8,28 +8,33 @@
  * persistence). Split out of `EditorHeader` so the header's own template
  * stays under the complexity ratchet.
  *
- * Three items: **Learning center** (chapters, lessons, quick answers,
+ * Four items: **Learning center** (chapters, lessons, quick answers,
  * progress and preferences — `LearningCenter`), **Resume walkthrough**
  * (the coach at the exact saved lesson; F1 and ? do the same from the
- * keyboard) and **Keyboard shortcuts** (the learning center, on its
- * shortcut table). There is deliberately no item for anything not built
- * yet. The menu closes on a choice, on Escape (focus back on Help) and on
+ * keyboard), **Keyboard shortcuts** (the learning center, on its
+ * shortcut table) and, since Task 58, **Export diagnostics** (Rust's own
+ * save dialog writes counts, capabilities and error codes — never project
+ * content — to a new file; a toast says where it landed). There is
+ * deliberately no item for anything not built yet. The menu closes on a choice, on Escape (focus back on Help) and on
  * a pointer press outside it — `SaveProjectMenu`'s behaviour.
  */
 import { onBeforeUnmount, onMounted, ref } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
+import { toEditorError, useEditorProjectStore } from "../../../stores/editorProject";
+import { useNotificationsStore } from "../../../stores/notifications";
 import AppButton from "../../ui/AppButton.vue";
 import type { LearningTab } from "../guide/LearningCenter.vue";
 import LearningCenter from "../guide/LearningCenter.vue";
 
-type HelpItem = "center" | "resume" | "shortcuts";
+type HelpItem = "center" | "resume" | "shortcuts" | "diagnostics";
 
 const ITEMS: readonly { id: HelpItem; label: string; testid: string }[] = [
   { id: "center", label: "Learning center", testid: "editor-help-learning-center" },
   { id: "resume", label: "Resume walkthrough", testid: "editor-help-resume" },
   { id: "shortcuts", label: "Keyboard shortcuts", testid: "editor-help-shortcuts" },
+  { id: "diagnostics", label: "Export diagnostics", testid: "editor-help-diagnostics" },
 ];
 
 const onboarding = useEditorOnboardingStore();
@@ -40,10 +45,29 @@ const root = ref<HTMLElement | null>(null);
 const centerOpen = ref(false);
 const centerTab = ref<LearningTab>("walkthrough");
 
+const editorProject = useEditorProjectStore();
+const notifications = useNotificationsStore();
+
+/** A dismissed dialog says nothing; a refusal says why. */
+async function exportDiagnostics(): Promise<void> {
+  try {
+    const name = await editorProject.port.exportDiagnostics();
+    if (name) {
+      notifications.success(`Saved diagnostics to ${name}. It holds counts and error codes, never project content.`);
+    }
+  } catch (e) {
+    notifications.error(`The diagnostics could not be saved. ${toEditorError(e).message}`);
+  }
+}
+
 function choose(item: HelpItem): void {
   open.value = false;
   if (item === "resume") {
     onboarding.start();
+    return;
+  }
+  if (item === "diagnostics") {
+    void exportDiagnostics();
     return;
   }
   centerTab.value = item === "shortcuts" ? "shortcuts" : "walkthrough";
@@ -87,7 +111,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onPointerDown)
       v-if="open"
       role="menu"
       aria-label="Help"
-      class="absolute right-0 top-full z-20 mt-1 flex min-w-48 flex-col gap-0.5 rounded-control border border-white/10 bg-slate-800 p-1 shadow-lg"
+      class="absolute right-0 top-full z-20 mt-1 flex min-w-48 flex-col gap-0.5 rounded-control border border-line bg-panel p-1 shadow-lg"
     >
       <button
         v-for="item in ITEMS"

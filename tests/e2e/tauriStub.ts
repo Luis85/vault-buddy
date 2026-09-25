@@ -83,21 +83,30 @@ const EDITOR_OPEN_RESULT = {
 };
 
 /** What a spec may change about the stub: the project `editor_open_staged`
- * answers with, and extra command replies (e.g. the guide's progress). */
+ * answers with, extra command replies (e.g. the guide's progress), and
+ * replies that change call by call (`sequences`: each call to the command
+ * takes the next one — the keyboard journey's edits, Task 58). An
+ * exhausted sequence answers `undefined`, which the port's decoders refuse
+ * loudly, so an unexpected extra edit fails the spec rather than passing. */
 export interface StubOptions {
   openResult?: unknown;
   replies?: Record<string, unknown>;
+  sequences?: Record<string, unknown[]>;
 }
 
 export async function installTauriStub(page: Page, options: StubOptions = {}) {
   await page.addInitScript(
-    ({ detail, videoUrl, openResult, replies }) => {
+    ({ detail, videoUrl, openResult, replies, sequences }) => {
       const listeners = new Map<number, unknown>();
       let nextId = 1;
       // Every command the page invoked, in order — what a spec reads to
       // prove something was NOT sent.
       const invoked: string[] = [];
       (window as unknown as Record<string, unknown>).__invoked = invoked;
+      // The same calls with their arguments — what a spec reads to prove
+      // WHAT was sent (Task 58's keyboard journey).
+      const calls: { cmd: string; args: unknown }[] = [];
+      (window as unknown as Record<string, unknown>).__calls = calls;
 
       // Only the surfaces the editor touches. Anything else returns
       // undefined rather than throwing, so a command added later shows up as
@@ -113,6 +122,8 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       };
       const invoke = async (cmd: string, args?: Record<string, unknown>) => {
         invoked.push(cmd);
+        calls.push({ cmd, args: args ?? null });
+        if (Object.prototype.hasOwnProperty.call(sequences, cmd)) return sequences[cmd].shift();
         if (Object.prototype.hasOwnProperty.call(table, cmd)) return table[cmd];
         if (cmd.startsWith("plugin:event|listen")) {
           listeners.set(nextId, args);
@@ -139,6 +150,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       videoUrl: FIXTURE_VIDEO_URL,
       openResult: options.openResult ?? EDITOR_OPEN_RESULT,
       replies: options.replies ?? {},
+      sequences: options.sequences ?? {},
     },
   );
 }

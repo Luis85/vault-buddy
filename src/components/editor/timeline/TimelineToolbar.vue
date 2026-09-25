@@ -199,6 +199,7 @@ function itemClass(id: ActionId): string {
       type="button"
       data-testid="timeline-toolbar-zoom-out"
       title="Zoom out"
+      aria-label="Zoom out"
       class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       @click="zoomOut"
     >
@@ -208,6 +209,7 @@ function itemClass(id: ActionId): string {
       type="button"
       data-testid="timeline-toolbar-zoom-in"
       title="Zoom in"
+      aria-label="Zoom in"
       class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       @click="zoomIn"
     >

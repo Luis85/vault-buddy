@@ -6446,7 +6446,7 @@ is `hasFinished` (`reviewed` covers all 22), pinned by a test that sets
 lesson and chapter jumps go through `jumpTo`, which clears the flag like
 `start()`.
 
-### GAP-206 · Medium · The tutorial editor's light theme leaves the shared text tokens dark-only
+### GAP-206 · ~~Medium~~ FIXED 2026-09-25 (Task 58) · The tutorial editor's light theme leaves the shared text tokens dark-only
 `src/style.css` (`[data-theme="light"]`), every editor surface. The light
 theme overrides only the ten editor surface/media tokens (`--color-panel`
 becomes white) while the shared text ladder (`text-fg` = slate-100,
@@ -6459,6 +6459,20 @@ colour scheme is light, so the editor seeds `data-theme="light"`); it predates
 Task 56, which only inherits it. Fix: give the light theme its own text
 ladder (the concept bundle's `reference/editor.css` light block has one) —
 an accessibility change for Task 58, checked against WCAG AA contrast.
+**Fixed by Task 58**: `[data-theme="light"]` now also sets the text ladder
+(`fg` #292632, `fg-secondary` #504b5d, `fg-muted` #5f5969, `fg-subtle`
+#696274 — 4.75:1 on the darkest light surface, `stage`), `accent`,
+`accent-fg`, `danger`, `danger-fg`, `focus`, `color-scheme: light` and a new
+`--color-app` backdrop (EditorRoot's `bg-slate-900` became `bg-app`); the
+five editor menus (context, Save project, Help, toolbar More, track menu)
+moved from a literal `bg-slate-800` to `bg-panel`/`border-line`, and the
+shared toast's info variant pins `text-slate-100` on its dark background.
+`tests/e2e/editorKeyboard.spec.ts`' "light theme text meets 4.5:1 on every
+surface" measures every visible text in the header, library, inspector,
+timeline, preview toolbar and an open menu against its composited
+background (46 failures at 1.03–4.40:1 before, none after; removing the
+`--color-fg` override alone turns it red again). Checklist T60 is its
+hardware row. The DARK theme's own shortfalls are GAP-209.
 
 ### GAP-207 · Low · The learning center's recorded limits
 `src/components/editor/guide/LearningCenter.vue` (+ `LearningPreferences.vue`),
@@ -6502,3 +6516,61 @@ no arrow-key roving (deferred from Task 57's review).
 `reviewed`/`explored` — the stored file's rule — before the strict gate.
 The shipped retired map is empty, so only the injected-map test exercises
 it today.
+
+### GAP-208 · Low · The Render dialog does not reattach to a running render after a webview reload
+`src/components/editor/dialogs/RenderDialog.vue`, `src/composables/useRenderJob.ts`,
+`src/stores/editorJobs.ts`, `src/roots/EditorRoot.vue` (Task 47 carry; recorded
+by Task 58). A render's progress travels on the Channel the webview opened for
+it; a reload (Ctrl+R in a debug build, a WebView2 process recovery) drops that
+Channel and the dialog's `jobId`. Rust keeps rendering and `editor_get_jobs`
+still lists the job, but nothing reattaches: (1) after a reload
+`take_editor_request` is already drained, so `EditorRoot` opens NO session at
+all — the webview never learns which session the render belongs to, so there
+is nothing to reconcile against (the session is still open in Rust until the
+window is hidden or the app quits); (2) even with a session, `JobRecordDto`
+does not say whether a `render` job is a product render or a Review
+(`RenderRequest.review` is not in the registry), so a reattached dialog could
+not choose between the Render and Review dialogs; and (3) without the Channel
+the only progress source would be polling `editor_get_jobs`. Failure scenario:
+start a 10-minute render, reload the editor webview — the editor shows no
+project, the render finishes into `products\` unseen (it is in the Products
+tab the next time the project opens) and a close/quit still waits on it
+through the shutdown gate. Not small: it needs a session re-attach path in
+`EditorRoot`, a review flag on the job record and a polling reconcile.
+
+### GAP-209 · Medium · The editor's DARK theme misses 4.5:1 for subtle text, clip labels and the primary button
+`src/style.css` (`@theme` defaults), `src/components/ui/AppButton.vue`
+(measured by Task 58 with the same composited-contrast walk as its
+light-theme e2e check, not asserted). In the default dark theme:
+`text-fg-subtle` (slate-500) reads 3.37:1 on `panel` and 2.99:1 on `raised`
+(the header's duration/status/vault, library and inspector tab labels, field
+labels, the ruler's times, toolbar Split/Delete); the timeline's clip names
+(`text-video` #aa92ed on `video-bg` #40364f) read 4.33:1; and AppButton's
+primary (white on violet-500, e.g. **Render video**) reads 4.40:1. Fix
+direction: an editor-only `[data-theme="dark"]` `--color-fg-subtle` of about
+#8e98aa (4.9:1 on `raised`), a lighter `--color-video` (#b39ef0, 4.88:1),
+and a primary button on `accent-strong` — the last two touch the concept
+bundle's token values and a shared primitive, so they need their own
+decision rather than riding a light-theme fix. Once fixed, the e2e contrast
+check should run in both themes.
+
+### GAP-210 · Low · Content-free logs and diagnostics: what the scan and the export cannot see
+`src-tauri/src/editor/redact.rs`, `redact_guard.rs`, `diagnostics.rs`
+(Task 58, F-50). (1) **The scan reads source, not types.** It flags a log
+argument by name (`path`, `file`, `name`, `title`, `text`, `caption`,
+`base`), any `.display()`, and `{:?}` of an identifier the same file
+declares or binds as a `Path`/`PathBuf`. A path reached another way (a
+function returning `PathBuf` formatted with `{:?}`, a tuple field), a value
+formatted into a `String` first and then logged (`log::warn!("{msg}")`),
+and a third-party error whose `Display` includes a path are not seen. It
+covers `src/editor/**` only; `export_worker/vault_dir.rs` (whose
+`dir.display()` is the F38 shape) is covered the day Task 59 moves it under
+`editor/`, not before. (2) **A handle is a correlation aid, not a secret.**
+`<path:#hash8>` is 32 bits of SHA-256: enough to tell a log's files apart,
+and a guessed path can be confirmed against it. (3) **Diagnostics report
+`os` as `windows x86_64`**, not the Windows build (no dependency was added
+to read it), and `webview2Version` is what `tauri::webview_version()`
+answers (`null` if the runtime query fails). (4) **An `EditorError`
+message is never logged or exported by these rules, but it may still NAME
+a file** (a per-file import error names the picked file, by design, for the
+user); it reaches the UI, not the log or the diagnostics file.

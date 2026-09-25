@@ -286,6 +286,20 @@ impl JobRegistry {
             .any(|r| r.session_id == session_id && r.kind == kind && !r.phase.is_terminal())
     }
 
+    /// Every job's kind, phase and error code, oldest first -- all the
+    /// diagnostics export (Task 58) may say about a job: no id, no session,
+    /// no file name and no message.
+    pub(crate) fn summaries(&self) -> Vec<(JobKind, JobPhase, Option<EditorErrorCode>)> {
+        let mut rows: Vec<&JobRecord> = self.jobs.values().collect();
+        rows.sort_by_key(|r| r.started);
+        rows.into_iter()
+            .map(|r| {
+                let code = r.terminal.as_ref().and_then(|t| t.error.as_ref());
+                (r.kind, r.phase, code.map(|e| e.code))
+            })
+            .collect()
+    }
+
     /// Stop every job of `kind`, in every session -- a quit's render cancel.
     pub(crate) fn cancel_kind(&self, kind: JobKind) {
         for record in self.jobs.values().filter(|r| r.kind == kind) {

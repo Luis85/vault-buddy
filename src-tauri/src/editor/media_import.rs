@@ -47,6 +47,7 @@ use super::media_jobs::{JobPhase, JobReporter, JobTerminal, PerFileError};
 use super::media_probe::probe_media;
 use super::prefs_commands::project_id_for;
 use super::project_store::{project_dir, SourceLocator, SourceMediaKind, SourceRecord};
+use super::redact::redact_path;
 use super::save_commands::session_save_lock;
 use super::store_io::{load_sources, write_sources};
 use super::EditorState;
@@ -498,7 +499,7 @@ fn rollback(job: &ImportJob, project_id: &str, imported: &[Imported]) {
 pub(crate) fn remove_quietly(path: &Path) {
     if let Err(e) = std::fs::remove_file(path) {
         if e.kind() != io::ErrorKind::NotFound {
-            log::warn!("editor import: could not remove {}: {e}", path.display());
+            log::warn!("editor import: could not remove {}: {e}", redact_path(path));
         }
     }
 }

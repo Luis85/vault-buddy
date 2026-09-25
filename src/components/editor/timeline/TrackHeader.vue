@@ -175,8 +175,14 @@ function onWindowPointerDown(event: PointerEvent) {
   if (!menuOpen.value) return;
   if (menuRoot.value && !menuRoot.value.contains(event.target as Node)) menuOpen.value = false;
 }
+/** Escape closes the menu; when focus was inside it, focus goes back to
+ * the menu button rather than falling to the page (Task 58). */
 function onWindowKeydown(event: KeyboardEvent) {
-  if (menuOpen.value && event.key === "Escape") menuOpen.value = false;
+  if (!menuOpen.value || event.key !== "Escape") return;
+  menuOpen.value = false;
+  if (menuRoot.value?.contains(document.activeElement)) {
+    menuRoot.value.querySelector<HTMLElement>("[aria-haspopup]")?.focus();
+  }
 }
 onMounted(() => {
   window.addEventListener("pointerdown", onWindowPointerDown);
@@ -252,6 +258,7 @@ function deleteTrack() {
       :data-testid="`track-header-${track.id}-visible`"
       :aria-pressed="track.visible"
       :aria-disabled="locked"
+      :aria-label="`Show ${track.name}`"
       :title="eyeTitle"
       class="shrink-0 rounded px-1 hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
       :class="eyeClass"
@@ -264,6 +271,7 @@ function deleteTrack() {
       type="button"
       :data-testid="`track-header-${track.id}-lock`"
       :aria-pressed="track.locked"
+      :aria-label="`Lock ${track.name}`"
       :title="lockTitle"
       class="shrink-0 cursor-pointer rounded px-1 hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
       :class="lockClass"
@@ -277,6 +285,7 @@ function deleteTrack() {
       :data-testid="`track-header-${track.id}-mute`"
       :aria-pressed="track.muted"
       :aria-disabled="locked"
+      :aria-label="`Mute ${track.name}`"
       :title="muteTitle"
       class="shrink-0 rounded px-1 text-micro hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
       :class="muteClass"
@@ -289,6 +298,7 @@ function deleteTrack() {
       :data-testid="`track-header-${track.id}-solo`"
       :aria-pressed="track.solo"
       :aria-disabled="locked"
+      :aria-label="`Solo ${track.name}`"
       :title="soloTitle"
       class="shrink-0 rounded px-1 text-micro hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
       :class="soloClass"
@@ -324,6 +334,7 @@ function deleteTrack() {
         aria-haspopup="menu"
         :aria-expanded="menuOpen"
         :aria-pressed="menuOpen"
+        :aria-label="`${track.name} track menu`"
         title="Track menu"
         class="cursor-pointer rounded px-1 text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
         @click="menuOpen = !menuOpen"
@@ -334,7 +345,7 @@ function deleteTrack() {
         v-if="menuOpen"
         role="menu"
         :data-testid="`track-header-${track.id}-menu-list`"
-        class="absolute right-0 top-full z-40 mt-1 flex min-w-32 flex-col gap-0.5 rounded-control border border-white/10 bg-slate-800 p-1 text-micro shadow-lg"
+        class="absolute right-0 top-full z-40 mt-1 flex min-w-32 flex-col gap-0.5 rounded-control border border-line bg-panel p-1 text-micro shadow-lg"
       >
         <button
           type="button"

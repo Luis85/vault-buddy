@@ -71,6 +71,7 @@ use super::prefs_commands::WORKSPACE_FILE;
 use super::project_store::{
     join_contained, project_dir, store_dir, SourceLocator, SourceMediaKind, SourceRecord,
 };
+use super::redact::redact_path;
 use super::render_jobs::PRODUCTS_FILE;
 use super::save_commands::map_write_error;
 use super::session_commands::{missing_media, register_session};
@@ -184,7 +185,7 @@ impl Drop for ImportDir {
         if let Err(e) = remove_dir_no_follow(&self.dir) {
             log::warn!(
                 "editor import: could not remove the unfinished import at {}: {e}",
-                self.dir.display()
+                redact_path(&self.dir)
             );
         }
     }

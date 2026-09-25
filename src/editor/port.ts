@@ -234,6 +234,10 @@ export interface EditorPort {
    * returns the file's progress, validated like a save (or `null`). It
    * writes nothing. */
   importGuideProgress(): Promise<GuideProgress | null>;
+  /** `editor_export_diagnostics` (Task 58) — Rust opens its OWN save
+   * dialog and writes counts, capabilities and error codes to a NEW file;
+   * the file name, or `null` for a dismissed dialog. */
+  exportDiagnostics(): Promise<string | null>;
   /** `list_vaults` — the vaults a publish can go into. */
   listVaults(): Promise<VaultChoice[]>;
   /** `open_screen_capture` — open a PUBLISHED file in Obsidian (Rust
@@ -392,6 +396,9 @@ export function createTauriEditorPort(): EditorPort {
     },
     importGuideProgress() {
       return call("editor_import_guide_progress", undefined, decodeNullableGuideProgress);
+    },
+    exportDiagnostics() {
+      return call("editor_export_diagnostics", undefined, decodeNullableFileName);
     },
     listVaults() {
       return call("list_vaults", undefined, decodeVaultChoices);

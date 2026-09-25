@@ -35,6 +35,7 @@ use super::project_store::{
     SourceMediaKind, SourceRecord,
 };
 use super::recovery;
+use super::redact::redact_name;
 use super::store_io::{create_project, list_projects, load_project, load_sources, remove_project};
 use super::EditorState;
 use crate::editor_commands::is_safe_base;
@@ -83,7 +84,10 @@ pub(crate) fn open_staged_in(
     base: &str,
 ) -> Result<OpenedProject, EditorError> {
     if !is_safe_base(base) {
-        log::warn!("editor_open_staged: refused an unsafe base {base:?}");
+        log::warn!(
+            "editor_open_staged: refused an unsafe base {}",
+            redact_name(base)
+        );
         return Err(err(
             EditorErrorCode::InvalidRequest,
             "That capture name is not one of ours.",
@@ -112,7 +116,8 @@ pub(crate) fn open_staged_in(
             return ensure_sources_name(opened, base, &pid);
         }
         log::warn!(
-            "editor_open_staged: {base:?} is pinned to missing project {pid:?}; re-adopting"
+            "editor_open_staged: {} is pinned to missing project {pid:?}; re-adopting",
+            redact_name(base)
         );
     }
 
@@ -146,7 +151,8 @@ pub(crate) fn open_staged_in(
     );
     if migration.dropped_segments > 0 {
         log::warn!(
-            "editor_open_staged: {base:?} had {} backwards segment(s), dropped in migration",
+            "editor_open_staged: {} had {} backwards segment(s), dropped in migration",
+            redact_name(base),
             migration.dropped_segments
         );
     }
@@ -206,9 +212,9 @@ fn staged_webcam(
     let webcam = sidecar.webcam.as_ref()?;
     if webcam.file != staging::webcam_file_name(&sidecar.base) {
         log::warn!(
-            "editor_open_staged: {:?}'s webcam block names {:?}, not its own webcam file; ignored",
-            sidecar.base,
-            webcam.file
+            "editor_open_staged: {}'s webcam block names {}, not its own webcam file; ignored",
+            redact_name(&sidecar.base),
+            redact_name(&webcam.file)
         );
         return None;
     }
@@ -218,8 +224,8 @@ fn staged_webcam(
     };
     let Some(duration_ms) = u64::try_from(length).ok().filter(|ms| *ms > 0) else {
         log::warn!(
-            "editor_open_staged: {:?}'s webcam starts at {} ms, not before the capture ends at {} ms; ignored",
-            sidecar.base,
+            "editor_open_staged: {}'s webcam starts at {} ms, not before the capture ends at {} ms; ignored",
+            redact_name(&sidecar.base),
             webcam.offset_ms,
             sidecar.duration_ms
         );
@@ -232,9 +238,9 @@ fn staged_webcam(
         Ok(meta) => meta.len(),
         Err(e) => {
             log::warn!(
-                "editor_open_staged: cannot read {:?}'s webcam file {:?}: {e}",
-                sidecar.base,
-                webcam.file
+                "editor_open_staged: cannot read {}'s webcam file {}: {e}",
+                redact_name(&sidecar.base),
+                redact_name(&webcam.file)
             );
             0
         }
@@ -291,10 +297,10 @@ fn staged_stems(
             || !seen_files.insert(stem.file.as_str())
         {
             log::warn!(
-                "editor_open_staged: {:?}'s stem entry {} names {:?}, which it does not own; ignored",
-                sidecar.base,
+                "editor_open_staged: {}'s stem entry {} names {}, which it does not own; ignored",
+                redact_name(&sidecar.base),
                 stem.index,
-                stem.file
+                redact_name(&stem.file)
             );
             continue;
         }
@@ -303,8 +309,8 @@ fn staged_stems(
             Ok(meta) if meta.file_type().is_file() => meta.len(),
             other => {
                 log::warn!(
-                    "editor_open_staged: stem {:?} is not a file on disk ({:?}); not registered",
-                    stem.file,
+                    "editor_open_staged: stem {} is not a file on disk ({:?}); not registered",
+                    redact_name(&stem.file),
                     other.err().map(|e| e.kind())
                 );
                 continue;

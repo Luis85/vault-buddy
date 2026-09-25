@@ -32,6 +32,7 @@ const EXPECTED: &[&str] = &[
     "editor_cancel_job",
     "editor_close_session",
     "editor_execute",
+    "editor_export_diagnostics",
     "editor_export_guide_progress",
     "editor_export_package",
     "editor_export_subtitles",

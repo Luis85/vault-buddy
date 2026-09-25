@@ -23,12 +23,13 @@ import { ACTION_LABELS } from "../src/editor/actionMeta";
 import { displayCombo, OTHER_KEYS, QUICK_ANSWERS, searchAnswers, SHORTCUT_TABLE } from "../src/editor/guide/answers";
 import { GUIDE_CHAPTERS, GUIDE_STEPS, lessonCopy } from "../src/editor/guide/content";
 import type { EditorPort } from "../src/editor/port";
-import { createTauriEditorPort } from "../src/editor/port";
+import { createTauriEditorPort, EditorPortError } from "../src/editor/port";
 import { SHORTCUTS } from "../src/editor/shortcuts";
 import type { GuideProgress } from "../src/editorTypes";
 import { useEditorOnboardingStore } from "../src/stores/editorOnboarding";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
+import { useNotificationsStore } from "../src/stores/notifications";
 import { MountedShell, shellPort } from "./helpers/guideShell";
 
 enableAutoUnmount(afterEach);
@@ -185,7 +186,54 @@ describe("the Help menu", () => {
     await click(w, "editor-header-help");
 
     const items = w.findAll('[role="menu"][aria-label="Help"] [role="menuitem"]');
-    expect(items.map((i) => i.text())).toEqual(["Learning center", "Resume walkthrough", "Keyboard shortcuts"]);
+    expect(items.map((i) => i.text())).toEqual([
+      "Learning center",
+      "Resume walkthrough",
+      "Keyboard shortcuts",
+      "Export diagnostics",
+    ]);
+  });
+
+  // Task 58 (F-50): the diagnostics export is Rust's own dialog and file;
+  // the menu only asks for it and says where it landed. Nothing is edited.
+  it("Export diagnostics asks Rust to write the file and says where it landed", async () => {
+    await install(fresh(), { exportDiagnostics: () => Promise.resolve("support.json") });
+    const w = await mountEditor();
+
+    await click(w, "editor-header-help");
+    await click(w, "editor-help-diagnostics");
+
+    expect(calls.filter((c) => c === "exportDiagnostics")).toHaveLength(1);
+    expect(calls).not.toContain("execute");
+    expect(w.find('[role="menu"][aria-label="Help"]').exists()).toBe(false);
+    expect(useNotificationsStore().items.map((n) => [n.kind, n.message])).toEqual([
+      ["success", "Saved diagnostics to support.json. It holds counts and error codes, never project content."],
+    ]);
+  });
+
+  it("a dismissed diagnostics dialog says nothing, and a refusal says why", async () => {
+    let answer: () => Promise<string | null> = () => Promise.resolve(null);
+    await install(fresh(), { exportDiagnostics: () => answer() });
+    const w = await mountEditor();
+
+    await click(w, "editor-header-help");
+    await click(w, "editor-help-diagnostics");
+    expect(useNotificationsStore().items).toEqual([]);
+
+    answer = () =>
+      Promise.reject(
+        new EditorPortError({
+          code: "writeDenied",
+          message: "support.json already exists.",
+          retryable: false,
+          operationId: "op-1",
+        }),
+      );
+    await click(w, "editor-header-help");
+    await click(w, "editor-help-diagnostics");
+    expect(useNotificationsStore().items.map((n) => [n.kind, n.message])).toEqual([
+      ["error", "The diagnostics could not be saved. support.json already exists."],
+    ]);
   });
 
   it("Resume walkthrough starts the coach at the saved lesson", async () => {
@@ -392,6 +440,24 @@ describe("the progress file", () => {
     expect(w.get('[data-testid="learning-file-status"]').text()).toBe("Nothing was restored — the file dialog was closed.");
 
     expect(useEditorOnboardingStore().progress).toEqual(before);
+  });
+
+  it("the port asks for diagnostics with no arguments", async () => {
+    const sent: { cmd: string; args: unknown }[] = [];
+    const replies: unknown[] = ["support.json", null];
+    mockIPC((cmd, args) => {
+      sent.push({ cmd, args });
+      if (cmd === "editor_export_diagnostics") return replies.shift();
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    const port = createTauriEditorPort();
+
+    expect(await port.exportDiagnostics()).toBe("support.json");
+    expect(await port.exportDiagnostics()).toBeNull();
+    expect(sent).toEqual([
+      { cmd: "editor_export_diagnostics", args: {} },
+      { cmd: "editor_export_diagnostics", args: {} },
+    ]);
   });
 
   it("the port sends the progress to export and nothing to import", async () => {

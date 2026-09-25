@@ -365,7 +365,7 @@ async function onBelowLanesDrop(event: DragEvent) {
       />
       <div
         data-testid="timeline-playhead"
-        class="pointer-events-none absolute top-0 bottom-0 z-30 w-px bg-accent"
+        class="vb-playhead pointer-events-none absolute top-0 bottom-0 z-30 w-px bg-accent"
         :style="{ left: `${TRACK_LABEL_WIDTH_PX + pxPerMs(workspace.timelineZoom) * workspace.playheadMs}px` }"
       />
       <TrackLane
