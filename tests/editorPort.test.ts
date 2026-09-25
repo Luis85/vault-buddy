@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -77,6 +78,14 @@ function codeOnly(src: string): string {
 // `INVOKE_PATTERN`.
 const NAIVE_INVOKE_PATTERN = /invoke\s*\(\s*["'`]editor_/;
 const INVOKE_PATTERN = /invoke\s*(?:<[^>]*>)?\s*\(\s*["'`]editor_/;
+
+/** The scan reads every `.ts`/`.vue` file under `src/` (~315), and the cost
+ * is the reads, not the regexes: ~450 ms one file at a time on an idle
+ * Windows host, 8 s measured under the full suite's parallel load — past
+ * Vitest's 5 s default, and a SYNCHRONOUS test cannot even be interrupted
+ * when it runs over. So the reads run in parallel (~4x faster idle) and the
+ * test gets the whole-editor walks' budget (`editorA11y.test.ts`). */
+const SCAN_TIMEOUT_MS = 20_000;
 
 describe("EditorPort", () => {
   afterEach(() => clearMocks());
@@ -554,17 +563,12 @@ describe("EditorPort", () => {
     });
   });
 
-  it("only port.ts invokes editor commands", () => {
-    const offenders: string[] = [];
-    for (const file of walkTsFiles(SRC_DIR)) {
-      if (file === PORT_FILE) continue;
-      const src = codeOnly(readFileSync(file, "utf8"));
-      if (INVOKE_PATTERN.test(src)) {
-        offenders.push(path.relative(SRC_DIR, file));
-      }
-    }
-    expect(offenders).toEqual([]);
-  });
+  it("only port.ts invokes editor commands", async () => {
+    const files = walkTsFiles(SRC_DIR).filter((file) => file !== PORT_FILE);
+    const sources = await Promise.all(files.map((file) => readFile(file, "utf8")));
+    const offenders = files.filter((_, i) => INVOKE_PATTERN.test(codeOnly(sources[i])));
+    expect(offenders.map((file) => path.relative(SRC_DIR, file))).toEqual([]);
+  }, SCAN_TIMEOUT_MS);
 
   it("the scan pattern catches the generic invoke<T>(...) call form", () => {
     const genericCall = 'await invoke<EditorOpenResult>("editor_open_staged", { stagedBase: base });';

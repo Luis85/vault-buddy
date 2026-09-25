@@ -149,6 +149,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** The walk mounts the whole editor shell once per listed key (about twenty
+ * times): ~2 s alone, 3.4–4.4 s measured under the full suite's parallel
+ * load and past Vitest's 5 s default at worst — the `editorA11y.test.ts`
+ * walks' budget. */
+const WALK_TIMEOUT_MS = 20_000;
+
 describe("every listed shortcut", () => {
   it("every key the shortcut table lists does what the table says", async () => {
     // The table and the map are the same bindings (answers.ts builds one
@@ -175,7 +181,7 @@ describe("every listed shortcut", () => {
       effect.check(w);
       w.unmount();
     }
-  });
+  }, WALK_TIMEOUT_MS);
 
   it("Ctrl+S is the header's Save: never a second save while one is in flight", async () => {
     const w = await mountEditor();
