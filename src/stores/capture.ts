@@ -20,6 +20,7 @@ import type {
 } from "../types";
 import { basename } from "../utils/basename";
 import { useNotificationsStore } from "./notifications";
+import { clearRenamePrompt } from "./renamePrompt";
 
 /** How long the post-save "Name this recording" window stays open. */
 export const RENAME_PROMPT_MS = 30_000;
@@ -580,16 +581,10 @@ export const useCaptureStore = defineStore("capture", {
     },
     armRenameExpiry() {
       if (this.renameTimer) clearTimeout(this.renameTimer);
-      this.renameTimer = setTimeout(() => this.dismissRename(), RENAME_PROMPT_MS);
+      this.renameTimer = setTimeout(() => clearRenamePrompt(this), RENAME_PROMPT_MS);
     },
     dismissRename() {
-      if (this.renameTimer) {
-        clearTimeout(this.renameTimer);
-        this.renameTimer = null;
-      }
-      this.lastSaved = null;
-      this.lastSavedAtMs = null;
-      this.renameError = null;
+      clearRenamePrompt(this);
     },
     /** Dismiss the rename prompt only when it is genuinely stale (older than
      * the rename window) — the panel-reopen reset must not kill a fresh

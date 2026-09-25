@@ -42,7 +42,7 @@
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 2026-07-16: +21 for detected-language (field + frontmatter/stats rendering + render test) \u2014 Increment A, honest auto-detection reporting. +11 defense-in-depth parity for the frontmatter gate (H2 review M1) with pinned+detected render assertions."
     },
     "src/stores/capture.ts": {
-      "loc": 642,
+      "loc": 637,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-47). Shrink only; split when next touched."
     },
     "src/components/Tasks.vue": {

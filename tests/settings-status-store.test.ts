@@ -1,4 +1,4 @@
-import { createPinia, setActivePinia } from "pinia";
+import { createPinia, getActivePinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useSettingsStatusStore } from "../src/stores/settingsStatus";
@@ -104,5 +104,22 @@ describe("settingsStatus store", () => {
     s.reset();
     expect(s.state).toBe("idle");
     expect(s.error).toBeNull();
+  });
+
+  // Pinia's action wrapper calls setActivePinia(store's own pinia), so a fade
+  // timer that called the recompute ACTION re-activated this test's pinia in
+  // the middle of whatever LATER test was running when it fired.
+  it("the Saved fade never re-activates the pinia it was armed in", () => {
+    const s = useSettingsStatusStore();
+    s.saving(1);
+    s.saved(1);
+
+    const later = createPinia();
+    setActivePinia(later);
+    vi.advanceTimersByTime(2000);
+
+    expect(getActivePinia()).toBe(later);
+    expect(s.state).toBe("idle");
+    expect(s.savedFlash).toBe(false);
   });
 });
