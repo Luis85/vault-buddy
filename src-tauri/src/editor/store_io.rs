@@ -395,35 +395,44 @@ pub fn list_projects(root: &Path) -> Vec<ProjectSummaryDto> {
     out
 }
 
-/// Permanently remove a project directory — an irreversible unlink, not a
-/// trash, mirroring `delete_task`'s posture on the vault side.
+/// The most of `project.json` the ownership proof reads. ONE named bound,
+/// so widening what a discard can prove (a lightweight project's file can
+/// legitimately exceed the load bound, GAP-214 / review ruling R2) is a
+/// one-line change here rather than a hunt through every remover.
+const OWNERSHIP_PROOF_MAX_BYTES: u64 = limits::MAX_PROJECT_JSON_BYTES;
+
+/// Does the pin `project_id` name a project that still exists? A pin whose
+/// project folder, or that folder's `project.json`, is gone pins NOTHING —
+/// the editor's own open already re-adopts such a capture — so it neither
+/// refuses a staged capture's Discard nor keeps it out of Clear (review
+/// finding D-2). An id that is not a valid id cannot name a project.
+pub(crate) fn pin_is_live(root: &Path, project_id: &str) -> bool {
+    project_dir(root, project_id).is_some_and(|d| d.join(PROJECT_FILE).is_file())
+}
+
+/// Prove that the folder `project_dir(root, id)` is `id`'s own, before
+/// anything acts on that belief — the ONE ownership check every remover
+/// calls (`remove_project`, and both discards before they release a pin,
+/// GAP-214 item 8).
 ///
-/// **Ownership is proven before anything is deleted**: `project.json` must
-/// be JSON AND its own `project.id` must equal `id` (the document need not
-/// be a valid project any more — final review I3). Without that second
-/// check, a directory whose name and content disagree (hand-edited, or a
-/// caller that passed the wrong id) could have the WRONG project's
-/// `project.json` believed and the RIGHT directory deleted anyway — the
-/// check is what makes "removed only what it verified" a property of this
-/// function rather than of whichever id the caller happened to pass.
-///
-/// **No-follow, structurally**: every entry the walk visits is inspected
-/// with `symlink_metadata` before it is trusted to be a plain file or
-/// directory, and a symlink anywhere in the tree refuses the WHOLE removal
-/// before a single file is unlinked — `discard_staged_files`'s two-pass
-/// discipline, widened from a flat file set to a directory tree. Files are
-/// removed, then directories deepest-first via `remove_dir` (never
-/// `remove_dir_all`, which would recurse without this module's own
-/// symlink check at every level).
+/// `project.json` must be JSON AND its own `project.id` must equal `id`
+/// (the document need not be a valid project any more — final review I3:
+/// a damaged project is exactly the one that must stay discardable, and its
+/// own `project.id` is still the proof of whose folder this is). Without
+/// that second check, a directory whose name and content disagree
+/// (hand-edited, or a caller that passed the wrong id) could have the WRONG
+/// project's `project.json` believed and the RIGHT directory deleted anyway.
 ///
 /// **The project directory itself is checked first, before its
-/// `project.json` is ever read.** `walk_no_follow` only inspects what is
-/// INSIDE `dir` — if `dir` were itself a symlink or (on Windows) a
-/// junction, `read_dir`/`read` on it transparently follow it to whatever it
-/// points at, so both the ownership check and the walk would operate on a
-/// directory this function never created. Rust reports an NTFS junction as
-/// a symlink too, so one `is_symlink()` check here covers both.
-pub fn remove_project(root: &Path, id: &str) -> Result<(), EditorError> {
+/// `project.json` is ever read.** If `dir` were itself a symlink or (on
+/// Windows) a junction, `read_dir`/`read` on it transparently follow it to
+/// whatever it points at, so the proof would be about a directory this app
+/// never created. Rust reports an NTFS junction as a symlink too, so one
+/// `is_symlink()` check here covers both.
+///
+/// A refusal that means "these files are not this project's" is
+/// `InvalidProject`; a folder that cannot be inspected at all is `Internal`.
+pub(crate) fn prove_ownership(root: &Path, id: &str) -> Result<(), EditorError> {
     let dir = project_dir(root, id).ok_or_else(|| invalid_id_err(id))?;
     let dir_meta = std::fs::symlink_metadata(&dir).map_err(|e| {
         EditorError::new(
@@ -444,10 +453,7 @@ pub fn remove_project(root: &Path, id: &str) -> Result<(), EditorError> {
         ));
     }
     let project_path = dir.join(PROJECT_FILE);
-    let bytes = read_bounded(&project_path, limits::MAX_PROJECT_JSON_BYTES)?;
-    // The JSON document, not a valid project (final review I3): a damaged
-    // project is exactly the one that must stay discardable, and its own
-    // `project.id` is still the proof of whose folder this is.
+    let bytes = read_bounded(&project_path, OWNERSHIP_PROOF_MAX_BYTES)?;
     let document: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
         EditorError::new(
             EditorErrorCode::InvalidProject,
@@ -469,6 +475,28 @@ pub fn remove_project(root: &Path, id: &str) -> Result<(), EditorError> {
             ),
         ));
     }
+    Ok(())
+}
+
+/// Permanently remove a project directory — an irreversible unlink, not a
+/// trash, mirroring `delete_task`'s posture on the vault side.
+///
+/// **Ownership is proven before anything is deleted** (`prove_ownership`,
+/// the one check every remover shares).
+///
+/// **No-follow, structurally**: every entry the walk visits is inspected
+/// with `symlink_metadata` before it is trusted to be a plain file or
+/// directory, and a symlink anywhere in the tree refuses the WHOLE removal
+/// before a single file is unlinked — `discard_staged_files`'s two-pass
+/// discipline, widened from a flat file set to a directory tree. Files are
+/// removed, then directories deepest-first via `remove_dir` (never
+/// `remove_dir_all`, which would recurse without this module's own
+/// symlink check at every level). `walk_no_follow` only inspects what is
+/// INSIDE the folder; `prove_ownership` has already refused a folder that
+/// is itself a symlink or junction.
+pub fn remove_project(root: &Path, id: &str) -> Result<(), EditorError> {
+    prove_ownership(root, id)?;
+    let dir = project_dir(root, id).ok_or_else(|| invalid_id_err(id))?;
     remove_tree(&dir, Some(PROJECT_FILE)).map_err(|e| {
         EditorError::new(
             EditorErrorCode::Internal,

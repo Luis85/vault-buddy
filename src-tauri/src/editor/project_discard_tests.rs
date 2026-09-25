@@ -181,3 +181,87 @@ fn an_invalid_or_unknown_id_is_refused() {
         EditorErrorCode::SourceMissing
     );
 }
+
+// GAP-214 item 8 (review N4): a folder whose `project.json` names ANOTHER
+// project proves it is not this project's, so the discard is refused BEFORE
+// any pin is released — the capture pinned to the folder's id keeps its pin
+// — and the refusal is fixed role copy: no redaction handle, no parser text.
+#[test]
+fn a_folder_owned_by_another_id_is_refused_before_any_pin_is_released() {
+    let f = Fixture::new();
+    let project = f.project_for(BASE);
+    let path = f.dir(&project).join("project.json");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    value["project"]["id"] = serde_json::json!("proj-someone-else");
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+    let e = f.discard(&project).unwrap_err();
+
+    assert_eq!(e.code, EditorErrorCode::InvalidProject);
+    assert_eq!(
+        e.message,
+        "This project could not be discarded because its files do not belong to it."
+    );
+    assert!(!e.message.contains("<path:#") && !e.message.contains("expected"));
+    assert_eq!(
+        f.pin_of(BASE),
+        Some(project.clone()),
+        "the pin is untouched"
+    );
+    assert!(path.is_file(), "nothing is removed");
+}
+
+// The same proof for bytes that are not JSON at all: the refusal is the
+// fixed copy, never serde's "expected value at line 1" text, and the pin
+// stays.
+#[test]
+fn a_project_json_that_is_not_json_keeps_the_pin_and_says_so_in_role_words() {
+    let f = Fixture::new();
+    let project = f.project_for(BASE);
+    std::fs::write(f.dir(&project).join("project.json"), b"\x00\x01garbage").unwrap();
+
+    let e = f.discard(&project).unwrap_err();
+
+    assert_eq!(
+        e.message,
+        "This project could not be discarded because its files do not belong to it."
+    );
+    assert_eq!(f.pin_of(BASE), Some(project), "the pin is untouched");
+}
+
+// Carried from the Task 2/3 reviews: the pin scan read ANY failure to list
+// staging as "nothing pinned", so the project was removed and a pin to it
+// left behind. Only a staging folder that does not exist holds no pins; one
+// that cannot be listed (here: a FILE where the folder should be) refuses
+// the discard, project and pins untouched.
+#[test]
+fn a_staging_folder_that_cannot_be_listed_refuses_the_discard() {
+    let f = Fixture::new();
+    let project = f.project_for(BASE);
+    let not_a_folder = f.root().join("staging-is-a-file");
+    std::fs::write(&not_a_folder, b"not a folder").unwrap();
+
+    let e = discard_project_in(&f.state, f.root(), &not_a_folder, &project).unwrap_err();
+
+    assert_eq!(e.code, EditorErrorCode::Internal);
+    assert_eq!(
+        e.message,
+        "The captures linked to this project could not be checked, so the project was kept. \
+         Try again in a moment."
+    );
+    assert!(f.dir(&project).join("project.json").is_file());
+    assert_eq!(f.pin_of(BASE), Some(project));
+}
+
+// ...while a staging folder that does not exist at all pins nothing, and
+// the discard goes ahead.
+#[test]
+fn a_staging_folder_that_does_not_exist_pins_nothing() {
+    let f = Fixture::new();
+    let project = f.project_for(BASE);
+    let missing = f.root().join("no-such-staging");
+
+    discard_project_in(&f.state, f.root(), &missing, &project).expect("nothing is pinned");
+    assert!(!f.dir(&project).exists());
+}

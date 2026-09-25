@@ -9,8 +9,8 @@
 //! **Every rule here is borrowed, never re-grown.** Which captures exist is
 //! `staged_commands::staged_summaries`; which files one owns is
 //! `staging_files::capture_file_names`; whether a capture may be removed is
-//! `staged_commands::discard_conflict`; the removal itself, with its
-//! two-pass symlink refusal, is `staged_commands::discard_staged_files`.
+//! `staged_commands::live_pin_of` + `discard_conflict`; the removal itself,
+//! with its two-pass symlink refusal, is `staged_commands::discard_staged_files`.
 //! A bulk clear that grew its own copy of any of those would be a second
 //! answer to "is this file ours", on the one code path in the app that
 //! deletes many of the user's recordings at once.
@@ -30,8 +30,8 @@ use vault_buddy_screen::staging_files::{self, StagingUsage};
 
 use crate::editor::EditorState;
 use crate::staged_commands::{
-    discard_conflict, discard_staged_files, emit_discarded, pinned_project_of, staged_summaries,
-    staging_dir_for,
+    discard_conflict, discard_staged_files, emit_discarded, live_pin_of, local_root_for,
+    staged_summaries, staging_dir_for,
 };
 
 /// What a bulk clear actually did. Four numbers rather than a bare success,
@@ -60,12 +60,21 @@ pub struct ClearStagedResultDto {
 /// Each capture's pin is re-read, and the capture removed, under
 /// `EditorState::open` (final review I2) — `discard_unpinned`'s rule: the
 /// list is read once, but an open can pin a capture while the loop runs.
-fn clear_staged(open: &Mutex<()>, dir: &Path) -> (ClearStagedResultDto, Vec<String>) {
+fn clear_staged(open: &Mutex<()>, root: &Path, dir: &Path) -> (ClearStagedResultDto, Vec<String>) {
     let mut result = ClearStagedResultDto::default();
     let mut cleared = Vec::new();
     for summary in staged_summaries(dir) {
         let _open = vault_buddy_core::sync_util::lock_ignoring_poison(open);
-        if discard_conflict(pinned_project_of(dir, &summary.base).as_deref()).is_some() {
+        // A pin to a project that no longer exists is cleared, not honoured
+        // (D-2): the capture is cleared and never counted as kept.
+        let pin = match live_pin_of(root, dir, &summary.base) {
+            Ok(pin) => pin,
+            Err(_) => {
+                result.failed += 1;
+                continue;
+            }
+        };
+        if discard_conflict(pin.as_deref()).is_some() {
             result.skipped_pinned += 1;
             continue;
         }
@@ -130,10 +139,11 @@ pub async fn staging_usage(app: AppHandle) -> StagingUsage {
 /// ASYNC: up to four unlinks per capture on a volume that may be slow.
 #[tauri::command]
 pub async fn clear_staged_captures(app: AppHandle) -> Result<ClearStagedResultDto, String> {
-    let dir = staging_dir_for(&app)?;
+    let root = local_root_for(&app)?;
+    let dir = vault_buddy_screen::staging::staging_dir(&root);
     let editor = app.clone();
     let worked = tauri::async_runtime::spawn_blocking(move || {
-        clear_staged(&editor.state::<EditorState>().open, &dir)
+        clear_staged(&editor.state::<EditorState>().open, &root, &dir)
     })
     .await;
 
@@ -201,10 +211,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         stage(dir.path(), "A", None);
         stage(dir.path(), "B", None);
+        crate::staged_commands::tests::live_project(dir.path(), "proj-a");
         let open = Mutex::new(());
         let opening = open.lock().unwrap();
         let (result, cleared) = std::thread::scope(|scope| {
-            let clearing = scope.spawn(|| clear_staged(&open, dir.path()));
+            let clearing = scope.spawn(|| clear_staged(&open, dir.path(), dir.path()));
             std::thread::sleep(std::time::Duration::from_millis(200));
             // The open lands its pin, then lets go of the lock.
             crate::editor::project_store::pin_staged(dir.path(), "A", "proj-a").unwrap();
@@ -226,9 +237,10 @@ mod tests {
     fn clear_skips_pinned_captures_and_counts_them() {
         let dir = tempfile::tempdir().unwrap();
         stage(dir.path(), "A", Some("proj1"));
+        crate::staged_commands::tests::live_project(dir.path(), "proj1");
         stage(dir.path(), "B", None);
 
-        let (result, cleared) = clear_staged(&Mutex::new(()), dir.path());
+        let (result, cleared) = clear_staged(&Mutex::new(()), dir.path(), dir.path());
 
         assert_eq!(result.cleared, 1);
         assert_eq!(result.skipped_pinned, 1);
@@ -238,6 +250,29 @@ mod tests {
             "a pinned capture was cleared"
         );
         assert!(!dir.path().join(staging::mp4_file_name("B")).exists());
+    }
+
+    // D-2: a capture pinned to a project that no longer exists is not
+    // "used by a tutorial project" — the editor's own open already re-adopts
+    // it — so Clear removes it and does NOT count it as kept for a pin. A
+    // live pin is still kept and counted.
+    #[test]
+    fn clear_removes_a_capture_pinned_to_a_missing_project() {
+        let dir = tempfile::tempdir().unwrap();
+        stage(dir.path(), "A", Some("proj-gone"));
+        stage(dir.path(), "B", Some("proj-live"));
+        crate::staged_commands::tests::live_project(dir.path(), "proj-live");
+
+        let (result, cleared) = clear_staged(&Mutex::new(()), dir.path(), dir.path());
+
+        assert_eq!(
+            (result.cleared, result.skipped_pinned),
+            (1, 1),
+            "{result:?}"
+        );
+        assert_eq!(cleared, vec!["A".to_string()]);
+        assert!(!dir.path().join(staging::mp4_file_name("A")).exists());
+        assert!(dir.path().join(staging::mp4_file_name("B")).is_file());
     }
 
     /// A file symlink, or `false` where this host cannot make one (Windows
@@ -270,7 +305,7 @@ mod tests {
         stage(dir.path(), "B", None);
         let webcam_b = dir.path().join(staging::webcam_file_name("B"));
         std::fs::write(&webcam_b, b"more webcam footage").unwrap();
-        let (result, _) = clear_staged(&Mutex::new(()), dir.path());
+        let (result, _) = clear_staged(&Mutex::new(()), dir.path(), dir.path());
         assert_eq!(result.cleared, 1);
         assert!(!webcam_b.exists(), "Clear left the webcam file behind");
 
@@ -330,7 +365,7 @@ mod tests {
         std::fs::remove_file(stem("A", 3)).unwrap();
 
         with_stems("B");
-        let (result, _) = clear_staged(&Mutex::new(()), dir.path());
+        let (result, _) = clear_staged(&Mutex::new(()), dir.path(), dir.path());
         assert_eq!(result.cleared, 1);
         assert!(
             !stem("B", 1).exists() && !stem("B", 2).exists(),

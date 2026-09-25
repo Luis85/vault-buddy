@@ -49,10 +49,13 @@ fn a_discard_waits_for_an_open_in_progress_and_then_sees_its_pin() {
     };
     staging::write_sidecar(dir.path(), "A", &sidecar).unwrap();
     std::fs::write(dir.path().join(staging::mp4_file_name("A")), b"footage").unwrap();
+    // The project the open mints exists before it pins (a pin to a project
+    // that is gone is cleared, not honoured — D-2).
+    live_project(dir.path(), "proj-a");
     let open = Mutex::new(());
     let opening = open.lock().unwrap();
     let discarded = std::thread::scope(|scope| {
-        let discarding = scope.spawn(|| discard_unpinned(&open, dir.path(), "A"));
+        let discarding = scope.spawn(|| discard_unpinned(&open, dir.path(), dir.path(), "A"));
         std::thread::sleep(std::time::Duration::from_millis(200));
         crate::editor::project_store::pin_staged(dir.path(), "A", "proj-a").unwrap();
         drop(opening);
@@ -481,5 +484,75 @@ fn every_new_command_is_registered_and_the_base_takers_are_guarded() {
         ["discard_staged_capture"],
         "the set of commands taking a base changed; confirm the new one \
          guards it, then update this list"
+    );
+}
+
+/// A tutorial project that exists under `root`'s store: all `pin_is_live`
+/// asks of it is a `project.json`.
+pub(crate) fn live_project(root: &Path, id: &str) {
+    let dir = crate::editor::project_store::project_dir(root, id).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    let json = serde_json::json!({ "project": { "id": id } });
+    std::fs::write(dir.join("project.json"), json.to_string()).unwrap();
+}
+
+// D-2: a capture pinned to a project whose folder no longer exists (removed
+// by hand, or by a discard that crashed between its removal and a pin it
+// could not see) was refused Discard forever — while the editor's own open
+// already treated that pin as nothing and re-adopted the capture. The pin
+// is cleared under `open` and the capture discarded; a LIVE pin still
+// refuses.
+#[test]
+fn a_capture_pinned_to_a_missing_project_is_discarded() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = staging::staging_dir(root.path());
+    std::fs::create_dir_all(&dir).unwrap();
+    stage(&dir, "A", "2026-09-20T14:32:00+02:00");
+    crate::editor::project_store::pin_staged(&dir, "A", "proj-gone").unwrap();
+    stage(&dir, "B", "2026-09-20T14:33:00+02:00");
+    crate::editor::project_store::pin_staged(&dir, "B", "proj-live").unwrap();
+    live_project(root.path(), "proj-live");
+    let open = Mutex::new(());
+
+    discard_unpinned(&open, root.path(), &dir, "A").expect("a dangling pin is not a refusal");
+    assert!(!dir.join(staging::mp4_file_name("A")).exists());
+    assert!(!dir.join(staging::sidecar_file_name("A")).exists());
+
+    assert_eq!(
+        discard_unpinned(&open, root.path(), &dir, "B").unwrap_err(),
+        "This capture is used by a tutorial project. Discard the project first."
+    );
+    assert!(dir.join(staging::mp4_file_name("B")).is_file());
+}
+
+// D-2, the list half: a row pinned to a missing project must offer Discard
+// like any unpinned row (the list hides Discard for a pinned one), or the
+// single discard above is unreachable. A live pin is still reported.
+#[test]
+fn the_staged_list_reports_a_pin_to_a_missing_project_as_no_pin() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = staging::staging_dir(root.path());
+    std::fs::create_dir_all(&dir).unwrap();
+    stage(&dir, "A", "2026-09-20T14:32:00+02:00");
+    crate::editor::project_store::pin_staged(&dir, "A", "proj-gone").unwrap();
+    stage(&dir, "B", "2026-09-20T14:33:00+02:00");
+    crate::editor::project_store::pin_staged(&dir, "B", "proj-live").unwrap();
+    live_project(root.path(), "proj-live");
+
+    let rows = live_summaries(root.path(), &dir);
+
+    let pin = |base: &str| {
+        rows.iter()
+            .find(|r| r.base == base)
+            .and_then(|r| r.project_id.clone())
+    };
+    assert_eq!(pin("A"), None);
+    assert_eq!(pin("B").as_deref(), Some("proj-live"));
+    assert!(
+        crate::editor::project_store::pinned_project(
+            &staging::read_sidecar(&dir.join(staging::sidecar_file_name("A"))).unwrap()
+        )
+        .is_some(),
+        "the list is a view: it never writes a sidecar"
     );
 }

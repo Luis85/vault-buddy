@@ -179,3 +179,26 @@ fn a_session_discard_unpins_by_sidecar_when_sources_json_is_gone() {
         "the recording survives"
     );
 }
+
+// GAP-214 item 8, the session half: ownership is proven before any pin is
+// released, so a folder whose `project.json` names another project refuses
+// the discard with the capture still pinned, in fixed words.
+#[test]
+fn a_session_discard_proves_ownership_before_it_unpins() {
+    let f = Fixture::new();
+    let path = f.project_dir().join("project.json");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    value["project"]["id"] = serde_json::json!("proj-someone-else");
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+    let e = f.discard().unwrap_err();
+
+    assert_eq!(e.code, EditorErrorCode::InvalidProject);
+    assert_eq!(
+        e.message,
+        "This project could not be discarded because its files do not belong to it."
+    );
+    assert_eq!(f.pinned(), Some(f.project.clone()), "the pin is untouched");
+    assert!(path.is_file());
+}

@@ -291,7 +291,9 @@ pub(crate) fn raw_chunk(body: &InvokeBody) -> Result<Vec<u8>, EditorError> {
 }
 
 /// The `AppHandle`-free half of `editor_webcam_append`. `chunk` is the raw
-/// body or why there is none — an error either way marks the take failed.
+/// body or why there is none — an error in the chunk or its write marks the
+/// take failed; a refusal because the session is closing does NOT (GAP-214
+/// item 6), since that discard may yet be refused and the chunk retried.
 pub(crate) fn append_in(
     state: &EditorState,
     at: &ChunkHeaders,

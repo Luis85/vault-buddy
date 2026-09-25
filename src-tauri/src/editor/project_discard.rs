@@ -13,17 +13,21 @@
 //!   through the session, which stops its jobs, takes and journal first
 //!   (`discard.rs`). Checked under `EditorState::open`, which is held for
 //!   the whole discard, so no open can register a session in between.
+//! - Ownership is proven FIRST (`store_io::prove_ownership`: `project.json`'s
+//!   own `project.id`), before any pin is released (GAP-214 item 8). Bytes
+//!   that are not JSON at all, or a document naming another project, prove
+//!   nothing: the discard is refused in fixed words, every pin untouched.
 //! - Every staged capture pinned to the project is unpinned — found by a
 //!   scan of the staging sidecars, not through `sources.json` (which may be
 //!   exactly what is damaged, and a hand-edited pin elsewhere may name this
 //!   project too). A pin naming any other project is never touched.
-//! - Then `store_io::remove_project`: ownership proven by `project.json`'s
-//!   own `project.id`, owned files only, no-follow, `project.json` last.
-//!   Bytes that are not JSON at all prove nothing, so nothing is removed.
+//! - Then `store_io::remove_project`: owned files only, no-follow,
+//!   `project.json` last.
 //!
 //! Like every `editor_*` command it takes `window: WebviewWindow` and calls
 //! `authz::require_editor_window(&window)?` FIRST (`authz_guard.rs`).
 
+use std::io;
 use std::path::Path;
 
 use tauri::{AppHandle, Manager, WebviewWindow};
@@ -35,22 +39,72 @@ use super::authz::require_editor_window;
 use super::prefs_commands::{blocking, local_data};
 use super::project_store::{pinned_project, project_dir, unpin_staged};
 use super::redact::redact_name;
-use super::store_io::remove_project;
+use super::store_io::{prove_ownership, remove_project};
 use super::EditorState;
 
 fn err(code: EditorErrorCode, message: &str) -> EditorError {
     EditorError::new(code, message)
 }
 
+/// What a discard says when `project.json` does not prove the folder is this
+/// project's (GAP-214 item 8): fixed role words — never the redaction
+/// handle or the parser's own text the proof's message carries (that goes
+/// to the log).
+pub(crate) const NOT_ITS_FILES: &str =
+    "This project could not be discarded because its files do not belong to it.";
+
+/// `store_io::prove_ownership`, worded for a discard — shared with a
+/// session's `discardProject` (`session_close::close_locked`). Run BEFORE
+/// any pin is released, so a refusal leaves every capture pinned.
+pub(super) fn prove_owned_for_discard(root: &Path, project_id: &str) -> Result<(), EditorError> {
+    prove_ownership(root, project_id).map_err(|e| {
+        if e.code != EditorErrorCode::InvalidProject {
+            return e;
+        }
+        log::warn!("project discard: refused {project_id}: {}", e.message);
+        err(EditorErrorCode::InvalidProject, NOT_ITS_FILES)
+    })
+}
+
+/// A staging folder that cannot be listed means the pins cannot be found,
+/// so the discard is refused rather than read as "nothing pinned" — which
+/// would remove the project and leave a pin to it. Only a folder that does
+/// not EXIST holds no pins.
+fn staging_unreadable(e: &io::Error) -> Option<EditorError> {
+    if e.kind() == io::ErrorKind::NotFound {
+        return None;
+    }
+    log::warn!("project discard: the staging folder could not be listed: {e}");
+    Some(err(
+        EditorErrorCode::Internal,
+        "The captures linked to this project could not be checked, so the project was kept. \
+         Try again in a moment.",
+    ))
+}
+
 /// Clear every staged capture's pin that names `project_id` — shared with a
 /// session's `discardProject` (`session_close::close_locked`, GAP-214 item
 /// 7). The caller holds `EditorState::open`, like every pin writer.
+///
+/// A sidecar that cannot be read or parsed is skipped WITH a log line: it
+/// may hold a pin to this project, which then outlives it — harmless since
+/// a pin to a project that no longer exists refuses nothing (review finding
+/// D-2, `store_io::pin_is_live`).
 pub(super) fn unpin_everywhere(staging_dir: &Path, project_id: &str) -> Result<(), EditorError> {
-    let Ok(entries) = std::fs::read_dir(staging_dir) else {
-        // No staging directory: nothing can be pinned to anything.
-        return Ok(());
+    let entries = match std::fs::read_dir(staging_dir) {
+        Ok(entries) => entries,
+        Err(e) => return staging_unreadable(&e).map_or(Ok(()), Err),
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        // An entry that vanished mid-scan holds no pin; any other failure
+        // hides what it might have held.
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => match staging_unreadable(&e) {
+                Some(refusal) => return Err(refusal),
+                None => continue,
+            },
+        };
         let name = entry.file_name().to_string_lossy().into_owned();
         let Some(base) = name.strip_suffix(".json") else {
             continue;
@@ -58,8 +112,14 @@ pub(super) fn unpin_everywhere(staging_dir: &Path, project_id: &str) -> Result<(
         if !crate::editor_commands::is_safe_base(base) {
             continue;
         }
-        let pinned = staging::read_sidecar(&entry.path()).and_then(|s| pinned_project(&s));
-        if pinned.as_deref() != Some(project_id) {
+        let Some(sidecar) = staging::read_sidecar(&entry.path()) else {
+            log::warn!(
+                "project discard: the sidecar of {} could not be read; any pin it holds stays",
+                redact_name(base)
+            );
+            continue;
+        };
+        if pinned_project(&sidecar).as_deref() != Some(project_id) {
             continue;
         }
         unpin_staged(staging_dir, base, project_id).map_err(|e| {
@@ -104,6 +164,7 @@ pub(crate) fn discard_project_in(
             "That project is no longer on disk.",
         ));
     }
+    prove_owned_for_discard(root, project_id)?;
     unpin_everywhere(staging_dir, project_id)?;
     remove_project(root, project_id)?;
     log::info!("editor_discard_project: discarded the project {project_id}");

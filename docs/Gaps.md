@@ -6800,7 +6800,7 @@ the old value is the user's file and is left alone (a vault write never
 rewrites an existing note), so the fix note should say that old notes keep
 `vault-buddy`. Not done in Task 60 because that task changes no behaviour.
 
-### GAP-214 · Low (items 5–6 CLOSED 2026-09-25, hardening Task 3; item 7 CLOSED 2026-09-25, hardening Task 2) · What the final review's damaged-project fixes still cannot reach
+### GAP-214 · Low (items 5–6 CLOSED 2026-09-25, hardening Task 3; item 7 CLOSED 2026-09-25, hardening Task 2; item 8 CLOSED 2026-09-25, hardening Task 4) · What the final review's damaged-project fixes still cannot reach
 `src-tauri/src/editor/project_discard.rs`, `session_commands.rs`
 (`open_staged_in`), `store_io.rs` (`remove_project`, `list_projects`),
 `recovery.rs` (`run_startup_repin`), `discard.rs` (final whole-branch review
@@ -6883,11 +6883,41 @@ editor's "could not be opened" line for an `invalidProject` project) and
    an open in progress lands is seen by that scan. Pinned by
    `session_close::tests::a_session_discard_unpins_by_sidecar_when_sources_json_is_gone`
    and `…::a_session_discard_waits_for_an_open_in_progress`.
-8. **The sessionless discard unpins before ownership is proven** (N4,
+8. ~~**The sessionless discard unpins before ownership is proven** (N4,
    `project_discard.rs`): a discard that `remove_project` then refuses has
    still released the captures' pins, and its refusal text carries a
    redaction handle and a raw parse error. Fix: prove ownership first;
-   map the refusal to fixed copy.
+   map the refusal to fixed copy.~~ **CLOSED 2026-09-25 (hardening Task 4).**
+   `store_io::prove_ownership` is the one ownership check (`remove_project`
+   calls it; its read bound is the single constant
+   `OWNERSHIP_PROOF_MAX_BYTES`), and BOTH discards — the sessionless one and
+   a session's `discardProject` — run it before any pin is released
+   (`project_discard::prove_owned_for_discard`); a document that is not JSON
+   or names another project is refused `invalidProject` with the fixed "This
+   project could not be discarded because its files do not belong to it.",
+   every pin untouched, the proof's own text only in the log. The pin scan
+   (`unpin_everywhere`) no longer fails open either: only a staging folder
+   that does not EXIST pins nothing — one that cannot be listed refuses the
+   discard ("The captures linked to this project could not be checked, so
+   the project was kept. Try again in a moment."), and a sidecar that cannot
+   be read is skipped with a redacted log line. Review finding D-2 closed
+   with it: a pin naming a project whose folder or `project.json` is gone
+   (`store_io::pin_is_live`) no longer refuses the capture's Discard or keeps
+   it out of Clear — it is cleared under `EditorState::open` and the capture
+   goes (the editor's open already re-adopted such a capture), and the
+   staged list reports it as no pin, so the row offers Discard. Pinned by
+   `project_discard::tests::a_folder_owned_by_another_id_is_refused_before_any_pin_is_released`,
+   `…::a_staging_folder_that_cannot_be_listed_refuses_the_discard`,
+   `session_close::tests::a_session_discard_proves_ownership_before_it_unpins`,
+   `staged_commands::tests::a_capture_pinned_to_a_missing_project_is_discarded`,
+   `…::the_staged_list_reports_a_pin_to_a_missing_project_as_no_pin` and
+   `staging_commands::tests::clear_removes_a_capture_pinned_to_a_missing_project`.
+   **Residual:** an open that took `EditorState::open` BEFORE a session's
+   discard can still hand the webview a session that discard then drops
+   (the discard waits for the open, then removes the project): the webview's
+   next call gets `sessionGone`. No pin is left dangling — the discard's
+   sidecar scan runs after the open's pin landed — and the editor reads the
+   refusal as a closed session.
 9. **A project written by a NEWER build reads as damaged after a
    downgrade**: `invalidProject`, so a capture's Edit re-migrates it into a
    fresh project and the newer one is left an orphan (item 2's shape).

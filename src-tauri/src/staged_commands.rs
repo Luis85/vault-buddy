@@ -24,7 +24,9 @@ use vault_buddy_core::timeline::Timeline;
 use vault_buddy_core::uri;
 use vault_buddy_screen::{staging, staging_files};
 
-use crate::editor::project_store::pinned_project;
+use crate::editor::project_store::{pinned_project, unpin_staged};
+use crate::editor::redact::redact_name;
+use crate::editor::store_io::pin_is_live;
 use crate::editor::EditorState;
 
 /// `screen:discarded`, and SAY SO when the send fails.
@@ -171,12 +173,16 @@ pub(crate) fn capture_file_param(path: &Path, vault_root: &Path) -> Option<Strin
     }
 }
 
-pub(crate) fn staging_dir_for(app: &AppHandle) -> Result<PathBuf, String> {
-    let local = app
-        .path()
+/// The app's local data root — the parent of both staging and the tutorial
+/// project store, which a pin's liveness (`store_io::pin_is_live`) reads.
+pub(crate) fn local_root_for(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
         .app_local_data_dir()
-        .map_err(|e| format!("Could not resolve the staging directory: {e}"))?;
-    Ok(staging::staging_dir(&local))
+        .map_err(|e| format!("Could not resolve the staging directory: {e}"))
+}
+
+pub(crate) fn staging_dir_for(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(staging::staging_dir(&local_root_for(app)?))
 }
 
 /// Forget a staged capture, on disk: every file
@@ -304,7 +310,8 @@ pub async fn discard_staged_capture(app: AppHandle, base: String) -> Result<(), 
         log::warn!("discard_staged_capture: refused a base outside staging: {base:?}");
         return Err("That capture name is not one of ours.".to_string());
     }
-    let dir = staging_dir_for(&app)?;
+    let root = local_root_for(&app)?;
+    let dir = staging::staging_dir(&root);
     let target = base.clone();
     let editor = app.clone();
     // The pin check reads the sidecar, so it rides the same spawn_blocking
@@ -312,7 +319,7 @@ pub async fn discard_staged_capture(app: AppHandle, base: String) -> Result<(), 
     // async runtime thread, and this is one more small file read joining
     // the unlinks that already needed the blocking pool.
     tauri::async_runtime::spawn_blocking(move || {
-        discard_unpinned(&editor.state::<EditorState>().open, &dir, &target)
+        discard_unpinned(&editor.state::<EditorState>().open, &root, &dir, &target)
     })
     .await
     .map_err(|e| format!("That capture could not be discarded: {e}"))??;
@@ -330,12 +337,64 @@ pub async fn discard_staged_capture(app: AppHandle, base: String) -> Result<(), 
 /// "unpinned" and deleted the only source of the project that open then
 /// registered. The pin is read INSIDE the lock, so it is the one the open
 /// left. `open` is the outermost editor lock; nothing else is held here.
-pub(crate) fn discard_unpinned(open: &Mutex<()>, dir: &Path, base: &str) -> Result<(), String> {
+pub(crate) fn discard_unpinned(
+    open: &Mutex<()>,
+    root: &Path,
+    dir: &Path,
+    base: &str,
+) -> Result<(), String> {
     let _open = vault_buddy_core::sync_util::lock_ignoring_poison(open);
-    if let Some(message) = discard_conflict(pinned_project_of(dir, base).as_deref()) {
+    if let Some(message) = discard_conflict(live_pin_of(root, dir, base)?.as_deref()) {
         return Err(message);
     }
     discard_staged_files(dir, base)
+}
+
+/// The pin that still refuses a discard or a Clear: `pinned_project_of`,
+/// except that a pin naming a project that no longer exists
+/// (`store_io::pin_is_live`) is CLEARED here and answers `None` (review
+/// finding D-2) — the editor's own open already treats such a pin as
+/// nothing and re-adopts the capture, and honouring it stranded the capture
+/// behind a refusal nobody could satisfy. The caller holds
+/// `EditorState::open`, like every pin writer, so an open cannot land a
+/// project (and its pin) between the liveness read and the unpin.
+pub(crate) fn live_pin_of(root: &Path, dir: &Path, base: &str) -> Result<Option<String>, String> {
+    let Some(pin) = pinned_project_of(dir, base) else {
+        return Ok(None);
+    };
+    if pin_is_live(root, &pin) {
+        return Ok(Some(pin));
+    }
+    unpin_staged(dir, base, &pin).map_err(|e| {
+        log::warn!(
+            "screen discard: could not clear {}'s pin to a missing project: {e}",
+            redact_name(base)
+        );
+        "That capture could not be discarded. See the log for details.".to_string()
+    })?;
+    log::info!(
+        "screen discard: cleared {}'s pin to the missing project {pin}",
+        redact_name(base)
+    );
+    Ok(None)
+}
+
+/// The resume-or-discard list with every pin to a missing project reported
+/// as no pin (D-2): the list hides Discard for a pinned row, so without this
+/// a capture `discard_unpinned` would now discard could not be asked to. A
+/// VIEW: it clears nothing on disk (the discard does, under `open`).
+pub(crate) fn live_summaries(root: &Path, dir: &Path) -> Vec<StagedCaptureSummaryDto> {
+    let mut rows = staged_summaries(dir);
+    for row in &mut rows {
+        if row
+            .project_id
+            .as_deref()
+            .is_some_and(|id| !pin_is_live(root, id))
+        {
+            row.project_id = None;
+        }
+    }
+    rows
 }
 
 /// The tutorial-project id pinning this staged capture, or `None` — both
@@ -351,14 +410,15 @@ pub(crate) fn pinned_project_of(dir: &Path, base: &str) -> Option<String> {
 /// ASYNC: a directory read plus one sidecar parse per capture.
 #[tauri::command]
 pub async fn list_staged_captures(app: AppHandle) -> Vec<StagedCaptureSummaryDto> {
-    let dir = match staging_dir_for(&app) {
-        Ok(dir) => dir,
+    let root = match local_root_for(&app) {
+        Ok(root) => root,
         Err(e) => {
             log::warn!("list_staged_captures: {e}");
             return Vec::new();
         }
     };
-    match tauri::async_runtime::spawn_blocking(move || staged_summaries(&dir)).await {
+    let dir = staging::staging_dir(&root);
+    match tauri::async_runtime::spawn_blocking(move || live_summaries(&root, &dir)).await {
         Ok(rows) => rows,
         Err(e) => {
             log::warn!("list_staged_captures: the staging scan failed: {e}");
@@ -394,4 +454,4 @@ pub fn open_screen_capture(id: String, path: String) -> Result<(), String> {
 
 #[cfg(test)]
 #[path = "staged_commands_tests.rs"]
-mod tests;
+pub(crate) mod tests;

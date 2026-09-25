@@ -74,11 +74,18 @@ use vault_buddy_core::editor::EditorSession;
 /// project. Both open paths refuse a project whose session is being
 /// discarded (`discard::refuse_if_project_closing`).
 ///
-/// **Lock order: `open` → `jobs` → `closing` → the per-session save lock →
-/// `by_project` → `sessions`.** `open` is the OUTERMOST lock — never taken
-/// while holding any other — and, unlike the maps, it IS held across disk
-/// I/O by design (the sidecar read, the store scan, the create, the pin and
-/// a discard's quiesce and removal are exactly what it serializes). No
+/// **Lock order: `open` → the per-session save lock → `by_project` →
+/// `sessions`.** `jobs` and `closing` are LEAVES, not links in that chain:
+/// either may be taken anywhere after `open` — `drop_session` takes `jobs`
+/// under a save lock, `discard::mark_closing` takes it before one — and
+/// between the two of them the order is `jobs`, then `closing` (below).
+/// Neither is ever held while `open`, a save lock or a map is taken. `open`
+/// is the OUTERMOST lock — never taken while holding any other — and,
+/// unlike the maps, it IS held across disk I/O by design (the sidecar read,
+/// the store scan, the create, the pin and a discard's quiesce and removal
+/// are exactly what it serializes). So an open can wait behind a discard
+/// that holds `open` for as long as that discard's quiesce takes — up to
+/// four bounded waits of 5 s each (`discard::quiesce`), about 20 s. No
 /// holder of `open` other than a discard takes a save lock, and nothing a
 /// discard's quiesce waits for takes `open`. Execute, snapshot, save and a
 /// `keep`/`discardRecovery` close never take it. The maps are never held

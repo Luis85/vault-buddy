@@ -119,11 +119,12 @@ pub(crate) fn close_in(
         _ => None,
     };
     // Final review I1/C2: a discard first marks the session closing (every
-    // start path refuses it from here on), then stops or waits for what is
-    // still writing into the project — derived media, renders, publishes,
-    // an import, a reconnect, a take's write or finish — BEFORE the save
-    // lock is taken (their final writes need it), and refuses rather than
-    // remove the directory under any of them (`discard.rs`).
+    // start path refuses it from here on), then — BEFORE the save lock is
+    // taken (their final writes need it) — waits, cancelling nothing, for a
+    // take's write or finish, a reconnect and an import, and only once all
+    // three have ended cancels and waits for derived media, renders and
+    // publishes (GAP-214 item 5). It refuses rather than remove the
+    // directory under any of them (`discard::quiesce`).
     let _closing = match disposition {
         CloseDisposition::DiscardProject => {
             let mark = super::discard::mark_closing(state, session_id)?;
@@ -170,6 +171,9 @@ pub(crate) fn close_locked(
             // staging sidecars — never through `sources.json`, which may be
             // exactly what is damaged (and a hand-edited pin may name this
             // project from a capture `sources.json` does not list).
+            // GAP-214 item 8: ownership is proven before any pin is
+            // released, so a refused removal leaves every capture pinned.
+            super::project_discard::prove_owned_for_discard(root, project_id)?;
             super::project_discard::unpin_everywhere(staging_dir, project_id)?;
             remove_project(root, project_id)?;
         }
