@@ -22,7 +22,8 @@ use super::*;
 use crate::editor::media_jobs::tests::CollectingSink;
 use crate::editor::media_jobs::{cancel_job_in, jobs_in, JobPhase, JobProgressDto};
 use crate::editor::project_store::{minimal_project, SourceLocator, SourceRecord};
-use crate::editor::session_commands::{close_in, execute_in, CloseDisposition};
+use crate::editor::session_close::close_in;
+use crate::editor::session_commands::{execute_in, CloseDisposition};
 use crate::editor::store_io::create_project;
 
 pub(super) const SESSION: &str = "ses-proj1";

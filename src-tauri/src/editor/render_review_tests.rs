@@ -20,7 +20,8 @@ use crate::editor::media_commands::{media_path_in, parse_media_ref, MediaRef};
 use crate::editor::media_jobs::tests::CollectingSink;
 use crate::editor::media_jobs::{JobPhase, JobProgressDto};
 use crate::editor::render_review::review_file_name;
-use crate::editor::session_commands::{close_in, CloseDisposition};
+use crate::editor::session_close::close_in;
+use crate::editor::session_commands::CloseDisposition;
 
 fn review_request(state: &EditorState) -> RenderRequest {
     serde_json::from_value(json!({

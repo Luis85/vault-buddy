@@ -11,7 +11,8 @@ use super::tests::{
 };
 use super::*;
 use crate::editor::media_jobs::tests::CollectingSink;
-use crate::editor::session_commands::{close_in, CloseDisposition};
+use crate::editor::session_close::close_in;
+use crate::editor::session_commands::CloseDisposition;
 use crate::editor::store_io::load_project;
 
 /// Render one product through the fake; its id.

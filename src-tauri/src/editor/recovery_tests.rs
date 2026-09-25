@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 
 use super::*;
 use crate::editor::save_commands::{open_project_session, save_project_in, save_project_with};
+use crate::editor::session_close::{close_in, close_locked};
 use crate::editor::session_commands::{
-    close_in, close_locked, execute_in, open_staged_session, snapshot_in, CloseDisposition,
+    execute_in, open_staged_session, snapshot_in, CloseDisposition,
 };
 use crate::editor::store_io::{create_project, ProjectWriter};
 use vault_buddy_core::capture_note::write_atomic_replacing;

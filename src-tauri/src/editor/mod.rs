@@ -43,6 +43,7 @@ pub mod render_commands;
 pub mod render_jobs;
 pub mod render_review;
 pub mod save_commands;
+pub mod session_close;
 pub mod session_commands;
 pub mod store_io;
 pub mod subtitle_commands;
@@ -78,7 +79,7 @@ use vault_buddy_core::editor::EditorSession;
 ///   hold — is what `save_commands::session_save_lock`'s callers actually
 ///   care about: `save_project_with` holds it across its whole
 ///   read-the-revision → commit → `mark_saved` sequence, and
-///   `session_commands::close_in`'s `discardProject` holds the SAME one
+///   `session_close::close_in`'s `discardProject` holds the SAME one
 ///   across its unpin-then-remove sequence (fix round 2), so a save and a
 ///   discard on the SAME session can never interleave either. This lock is
 ///   NEVER taken while holding `by_project` or `sessions` — it sits outside
@@ -89,7 +90,7 @@ use vault_buddy_core::editor::EditorSession;
 /// - **The map's OWN outer `Mutex` — `Mutex<HashMap<String,
 ///   Arc<Mutex<()>>>>` itself** — is a plain LEAF lock: `session_save_lock`
 ///   takes it only to look up or insert one entry and clone the `Arc` out,
-///   and `session_commands::drop_session` takes it (after releasing
+///   and `session_close::drop_session` takes it (after releasing
 ///   `by_project` and `sessions`, final review M1) only to remove one
 ///   entry, so the map only grows with sessions currently open. Neither
 ///   ever does I/O or waits on another lock while holding it, so it MAY be

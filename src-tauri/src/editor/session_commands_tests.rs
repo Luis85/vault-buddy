@@ -6,6 +6,8 @@ use super::*;
 use vault_buddy_core::editor::commands::payloads::{DetachAudioPayload, RenamePayload};
 use vault_buddy_screen::staging::StagedSidecar;
 
+use crate::editor::project_store::unpin_staged;
+use crate::editor::session_close::close_in;
 use crate::editor::store_io::source_base_of;
 
 const BASE: &str = "2026-09-20 1432 Demo";

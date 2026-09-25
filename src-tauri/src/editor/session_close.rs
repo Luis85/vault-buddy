@@ -1,0 +1,165 @@
+//! Closing an editor session (`editor_close_session`'s logic, split out of
+//! `session_commands.rs` at its line cap): `close_in` and the part of it that
+//! runs under the session's save lock, `close_locked`, plus the two helpers
+//! that take a session out of `EditorState`.
+//!
+//! `editor_close_session` itself stays in `session_commands.rs` beside the
+//! other session commands and calls `close_in`; nothing here is a command.
+
+use std::path::Path;
+
+use vault_buddy_core::editor::{EditorError, EditorErrorCode};
+use vault_buddy_core::sync_util::lock_ignoring_poison;
+
+use super::prefs_commands::project_id_for;
+use super::project_store::{unpin_staged, SourceLocator};
+use super::recovery;
+use super::session_commands::CloseDisposition;
+use super::store_io::{load_sources, remove_project};
+use super::EditorState;
+
+fn internal(message: impl Into<String>) -> EditorError {
+    EditorError::new(EditorErrorCode::Internal, message)
+}
+
+/// Take the session out of the two maps — and do nothing else under them
+/// (final review M1: the maps are never held across disk I/O, and the
+/// cleanups `drop_session` runs next unlink files).
+fn unregister_session(state: &EditorState, session_id: &str) {
+    let mut by_project = lock_ignoring_poison(&state.by_project);
+    let mut sessions = lock_ignoring_poison(&state.sessions);
+    if let Some(session) = sessions.remove(session_id) {
+        let project_id = &session.project().id;
+        if by_project.get(project_id).map(String::as_str) == Some(session_id) {
+            by_project.remove(project_id);
+        }
+    }
+}
+
+fn drop_session(state: &EditorState, session_id: &str) {
+    unregister_session(state, session_id);
+    // Prune the per-session save lock (`EditorState::save_locks`'s own
+    // doc) along with the session it belongs to, so the map only grows
+    // with sessions currently open rather than every session ever opened
+    // in this process's life.
+    lock_ignoring_poison(&state.save_locks).remove(session_id);
+    // Whatever journal write was still pending has either been flushed
+    // (`keep`) or must never happen (`discard*`).
+    state.journal.forget(session_id);
+    // A running import (Task 25) of a closing session stops before its next
+    // file; its results would have no session to land in. Its peaks decodes
+    // are jobs too; its thumbnail renders are not (Task 28).
+    // Its finished records go too (GAP-174): nothing can ask for them once
+    // the session is gone; a render still running keeps its record until
+    // its terminal lands (Task 46). Final review M3: this runs for EVERY
+    // disposition, so closing a session ends its renders and publishes — a
+    // render can only land in a live session (`render_jobs::publish`). The
+    // window's X never closes a session (the close guard only hides the
+    // window), which is why nothing on a window close cancels a render.
+    let mut jobs = lock_ignoring_poison(&state.jobs);
+    jobs.cancel_session(session_id);
+    jobs.forget_terminal(session_id);
+    drop(jobs);
+    super::media_derive::cancel_session_thumbnails(state, session_id);
+    // Its unfinished webcam takes can never be finished now (Task 49): their
+    // `.part` files go; a finished take's `.webm` stays with its asset.
+    state.takes.forget_session(session_id);
+}
+
+/// Close a session. `discardProject` UNPINS the staged capture first and
+/// only then removes the project directory: a failure between the two
+/// leaves an unpinned orphan the next open adopts back, whereas the
+/// reverse order would leave a pin naming a deleted project, and a pinned
+/// capture refuses Discard. The recording itself is never touched (R6).
+/// On any failure the session stays open so the user can retry.
+///
+/// **Every disposition holds the per-session SAVE lock** (Task 12 fix round
+/// 2 for `discardProject`; Task 37 for `keep` and `discardRecovery`) — the
+/// lock `editor_save_project` holds for its whole read-through-write
+/// sequence and every recovery-journal write runs under. Without it a
+/// discard could remove the directory under an in-flight save, a `keep`
+/// could flush a journal beside a save that is deleting it, and a
+/// `discardRecovery` could delete a journal a racing write then recreates.
+/// A concurrent close waits behind an in-flight save, never the reverse.
+///
+/// `drop_session` runs INSIDE that lock (`close_locked`), so a save queued
+/// behind this close finds the session gone (`sessionGone`) rather than
+/// finding it still registered and failing against a removed directory
+/// with a generic write error (Task 12 review, carried to Task 37).
+pub(crate) fn close_in(
+    state: &EditorState,
+    root: &Path,
+    staging_dir: &Path,
+    session_id: &str,
+    disposition: CloseDisposition,
+) -> Result<(), EditorError> {
+    let project_id = project_id_for(state, session_id)?;
+    // Final review I1/C2: a discard first marks the session closing (every
+    // start path refuses it from here on), then stops or waits for what is
+    // still writing into the project — derived media, renders, publishes,
+    // an import, a reconnect, a take's write or finish — BEFORE the save
+    // lock is taken (their final writes need it), and refuses rather than
+    // remove the directory under any of them (`discard.rs`).
+    let _closing = match disposition {
+        CloseDisposition::DiscardProject => {
+            let mark = super::discard::mark_closing(state, session_id)?;
+            super::discard::quiesce(state, session_id)?;
+            Some(mark)
+        }
+        _ => None,
+    };
+    let session_lock = super::save_commands::session_save_lock(state, session_id)?;
+    let _save_guard = lock_ignoring_poison(&session_lock);
+    close_locked(
+        state,
+        root,
+        staging_dir,
+        session_id,
+        &project_id,
+        disposition,
+    )
+}
+
+/// The part of `close_in` that runs under the session's save lock — ending
+/// with `drop_session`, so nothing queued on that lock ever sees a session
+/// whose project this close has already changed underneath it.
+pub(crate) fn close_locked(
+    state: &EditorState,
+    root: &Path,
+    staging_dir: &Path,
+    session_id: &str,
+    project_id: &str,
+    disposition: CloseDisposition,
+) -> Result<(), EditorError> {
+    match disposition {
+        // Task 37: the pending journal write lands before the session goes.
+        CloseDisposition::Keep => recovery::flush_locked(state, session_id),
+        // Task 37: only `recovery.json` goes (owned-file check); the saved
+        // project, its sources and the pin are untouched.
+        CloseDisposition::DiscardRecovery => {
+            state.journal.forget(session_id);
+            recovery::remove_journal(root, project_id)
+                .map_err(|e| internal(format!("Could not discard the unsaved changes: {e}")))?;
+        }
+        CloseDisposition::DiscardProject => {
+            let sources = load_sources(root, project_id)?;
+            for record in sources.values() {
+                if let SourceLocator::Staging { base } = &record.locator {
+                    unpin_staged(staging_dir, base, project_id).map_err(|e| {
+                        internal(format!("Could not unlink the capture {base:?}: {e}"))
+                    })?;
+                }
+            }
+            remove_project(root, project_id)?;
+        }
+    }
+    // Task 47: a Review render is disposable -- the session's last one goes
+    // with the session (a discard already removed the whole directory).
+    // Under the save lock, so a review landing concurrently either lands
+    // before this sweep or finds its job cancelled by `drop_session`.
+    if disposition != CloseDisposition::DiscardProject {
+        super::render_review::sweep_reviews(root, project_id, None);
+    }
+    drop_session(state, session_id);
+    Ok(())
+}

@@ -14,9 +14,8 @@ use crate::editor::caption_commands::claim_caption_import;
 use crate::editor::media_jobs::{start_job_in, JobPhase, JobReporter, JobTerminal, NoSubscriber};
 use crate::editor::project_store::pinned_project;
 use crate::editor::relink_commands::claim_relink;
-use crate::editor::session_commands::{
-    close_in, open_staged_session, snapshot_in, CloseDisposition,
-};
+use crate::editor::session_close::close_in;
+use crate::editor::session_commands::{open_staged_session, snapshot_in, CloseDisposition};
 use crate::editor::webcam_commands::{append_in, begin_in, finish_in, ChunkHeaders, TakeIo};
 
 const BASE: &str = "2026-09-21 0915 Discard demo";
@@ -332,7 +331,7 @@ fn closing_a_session_with_keep_cancels_its_render() {
 #[test]
 fn drop_session_releases_the_maps_before_any_cleanup() {
     use crate::structural_scan::{fn_body, production_code};
-    let code = production_code(include_str!("session_commands.rs"));
+    let code = production_code(include_str!("session_close.rs"));
     let drop_body = fn_body(&code, "fn drop_session(");
     for map in ["state.by_project", "state.sessions"] {
         assert!(

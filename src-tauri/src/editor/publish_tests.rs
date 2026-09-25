@@ -606,7 +606,8 @@ fn quit_cancels_a_publish_before_finalizing_captures() {
 // merely told to stop by the session's close afterwards.
 #[test]
 fn discarding_a_project_while_publishing_stops_the_publish_first() {
-    use crate::editor::session_commands::{close_in, CloseDisposition};
+    use crate::editor::session_close::close_in;
+    use crate::editor::session_commands::CloseDisposition;
 
     let root = tempfile::tempdir().unwrap();
     let vault = tempfile::tempdir().unwrap();

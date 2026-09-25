@@ -6,8 +6,9 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::editor::prefs_commands::save_workspace_in;
+use crate::editor::session_close::close_in;
 use crate::editor::session_commands::{
-    close_in, execute_in, open_staged_session, snapshot_in, CloseDisposition,
+    execute_in, open_staged_session, snapshot_in, CloseDisposition,
 };
 use vault_buddy_core::editor::commands::payloads::{
     RenamePayload, SplitClipPayload, TrimClipPayload,

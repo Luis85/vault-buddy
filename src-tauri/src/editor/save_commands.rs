@@ -114,7 +114,7 @@ pub(crate) fn map_write_error(e: io::Error) -> EditorError {
 /// `session_id`. The map mutex is held only for this lookup/insert, never
 /// across the save itself; the returned `Arc` is what the caller then locks
 /// and holds for its whole read-revision-through-commit-through-mark_saved
-/// sequence. `close_in`'s `discardProject` (`session_commands.rs`) takes
+/// sequence. `close_in`'s `discardProject` (`session_close.rs`) takes
 /// the SAME lock for the same reason — it must not remove the project
 /// directory out from under an in-flight save (Task 12 fix round 2,
 /// finding 2).

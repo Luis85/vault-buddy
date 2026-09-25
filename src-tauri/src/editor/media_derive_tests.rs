@@ -586,7 +586,8 @@ fn ensure_cache_dir_never_recreates_a_removed_project() {
 // left behind — no project directory, no cache.
 #[test]
 fn discarding_a_project_mid_render_stops_the_render() {
-    use crate::editor::session_commands::{close_in, CloseDisposition};
+    use crate::editor::session_close::close_in;
+    use crate::editor::session_commands::CloseDisposition;
 
     let root = tempfile::tempdir().unwrap();
     let tools = tempfile::tempdir().unwrap();
