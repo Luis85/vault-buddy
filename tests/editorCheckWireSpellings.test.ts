@@ -24,7 +24,7 @@ const CHECKS_RS = path.resolve(
 
 function rustVariants(enumName: string): string[] {
   const source = readFileSync(CHECKS_RS, "utf8");
-  const body = new RegExp(`pub enum ${enumName} \{([^}]*)\}`).exec(source);
+  const body = new RegExp(`pub enum ${enumName} [{]([^}]*)[}]`).exec(source);
   if (!body) throw new Error(`enum ${enumName} not found in core::editor::checks`);
   return body[1]
     .split("\n")
