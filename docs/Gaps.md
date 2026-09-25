@@ -2487,8 +2487,10 @@ disk- or memory-only — no edit is lost and nothing wrong is shown:
 
 **Fix:** a project-store sweep on project open (Task 37's recovery is the
 natural home): delete owned `media\.*.part` files, and drop `media\` files
-plus `sources.json` records whose asset id the project graph does not hold —
-no-follow, owned names only (`<assetId>.<ext>` with a valid entity id). (The
+plus `sources.json` records whose asset id neither the graph nor any
+retained product snapshot uses (`package_plan::assets_needing_media`) — a
+snapshot-only asset is what Restore needs — no-follow, owned names only
+(`<assetId>.<ext>` with a valid entity id). (The
 registry half is done — item 3.)
 
 ### GAP-175 · ~~Medium~~ FIXED 2026-09-23 · The preview skips a migrated staged capture's own video, because migration marks its asset `builtin: screen`
@@ -3075,8 +3077,9 @@ that probes as video (or keep it raw, A09), remove a leftover
 `.remux.webm`, and report what it recovered in the next open of that project.
 
 ### GAP-198 · Low (path 1 CLOSED 2026-09-25, Task 59) · A capture's webcam file can outlive its capture as untracked staging litter
-`src-tauri/src/export_worker/mod.rs` (`remove_staged_capture`),
-`src-tauri/src/screen_recovery/mod.rs`, Task 51 (F-22). A staged capture now
+`src-tauri/src/screen_recovery/mod.rs` (paths 2–4),
+`src-tauri/src/export_worker/mod.rs` (`remove_staged_capture`, path 1,
+retired by Task 59), Task 51 (F-22). A staged capture now
 owns a fourth file, `<base>.webcam.mp4` (`staging_files::capture_file_names`),
 and discard, Clear and the size readout all include it. Two paths still do
 not: (1) the LEGACY export's post-save cleanup removes only the `.mp4` and
@@ -6179,8 +6182,9 @@ tests the member crates only; the shell's clippy and tests live in
   on the literal and never exercised the ordering or dedup it exists for. It
   now builds input and expectation with the platform separator.
   Mutation-proven there against a registry-after-process ordering.
-- **`export_worker::vault_dir::a_symlinked_capture_folder_is_refused_before_anything_is_created`
-  (bounded `981bf67`).** `symlink_dir` needs `SeCreateSymbolicLinkPrivilege`
+- **`editor::vault_dir::a_symlinked_capture_folder_is_refused_before_anything_is_created`
+  (`src-tauri/src/editor/vault_dir.rs`, moved from the retired `export_worker/`
+  by Task 59; bounded `981bf67`).** `symlink_dir` needs `SeCreateSymbolicLinkPrivilege`
   (Developer Mode or elevation); without it Windows returns OS error 1314. The
   test now prints a `SKIP` line on exactly that error (on stderr, so it shows
   under `--nocapture`, like the ffmpeg round-trip's skips) and panics on any
@@ -6261,7 +6265,8 @@ measuring CPU time, whenever that file is next touched.
 ### GAP-170 · High (unverified) · The app-wide ACL that now gates ALL the app's commands (131, measured at the final review) has never run inside a live app — if it resolves differently than the generated-artifact replica models, every IPC command from every window is refused, not just the editor ones
 Task 11 (tutorial editor, R8's app-manifest half) made `build.rs`'s
 `AppManifest::commands(ALL_COMMANDS)` list EVERY command in
-`generate_handler!`, not just the eight `editor_*` commands
+`generate_handler!`, not just the thirty-six `editor_*` commands (eight at
+Task 12; measured in `editor.json`)
 (`editor_open_staged`, `editor_get_snapshot`, `editor_execute`,
 `editor_close_session`, `editor_hide_window`, `editor_save_project`,
 `editor_list_projects`, `editor_open_project` — the last three added by
@@ -6271,20 +6276,21 @@ just the ones a narrower list would have scoped. That makes this gap's
 blast radius the whole app, not one feature: **this is not "the editor
 commands might stay reachable from other windows" (a missed defense layer,
 tolerable because Task 10's native `authz::require_editor_window` still
-holds for those eight) — it is "if
+holds for those thirty-six) — it is "if
 Tauri's live ACL resolution disagrees with what this task's tests model,
 every window loses EVERY command," including `list_vaults`, `toggle_panel`,
-`start_capture`, `add_task`, `search_vaults`, and the other 91 that have NO
+`start_capture`, `add_task`, `search_vaults`, and the other 95 that have NO
 second layer at all.** The editor commands alone have `authz::
 require_editor_window` as native defense-in-depth if the capability layer
-fails; the other 96 have nothing behind the ACL — a resolution mismatch for
+fails; the other 95 have nothing behind the ACL — a resolution mismatch for
 any of them is a fully bricked app, not a security gap. That is why this is
 High, not Low, until it is verified on real hardware: the SEVERITY question
 here is not "could an unauthorized window reach a command" but "does the
 app still start and work at all."
 
 **A near-miss worth recording, because it is exactly the failure mode this
-gap is now scoped around.** The first version of this task's `build.rs`
+gap is now scoped around** (at Task 11: 101 commands, 5 in the manifest;
+131 / 36 / 95 today). The first version of this task's `build.rs`
 passed `AppManifest::commands()` only the five `editor_*` names. That
 compiled, `npx tauri build --no-bundle` succeeded, and the original
 (narrower) `capability_guard.rs` was green — because `AppManifest::
@@ -6323,8 +6329,8 @@ git-ignored, correctly, since it is 1:1 derived from the checked-in source
 on every build) — and replicates tauri's own resolution over it: for the
 `panel`, `main`, `bubble`, `overlay` and `region-indicator` windows,
 `list_vaults` resolves as allowed and every `editor_*` command resolves as
-NOT allowed; for the `editor` window itself, `list_vaults` and all eight
-`editor_*` commands resolve as allowed. This closes the actual defect
+NOT allowed; for the `editor` window itself, `list_vaults` and every
+`editor_*` command (36) resolves as allowed. This closes the actual defect
 above (a hand-parsed source file agreeing with itself proves nothing about
 what `tauri-build` did with it) and is more than a shape check — it is the
 same DATA `tauri`'s `RuntimeAuthority` consumes to build its resolved ACL,
@@ -6614,12 +6620,14 @@ no arrow-key roving (deferred from Task 57's review).
 The shipped retired map is empty, so only the injected-map test exercises
 it today.
 
-### GAP-208 · Low · The Render dialog does not reattach to a running render after a webview reload
+### GAP-208 · Medium · The Render dialog does not reattach to a running render after a webview reload
 `src/components/editor/dialogs/RenderDialog.vue`, `src/composables/useRenderJob.ts`,
 `src/stores/editorJobs.ts`, `src/roots/EditorRoot.vue` (Task 47 carry; recorded
 by Task 58). A render's progress travels on the Channel the webview opened for
-it; a reload (Ctrl+R in a debug build, a WebView2 process recovery) drops that
-Channel and the dialog's `jobId`. Rust keeps rendering and `editor_get_jobs`
+it; a reload — F5 or Ctrl+R in ANY build: WebView2's browser accelerator keys
+are on by default (wry 0.55.1 `browser_accelerator_keys: true`, never
+switched off by tauri 2.11.5 or this app), so a release build reloads the
+editor too — drops that Channel and the dialog's `jobId`. Rust keeps rendering and `editor_get_jobs`
 still lists the job, but nothing reattaches: (1) after a reload
 `take_editor_request` is already drained, so `EditorRoot` opens NO session at
 all — the webview never learns which session the render belongs to, so there
