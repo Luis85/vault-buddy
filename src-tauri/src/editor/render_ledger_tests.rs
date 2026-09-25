@@ -279,3 +279,49 @@ fn a_ledger_with_a_duplicate_product_id_is_refused() {
     let e = products_in(&state, root.path(), SESSION).unwrap_err();
     assert_eq!(e.code, EditorErrorCode::InvalidProject);
 }
+
+// Final review I6: the product file is moved into `products\` BEFORE the
+// ledger is written (a ledger entry must always have its file). When that
+// write fails, the moved file is not a product — nothing lists it, nothing
+// can remove it — so it is taken back out, and the ledger is unchanged.
+#[test]
+fn a_failed_ledger_write_takes_the_unrecorded_product_back_out() {
+    let root = tempfile::tempdir().unwrap();
+    let state = EditorState::default();
+    let dir = opened(root.path(), &state);
+    let earlier = rendered(&state, root.path());
+    let ledger_before = std::fs::read(dir.join(PRODUCTS_FILE)).unwrap();
+    let (job, _runner) = begin(
+        &state,
+        root.path(),
+        FakeRunner::new(Behaviour::Writes(b"x".to_vec())),
+    )
+    .unwrap();
+    let part = root.path().join("rendered.mp4.part");
+    std::fs::write(&part, b"rendered bytes").unwrap();
+    let full_disk = |_: &Path, _: &str, _: &[Product]| {
+        Err(EditorError::new(
+            EditorErrorCode::DiskFull,
+            "Not enough disk space to record the product.",
+        ))
+    };
+
+    let e = record_product_with(&job, &part, 1_250, &full_disk).unwrap_err();
+
+    assert_eq!(e.code, EditorErrorCode::DiskFull);
+    let dest = dir
+        .join(PRODUCTS_DIR)
+        .join(product_file_name(&job.product_id));
+    assert!(!dest.exists(), "an unrecorded product file was left behind");
+    assert!(
+        dir.join(PRODUCTS_DIR)
+            .join(product_file_name(&earlier))
+            .is_file(),
+        "only the unrecorded file goes"
+    );
+    assert_eq!(
+        std::fs::read(dir.join(PRODUCTS_FILE)).unwrap(),
+        ledger_before,
+        "the ledger is unchanged"
+    );
+}

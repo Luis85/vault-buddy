@@ -4,11 +4,14 @@
  * (`MixerPopover.vue`), the Audio inspector (`AudioSection.vue`) and the
  * `detachAudio` action (`actions.ts`), so none of them grows a second copy.
  *
- * **Solo** is the rule Rust documents in `core::editor::commands::tracks`
- * (Task 23): when ANY track is soloed, only soloed tracks are audible, and
- * a soloed track's own mute still wins. `isTrackAudible` is that rule; the
+ * **Solo** is the rule Rust's render applies in
+ * `core::editor::render_plan_audio::track_is_audible` (Task 23's rule):
+ * when ANY track is soloed, only soloed tracks are audible, and a soloed
+ * track's own mute still wins. `isTrackAudible` is that rule; the
  * preview's `computeLayers` and the mixer's "silenced by solo" label both
- * call it rather than restating it.
+ * call it rather than restating it, and the two languages are held
+ * together by `tests/fixtures/editor-audibility-cases.json` (final review
+ * I4), which both suites read.
  *
  * **Detach** mirrors the refusals Rust's `commands::mix::detach_audio` can
  * decide from the graph alone (a video, not a still; not already

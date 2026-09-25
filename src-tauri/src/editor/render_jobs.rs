@@ -594,6 +594,19 @@ fn publish(
 /// Move the part into `products\` and record it -- in THAT order (module
 /// doc). The caller holds the save lock.
 fn record_product(job: &RenderJob, part: &Path, duration_ms: u64) -> Result<String, EditorError> {
+    record_product_with(job, part, duration_ms, &write_ledger)
+}
+
+/// The ledger writer taken as a seam (final review I6), so the arm that
+/// takes an unrecorded product back out is testable on any filesystem.
+type LedgerWriter = dyn Fn(&Path, &str, &[Product]) -> Result<(), EditorError>;
+
+pub(crate) fn record_product_with(
+    job: &RenderJob,
+    part: &Path,
+    duration_ms: u64,
+    write: &LedgerWriter,
+) -> Result<String, EditorError> {
     let mut ledger = read_ledger(&job.root, &job.project_id)?;
     if ledger.len() >= limits::MAX_PRODUCTS {
         return Err(too_many_products());
@@ -622,7 +635,7 @@ fn record_product(job: &RenderJob, part: &Path, duration_ms: u64) -> Result<Stri
         range,
         &now,
     ));
-    if let Err(e) = write_ledger(&job.root, &job.project_id, &ledger) {
+    if let Err(e) = write(&job.root, &job.project_id, &ledger) {
         // Never recorded, so never a product: take the file back out.
         if let Err(remove) = std::fs::remove_file(&dest) {
             log::warn!("editor render: could not remove an unrecorded product: {remove}");

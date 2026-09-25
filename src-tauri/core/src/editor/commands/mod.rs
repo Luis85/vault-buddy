@@ -271,6 +271,10 @@ pub fn apply_internal(
 }
 
 #[cfg(test)]
+#[path = "wire_tests.rs"]
+mod wire_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::editor::model::TrackKind;

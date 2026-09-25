@@ -87,3 +87,60 @@ pub(super) fn contribution(
         cut: placed.cut,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::{Map, Num, TrackKind};
+
+    // Final review I4: `src/editor/mixRules.ts`' `isTrackAudible` (the
+    // preview and the mixer's "silenced by solo" label) restates this rule
+    // in TypeScript. Both read this one table by the same relative path —
+    // `include_str!`, so moving it breaks this build — and a disagreement
+    // reddens a suite instead of making the preview play what the render
+    // drops (the `editor-time-cases.json` precedent).
+    const SHARED: &str = include_str!("../../../../tests/fixtures/editor-audibility-cases.json");
+
+    fn track(index: usize, flags: &serde_json::Value) -> Track {
+        Track {
+            id: format!("a{index}"),
+            kind: TrackKind::Audio,
+            name: format!("Audio {index}"),
+            visible: true,
+            locked: false,
+            muted: flags["muted"].as_bool().expect("muted"),
+            solo: flags["solo"].as_bool().expect("solo"),
+            volume: Num::from(1),
+            extra: Map::new(),
+        }
+    }
+
+    #[test]
+    fn the_shared_audibility_table_agrees_with_the_render() {
+        let table: serde_json::Value = serde_json::from_str(SHARED).expect("JSON");
+        let cases = table["cases"].as_array().expect("cases");
+        // The TypeScript half asserts the same count against the same file.
+        assert_eq!(cases.len(), 8, "the shared table lost or gained a case");
+        for case in cases {
+            let name = case["name"].as_str().expect("name");
+            let tracks: Vec<Track> = case["tracks"]
+                .as_array()
+                .expect("tracks")
+                .iter()
+                .enumerate()
+                .map(|(i, flags)| track(i, flags))
+                .collect();
+            let audible: Vec<bool> = tracks
+                .iter()
+                .map(|t| track_is_audible(t, &tracks))
+                .collect();
+            let expected: Vec<bool> = case["audible"]
+                .as_array()
+                .expect("audible")
+                .iter()
+                .map(|v| v.as_bool().expect("bool"))
+                .collect();
+            assert_eq!(audible, expected, "{name}");
+        }
+    }
+}
