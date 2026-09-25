@@ -123,6 +123,14 @@ const damagedProjectId = computed(() => {
   return r?.kind === "project" && openErrorCode.value === "invalidProject" ? r.value : null;
 });
 
+/** What the open just asked for said, kept for the failure line (and its
+ * code, for the damaged-project offer). */
+function recordOpenOutcome(): void {
+  const error = editorProject.lastError;
+  openError.value = error?.message ?? null;
+  openErrorCode.value = error?.code ?? null;
+}
+
 /** Drain the stash and open whatever it held. Runs on mount AND on every
  * `editor:open`. An empty drain means "nothing new", never "close what is
  * showing" — blanking a live edit on a spurious or double-fired event would
@@ -142,8 +150,7 @@ async function openRequested() {
   requested.value = request;
   if (request.kind === "staged") await editorProject.openStaged(request.value);
   else await editorProject.openProject(request.value, false);
-  openError.value = editorProject.lastError?.message ?? null;
-  openErrorCode.value = editorProject.lastError?.code ?? null;
+  recordOpenOutcome();
   // A failed open is logged here, not inside the store, because the
   // store's own `openWith` doc is explicit that a failure is a normal,
   // expected outcome for some callers (a picker probing a project that no
