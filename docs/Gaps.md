@@ -2448,7 +2448,7 @@ Required media fixtures), so parity is measured rather than asserted; the
 Review render (a real file, `cache\review-<jobId>.mp4`) remains the only
 thing that shows the exported result.
 
-### GAP-174 · Low · A crash mid-import leaves unreferenced media in the project (the job registry half FIXED 2026-09-24, Task 46)
+### GAP-174 · Low (item 2 CLOSED 2026-09-25, hardening Task 7) · A crash mid-import leaves unreferenced media in the project (the job registry half FIXED 2026-09-24, Task 46)
 `src-tauri/src/editor/media_import.rs` + `src-tauri/src/editor/media_jobs.rs`
 (tutorial-editor Task 25). Two crash windows and one retention gap, all
 disk- or memory-only — no edit is lost and nothing wrong is shown:
@@ -2462,7 +2462,7 @@ disk- or memory-only — no edit is lost and nothing wrong is shown:
    asset in the LIVE graph), so they are invisible — just wasted disk. The
    in-process failure of the same step (a refused `AddAssets`) rolls the
    batch back; only a crash escapes that.
-2. **Mid-copy.** A crash while a file is being copied leaves its
+2. ~~**Mid-copy.** A crash while a file is being copied leaves its
    dot-prefixed `media\.<assetId>.<ext>.part`. Nothing sweeps `media\`
    (the staging sweep, `screen_recovery`, covers only the staging
    directory), and every later import mints a fresh asset id, so the part
@@ -2470,7 +2470,17 @@ disk- or memory-only — no edit is lost and nothing wrong is shown:
    buddy's own quit doors — tray Quit, Alt+F4 on the buddy, the updater's
    install — end the process without closing any editor SESSION, so an
    import still copying at a quit leaves exactly this part and exactly
-   window 1's unreferenced copies, just as a kill would.
+   window 1's unreferenced copies, just as a kill would.~~ **CLOSED
+   2026-09-25 (hardening Task 7).** The startup store sweep
+   (`editor/store_sweep.rs`, on the `editor-recovery-sweep` thread under
+   `open`) removes every `media\.<valid assetId>.<ext>.part` that is a plain
+   file and an hour old; a fresh one, a link wearing the name and a `media`
+   folder that is itself a link are left alone
+   (`store_sweep::tests::a_stale_media_part_is_removed_and_a_fresh_one_or_a_stranger_kept`,
+   `…a_link_wearing_a_part_name_or_standing_in_for_media_is_kept`). Window 1
+   (the unreferenced COPIES and their `sources.json` records) is still open:
+   telling them from a copy a retained snapshot needs is the project-open
+   sweep the Fix below describes.
 3. ~~**`JobRegistry` is never pruned.**~~ **FIXED 2026-09-24 (Task 46)**,
    before render jobs could make it grow faster. A session now keeps at
    most `media_jobs::MAX_TERMINAL_RECORDS` (8) TERMINAL records — the most
@@ -2891,7 +2901,7 @@ find them. **Fix:** package each ledger product whose file exists as
 `products/<productId>.mp4` (`package::PackageProduct`, which the import
 already extracts and verifies), counted against `MAX_PACKAGE_MEDIA_BYTES`.
 
-### GAP-189 · Low · A crash mid-render leaves the render's `jobs\<jobId>\` scratch directory behind, and a crash mid-publish an unrecorded product file
+### GAP-189 · ~~Low~~ CLOSED 2026-09-25 (hardening Task 7) · A crash mid-render leaves the render's `jobs\<jobId>\` scratch directory behind, and a crash mid-publish an unrecorded product file
 `src-tauri/src/editor/render_jobs.rs`, Task 46. A render writes
 `jobs\<jobId>\out.mp4.part` (and its `cues.ass`/`captions.ass`) and removes
 the whole directory itself on success, cancel and failure — every exit a
@@ -2909,6 +2919,18 @@ record -- never listed or served (the ledger is the authority), never swept
 directories older than an hour, and `products\<valid id>.mp4` files the
 ledger does not name, owned names only, no-follow
 (`store_io::remove_dir_no_follow`), the `sweep_stale_imports` posture.
+
+> **2026-09-25 — CLOSED by hardening Task 7.** `store_sweep::sweep_project_leftovers`
+> (called by `sweep_at_startup` on the `editor-recovery-sweep` thread, under
+> `open`, after `sweep_stale_imports`; the whole pass is skipped should a
+> session already be open) removes a real `jobs\<valid jobId>\` directory an
+> hour old through `remove_dir_no_follow` — except one holding a
+> `publish.json`, which GAP-192's report needs and never deletes — and a
+> plain `products\<valid id>.mp4` an hour old that `products.json` does not
+> record, ONLY when the ledger reads cleanly: an unreadable ledger leaves
+> `products\` untouched. A linked job folder, a fresh one, a recorded
+> product and a product under an unreadable ledger are each pinned as kept
+> (`store_sweep_tests.rs`).
 
 ### GAP-190 · ~~Low~~ CLOSED 2026-09-25 (Task 59) · Alt+F4 re-opens its own close every 5 s while a cancelled export will not unwind
 `src-tauri/src/window_close.rs` (`handle_main_close`), found by Task 46
@@ -2931,7 +2953,7 @@ rather than re-triggering the close).
 > latch on expiry (`RENDERS_ABANDONED`, `PUBLISHES_ABANDONED`), so the
 > re-triggered close cannot loop.
 
-### GAP-191 · Low · A Review render survives a quit or a crash in the project's cache until that project's next review or close
+### GAP-191 · ~~Low~~ CLOSED 2026-09-25 (hardening Task 7) · A Review render survives a quit or a crash in the project's cache until that project's next review or close
 `src-tauri/src/editor/render_review.rs`, Task 47. A Review render (the
 preview toolbar's Review, pre-flight F18) is kept as the project's
 `cache\review-<jobId>.mp4` so `editor_media_url({reviewJobId})` can serve it
@@ -2947,6 +2969,15 @@ product and never counted against the 40-product cap (GAP-187) — wasted disk
 only. **Fix:** sweep `review-<valid id>.mp4` files from every project's
 `cache\` on the Task 37 startup sweep thread (`recovery::run_startup_repin`),
 owned names only, no-follow — the `sweep_stale_imports` posture.
+
+> **2026-09-25 — CLOSED by hardening Task 7.** A review is removed at the
+> next start: the store sweep (`store_sweep.rs`) removes every plain
+> `cache\review-<valid id>.mp4` of every project, at any age — a review
+> belongs to a session, and the sweep runs before any can exist — and
+> nothing else in `cache\` (a thumbnail, a waveform, a name around an
+> invalid id, a link wearing a review's name, a `cache` folder that is a
+> link). Pinned by
+> `store_sweep::tests::every_review_render_is_removed_and_nothing_else_in_the_cache`.
 
 ### GAP-192 · Low · Publish has no resume-from-journal: an interrupted publish is reported, never continued
 `src-tauri/src/editor/publish.rs`, `src-tauri/src/editor/recovery.rs`
@@ -3067,7 +3098,8 @@ finish, `takes\.<takeId>.remux.webm`); the take's state is in memory
 leaves the user's actual recording — a streamable WebM prefix that plays —
 in a hidden file that nothing sweeps, surfaces or offers back: the next
 session has no slot for it, `sources.json` never names it, and the startup
-sweeps (`screen_recovery`, `recovery::run_startup_repin`) never look in a
+sweeps (`screen_recovery`, `recovery::run_startup_repin`, and hardening
+Task 7's store sweep, which skips `takes\` deliberately) never look in a
 project's `takes\`. This is lost recorded MEDIA, not scratch — unlike
 GAP-189's render/publish leftovers — and the screen-capture side already
 solved the same problem (`screen_recovery` promotes an orphaned `.part` that

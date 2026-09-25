@@ -558,3 +558,57 @@ fn remove_dir_no_follow_refuses_a_link_at_the_top() {
         "the link is left too"
     );
 }
+
+/// Writes every store file but `project.json`, which fails as a full disk
+/// would.
+struct FailsOnProjectJson;
+
+impl ProjectWriter for FailsOnProjectJson {
+    fn write(&self, path: &Path, content: &str) -> io::Result<()> {
+        if path.file_name() == Some(PROJECT_FILE.as_ref()) {
+            return Err(io::Error::other("the disk is full"));
+        }
+        write_atomic_replacing(path, content)
+    }
+}
+
+// Review finding D-4: `create_project` wrote `sources.json` into the real
+// project folder and then `project.json`, so a failure (or a crash) between
+// the two left a project folder with no `project.json` -- a folder the
+// store's ownership proof can never prove, holding the id. It now builds in
+// `.<id>.creating` and renames into place last: a failure leaves nothing.
+#[test]
+fn a_failed_create_leaves_no_project_folder_and_no_build_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let err = create_project_with(
+        &FailsOnProjectJson,
+        root.path(),
+        &minimal_project("proj1"),
+        &BTreeMap::new(),
+    )
+    .expect_err("the project.json write fails");
+    assert_eq!(err.kind(), io::ErrorKind::Other);
+    let left: Vec<_> = std::fs::read_dir(store_dir(root.path()))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert!(left.is_empty(), "left behind: {left:?}");
+    // And the id is still free.
+    create_project(root.path(), &minimal_project("proj1"), &BTreeMap::new()).unwrap();
+}
+
+#[test]
+fn a_create_leaves_no_build_folder_behind() {
+    let root = tempfile::tempdir().unwrap();
+    create_project(root.path(), &minimal_project("proj1"), &BTreeMap::new()).unwrap();
+    let names: Vec<String> = std::fs::read_dir(store_dir(root.path()))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["proj1"]);
+    assert_eq!(creating_project_id(".proj1.creating"), Some("proj1"));
+    assert_eq!(creating_project_id(".bad!.creating"), None);
+    assert_eq!(creating_project_id("proj1.creating"), None);
+}

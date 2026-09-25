@@ -38,7 +38,7 @@ pub(crate) fn review_file_name(job_id: &str) -> String {
 }
 
 /// Is `name` a review file this module minted (`review-<valid id>.mp4`)?
-fn is_review_name(name: &str) -> bool {
+pub(crate) fn is_review_name(name: &str) -> bool {
     name.strip_prefix(PREFIX)
         .and_then(|rest| rest.strip_suffix(SUFFIX))
         .is_some_and(is_valid_id)

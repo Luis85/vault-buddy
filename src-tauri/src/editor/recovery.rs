@@ -2,7 +2,9 @@
 //! journal", R6; PERSISTENCE-AND-SECURITY.md "Recovery and garbage
 //! collection"): the `recovery.json` journal a dirty session leaves behind,
 //! the startup re-pin sweep that reconciles the project store against
-//! staging, and the sweep of abandoned package imports (Task 39).
+//! staging, and the sweep of abandoned package imports (Task 39). The
+//! store's other crash leftovers are `store_sweep`'s (hardening Task 7),
+//! run from the same thread.
 //!
 //! **The journal.** After every acknowledged edit (`editor_execute`, a
 //! finished import's `AddAssets`, a caption import) the session is
@@ -50,6 +52,7 @@ use super::redact::redact_path;
 use super::render_jobs::JOBS_DIR;
 use super::save_commands::session_save_lock;
 use super::store_io::{load_sources, read_bounded, remove_dir_no_follow, RECOVERY_FILE};
+use super::store_sweep::{sweep_at_startup, SweepReport};
 use super::EditorState;
 use crate::editor_commands::is_safe_base;
 
@@ -542,7 +545,8 @@ pub(crate) fn sweep_stale_imports(root: &Path, now: std::time::SystemTime) -> Ve
     removed
 }
 
-/// Run `sweep_stale_imports` (Task 39), then `run_startup_repin`, on the named `editor-recovery-sweep` thread
+/// Run `sweep_stale_imports` (Task 39), the store's crash-leftover sweep
+/// (`store_sweep`, hardening Task 7), then `run_startup_repin`, on the named `editor-recovery-sweep` thread
 /// (wired into `lib.rs`'s `setup`, right after `run_screen_recovery`). That
 /// is SPAWN order only: the screen sweep runs on its own thread with its own
 /// retry loop and is not awaited. It does not need to be: a capture it
@@ -566,12 +570,23 @@ pub fn spawn_startup_repin(app: &AppHandle) {
             for report in interrupted_publishes(&root) {
                 log::warn!("editor-recovery-sweep: {report}");
             }
-            let swept = sweep_stale_imports(&root, std::time::SystemTime::now());
+            let now = std::time::SystemTime::now();
+            let swept = sweep_stale_imports(&root, now);
             if !swept.is_empty() {
                 log::info!(
                     "editor-recovery-sweep: removed {} abandoned project import(s)",
                     swept.len()
                 );
+            }
+            match sweep_at_startup(&state, &root, now) {
+                Some(SweepReport { removed, kept }) if removed + kept > 0 => log::info!(
+                    "editor-recovery-sweep: removed {removed} crash leftover(s), kept {kept}"
+                ),
+                Some(_) => {}
+                None => log::info!(
+                    "editor-recovery-sweep: a project is already open; leftovers wait for the \
+                     next start"
+                ),
             }
             let report = run_startup_repin(&root, &staging::staging_dir(&root));
             if !report.repinned.is_empty() {

@@ -46,6 +46,7 @@ pub mod save_commands;
 pub mod session_close;
 pub mod session_commands;
 pub mod store_io;
+pub(crate) mod store_sweep;
 pub mod subtitle_commands;
 pub(crate) mod vault_dir;
 pub mod webcam_commands;

@@ -81,36 +81,111 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
     write_json_with(&RealWriter, path, value)
 }
 
+/// The suffix of a project's build directory, `.<projectId>.creating`
+/// (review finding D-4) — `package_import`'s `.importing`, for a mint.
+const CREATING_SUFFIX: &str = ".creating";
+
+/// The project id a store entry named `.<id>.creating` was building, if it
+/// is one — the startup sweep's ownership test (`store_sweep`). A leading
+/// dot is never a valid project id, so `list_projects`, the re-pin sweep
+/// and every other store walk skip such a directory already.
+pub(crate) fn creating_project_id(name: &str) -> Option<&str> {
+    name.strip_prefix('.')?
+        .strip_suffix(CREATING_SUFFIX)
+        .filter(|id| is_valid_id(id))
+}
+
+/// A project being built aside: removed (owned, no-follow) unless it was
+/// installed. A CRASH skips the drop and leaves it for the startup sweep.
+struct CreatingDir {
+    dir: PathBuf,
+    installed: bool,
+}
+
+impl CreatingDir {
+    fn create(root: &Path, id: &str) -> io::Result<Self> {
+        let dir = store_dir(root).join(format!(".{id}{CREATING_SUFFIX}"));
+        std::fs::create_dir(&dir)?;
+        Ok(Self {
+            dir,
+            installed: false,
+        })
+    }
+
+    /// The one rename that makes the project exist.
+    fn install(mut self, target: &Path) -> io::Result<()> {
+        std::fs::rename(&self.dir, target)?;
+        self.installed = true;
+        Ok(())
+    }
+}
+
+impl Drop for CreatingDir {
+    fn drop(&mut self) {
+        if self.installed {
+            return;
+        }
+        if let Err(e) = remove_dir_no_follow(&self.dir) {
+            log::warn!(
+                "editor project store: could not remove an unfinished project build ({:?})",
+                e.kind()
+            );
+        }
+    }
+}
+
 /// Create a brand-new project directory and its two founding files.
 ///
-/// **Exclusive create for the LEAF** (`std::fs::create_dir`, never
-/// `create_dir_all`): a duplicate project id must be refused loudly rather
-/// than silently adopted — two callers minting the same id would otherwise
-/// interleave their writes into one directory. The STORE's own root
-/// (`editor-projects`) is the opposite case — it is shared by every
-/// project, so ensuring it exists is `create_dir_all`, same as the
-/// audio/screen capture roots elsewhere in this app.
+/// **Built aside, installed last** (review finding D-4): both files are
+/// written into `editor-projects\.<id>.creating\` and that directory is
+/// renamed to the project's own name in ONE step, so the project folder
+/// never exists without its `project.json` — a failure removes the build
+/// directory, and a crash leaves it for the startup sweep
+/// (`store_sweep`), which removes it once it is an hour old. It used to be
+/// created in place, `sources.json` first, so a crash between the two
+/// writes left a project folder no ownership proof could ever prove.
 ///
-/// `project` is the bare graph a caller (Task 10's `editor_open_staged`, a
-/// portable-package import) has just built or migrated; this function is
-/// what turns it into a full `WorkspaceEnvelope` at revision 1 — a fresh
-/// `Record` with no products yet, an empty `workspace` preference blob, and
-/// `saved_at`/`created_at`/`updated_at` all stamped now. `sources.json` is
-/// written FIRST: a project whose graph references a source id that
-/// `sources.json` does not carry yet is a worse failure mode than a
-/// `sources.json` with no `project.json` to go with it (the load side
-/// refuses the latter outright; nothing reads sources.json without a valid
-/// project.json beside it).
+/// **A duplicate id is refused loudly** (`AlreadyExists`) rather than
+/// silently adopted — two callers minting the same id would otherwise
+/// interleave their writes into one directory. The build directory itself
+/// is an exclusive `create_dir`, and every mint holds `EditorState::open`
+/// across the existence check and the rename (the import's `choose_id`
+/// discipline). The STORE's own root (`editor-projects`) is shared by
+/// every project, so ensuring it exists is `create_dir_all`.
+///
+/// `project` is the bare graph a caller (Task 10's `editor_open_staged`)
+/// has just built or migrated; this function is what turns it into a full
+/// `WorkspaceEnvelope` at revision 1 — a fresh `Record` with no products
+/// yet, an empty `workspace` preference blob, and
+/// `saved_at`/`created_at`/`updated_at` all stamped now.
 pub fn create_project(
     root: &Path,
     project: &Project,
     sources: &BTreeMap<String, SourceRecord>,
 ) -> io::Result<()> {
+    create_project_with(&RealWriter, root, project, sources)
+}
+
+/// `create_project` through an injectable writer (its failure test).
+pub(crate) fn create_project_with(
+    writer: &dyn ProjectWriter,
+    root: &Path,
+    project: &Project,
+    sources: &BTreeMap<String, SourceRecord>,
+) -> io::Result<()> {
     let dir = project_dir(root, &project.id).ok_or_else(|| invalid_id(&project.id))?;
-    if let Some(parent) = dir.parent() {
-        std::fs::create_dir_all(parent)?;
+    std::fs::create_dir_all(store_dir(root))?;
+    match std::fs::symlink_metadata(&dir) {
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("project {:?} already exists", project.id),
+            ))
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
     }
-    std::fs::create_dir(&dir)?;
+    let build = CreatingDir::create(root, &project.id)?;
     let now = chrono::Local::now().to_rfc3339();
     let envelope = WorkspaceEnvelope {
         schema: editor::WORKSPACE_SCHEMA.to_string(),
@@ -127,9 +202,9 @@ pub fn create_project(
         saved_at: now,
         extra: Map::new(),
     };
-    write_json(&dir.join(SOURCES_FILE), sources)?;
-    write_json(&dir.join(PROJECT_FILE), &envelope)?;
-    Ok(())
+    write_json_with(writer, &build.dir.join(SOURCES_FILE), sources)?;
+    write_json_with(writer, &build.dir.join(PROJECT_FILE), &envelope)?;
+    build.install(&dir)
 }
 
 /// Persist an already-built envelope — the ongoing-save path
