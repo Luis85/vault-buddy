@@ -50,7 +50,10 @@ pub(crate) fn claim_relink(state: &EditorState, session_id: &str) -> Result<(), 
             "A reconnect is already running for this project.",
         ));
     }
-    Ok(())
+    // Final review C2: claimed first, checked second, so a discard's
+    // quiesce (which marks first, looks second) never misses a reconnect.
+    super::discard::refuse_if_closing(state, session_id)
+        .inspect_err(|_| release_relink(state, session_id))
 }
 
 pub(crate) fn release_relink(state: &EditorState, session_id: &str) {

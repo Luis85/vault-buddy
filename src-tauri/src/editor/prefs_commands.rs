@@ -26,6 +26,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Manager, WebviewWindow};
 use vault_buddy_core::capture_note::write_atomic_replacing;
 use vault_buddy_core::editor::{sanitize, EditorError, EditorErrorCode};
+use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::{require_editor_window, require_session};
 use super::project_store::project_dir;
@@ -147,6 +148,13 @@ pub(crate) fn save_workspace_in(
         .ok_or_else(|| internal(format!("{project_id:?} is not a valid project id")))?;
     let json = serde_json::to_string_pretty(&sanitized)
         .map_err(|e| internal(format!("Could not encode the workspace: {e}")))?;
+    // Under the session's save lock, with the session still live once it
+    // is held (final review I1): a discard removes the folder under that
+    // lock, and a write racing it would leave a temp file in — or recreate
+    // `workspace.json` inside — a folder being removed.
+    let lock = super::save_commands::session_save_lock(state, session_id)?;
+    let _guard = lock_ignoring_poison(&lock);
+    drop(require_session(state, session_id)?);
     write_atomic_replacing(&dir.join(WORKSPACE_FILE), &json)
         .map_err(|e| internal(format!("Could not save the workspace: {e}")))
 }

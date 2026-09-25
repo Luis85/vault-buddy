@@ -35,19 +35,14 @@
 //! **A take does not claim `CaptureGuard`** (it holds no native device;
 //! GAP-193): a screen capture started DURING a take is not refused.
 //!
-//! **Locks.** `EditorState::takes` (`TakeRegistry`) is a LEAF lock, taken
-//! only to find, add or remove one slot. Each slot's own `entry` lock is
-//! held across that take's file I/O (so its chunks, its finish and its
-//! discard are serial) and, in finish, across the save lock and then
-//! `sessions` — so the order is: take entry, then save lock, then
-//! `sessions`. Nothing takes a take entry while holding the save lock:
-//! `forget_session` (run by `drop_session` under it) never locks an entry.
+//! **Locks** — the registry and its lock order live in `webcam_registry.rs`
+//! (take entry, then save lock, then `sessions`).
 //!
 //! Every `#[tauri::command]` here takes `window: WebviewWindow` and calls
 //! `authz::require_editor_window(&window)?` FIRST (`authz_guard.rs`).
 
 use std::cell::OnceCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -77,6 +72,7 @@ use super::project_store::{project_dir, SourceLocator, SourceMediaKind, SourceRe
 use super::redact::redact_path;
 use super::save_commands::session_save_lock;
 use super::store_io::{load_sources, write_sources};
+use super::webcam_registry::{remove_owned, TakeEntry, TakeSlot};
 use super::EditorState;
 use crate::capture_guard::{CaptureGuard, CaptureKind};
 use crate::ffmpeg::{resolve_working_ffmpeg, FfmpegTools};
@@ -120,101 +116,6 @@ pub struct TakeDto {
     pub width: u32,
     pub height: u32,
     pub has_audio: bool,
-}
-
-/// One take's mutable state, behind its slot's lock.
-pub(crate) struct TakeEntry {
-    pub(crate) state: TakeState,
-    /// Why the take stopped accepting chunks, once it has.
-    pub(crate) failed: Option<String>,
-}
-
-/// One live take: who owns it and where its files live (outside the lock,
-/// so `forget_session` can clean up without ever waiting on a take).
-pub(crate) struct TakeSlot {
-    session_id: String,
-    project_id: String,
-    dir: PathBuf,
-    take_id: String,
-    pub(crate) entry: Mutex<TakeEntry>,
-}
-
-impl TakeSlot {
-    fn part(&self) -> PathBuf {
-        self.dir.join(format!(".{}.webm.part", self.take_id))
-    }
-
-    fn remux_temp(&self) -> PathBuf {
-        self.dir.join(format!(".{}.remux.webm", self.take_id))
-    }
-
-    fn file_name(&self) -> String {
-        format!("{}.webm", self.take_id)
-    }
-
-    fn out(&self) -> PathBuf {
-        self.dir.join(self.file_name())
-    }
-}
-
-/// Every take this process began and has not yet discarded, by take id.
-#[derive(Default)]
-pub struct TakeRegistry(Mutex<HashMap<String, Arc<TakeSlot>>>);
-
-impl TakeRegistry {
-    /// The take, if `session_id` owns it — `invalidRequest` otherwise, so a
-    /// guessed or another session's take id learns nothing.
-    fn get(&self, session_id: &str, take_id: &str) -> Result<Arc<TakeSlot>, EditorError> {
-        lock_ignoring_poison(&self.0)
-            .get(take_id)
-            .filter(|slot| slot.session_id == session_id)
-            .cloned()
-            .ok_or_else(|| invalid("This webcam take is not part of this editing session."))
-    }
-
-    /// The ids of `session_id`'s takes that are still recording — what the
-    /// close guard would lose, and what Checks counts as unfinished (Task
-    /// 54, `checks_commands`). Never locks an entry for longer than one
-    /// read.
-    pub(crate) fn open_takes(&self, session_id: &str) -> Vec<String> {
-        let slots: Vec<Arc<TakeSlot>> = lock_ignoring_poison(&self.0)
-            .values()
-            .filter(|s| s.session_id == session_id)
-            .cloned()
-            .collect();
-        let mut ids: Vec<String> = slots
-            .iter()
-            .filter(|s| {
-                matches!(
-                    lock_ignoring_poison(&s.entry).state,
-                    TakeState::Recording { .. }
-                )
-            })
-            .map(|s| s.take_id.clone())
-            .collect();
-        ids.sort();
-        ids
-    }
-
-    /// A closing session's takes: forgotten, and every unfinished take's
-    /// `.part` removed (nothing could ever finish it now). Runs under the
-    /// session's save lock (`drop_session`), so it NEVER locks an entry —
-    /// a finish holds its entry while it takes the save lock. A finished
-    /// take has no `.part`, so its `.webm` is untouched.
-    pub(crate) fn forget_session(&self, session_id: &str) {
-        let gone: Vec<Arc<TakeSlot>> = {
-            let mut map = lock_ignoring_poison(&self.0);
-            let ids: Vec<String> = map
-                .iter()
-                .filter(|(_, s)| s.session_id == session_id)
-                .map(|(id, _)| id.clone())
-                .collect();
-            ids.iter().filter_map(|id| map.remove(id)).collect()
-        };
-        for slot in gone {
-            remove_owned(&slot.part());
-        }
-    }
 }
 
 // ---- begin ----------------------------------------------------------------
@@ -273,25 +174,39 @@ pub(crate) fn begin_in(
     // Refuse before anything is recorded; finish's raw-keep path remains
     // only for ffmpeg vanishing mid-take (GAP-196).
     io.ready()?;
-    let dir = takes_dir(root, &project_id)?;
     let take_id = new_entity_id(TAKE_ID_PREFIX);
-    let slot = TakeSlot {
+    let slot = Arc::new(TakeSlot {
         session_id: session_id.to_string(),
+        dir: project_dir(root, &project_id)
+            .ok_or_else(|| internal("The project id is not valid."))?
+            .join("takes"),
         project_id,
-        dir,
         take_id: take_id.clone(),
         entry: Mutex::new(TakeEntry {
             state: TakeState::new(),
             failed: None,
         }),
-    };
-    // Exclusive: a stranger's file wearing this name is never appended to.
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(slot.part())
-        .map_err(|e| write_error("start the take", &e))?;
-    lock_ignoring_poison(&state.takes.0).insert(take_id.clone(), Arc::new(slot));
+    });
+    // Registered (entry held) BEFORE anything is created, and the closing
+    // mark checked AFTER — so a discard's quiesce either waits for this
+    // begin or this begin refuses (final review C2, `discard.rs`).
+    let entry = lock_ignoring_poison(&slot.entry);
+    lock_ignoring_poison(&state.takes.0).insert(take_id.clone(), Arc::clone(&slot));
+    let created = super::discard::refuse_if_closing(state, session_id).and_then(|()| {
+        takes_dir(root, &slot.project_id)?;
+        // Exclusive: a stranger's file wearing this name is never appended to.
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(slot.part())
+            .map(drop)
+            .map_err(|e| write_error("start the take", &e))
+    });
+    drop(entry);
+    if let Err(e) = created {
+        lock_ignoring_poison(&state.takes.0).remove(&take_id);
+        return Err(e);
+    }
     Ok(TakeStarted { take_id })
 }
 
@@ -391,6 +306,9 @@ pub(crate) fn append_in(
         )));
     }
     let result = chunk.and_then(|bytes| {
+        // Under the entry lock (final review C2): a discard's quiesce
+        // waits for a write already here; a later one refuses.
+        super::discard::refuse_if_closing(state, &at.session_id)?;
         let mut next = entry.state.clone();
         next.accept_chunk(at.seq, bytes.len() as u64)?;
         let before = entry.state.bytes().unwrap_or(0);
@@ -528,6 +446,7 @@ pub(crate) fn finish_in(
     drop(require_session(state, session_id)?);
     let slot = state.takes.get(session_id, take_id)?;
     let mut entry = lock_ignoring_poison(&slot.entry);
+    super::discard::refuse_if_closing(state, session_id)?;
     let mut next = entry.state.clone();
     next.finish(last_seq)?;
     let landed = land(state, root, io, &slot)?;
@@ -802,25 +721,6 @@ fn require_owned_file(path: &Path) -> Result<(), EditorError> {
             "The take's file has been replaced; discard the take.",
         )),
         Err(e) => Err(write_error("reach the take's file", &e)),
-    }
-}
-
-/// Remove one of a take's own files: a plain file only (a symlink or a
-/// directory wearing the name is left alone), a missing one is fine, any
-/// other failure is logged.
-fn remove_owned(path: &Path) {
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.is_file() => {
-            if let Err(e) = std::fs::remove_file(path) {
-                log::warn!("webcam take: could not remove {}: {e}", redact_path(path));
-            }
-        }
-        Ok(_) => log::warn!(
-            "webcam take: {} is not a plain file; left in place",
-            redact_path(path)
-        ),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => log::warn!("webcam take: cannot inspect {}: {e}", redact_path(path)),
     }
 }
 

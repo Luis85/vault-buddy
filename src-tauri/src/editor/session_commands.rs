@@ -550,7 +550,10 @@ pub enum CloseDisposition {
     DiscardProject,
 }
 
-fn drop_session(state: &EditorState, session_id: &str) {
+/// Take the session out of the two maps — and do nothing else under them
+/// (final review M1: the maps are never held across disk I/O, and the
+/// cleanups `drop_session` runs next unlink files).
+fn unregister_session(state: &EditorState, session_id: &str) {
     let mut by_project = lock_ignoring_poison(&state.by_project);
     let mut sessions = lock_ignoring_poison(&state.sessions);
     if let Some(session) = sessions.remove(session_id) {
@@ -559,6 +562,10 @@ fn drop_session(state: &EditorState, session_id: &str) {
             by_project.remove(project_id);
         }
     }
+}
+
+fn drop_session(state: &EditorState, session_id: &str) {
+    unregister_session(state, session_id);
     // Prune the per-session save lock (`EditorState::save_locks`'s own
     // doc) along with the session it belongs to, so the map only grows
     // with sessions currently open rather than every session ever opened
@@ -572,7 +579,11 @@ fn drop_session(state: &EditorState, session_id: &str) {
     // are jobs too; its thumbnail renders are not (Task 28).
     // Its finished records go too (GAP-174): nothing can ask for them once
     // the session is gone; a render still running keeps its record until
-    // its terminal lands (Task 46).
+    // its terminal lands (Task 46). Final review M3: this runs for EVERY
+    // disposition, so closing a session ends its renders and publishes — a
+    // render can only land in a live session (`render_jobs::publish`). The
+    // window's X never closes a session (the close guard only hides the
+    // window), which is why nothing on a window close cancels a render.
     let mut jobs = lock_ignoring_poison(&state.jobs);
     jobs.cancel_session(session_id);
     jobs.forget_terminal(session_id);
@@ -611,12 +622,20 @@ pub(crate) fn close_in(
     disposition: CloseDisposition,
 ) -> Result<(), EditorError> {
     let project_id = project_id_for(state, session_id)?;
-    if disposition == CloseDisposition::DiscardProject {
-        // Task 28 fix round 1: derived media (an ffmpeg holding a file of
-        // this project open, a late cache write) must be stopped BEFORE
-        // the save lock is taken — their final write needs that lock.
-        super::media_derive::stop_session_derivations(state, session_id);
-    }
+    // Final review I1/C2: a discard first marks the session closing (every
+    // start path refuses it from here on), then stops or waits for what is
+    // still writing into the project — derived media, renders, publishes,
+    // an import, a reconnect, a take's write or finish — BEFORE the save
+    // lock is taken (their final writes need it), and refuses rather than
+    // remove the directory under any of them (`discard.rs`).
+    let _closing = match disposition {
+        CloseDisposition::DiscardProject => {
+            let mark = super::discard::mark_closing(state, session_id)?;
+            super::discard::quiesce(state, session_id)?;
+            Some(mark)
+        }
+        _ => None,
+    };
     let session_lock = super::save_commands::session_save_lock(state, session_id)?;
     let _save_guard = lock_ignoring_poison(&session_lock);
     close_locked(

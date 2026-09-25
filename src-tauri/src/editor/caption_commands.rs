@@ -131,14 +131,15 @@ pub(crate) fn claim_caption_import(
     state: &EditorState,
     session_id: &str,
 ) -> Result<(), EditorError> {
-    let mut running = lock_ignoring_poison(&state.caption_imports);
-    if !running.insert(session_id.to_string()) {
+    if !lock_ignoring_poison(&state.caption_imports).insert(session_id.to_string()) {
         return Err(err(
             EditorErrorCode::InvalidRequest,
             "A caption import is already running for this project.",
         ));
     }
-    Ok(())
+    // Final review C2: claimed first, checked second (`discard.rs`).
+    super::discard::refuse_if_closing(state, session_id)
+        .inspect_err(|_| release_caption_import(state, session_id))
 }
 
 pub(crate) fn release_caption_import(state: &EditorState, session_id: &str) {

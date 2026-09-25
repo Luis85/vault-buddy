@@ -375,6 +375,10 @@ pub(crate) fn start_job_in(
 ) -> Result<(String, Arc<AtomicBool>), EditorError> {
     drop(require_session(state, session_id)?);
     let mut jobs = lock_ignoring_poison(&state.jobs);
+    // Under the jobs lock, which `discard::mark_closing` also holds: a job
+    // registers before a discard's mark (and its quiesce sees it) or is
+    // refused here (final review C2).
+    super::discard::refuse_if_closing(state, session_id)?;
     if kind.exclusive() && jobs.is_running(session_id, kind) {
         return Err(EditorError::new(
             EditorErrorCode::InvalidRequest,

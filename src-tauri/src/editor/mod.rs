@@ -18,6 +18,7 @@ mod capability_guard;
 pub mod caption_commands;
 pub mod checks_commands;
 pub mod diagnostics;
+pub(crate) mod discard;
 pub mod guide_commands;
 pub mod media_commands;
 pub mod media_derive;
@@ -46,6 +47,7 @@ pub mod store_io;
 pub mod subtitle_commands;
 pub(crate) mod vault_dir;
 pub mod webcam_commands;
+pub mod webcam_registry;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -86,13 +88,13 @@ use vault_buddy_core::editor::EditorSession;
 /// - **The map's OWN outer `Mutex` — `Mutex<HashMap<String,
 ///   Arc<Mutex<()>>>>` itself** — is a plain LEAF lock: `session_save_lock`
 ///   takes it only to look up or insert one entry and clone the `Arc` out,
-///   and `session_commands::drop_session` takes it (after `by_project` and
-///   `sessions`) only to remove one entry, so the map only grows with
-///   sessions currently open. Neither ever does I/O or waits on another
-///   lock while holding it, so it MAY be taken while `by_project`/`sessions`
-///   are already held (as `drop_session` does) without violating the rule
-///   above — that rule is about the per-session `Arc<Mutex<()>>`, not the
-///   container around it.
+///   and `session_commands::drop_session` takes it (after releasing
+///   `by_project` and `sessions`, final review M1) only to remove one
+///   entry, so the map only grows with sessions currently open. Neither
+///   ever does I/O or waits on another lock while holding it, so it MAY be
+///   taken while `by_project`/`sessions` are held without violating the
+///   rule above — that rule is about the per-session `Arc<Mutex<()>>`, not
+///   the container around it.
 ///
 /// `session_save_lock` also refuses `sessionGone` before ever touching
 /// `save_locks` at all (fix round 2), so a save or discard on an unknown
@@ -125,8 +127,14 @@ use vault_buddy_core::editor::EditorSession;
 /// save lock instead (`recovery.rs`' module doc).
 ///
 /// `takes` (Task 49) is every webcam take begun and not yet discarded
-/// (`webcam_commands::TakeRegistry`) — a leaf lock around per-take slots
-/// whose own lock order is in `webcam_commands.rs`' module doc.
+/// (`webcam_registry::TakeRegistry`) — a leaf lock around per-take slots
+/// whose own lock order is in `webcam_registry.rs`' module doc.
+///
+/// `closing` (final whole-branch review I1/C2) is the sessions a
+/// `discardProject` is removing right now (`discard.rs`): every start path
+/// refuses them. A leaf lock, taken inside `jobs` by `discard::mark_closing`
+/// and `media_jobs::start_job_in` (order: `jobs`, then `closing`) and alone
+/// everywhere else.
 #[derive(Default)]
 pub struct EditorState {
     pub open: Mutex<()>,
@@ -138,5 +146,6 @@ pub struct EditorState {
     pub caption_imports: Mutex<HashSet<String>>,
     pub relinks: Mutex<HashSet<String>>,
     pub journal: recovery::JournalQueue,
-    pub takes: webcam_commands::TakeRegistry,
+    pub takes: webcam_registry::TakeRegistry,
+    pub closing: Mutex<HashSet<String>>,
 }
