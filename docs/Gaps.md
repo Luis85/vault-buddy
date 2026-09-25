@@ -6712,7 +6712,11 @@ report `os` as `windows x86_64`**, not the Windows build (no dependency was
 added to read it), and `webview2Version` is what `tauri::webview_version()`
 answers (`null` if the runtime query fails). Its `ffmpeg.filters` come from
 `screen::render::run::FEATURE_FILTERS`, which a screen test holds equal to
-the optional filters `required_filters` can ask for.
+the optional filters `required_filters` can ask for. **Still unredacted**
+(final re-review, out of the scan's scope): `screen/src/ffmpeg_run.rs`
+logs a render's output path raw when it cannot remove an abandoned output
+file — the screen crate is outside `src/editor/**`, so `redact_guard` does
+not see it.
 
 ### GAP-211 · ~~Low~~ FIXED 2026-09-25 (Task 59 fix round 1) · Two Screen-tab settings are read by nothing since the phase-5 export was retired
 `src/components/ScreenCaptureConfigTab.vue`, `src-tauri/src/screen_config_commands.rs`,
@@ -6818,6 +6822,33 @@ editor's "could not be opened" line for an `invalidProject` project) and
    and the user is asked to wait for it and discard again rather than
    having it killed mid-write. Deliberate — a finish that was killed would
    lose the take's indexed copy — but it is a refusal the user can meet.
+5. **A refused discard is not side-effect free** (final re-review N1).
+   `discard.rs` cancels renders, publishes and an import BEFORE it waits
+   for takes and reconnects, so a discard refused because a take is still
+   saving has already stopped the render and cut the import short; and
+   `media_derive::stop_session_derivations` only LOGS when derived media
+   outlives its wait, after which the discard proceeds. Fix: check the
+   take/reconnect waits first, and cancel only once the discard is certain.
+6. **A take chunk refused while the session is closing fails the take for
+   good** (N2, `webcam_commands.rs` append): if that discard is then
+   refused, the take has stopped recording for nothing. Fix: refuse the
+   chunk without marking the take failed, or refuse the discard before the
+   closing mark while a take is recording.
+7. **`remove_project` still deletes `sources.json` before `project.json`**
+   (N3, `store_io.rs`), and the session discard reads `sources.json` first
+   to unpin — a removal that fails after `sources.json` is gone makes every
+   retry fail with a generic error, and the editor's "Discard this
+   project…" offer does not appear (that failure is not `invalidProject`).
+   Unlikely (nested folders go first). Fix: remove `sources.json` last but
+   one, or let the unpin step tolerate its absence.
+8. **The sessionless discard unpins before ownership is proven** (N4,
+   `project_discard.rs`): a discard that `remove_project` then refuses has
+   still released the captures' pins, and its refusal text carries a
+   redaction handle and a raw parse error. Fix: prove ownership first;
+   map the refusal to fixed copy.
+9. **A project written by a NEWER build reads as damaged after a
+   downgrade**: `invalidProject`, so a capture's Edit re-migrates it into a
+   fresh project and the newer one is left an orphan (item 2's shape).
 **Fix (for 1 and 2):** a "Damaged projects" row in the Tutorial projects
 list that names what the store holds but cannot read, with the same
 confirmed discard, and a raw-bytes ownership proof (a `"project":{"id":…}`
