@@ -225,6 +225,47 @@ describe("PublishDialog — the vault's Screen settings are its defaults", () =>
     expect(checked(w, "publish-create-note")).toBe(false);
   });
 
+  // Fix round 2 (re-review finding 2): a read that lands AFTER the user
+  // toggled a box must not undo that click. A field the user touched since
+  // the read began keeps the user's value; an untouched one still takes
+  // the vault's default.
+  it("a late settings read never undoes a box the user already toggled", async () => {
+    let answer: (d: { dated: boolean; createNote: boolean }) => void = () => {};
+    const { w, publishProduct } = await openPublish({
+      publishDefaults: () => new Promise((resolve) => (answer = resolve)),
+    });
+    // The read for vault-b is still in flight; the user turns the note off.
+    await w.get('[data-testid="publish-create-note"]').setValue(false);
+    answer({ dated: false, createNote: true });
+    await flushPromises();
+    expect(checked(w, "publish-create-note")).toBe(false);
+    expect(checked(w, "publish-dated")).toBe(false);
+    await w.get('[data-testid="publish-start"]').trigger("click");
+    await flushPromises();
+    expect(publishProduct).toHaveBeenCalledWith(SESSION, "prod-a", {
+      vaultId: "vault-b",
+      folder: "Tutorials",
+      dated: false,
+      createNote: false,
+    });
+  });
+
+  // ...and a read for a vault that is no longer picked never applies, even
+  // when it lands after the current vault's own read.
+  it("a stale read for a previously picked vault never applies", async () => {
+    const pending: Record<string, (d: { dated: boolean; createNote: boolean }) => void> = {};
+    const { w } = await openPublish({
+      publishDefaults: (id: string) => new Promise((resolve) => (pending[id] = resolve)),
+    });
+    await w.get('[data-testid="publish-vault"]').setValue("vault-a");
+    pending["vault-a"]({ dated: false, createNote: false });
+    await flushPromises();
+    pending["vault-b"]({ dated: true, createNote: true });
+    await flushPromises();
+    expect(checked(w, "publish-dated")).toBe(false);
+    expect(checked(w, "publish-create-note")).toBe(false);
+  });
+
   // Settings that cannot be read are not a reason to refuse a publish: the
   // dialog keeps the project's own date choice and writes a note, and the
   // user can still change either.

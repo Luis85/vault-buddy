@@ -51,17 +51,42 @@ const publishing = ref(false);
 const error = ref<string | null>(null);
 const receipt = ref<PublishReceipt | null>(null);
 
+/** Which toggle the USER has changed since the current vault was picked
+ * (fix round 2). A settings read that lands late must never undo a click
+ * made while it was in flight, so a read sets only an untouched field.
+ * `applying` marks the dialog's own writes (its reset, a read landing),
+ * which the SYNC watchers below must not mistake for the user's. */
+const touched = { dated: false, createNote: false };
+let applying = false;
+function applyDefaults(values: { dated?: boolean; createNote?: boolean }): void {
+  applying = true;
+  if (values.dated !== undefined) dated.value = values.dated;
+  if (values.createNote !== undefined) createNote.value = values.createNote;
+  applying = false;
+}
+watch(dated, () => {
+  if (!applying) touched.dated = true;
+}, { flush: "sync" });
+watch(createNote, () => {
+  if (!applying) touched.createNote = true;
+}, { flush: "sync" });
+
 /** The vault's Screen settings as this publish's defaults. A ticket keeps
- * a slow reply for a vault no longer picked from overwriting a newer one. */
+ * a slow reply for a vault no longer picked from overwriting a newer one,
+ * and `touched` keeps it from undoing the user's own choice. */
 let defaultsTicket = 0;
 async function loadDefaults(id: string): Promise<void> {
   const ticket = ++defaultsTicket;
+  touched.dated = false;
+  touched.createNote = false;
   if (!id) return;
   try {
     const defaults = await editorProject.port.publishDefaults(id);
     if (ticket !== defaultsTicket) return;
-    dated.value = defaults.dated;
-    createNote.value = defaults.createNote;
+    applyDefaults({
+      dated: touched.dated ? undefined : defaults.dated,
+      createNote: touched.createNote ? undefined : defaults.createNote,
+    });
   } catch (e) {
     logWarning(`editor publish: the vault's Screen settings could not be read: ${toEditorError(e).message}`);
   }
@@ -82,8 +107,7 @@ async function loadVaults(capture: string): Promise<void> {
 function reset(): void {
   const destination = editorProject.project?.destination;
   folder.value = destination?.folder ?? "";
-  dated.value = destination?.dated ?? false;
-  createNote.value = true;
+  applyDefaults({ dated: destination?.dated ?? false, createNote: true });
   error.value = null;
   receipt.value = null;
   vaultId.value = "";
