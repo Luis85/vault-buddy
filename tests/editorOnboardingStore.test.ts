@@ -11,7 +11,7 @@
  * map could only ever prove the "no chapter known" arm.
  */
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { createPinia, setActivePinia } from "pinia";
+import { createPinia, getActivePinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/editor/guide/retired-steps.json", () => ({ default: { trim: "edit" } }));
@@ -190,6 +190,24 @@ describe("editorOnboarding — storage", () => {
     expect(saves).toEqual([]);
     expect(guide.sessionOnly).toBe(true);
     expect(guide.progress.currentStepId).toBe("media");
+  });
+
+  // A debounced save can fire after its test ended. Fired through the
+  // `save` ACTION, Pinia's action wrapper re-activated the old pinia, so the
+  // NEXT test's `useXStore()` calls read the old test's stores. The write
+  // still goes through the port of the pinia the change was made in.
+  it("a debounced save that fires after its pinia was replaced leaves the active pinia alone", async () => {
+    const guide = install();
+    await guide.load();
+    guide.start();
+    const current = createPinia();
+    setActivePinia(current);
+
+    await settle();
+
+    expect(saves.map((s) => s.currentStepId)).toEqual(["welcome"]);
+    expect(guide.sessionOnly).toBe(false);
+    expect(getActivePinia()).toBe(current);
   });
 
   it("flush writes a pending change at once, and nothing when nothing is pending", async () => {

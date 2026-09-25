@@ -1,4 +1,4 @@
-import { createPinia, setActivePinia } from "pinia";
+import { createPinia, getActivePinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useNotificationsStore } from "../src/stores/notifications";
@@ -67,6 +67,23 @@ describe("notifications store", () => {
     });
     expect(a).not.toBe(b);
     expect(n.items).toHaveLength(2);
+  });
+
+  // A success toast's 4 s TTL outlives a fast test. When it fired through
+  // the `dismiss` ACTION, Pinia's action wrapper re-activated the pinia the
+  // toast was raised in, so every later `useXStore()` in whatever test was
+  // running by then read that old test's stores (the flaky
+  // editorLearningCenter "a refused or dismissed restore changes nothing").
+  it("an expiring toast never re-activates the pinia it was raised in", () => {
+    const old = useNotificationsStore();
+    old.success("done");
+    const current = createPinia();
+    setActivePinia(current);
+
+    vi.advanceTimersByTime(4000);
+
+    expect(old.items).toEqual([]);
+    expect(getActivePinia()).toBe(current);
   });
 
   it("dedupe-reuse restarts the TTL (GAP-32)", () => {

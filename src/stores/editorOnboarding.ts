@@ -35,6 +35,7 @@ import { defineStore } from "pinia";
 
 import type { GuideStepId } from "../editor/guide/content";
 import { CONTENT_REVISION, GUIDE_STEPS, isGuideStepId, resolveStepId } from "../editor/guide/content";
+import type { EditorPort } from "../editor/port";
 import type { GuidePreferences, GuideProgress } from "../editorTypes";
 import { logWarning } from "../logging";
 import { useEditorProjectStore } from "./editorProject";
@@ -70,6 +71,37 @@ function hydrate(stored: GuideProgress): GuideProgress {
     explored: lessons(stored.explored),
     preferences: { ...stored.preferences },
   };
+}
+
+/** `snapshot()`, as a plain function for `writeProgress`. */
+function snapshotOf(p: GuideProgress): GuideProgress {
+  return {
+    ...p,
+    contentRevision: CONTENT_REVISION,
+    reviewed: [...p.reviewed],
+    explored: [...p.explored],
+    preferences: { ...p.preferences },
+  };
+}
+
+/** The write behind `save()`, a plain function so the debounced timer never
+ * calls an ACTION: Pinia's action wrapper calls `setActivePinia` with the
+ * store's own pinia, so a timer that outlives its pinia (a test's
+ * `setActivePinia(createPinia())` reset) would re-activate the old one and
+ * the next test's `useXStore()` calls would read stale stores. `project` is
+ * resolved by the caller, inside the store's own pinia. Never throws. */
+async function writeProgress(
+  guide: { readFailed: boolean; sessionOnly: boolean; progress: GuideProgress },
+  project: { port: EditorPort },
+): Promise<void> {
+  if (guide.readFailed) return;
+  try {
+    await project.port.saveGuideProgress(snapshotOf(guide.progress));
+    guide.sessionOnly = false;
+  } catch (e) {
+    guide.sessionOnly = true;
+    logWarning(`editor guide: could not save progress, this session only: ${String(e)}`);
+  }
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -206,9 +238,10 @@ export const useEditorOnboardingStore = defineStore("editorOnboarding", {
     /** Debounced save of the latest progress. Never throws. */
     persist(): void {
       if (persistTimer !== null) clearTimeout(persistTimer);
+      const project = useEditorProjectStore();
       persistTimer = setTimeout(() => {
         persistTimer = null;
-        void this.save();
+        void writeProgress(this, project);
       }, PERSIST_DEBOUNCE_MS);
     },
     /** Writes a pending (debounced) save now. Never throws. */
@@ -221,24 +254,10 @@ export const useEditorOnboardingStore = defineStore("editorOnboarding", {
     /** A plain copy of the progress, stamped with this build's content
      * revision — what a save and a progress file carry. */
     snapshot(): GuideProgress {
-      const p = this.progress;
-      return {
-        ...p,
-        contentRevision: CONTENT_REVISION,
-        reviewed: [...p.reviewed],
-        explored: [...p.explored],
-        preferences: { ...p.preferences },
-      };
+      return snapshotOf(this.progress);
     },
     async save(): Promise<void> {
-      if (this.readFailed) return;
-      try {
-        await useEditorProjectStore().port.saveGuideProgress(this.snapshot());
-        this.sessionOnly = false;
-      } catch (e) {
-        this.sessionOnly = true;
-        logWarning(`editor guide: could not save progress, this session only: ${String(e)}`);
-      }
+      await writeProgress(this, useEditorProjectStore());
     },
   },
 });

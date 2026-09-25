@@ -39,6 +39,17 @@ function ttlFor(kind: NotifyKind, opts?: NotifyOpts): number | null {
   return opts?.action ? null : DEFAULT_TTL[kind];
 }
 
+// A TTL expiry, deliberately NOT the `dismiss` action: Pinia's action
+// wrapper calls `setActivePinia` with the store's own pinia, so a timer that
+// outlives its pinia (every test's `setActivePinia(createPinia())` reset)
+// would re-activate the old one and every later `useXStore()` would read the
+// stale stores. That made a success toast from one test swap the stores out
+// from under an assertion several tests later.
+function expire(store: { items: Notification[] }, id: number): void {
+  timers.delete(id);
+  store.items = store.items.filter((i) => i.id !== id);
+}
+
 export const useNotificationsStore = defineStore("notifications", {
   state: () => ({ items: [] as Notification[] }),
   actions: {
@@ -50,13 +61,13 @@ export const useNotificationsStore = defineStore("notifications", {
         // TTL — a re-raise moments before expiry otherwise reads as flicker.
         const t = timers.get(last!.id);
         if (t) clearTimeout(t);
-        if (ttlMs != null) timers.set(last!.id, setTimeout(() => this.dismiss(last!.id), ttlMs));
+        if (ttlMs != null) timers.set(last!.id, setTimeout(() => expire(this, last!.id), ttlMs));
         return last!.id;
       }
       const id = ++seq;
       this.items.push({ id, kind, message, action: opts?.action });
       if (this.items.length > MAX_ITEMS) this.items.splice(0, this.items.length - MAX_ITEMS);
-      if (ttlMs != null) timers.set(id, setTimeout(() => this.dismiss(id), ttlMs));
+      if (ttlMs != null) timers.set(id, setTimeout(() => expire(this, id), ttlMs));
       return id;
     },
     error(message: string) { return this.notify("error", message); },
@@ -66,8 +77,7 @@ export const useNotificationsStore = defineStore("notifications", {
     dismiss(id: number) {
       const t = timers.get(id);
       if (t) clearTimeout(t);
-      timers.delete(id);
-      this.items = this.items.filter((i) => i.id !== id);
+      expire(this, id);
     },
     clear() {
       for (const t of timers.values()) clearTimeout(t);
