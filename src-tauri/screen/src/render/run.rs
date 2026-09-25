@@ -83,7 +83,7 @@ const DURATION_SLACK_MS: u64 = 40;
 /// Filters any graph render may use -- core libavfilter that no build able
 /// to run a `filter_complex` at all lacks, so requiring them never refuses
 /// a real build; listed so the coverage test holds them to account too.
-const CORE_FILTERS: [&str; 19] = [
+pub(crate) const CORE_FILTERS: [&str; 19] = [
     "color",
     "overlay",
     "null",
@@ -103,6 +103,28 @@ const CORE_FILTERS: [&str; 19] = [
     "alimiter",
     "aresample",
     "aformat",
+];
+
+/// The OPTIONAL filters -- each one a single editing feature needs, and
+/// one a real ffmpeg build can lack (`feature_needing` names which). The
+/// shell's diagnostics export (Task 58) reports which of these a build has;
+/// `run_tests::feature_filters_are_exactly_the_optional_filters_a_plan_can_need`
+/// holds this list to `required_filters`, so it cannot drift.
+pub const FEATURE_FILTERS: [&str; 14] = [
+    "acrossfade",
+    "afade",
+    "asetrate",
+    "ass",
+    "atempo",
+    "colorchannelmixer",
+    "eq",
+    "fade",
+    "geq",
+    "hflip",
+    "perspective",
+    "transpose",
+    "vflip",
+    "xfade",
 ];
 
 /// Everything one render needs. Borrowed: the job (Task 46) owns it all.

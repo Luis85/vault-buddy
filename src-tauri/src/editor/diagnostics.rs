@@ -29,6 +29,7 @@ use tauri::{AppHandle, Manager, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 use vault_buddy_core::editor::{EditorError, EditorErrorCode};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
+use vault_buddy_screen::render::run::FEATURE_FILTERS;
 
 use super::authz::require_editor_window;
 use super::media_jobs::{JobKind, JobPhase};
@@ -37,28 +38,8 @@ use super::render_jobs::read_ledger;
 use super::store_io::list_projects;
 use super::subtitle_commands::write_new_file;
 use super::EditorState;
-use crate::ffmpeg::{probe_capabilities, resolve_working_ffmpeg};
 
-/// The render's feature filters (`screen::render::run::feature_needing`):
-/// the ones a real ffmpeg build can lack, each switching off one editing
-/// feature. The core filters every `filter_complex`-capable build has are
-/// not worth a line each.
-pub(crate) const FEATURE_FILTERS: [&str; 14] = [
-    "acrossfade",
-    "afade",
-    "asetrate",
-    "ass",
-    "atempo",
-    "colorchannelmixer",
-    "eq",
-    "fade",
-    "geq",
-    "hflip",
-    "perspective",
-    "transpose",
-    "vflip",
-    "xfade",
-];
+use crate::ffmpeg::{probe_capabilities, resolve_working_ffmpeg};
 
 /// `Diagnostics.ffmpeg`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -67,7 +48,8 @@ pub struct FfmpegDiagnostics {
     pub found: bool,
     /// `"<major>.<minor>"`, or `null` when none was found.
     pub version: Option<String>,
-    /// The `FEATURE_FILTERS` this build has.
+    /// The render's optional filters this build has
+    /// (`screen::render::run::FEATURE_FILTERS`, the one list).
     pub filters: Vec<String>,
 }
 

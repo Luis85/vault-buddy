@@ -38,7 +38,7 @@ use super::recovery;
 use super::redact::redact_name;
 use super::store_io::{create_project, list_projects, load_project, load_sources, remove_project};
 use super::EditorState;
-use crate::editor_commands::is_safe_base;
+use crate::editor_commands::{is_safe_base, unsafe_base_reason};
 
 /// The asset id `migrate::from_staged` gives the capture itself, and so the
 /// key its `sources.json` entry lives under.
@@ -84,8 +84,10 @@ pub(crate) fn open_staged_in(
     base: &str,
 ) -> Result<OpenedProject, EditorError> {
     if !is_safe_base(base) {
+        // The reason is a fixed category, never the name itself.
+        let reason = unsafe_base_reason(base).unwrap_or("unsafe");
         log::warn!(
-            "editor_open_staged: refused an unsafe base {}",
+            "editor_open_staged: refused an unsafe capture name ({reason}) {}",
             redact_name(base)
         );
         return Err(err(

@@ -334,6 +334,7 @@ fn a_cancelled_decode_reports_cancelled() {
     let e = decode_peaks(
         "ffmpeg",
         Path::new("missing.wav"),
+        "rec-1",
         1_000,
         10,
         &AtomicBool::new(true),

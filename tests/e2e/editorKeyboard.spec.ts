@@ -304,20 +304,25 @@ async function lowContrast(page: Page): Promise<string[]> {
   });
 }
 
-test("light theme text meets 4.5:1 on every surface", async ({ page }) => {
-  await page.emulateMedia({ colorScheme: "light" });
-  await openEditor(page, "light");
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await tabTo(page, "clip-body");
-  await page.keyboard.press("Enter");
-  expect(await lowContrast(page)).toEqual([]);
+// Both themes (GAP-206 fixed the light one, GAP-209 the dark one): every
+// visible text on the editor's surfaces, and in an open menu, reads at
+// 4.5:1 or more against what is composited behind it.
+for (const theme of ["light", "dark"] as const) {
+  test(`${theme} theme text meets 4.5:1 on every surface`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    await openEditor(page, theme);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    await tabTo(page, "clip-body");
+    await page.keyboard.press("Enter");
+    expect(await lowContrast(page)).toEqual([]);
 
-  // An open menu is a surface too.
-  await tabTo(page, "editor-header-help");
-  await page.keyboard.press("Enter");
-  await expect(page.getByRole("menu", { name: "Help" })).toBeVisible();
-  expect(await lowContrast(page)).toEqual([]);
-});
+    // An open menu is a surface too.
+    await tabTo(page, "editor-header-help");
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("menu", { name: "Help" })).toBeVisible();
+    expect(await lowContrast(page)).toEqual([]);
+  });
+}
 
 test("reduced motion keeps the guide ring still", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });

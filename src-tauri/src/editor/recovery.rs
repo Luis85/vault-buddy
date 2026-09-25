@@ -46,7 +46,7 @@ use vault_buddy_screen::staging;
 use super::package_import::importing_project_id;
 use super::project_store::{pin_staged, pinned_project, project_dir, store_dir, SourceLocator};
 use super::publish::{PublishJournal, PublishStep, PUBLISH_JOURNAL};
-use super::redact::redact_name;
+use super::redact::redact_path;
 use super::render_jobs::JOBS_DIR;
 use super::save_commands::session_save_lock;
 use super::store_io::{load_sources, read_bounded, remove_dir_no_follow, RECOVERY_FILE};
@@ -228,7 +228,7 @@ pub(crate) fn remove_journal(root: &Path, project_id: &str) -> std::io::Result<(
             std::io::ErrorKind::InvalidInput,
             format!(
                 "{} is not a plain file; refusing to remove it",
-                path.display()
+                redact_path(&path)
             ),
         ));
     }
@@ -503,9 +503,11 @@ pub(crate) fn sweep_stale_imports(root: &Path, now: std::time::SystemTime) -> Ve
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if importing_project_id(&name).is_none() {
+        // A validated project id (`.<id>.importing`): content-free, so the
+        // log names it rather than a hash that would throw it away.
+        let Some(project_id) = importing_project_id(&name).map(str::to_string) else {
             continue;
-        }
+        };
         let path = entry.path();
         let Ok(meta) = std::fs::symlink_metadata(&path) else {
             continue;
@@ -519,8 +521,7 @@ pub(crate) fn sweep_stale_imports(root: &Path, now: std::time::SystemTime) -> Ve
         match remove_dir_no_follow(&path) {
             Ok(()) => removed.push(name),
             Err(e) => log::warn!(
-                "editor-recovery-sweep: could not remove {}: {e}",
-                redact_name(&name)
+                "editor-recovery-sweep: could not remove the unfinished import of {project_id}: {e}"
             ),
         }
     }

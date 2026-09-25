@@ -25,6 +25,7 @@ use vault_buddy_core::editor::{
 };
 
 use super::project_store::{project_dir, store_dir, SourceRecord};
+use super::redact::redact_path;
 
 pub(crate) const PROJECT_FILE: &str = "project.json";
 pub(crate) const SOURCES_FILE: &str = "sources.json";
@@ -171,15 +172,15 @@ pub(crate) fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, Edito
     let meta = std::fs::metadata(path).map_err(|e| {
         EditorError::new(
             EditorErrorCode::Internal,
-            format!("Cannot read {}: {e}", path.display()),
+            format!("Cannot read the file {}: {e}", redact_path(path)),
         )
     })?;
     if meta.len() > max_bytes {
         return Err(EditorError::new(
             EditorErrorCode::InvalidProject,
             format!(
-                "{} is {} bytes, exceeding the {max_bytes} byte maximum",
-                path.display(),
+                "The file {} is {} bytes, exceeding the {max_bytes} byte maximum",
+                redact_path(path),
                 meta.len()
             ),
         ));
@@ -187,7 +188,7 @@ pub(crate) fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, Edito
     std::fs::read(path).map_err(|e| {
         EditorError::new(
             EditorErrorCode::Internal,
-            format!("Cannot read {}: {e}", path.display()),
+            format!("Cannot read the file {}: {e}", redact_path(path)),
         )
     })
 }
@@ -239,8 +240,8 @@ pub fn load_project(
         EditorError::new(
             EditorErrorCode::InvalidProject,
             format!(
-                "{} is not a valid project file: {e}",
-                project_path.display()
+                "The project file {} is not valid: {e}",
+                redact_path(&project_path)
             ),
         )
     })?;
@@ -276,13 +277,13 @@ fn read_sources(dir: &Path) -> Result<BTreeMap<String, SourceRecord>, EditorErro
     let bytes = std::fs::read(&path).map_err(|e| {
         EditorError::new(
             EditorErrorCode::Internal,
-            format!("Cannot read {}: {e}", path.display()),
+            format!("Cannot read the file {}: {e}", redact_path(&path)),
         )
     })?;
     serde_json::from_slice(&bytes).map_err(|e| {
         EditorError::new(
             EditorErrorCode::Internal,
-            format!("{} is not valid: {e}", path.display()),
+            format!("The sources file {} is not valid: {e}", redact_path(&path)),
         )
     })
 }
@@ -407,15 +408,18 @@ pub fn remove_project(root: &Path, id: &str) -> Result<(), EditorError> {
     let dir_meta = std::fs::symlink_metadata(&dir).map_err(|e| {
         EditorError::new(
             EditorErrorCode::Internal,
-            format!("Cannot resolve {}: {e}", dir.display()),
+            format!(
+                "Cannot resolve the project folder {}: {e}",
+                redact_path(&dir)
+            ),
         )
     })?;
     if dir_meta.file_type().is_symlink() {
         return Err(EditorError::new(
             EditorErrorCode::Internal,
             format!(
-                "{} is a symlink or junction; refusing to remove through it",
-                dir.display()
+                "The project folder {} is a symlink or junction; refusing to remove through it",
+                redact_path(&dir)
             ),
         ));
     }
@@ -423,15 +427,18 @@ pub fn remove_project(root: &Path, id: &str) -> Result<(), EditorError> {
     let bytes = std::fs::read(&project_path).map_err(|e| {
         EditorError::new(
             EditorErrorCode::Internal,
-            format!("Cannot read {}: {e}", project_path.display()),
+            format!(
+                "Cannot read the project file {}: {e}",
+                redact_path(&project_path)
+            ),
         )
     })?;
     let envelope: WorkspaceEnvelope = serde_json::from_slice(&bytes).map_err(|e| {
         EditorError::new(
             EditorErrorCode::InvalidProject,
             format!(
-                "{} is not a valid project file: {e}",
-                project_path.display()
+                "The project file {} is not valid: {e}",
+                redact_path(&project_path)
             ),
         )
     })?;
@@ -439,15 +446,18 @@ pub fn remove_project(root: &Path, id: &str) -> Result<(), EditorError> {
         return Err(EditorError::new(
             EditorErrorCode::InvalidProject,
             format!(
-                "refusing to remove {}: its own project id does not match {id:?}",
-                dir.display()
+                "refusing to remove the project folder {}: its own project id does not match {id:?}",
+                redact_path(&dir)
             ),
         ));
     }
     remove_dir_no_follow(&dir).map_err(|e| {
         EditorError::new(
             EditorErrorCode::Internal,
-            format!("Could not remove {}: {e}", dir.display()),
+            format!(
+                "Could not remove the project folder {}: {e}",
+                redact_path(&dir)
+            ),
         )
     })
 }
@@ -482,7 +492,7 @@ fn walk_no_follow(dir: &Path, files: &mut Vec<PathBuf>, dirs: &mut Vec<PathBuf>)
                 io::ErrorKind::InvalidInput,
                 format!(
                     "{} is a symlink; refusing to remove through it",
-                    path.display()
+                    redact_path(&path)
                 ),
             ));
         }

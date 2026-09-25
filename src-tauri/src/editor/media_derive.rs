@@ -366,6 +366,7 @@ fn write_cached_peaks(
 pub(crate) fn decode_peaks(
     program: &str,
     src: &Path,
+    record_id: &str,
     duration_ms: u64,
     buckets: usize,
     cancel: &AtomicBool,
@@ -387,9 +388,10 @@ pub(crate) fn decode_peaks(
         }) => Ok(state.finish()),
         Ok(Streamed::Finished { success: false, .. }) => {
             // stderr is nulled (it names the source's path, and an unread
-            // pipe could wedge the child), so say at least which file.
+            // pipe could wedge the child), so say at least which source:
+            // its record id, plus the path's handle to match other lines.
             log::warn!(
-                "editor peaks: ffmpeg exited with an error decoding {}",
+                "editor peaks: ffmpeg exited with an error decoding source {record_id} ({})",
                 redact_path(src)
             );
             Err(err(
@@ -466,7 +468,8 @@ fn run_peaks_job(
         let decoded = read_cached_peaks(&plan.cached, plan.buckets, plan.stamp).map_or_else(
             || {
                 let (src, duration) = (&plan.asset.path, plan.asset.record.duration_ms);
-                decode_peaks(program, src, duration, plan.buckets, &cancel)
+                let record_id = plan.asset.record_id.as_str();
+                decode_peaks(program, src, record_id, duration, plan.buckets, &cancel)
             },
             Ok,
         );
@@ -627,6 +630,7 @@ fn read_frame(tmp: &Path) -> Option<Vec<u8>> {
 fn render_thumbnail(
     program: &str,
     src: &Path,
+    record_id: &str,
     at_ms: u64,
     cancel: &AtomicBool,
 ) -> Result<Vec<u8>, EditorError> {
@@ -646,7 +650,7 @@ fn render_thumbnail(
     let result = match outcome {
         Ok(Streamed::Finished { success: true, .. }) => read_frame(&tmp).ok_or_else(|| {
             log::warn!(
-                "editor thumbnail: ffmpeg made no frame of {} at {at_ms} ms",
+                "editor thumbnail: ffmpeg made no frame of source {record_id} ({}) at {at_ms} ms",
                 redact_path(src)
             );
             err(
@@ -656,7 +660,7 @@ fn render_thumbnail(
         }),
         Ok(Streamed::Finished { success: false, .. }) => {
             log::warn!(
-                "editor thumbnail: ffmpeg exited with an error on {}",
+                "editor thumbnail: ffmpeg exited with an error on source {record_id} ({})",
                 redact_path(src)
             );
             Err(err(
@@ -786,7 +790,13 @@ pub(crate) fn thumbnail_in(
     let in_flight = InFlight::register(&state.thumbnails, request.session_id);
     let bytes = {
         let _one_at_a_time = lock_ignoring_poison(&THUMBNAIL_GATE);
-        render_thumbnail(&program, &asset.path, ms, &in_flight.cancel)?
+        render_thumbnail(
+            &program,
+            &asset.path,
+            &asset.record_id,
+            ms,
+            &in_flight.cancel,
+        )?
     };
     let session = request.session_id;
     commit_thumbnail(state, root, session, &project_id, &name, &bytes)

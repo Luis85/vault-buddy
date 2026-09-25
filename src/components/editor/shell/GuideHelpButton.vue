@@ -15,8 +15,9 @@
  * shortcut table) and, since Task 58, **Export diagnostics** (Rust's own
  * save dialog writes counts, capabilities and error codes — never project
  * content — to a new file; a toast says where it landed). There is
- * deliberately no item for anything not built yet. The menu closes on a choice, on Escape (focus back on Help) and on
- * a pointer press outside it — `SaveProjectMenu`'s behaviour.
+ * deliberately no item for anything not built yet. The menu closes on a
+ * choice, on Escape (focus back on Help) and on a pointer press outside it
+ * — `SaveProjectMenu`'s behaviour.
  */
 import { onBeforeUnmount, onMounted, ref } from "vue";
 

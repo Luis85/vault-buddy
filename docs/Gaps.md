@@ -6538,7 +6538,7 @@ tab the next time the project opens) and a close/quit still waits on it
 through the shutdown gate. Not small: it needs a session re-attach path in
 `EditorRoot`, a review flag on the job record and a polling reconcile.
 
-### GAP-209 · Medium · The editor's DARK theme misses 4.5:1 for subtle text, clip labels and the primary button
+### GAP-209 · ~~Medium~~ FIXED 2026-09-25 (Task 58 fix round 1) · The editor's DARK theme misses 4.5:1 for subtle text, clip labels and the primary button
 `src/style.css` (`@theme` defaults), `src/components/ui/AppButton.vue`
 (measured by Task 58 with the same composited-contrast walk as its
 light-theme e2e check, not asserted). In the default dark theme:
@@ -6553,24 +6553,51 @@ and a primary button on `accent-strong` — the last two touch the concept
 bundle's token values and a shared primitive, so they need their own
 decision rather than riding a light-theme fix. Once fixed, the e2e contrast
 check should run in both themes.
+**Fixed in Task 58's fix round 1**: an editor-only `[data-theme="dark"]`
+block in `style.css` sets `--color-fg-subtle: #8e98aa` (4.90:1 on `raised`)
+and `--color-video: #b39ef0` (4.88:1 on `video-bg`) — the `@theme` defaults
+(the concept bundle's values) are unchanged and no other window sets
+`data-theme`; AppButton's primary moved to `bg-accent-strong` (white on
+violet-600, 5.7:1) app-wide, a slightly darker violet in the panel too. The
+contrast e2e check now runs in both themes and failed on the old dark values
+(31 texts at 2.99–4.40:1).
 
 ### GAP-210 · Low · Content-free logs and diagnostics: what the scan and the export cannot see
 `src-tauri/src/editor/redact.rs`, `redact_guard.rs`, `diagnostics.rs`
-(Task 58, F-50). (1) **The scan reads source, not types.** It flags a log
-argument by name (`path`, `file`, `name`, `title`, `text`, `caption`,
-`base`), any `.display()`, and `{:?}` of an identifier the same file
-declares or binds as a `Path`/`PathBuf`. A path reached another way (a
-function returning `PathBuf` formatted with `{:?}`, a tuple field), a value
-formatted into a `String` first and then logged (`log::warn!("{msg}")`),
-and a third-party error whose `Display` includes a path are not seen. It
-covers `src/editor/**` only; `export_worker/vault_dir.rs` (whose
-`dir.display()` is the F38 shape) is covered the day Task 59 moves it under
-`editor/`, not before. (2) **A handle is a correlation aid, not a secret.**
-`<path:#hash8>` is 32 bits of SHA-256: enough to tell a log's files apart,
-and a guessed path can be confirmed against it. (3) **Diagnostics report
-`os` as `windows x86_64`**, not the Windows build (no dependency was added
-to read it), and `webview2Version` is what `tauri::webview_version()`
-answers (`null` if the runtime query fails). (4) **An `EditorError`
-message is never logged or exported by these rules, but it may still NAME
-a file** (a per-file import error names the picked file, by design, for the
-user); it reaches the UI, not the log or the diagnostics file.
+(Task 58, F-50; fix round 1). **What the scan sees**, in every `.rs` under
+`src/editor/**` except `*_tests.rs`/`*_guard.rs` (subdirectories included):
+every LOG call (`log::error!`…`trace!`, a bare level macro, `log::log!(Level::…,
+…)`) formatting an argument named `path`/`file`/`name`/`title`/`text`/
+`caption`/`base` without `redact`; any `.display()` inside a log call OR a
+MESSAGE construction (`format!`, `format_args!`, `io::Error::new`,
+`Error::other`, `anyhow!` — a message is logged as-is by whoever receives it,
+`e.message` or `{e}`); and `{:?}` of an identifier the file declares or binds
+as a `Path`/`PathBuf` (a `.join(` counts only on a receiver known to be a
+path, since `names.join(", ")` joins strings). Comments (`//`, `/* */`) and
+char literals are blanked first, so a quoted call is not a call and `'"'`
+opens no string. Fix round 1 moved every path in a `store_io`/`recovery`/
+`prefs_commands` error message to `redact_path` at the SOURCE ("Cannot read
+the project file <path:#…>: …"), so the log lines that print `e.message`
+(`recovery.rs`, `webcam_commands.rs`, `media_import.rs`, `save_commands.rs`,
+`store_io.rs`) or `{e}` of a `remove_dir_no_follow` failure carry no path.
+**What it does not see:** (1) a path reached another way — a function
+returning `PathBuf` formatted with `{:?}`, a tuple field, `to_string_lossy()`
+of a path pushed into a message; (2) a value formatted through a macro not
+listed (`write!` into a `String`, `concat!`) or by hand (`String` +
+`push_str`); (3) a third-party error whose `Display` names a path; (4) a
+capture NAME inside a message: the name rule applies to log calls only (a
+message builds `format!("{name}.json")` legitimately), so the user-facing
+messages that quote a staged capture's base (`session_commands.rs`
+"The capture … is linked to project …", "Could not unlink the capture …",
+`project_store.rs` "no staged capture named …") still carry it if a caller
+logs them; (5) a `(`/`)`/`,` inside a char literal is blanked, but a raw
+string (`r#"…"#`) is read as an ordinary string. It covers `src/editor/**`
+only; `export_worker/vault_dir.rs` (the F38 `dir.display()` shape) is covered
+the day Task 59 moves it under `editor/`. **A handle is a correlation aid, not
+a secret:** `<path:#hash8>` is 32 bits of SHA-256, enough to tell a log's
+files apart, and a guessed path can be confirmed against it. **Diagnostics
+report `os` as `windows x86_64`**, not the Windows build (no dependency was
+added to read it), and `webview2Version` is what `tauri::webview_version()`
+answers (`null` if the runtime query fails). Its `ffmpeg.filters` come from
+`screen::render::run::FEATURE_FILTERS`, which a screen test holds equal to
+the optional filters `required_filters` can ask for.

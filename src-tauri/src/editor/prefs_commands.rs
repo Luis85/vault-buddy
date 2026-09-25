@@ -92,7 +92,12 @@ pub(crate) fn read_workspace(root: &Path, project_id: &str) -> Result<Value, Edi
             Value::Object(serde_json::Map::new())
         }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Object(serde_json::Map::new()),
-        Err(e) => return Err(internal(format!("Cannot read {}: {e}", path.display()))),
+        Err(e) => {
+            return Err(internal(format!(
+                "Cannot read the workspace file {}: {e}",
+                redact_path(&path)
+            )))
+        }
     };
     Ok(serde_json::to_value(sanitize(&raw)).expect("Workspace always serializes"))
 }

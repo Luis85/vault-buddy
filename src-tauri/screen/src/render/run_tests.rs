@@ -17,7 +17,8 @@ use vault_buddy_core::screen_capture_config::ScreenQuality;
 
 use super::run::{
     expected_duration_ms, parse_output_probe, render, render_refusal, required_filters,
-    verify_output, write_ass_documents, OutputProbe, RenderRequestNative,
+    verify_output, write_ass_documents, OutputProbe, RenderRequestNative, CORE_FILTERS,
+    FEATURE_FILTERS,
 };
 use super::test_support::{audio, card, layer, plan, zoom, FULL, PIP};
 use super::{parse_filters_output, render_args, AssHooks, FfmpegCapabilities};
@@ -597,4 +598,19 @@ fn a_remux_is_checked_against_its_source_container() {
     };
     assert_eq!(expected_duration_ms(true, 3_800, Some(&unknown)), 3_800);
     assert_eq!(expected_duration_ms(true, 3_800, None), 3_800);
+}
+
+// Task 58 fix round 1: the diagnostics export reports which of these
+// filters a build has, from this ONE list. A filter a feature starts to
+// need that is missing here would never show up in a support file; one
+// listed here that no feature needs would be noise. The feature-rich plan
+// uses every optional filter (the fixture check above).
+#[test]
+fn feature_filters_are_exactly_the_optional_filters_a_plan_can_need() {
+    let optional: BTreeSet<&str> = required_filters(&feature_rich_plan())
+        .into_iter()
+        .filter(|f| !CORE_FILTERS.contains(f))
+        .collect();
+    let listed: BTreeSet<&str> = FEATURE_FILTERS.into_iter().collect();
+    assert_eq!(listed, optional);
 }

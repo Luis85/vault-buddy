@@ -132,15 +132,28 @@ pub struct StagedCaptureDetail {
 /// check would have refused forever, staged correctly and then never
 /// openable, exportable or discardable again.
 pub(crate) fn is_safe_base(base: &str) -> bool {
-    !base.is_empty()
-        && !base.starts_with('.')
-        && !base.ends_with('.')
-        && !base.ends_with(' ')
-        && !base.contains('/')
-        && !base.contains('\\')
-        && !base.contains(':')
-        && !staging::is_reserved_device_stem(base)
-        && base.chars().all(|c| !c.is_control())
+    unsafe_base_reason(base).is_none()
+}
+
+/// Why `base` is unsafe (see `is_safe_base`), as a category a log line can
+/// carry instead of the base itself — which holds a recorded window's title
+/// (Task 58, F-50). `None` is a safe base.
+pub(crate) fn unsafe_base_reason(base: &str) -> Option<&'static str> {
+    if base.is_empty() {
+        Some("empty")
+    } else if base.starts_with('.') || base.ends_with('.') || base.ends_with(' ') {
+        Some("leading or trailing dot or space")
+    } else if base.contains('/') || base.contains('\\') {
+        Some("path separator")
+    } else if base.contains(':') {
+        Some("drive or stream colon")
+    } else if staging::is_reserved_device_stem(base) {
+        Some("reserved device name")
+    } else if base.chars().any(char::is_control) {
+        Some("control character")
+    } else {
+        None
+    }
 }
 
 fn detail_from_sidecar(s: &staging::StagedSidecar, asset_path: &Path) -> StagedCaptureDetail {

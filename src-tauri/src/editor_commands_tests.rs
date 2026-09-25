@@ -611,3 +611,27 @@ fn open_project_editor_stashes_and_emits_like_open_capture_editor() {
          branches"
     );
 }
+
+// Task 58 fix round 1: the refusal is logged by its REASON (a capture base
+// carries a window title, so the base itself is never logged), and the
+// reason and `is_safe_base` can never disagree.
+#[test]
+fn an_unsafe_base_names_why_without_repeating_it() {
+    for (base, reason) in [
+        ("", "empty"),
+        (".hidden", "leading or trailing dot or space"),
+        ("a..", "leading or trailing dot or space"),
+        ("trailing ", "leading or trailing dot or space"),
+        ("a/b", "path separator"),
+        ("a\\b", "path separator"),
+        ("C:x", "drive or stream colon"),
+        ("CON", "reserved device name"),
+        ("a\u{7}b", "control character"),
+    ] {
+        assert_eq!(unsafe_base_reason(base), Some(reason), "{base:?}");
+        assert!(!is_safe_base(base), "{base:?}");
+    }
+    let fine = "2026-09-20 1432 Saving... please wait";
+    assert_eq!(unsafe_base_reason(fine), None);
+    assert!(is_safe_base(fine));
+}

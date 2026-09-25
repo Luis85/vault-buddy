@@ -36,66 +36,120 @@ use std::path::{Path, PathBuf};
 const WORDS: &[&str] = &["path", "file", "name", "title", "text", "caption", "base"];
 const LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 
-/// `src` with every `//` comment blanked (string literals and line
-/// numbers kept), so a log call quoted in a doc comment is not a call.
+/// `src` with every `//` and `/* */` comment and every char literal
+/// blanked (string literals and line numbers kept), so a log call quoted in
+/// a comment is not a call and `'"'` does not open a string.
 fn without_comments(src: &str) -> String {
+    let chars: Vec<char> = src.chars().collect();
     let mut out = String::with_capacity(src.len());
-    let mut chars = src.chars().peekable();
-    let (mut in_str, mut in_comment) = (false, false);
-    while let Some(c) = chars.next() {
-        if in_comment {
-            if c == '\n' {
-                in_comment = false;
-                out.push('\n');
-            } else {
-                out.push(' ');
-            }
+    let (mut i, mut in_str) = (0, false);
+    while i < chars.len() {
+        let (c, next) = (chars[i], chars.get(i + 1).copied());
+        if in_str {
+            let step = if c == '\\' { 2 } else { 1 };
+            in_str = c != '"';
+            out.extend(&chars[i..(i + step).min(chars.len())]);
+            i += step;
             continue;
         }
-        match c {
-            '\\' if in_str => {
-                out.push(c);
-                if let Some(n) = chars.next() {
-                    out.push(n);
-                }
-            }
-            '"' => {
-                in_str = !in_str;
-                out.push(c);
-            }
-            '/' if !in_str && chars.peek() == Some(&'/') => {
-                in_comment = true;
-                out.push(' ');
-            }
-            _ => out.push(c),
+        let skip = match (c, next) {
+            ('/', Some('/')) => comment_len(&chars[i..], "\n"),
+            ('/', Some('*')) => comment_len(&chars[i..], "*/"),
+            ('\'', _) => char_literal_len(&chars[i..]),
+            _ => 0,
+        };
+        if skip == 0 {
+            in_str = c == '"';
+            out.push(c);
+            i += 1;
+        } else {
+            let end = (i + skip).min(chars.len());
+            out.extend(
+                chars[i..end]
+                    .iter()
+                    .map(|&c| if c == '\n' { '\n' } else { ' ' }),
+            );
+            i = end;
         }
     }
     out
 }
 
-/// Byte offsets of every `log::<level>!(` / bare `<level>!(` call and the
-/// offset just past its `(`.
-fn macro_starts(code: &str) -> Vec<(usize, usize)> {
+/// A comment's length: up to (not including) a newline, or through `*/`.
+fn comment_len(rest: &[char], end: &str) -> usize {
+    let text: String = rest.iter().collect();
+    match text.find(end) {
+        Some(at) if end == "\n" => text[..at].chars().count(),
+        Some(at) => text[..at + end.len()].chars().count(),
+        None => rest.len(),
+    }
+}
+
+/// The length of a `'x'` or `'\x'` char literal at the start of `rest`,
+/// or 0 for a lifetime (`'a`), which has no closing quote.
+fn char_literal_len(rest: &[char]) -> usize {
+    match rest.get(1) {
+        Some('\\') => rest
+            .iter()
+            .skip(2)
+            .position(|&c| c == '\'')
+            .map_or(0, |at| at + 3),
+        Some(_) if rest.get(2) == Some(&'\'') => 3,
+        _ => 0,
+    }
+}
+
+/// What a scanned call is: a LOG call (every rule) or a MESSAGE
+/// construction — `format!`, `format_args!`, `io::Error::new`,
+/// `Error::other`, `anyhow!` — whose text the code receiving it logs as-is
+/// (`e.message`, `{e}`), so it may carry no `.display()` and no `{:?}` of
+/// a path. File NAMES are fine in a message: `format!("{name}.json")`
+/// builds names legitimately, so the name rule is the log calls' alone.
+#[derive(Clone, Copy, PartialEq)]
+enum Call {
+    Log,
+    Message,
+}
+
+const MESSAGES: &[&str] = &[
+    "format!(",
+    "format_args!(",
+    "io::Error::new(",
+    "Error::other(",
+    "anyhow!(",
+];
+
+/// Every offset where `needle` starts in `code`.
+fn occurrences<'a>(code: &'a str, needle: &'a str) -> impl Iterator<Item = usize> + 'a {
+    code.match_indices(needle).map(|(at, _)| at)
+}
+
+/// Every log call and message construction: `(start of the call, just past
+/// its "(", what it is)`. `log::log!(Level::…, …)` is a log call too.
+fn call_starts(code: &str) -> Vec<(usize, usize, Call)> {
     let bytes = code.as_bytes();
+    let ident_before =
+        |at: usize| at > 0 && (bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_');
     let mut out = Vec::new();
-    for level in LEVELS {
+    for level in LEVELS.iter().chain(&["log"]) {
         let needle = format!("{level}!(");
-        let mut from = 0;
-        while let Some(i) = code[from..].find(&needle) {
-            let at = from + i;
-            from = at + needle.len();
-            let before = if at == 0 { b' ' } else { bytes[at - 1] };
+        for at in occurrences(code, &needle) {
             let start = if code[..at].ends_with("log::") {
                 at - "log::".len()
-            } else if before.is_ascii_alphanumeric() || before == b'_' || before == b':' {
+            } else if *level == "log" || ident_before(at) || (at > 0 && bytes[at - 1] == b':') {
                 continue;
             } else {
                 at
             };
-            out.push((start, from));
+            out.push((start, at + needle.len(), Call::Log));
         }
     }
-    out.sort_unstable();
+    for needle in MESSAGES {
+        for at in occurrences(code, needle).filter(|&at| !ident_before(at)) {
+            out.push((at, at + needle.len(), Call::Message));
+        }
+    }
+    out.sort_unstable_by_key(|&(start, open, _)| (start, open));
     out
 }
 
@@ -248,6 +302,19 @@ fn is_path_expr(expr: &str) -> bool {
     .any(|n| expr.contains(n))
 }
 
+/// `is_path_expr` for an expression formatted directly: a `.join(` counts
+/// only on a receiver this file says is a path, since `names.join(", ")`
+/// joins strings.
+fn is_formatted_path_expr(expr: &str, paths: &HashSet<String>) -> bool {
+    match expr.split_once(".join(") {
+        Some((receiver, _)) => {
+            let receiver = receiver.trim_start_matches('&').trim();
+            paths.contains(receiver) || is_path_expr(receiver)
+        }
+        None => is_path_expr(expr),
+    }
+}
+
 fn segments(expr: &str) -> impl Iterator<Item = &str> {
     expr.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .flat_map(|s| s.split('_'))
@@ -255,18 +322,18 @@ fn segments(expr: &str) -> impl Iterator<Item = &str> {
 }
 
 /// Why `expr`, formatted by a log call, breaks a rule — or `None`.
-fn problem(expr: &str, debug: bool, paths: &HashSet<String>) -> Option<&'static str> {
+fn problem(expr: &str, debug: bool, paths: &HashSet<String>, call: Call) -> Option<&'static str> {
     if expr.contains("redact") {
         return None;
     }
     if expr.contains(".display()") {
         return Some(".display() prints the whole path");
     }
-    if segments(expr).any(|s| WORDS.contains(&s)) {
+    if call == Call::Log && segments(expr).any(|s| WORDS.contains(&s)) {
         return Some("names a path, file, name, title, text, caption or base");
     }
     let bare = expr.trim_start_matches('&').trim();
-    if debug && (paths.contains(bare) || is_path_expr(expr)) {
+    if debug && (paths.contains(bare) || is_formatted_path_expr(expr, paths)) {
         return Some("{:?} of a Path/PathBuf prints the whole path");
     }
     None
@@ -277,11 +344,19 @@ pub(crate) fn findings(file: &str, src: &str) -> Vec<String> {
     let code = without_comments(src);
     let paths = path_typed_idents(&code);
     let mut out = Vec::new();
-    for (start, open) in macro_starts(&code) {
+    for (start, open, call) in call_starts(&code) {
         let body = balanced(&code, open);
         let mut args = split_args(body);
-        if args.first().is_some_and(|a| a.starts_with("target:")) {
+        while args
+            .first()
+            .is_some_and(|a| a.starts_with("target:") || a.contains("Level::"))
+        {
             args.remove(0);
+        }
+        if call == Call::Message && !args.first().is_some_and(|a| a.starts_with('"')) {
+            // `io::Error::new(kind, message)`: no format string, so every
+            // argument is checked as a whole below.
+            args.insert(0, String::from("\"\""));
         }
         let Some(fmt) = args.first().cloned() else {
             continue;
@@ -317,7 +392,7 @@ pub(crate) fn findings(file: &str, src: &str) -> Vec<String> {
         }
         // `.display()` anywhere in the call, formatted or not.
         exprs.extend(rest.iter().map(|a| (a.clone(), false)));
-        if let Some(why) = exprs.iter().find_map(|(e, d)| problem(e, *d, &paths)) {
+        if let Some(why) = exprs.iter().find_map(|(e, d)| problem(e, *d, &paths, call)) {
             let line = code[..start].matches('\n').count() + 1;
             let call: String = code[start..open + body.len() + 1]
                 .split_whitespace()
@@ -437,5 +512,78 @@ mod tests {
     fn a_call_quoted_in_a_comment_is_not_a_call() {
         let fixture = "//! `log::warn!(\"{}\", path.display())` is what this forbids.\nfn f() {}\n";
         assert!(findings("fixture.rs", fixture).is_empty());
+    }
+
+    // Fix round 1: a message is logged as-is by the code that receives it
+    // (`e.message`, `{e}`), so building one with a raw path is logging it.
+    #[test]
+    fn a_path_in_a_message_construction_is_flagged() {
+        let fixture = concat!(
+            "fn f(dir: &Path, path: &Path) -> EditorError {
+",
+            "    let a = format!(\"Cannot read {}: {e}\", dir.display());
+",
+            "    let b = io::Error::new(io::ErrorKind::Other, path.display().to_string());
+",
+            "    let c = format!(\"{path:?} is gone\");
+",
+            "    let d = format!(\"Cannot read {}: {e}\", redact_path(dir));
+",
+            "    let e = format!(\"{name}.json\");
+",
+            "    internal(a)
+",
+            "}
+",
+        );
+        let found = findings("fixture.rs", fixture);
+        assert_eq!(found.len(), 3, "{found:?}");
+        assert!(
+            found[0].starts_with("fixture.rs:2: .display()"),
+            "{found:?}"
+        );
+        assert!(
+            found[1].starts_with("fixture.rs:3: .display()"),
+            "{found:?}"
+        );
+        assert!(
+            found[2].starts_with("fixture.rs:4: {:?} of a Path"),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn log_log_with_a_level_is_a_log_call() {
+        let fixture = "fn f() {
+    log::log!(log::Level::Warn, \"refused {base:?}\");
+}
+";
+        let found = findings("fixture.rs", fixture);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].starts_with("fixture.rs:2: names"), "{found:?}");
+    }
+
+    #[test]
+    fn char_literals_and_block_comments_do_not_hide_or_invent_calls() {
+        let fixture = concat!(
+            "fn f(path: &Path) {
+",
+            "    let q = '\"';
+",
+            "    let url = \"https://example.org\";
+",
+            "    log::warn!(\"x {}\", path.display());
+",
+            "    /* log::warn!(\"{}\", path.display()); */
+",
+            "}
+",
+        );
+        let found = findings("fixture.rs", fixture);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].starts_with("fixture.rs:4: .display()"),
+            "{found:?}"
+        );
     }
 }

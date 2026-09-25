@@ -103,6 +103,18 @@
   --color-gold-bg: #f7ecd8;
 }
 
+/* Tutorial editor dark theme (Task 58 fix round 1, GAP-209). The `@theme`
+   defaults above ARE the dark theme and stay the concept bundle's values;
+   this block overrides two of them in the editor window only (no other
+   window sets `data-theme`): `fg-subtle` (slate-500 read 2.99:1 on
+   `raised`, now 4.90:1) and `video` (the clip names, 4.33:1 on `video-bg`,
+   now 4.88:1). Measured by `tests/e2e/editorKeyboard.spec.ts` in both
+   themes. */
+[data-theme="dark"] {
+  --color-fg-subtle: #8e98aa;
+  --color-video: #b39ef0;
+}
+
 html,
 body,
 #app {
