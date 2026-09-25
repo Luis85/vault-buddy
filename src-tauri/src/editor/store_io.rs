@@ -169,28 +169,46 @@ pub fn commit_project(
 }
 
 pub(crate) fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, EditorError> {
-    let meta = std::fs::metadata(path).map_err(|e| {
+    use std::io::Read;
+    let cannot = |e: io::Error| {
         EditorError::new(
             EditorErrorCode::Internal,
             format!("Cannot read the file {}: {e}", redact_path(path)),
         )
-    })?;
-    if meta.len() > max_bytes {
-        return Err(EditorError::new(
+    };
+    let too_big = |len: u64| {
+        EditorError::new(
             EditorErrorCode::InvalidProject,
             format!(
-                "The file {} is {} bytes, exceeding the {max_bytes} byte maximum",
-                redact_path(path),
-                meta.len()
+                "The file {} is {len} bytes, exceeding the {max_bytes} byte maximum",
+                redact_path(path)
+            ),
+        )
+    };
+    // No-follow (final review M4): a store file replaced by a link is not
+    // read through, and the size checked is the size of what is read.
+    let meta = std::fs::symlink_metadata(path).map_err(cannot)?;
+    if !meta.is_file() {
+        return Err(EditorError::new(
+            EditorErrorCode::Internal,
+            format!(
+                "The file {} is not a plain file; it was not read",
+                redact_path(path)
             ),
         ));
     }
-    std::fs::read(path).map_err(|e| {
-        EditorError::new(
-            EditorErrorCode::Internal,
-            format!("Cannot read the file {}: {e}", redact_path(path)),
-        )
-    })
+    if meta.len() > max_bytes {
+        return Err(too_big(meta.len()));
+    }
+    // Bounded again while reading: the file may grow after the check.
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|f| f.take(max_bytes + 1).read_to_end(&mut bytes))
+        .map_err(cannot)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(too_big(bytes.len() as u64));
+    }
+    Ok(bytes)
 }
 
 /// Whether SOMETHING already occupies `id`'s `project.json` path — the ONE
@@ -274,12 +292,7 @@ pub fn write_sources(
 
 fn read_sources(dir: &Path) -> Result<BTreeMap<String, SourceRecord>, EditorError> {
     let path = dir.join(SOURCES_FILE);
-    let bytes = std::fs::read(&path).map_err(|e| {
-        EditorError::new(
-            EditorErrorCode::Internal,
-            format!("Cannot read the file {}: {e}", redact_path(&path)),
-        )
-    })?;
+    let bytes = read_bounded(&path, limits::MAX_PROJECT_JSON_BYTES)?;
     // `invalidProject`, not `internal` (final review I3): a sources file
     // that does not parse is a damaged project — no retry opens it — and
     // `editor_open_staged` re-migrates a capture pinned to one.
@@ -344,7 +357,10 @@ pub fn list_projects(root: &Path) -> Vec<ProjectSummaryDto> {
         if !is_valid_id(&id) {
             continue;
         }
-        let Ok(bytes) = std::fs::read(entry.path().join(PROJECT_FILE)) else {
+        let Ok(bytes) = read_bounded(
+            &entry.path().join(PROJECT_FILE),
+            limits::MAX_PROJECT_JSON_BYTES,
+        ) else {
             continue;
         };
         let Ok(envelope) = serde_json::from_slice::<WorkspaceEnvelope>(&bytes) else {
@@ -428,15 +444,7 @@ pub fn remove_project(root: &Path, id: &str) -> Result<(), EditorError> {
         ));
     }
     let project_path = dir.join(PROJECT_FILE);
-    let bytes = std::fs::read(&project_path).map_err(|e| {
-        EditorError::new(
-            EditorErrorCode::Internal,
-            format!(
-                "Cannot read the project file {}: {e}",
-                redact_path(&project_path)
-            ),
-        )
-    })?;
+    let bytes = read_bounded(&project_path, limits::MAX_PROJECT_JSON_BYTES)?;
     // The JSON document, not a valid project (final review I3): a damaged
     // project is exactly the one that must stay discardable, and its own
     // `project.id` is still the proof of whose folder this is.

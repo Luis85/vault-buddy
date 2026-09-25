@@ -288,7 +288,10 @@ fn plan_publish(
         "" => cfg.screen_capture_root(),
         chosen => chosen,
     };
-    let folder_root = safe_recording_root(&vault_path, folder).map_err(unavailable)?;
+    // A fixed message (final review M10): `safe_recording_root`'s own quotes
+    // the folder, which here is whatever the user typed.
+    let folder_root = safe_recording_root(&vault_path, folder)
+        .map_err(|_| unavailable("That folder is outside the vault. Choose a folder inside it."))?;
     let dir = capture_dir(
         &folder_root,
         rendered_at(&product.created_at).date(),

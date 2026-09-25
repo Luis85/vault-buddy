@@ -31,6 +31,7 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use super::authz::{require_editor_window, require_session};
 use super::project_store::project_dir;
 use super::redact::redact_path;
+use super::store_io::read_bounded;
 use super::EditorState;
 
 pub(crate) const WORKSPACE_FILE: &str = "workspace.json";
@@ -84,21 +85,25 @@ pub(crate) fn read_workspace(root: &Path, project_id: &str) -> Result<Value, Edi
         )
     })?;
     let path = dir.join(WORKSPACE_FILE);
-    let raw: Value = match std::fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-            log::warn!(
-                "editor workspace: {} is not valid JSON, degrading to empty ({e})",
-                redact_path(&path)
-            );
-            Value::Object(serde_json::Map::new())
-        }),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Object(serde_json::Map::new()),
-        Err(e) => {
-            return Err(internal(format!(
-                "Cannot read the workspace file {}: {e}",
-                redact_path(&path)
-            )))
-        }
+    let empty = || Value::Object(serde_json::Map::new());
+    // Bounded and no-follow (final review M4): a file over the size the
+    // save path writes degrades like a malformed one, unread.
+    let raw: Value = match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => empty(),
+        _ => match read_bounded(&path, MAX_WORKSPACE_JSON_BYTES as u64) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+                log::warn!(
+                    "editor workspace: {} is not valid JSON, degrading to empty ({e})",
+                    redact_path(&path)
+                );
+                empty()
+            }),
+            Err(e) if e.code == EditorErrorCode::InvalidProject => {
+                log::warn!("editor workspace: {}; degrading to empty", e.message);
+                empty()
+            }
+            Err(e) => return Err(internal(e.message)),
+        },
     };
     Ok(serde_json::to_value(sanitize(&raw)).expect("Workspace always serializes"))
 }
@@ -226,6 +231,24 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let state = EditorState::default();
         let session_id = opened_session(root.path(), &state, "proj1");
+
+        let value = get_workspace_in(&state, root.path(), &session_id).unwrap();
+
+        assert_eq!(value, serde_json::json!({}));
+    }
+
+    // Final review M4: `workspace.json` was read whole, however large. A
+    // file over the bound (the save path never writes one) degrades like a
+    // malformed one, to the sanitized empty blob, without being read.
+    #[test]
+    fn an_oversized_workspace_file_degrades_to_empty_without_being_read() {
+        let root = tempfile::tempdir().unwrap();
+        let state = EditorState::default();
+        let session_id = opened_session(root.path(), &state, "proj1");
+        let mut bytes = br#"{"theme":"light"}"#.to_vec();
+        bytes.resize(MAX_WORKSPACE_JSON_BYTES + 1, b' ');
+        let dir = project_dir(root.path(), "proj1").unwrap();
+        std::fs::write(dir.join(WORKSPACE_FILE), bytes).unwrap();
 
         let value = get_workspace_in(&state, root.path(), &session_id).unwrap();
 

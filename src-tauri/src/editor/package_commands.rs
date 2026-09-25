@@ -52,6 +52,13 @@ use super::EditorState;
 
 /// The refusal a portable export past `MAX_PACKAGE_MEDIA_BYTES` gets (ADR
 /// R9, residual R-P1: the lightweight file is the way forward).
+/// Final review M7: the project FILE is over the bound only because it
+/// carries every rendered video's saved edit, which a save leaves to the
+/// product ledger.
+pub(crate) const TOO_LARGE_WITH_RENDERS: &str = "This project file would be over its 8 MiB limit \
+     because it carries the saved edit of every rendered video. The project itself still saves \
+     normally.";
+
 const TOO_LARGE: &str = "This project is too large for a portable file (limit 200 MiB). Save a lightweight copy instead.";
 /// The refusal for a save target that exists and is not this project's own
 /// earlier file of the same format.
@@ -376,6 +383,23 @@ fn normalized_target(chosen: &Path, format: PackageFormat) -> Result<PathBuf, Ed
     Ok(chosen.with_file_name(package_file_name(&name, format)))
 }
 
+/// Why a project file would be over the bound (final review M7): a save
+/// leaves products' snapshots to the ledger while a project file carries
+/// them, so when the envelope WITHOUT them fits, it is the renders — and
+/// saying "the project is too large" would contradict the save that works.
+fn too_large(envelope: &WorkspaceEnvelope) -> &'static str {
+    let mut lean = envelope.clone();
+    for product in &mut lean.record.products {
+        product.snapshot = None;
+    }
+    let lean_len = serde_json::to_vec_pretty(&lean).map_or(u64::MAX, |j| j.len() as u64);
+    if lean_len <= limits::MAX_PROJECT_JSON_BYTES {
+        TOO_LARGE_WITH_RENDERS
+    } else {
+        "This project is too large to save as a project file."
+    }
+}
+
 /// The `AppHandle`-free half of `editor_export_package`. Every refusal the
 /// project itself earns (a stale revision, clashing asset ids, a project
 /// too large for the format) comes BEFORE the save dialog; the target check
@@ -402,10 +426,7 @@ pub(crate) fn export_package_in(
         )
     })?;
     if json.len() as u64 > limits::MAX_PROJECT_JSON_BYTES {
-        return Err(err(
-            EditorErrorCode::InvalidRequest,
-            "This project is too large to save as a project file.",
-        ));
+        return Err(err(EditorErrorCode::InvalidRequest, too_large(&envelope)));
     }
     let media = match format {
         PackageFormat::Portable => collect_media(root, &envelope, &sources)?,

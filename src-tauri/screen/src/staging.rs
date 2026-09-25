@@ -389,8 +389,31 @@ pub fn write_sidecar(dir: &Path, base: &str, sidecar: &StagedSidecar) -> std::io
 /// Same defensive-read posture as the rest of the vault domain: a
 /// hand-edited or truncated sidecar must make ONE capture un-resumable,
 /// never fail the whole staging scan.
+/// The largest sidecar `read_sidecar` reads (final review M4): far above
+/// any this app writes, far below reading an arbitrary file whole.
+pub const MAX_SIDECAR_BYTES: u64 = 1024 * 1024;
+
+/// A sidecar's bytes: a plain file (never read through a link wearing its
+/// name) within `MAX_SIDECAR_BYTES`, bounded again while reading.
+fn read_sidecar_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let refused = || std::io::Error::new(std::io::ErrorKind::InvalidData, "not a sidecar");
+    let meta = std::fs::symlink_metadata(path)?;
+    if !meta.is_file() || meta.len() > MAX_SIDECAR_BYTES {
+        return Err(refused());
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_SIDECAR_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_SIDECAR_BYTES {
+        return Err(refused());
+    }
+    Ok(bytes)
+}
+
 pub fn read_sidecar(path: &Path) -> Option<StagedSidecar> {
-    let bytes = std::fs::read(path)
+    let bytes = read_sidecar_bytes(path)
         .map_err(|e| {
             log::warn!(
                 "screen staging: cannot read sidecar {}: {e}",
@@ -446,6 +469,10 @@ fn without_unreadable_blocks(bytes: &[u8], path: &Path) -> Option<StagedSidecar>
 #[cfg(test)]
 #[path = "staging_webcam_tests.rs"]
 mod webcam_tests;
+
+#[cfg(test)]
+#[path = "staging_read_tests.rs"]
+mod read_tests;
 
 #[cfg(test)]
 mod tests {

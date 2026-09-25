@@ -113,7 +113,14 @@ impl RenderRunner for FakeRunner {
             }
             Behaviour::Fails => {
                 std::fs::write(work.dest, b"truncated").unwrap();
-                Err(ScreenError::Sink("ffmpeg exited with status 1".into()))
+                // What ffmpeg's stderr really says: the absolute paths of
+                // what it read and wrote (final review M8).
+                let input = work.inputs.first().map(|p| p.display().to_string());
+                Err(ScreenError::Sink(format!(
+                    "ffmpeg exited with status 1: {}: Invalid data found; Error opening {}",
+                    input.unwrap_or_default(),
+                    work.dest.display()
+                )))
             }
             Behaviour::ClaimsWithoutOutput => Ok(work.plan.duration_ms),
             Behaviour::Panics => panic!("a bug in the render path"),
@@ -600,10 +607,11 @@ fn failed_render_leaves_no_product_and_no_part() {
         run_render_job(&state, job, &runner, &sink);
         let last = terminal(&sink);
         assert_eq!(last.phase, JobPhase::Failed);
-        assert!(
-            last.terminal.unwrap().error.is_some(),
-            "the failure is named"
-        );
+        let error = last.terminal.unwrap().error.expect("the failure is named");
+        // Final review M8: ffmpeg's stderr names absolute paths; the
+        // webview gets a fixed sentence and the log a redacted copy.
+        let root_text = root.path().display().to_string();
+        assert!(!error.message.contains(&root_text), "{}", error.message);
         assert!(!dir.join(JOBS_DIR).join(&job_id).exists(), "no part left");
         assert!(entries(&dir.join(PRODUCTS_DIR)).is_empty(), "no product");
         assert!(

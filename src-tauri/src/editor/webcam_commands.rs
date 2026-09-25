@@ -419,7 +419,9 @@ impl TakeIo for FfmpegTakeIo {
         if ok {
             return Ok(());
         }
-        log::warn!("webcam take remux failed: {}", stderr.trim());
+        // ffmpeg's stderr names both files (final review M8).
+        let detail = super::redact::redact_paths_in(stderr.trim(), &[part, out]);
+        log::warn!("webcam take remux failed: {detail}");
         Err(err(
             EditorErrorCode::UnsupportedMedia,
             "ffmpeg could not read the recorded take; it may be damaged.",

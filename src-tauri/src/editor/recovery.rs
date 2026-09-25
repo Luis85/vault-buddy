@@ -181,6 +181,19 @@ fn write_locked(state: &EditorState, root: &Path, session_id: &str) -> std::io::
     })?;
     let json = serde_json::to_string_pretty(&journal)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    // Final review M5: `load_journal` refuses anything over this bound, so
+    // a larger journal could never be resumed — and would replace the last
+    // one that could. Refused here, the older journal stays.
+    if json.len() as u64 > limits::MAX_PROJECT_JSON_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "the unsaved changes are {} bytes, over the {} byte bound; not journaled",
+                json.len(),
+                limits::MAX_PROJECT_JSON_BYTES
+            ),
+        ));
+    }
     write_atomic_replacing(&path, &json)
 }
 

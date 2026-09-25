@@ -123,7 +123,8 @@ pub(crate) fn open_staged_in(
             match load_opened(root, &pid).and_then(|o| ensure_sources_name(o, base, &pid)) {
                 Ok(opened) => return Ok(opened),
                 Err(e) if e.code == EditorErrorCode::InvalidProject => log::warn!(
-                    "editor_open_staged: {} is pinned to project {pid:?}, which cannot open it                      ({}); giving it a project of its own",
+                    "editor_open_staged: {} is pinned to project {pid:?}, which cannot open it \
+                     ({}); giving it a project of its own",
                     redact_name(base),
                     e.message
                 ),

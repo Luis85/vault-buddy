@@ -502,11 +502,14 @@ fn a_refused_publish_creates_nothing() {
         publish(&state, root.path(), &env, &gone).unwrap_err().code,
         EditorErrorCode::DestinationUnavailable
     );
+    let outside =
+        publish(&state, root.path(), &env, &destination("../outside", false)).unwrap_err();
+    assert_eq!(outside.code, EditorErrorCode::DestinationUnavailable);
+    // Final review M10: the folder is what the user typed; the refusal
+    // says what is wrong with it without repeating it back.
     assert_eq!(
-        publish(&state, root.path(), &env, &destination("../outside", false))
-            .unwrap_err()
-            .code,
-        EditorErrorCode::DestinationUnavailable
+        outside.message,
+        "That folder is outside the vault. Choose a folder inside it."
     );
     assert_eq!(
         publish_in(

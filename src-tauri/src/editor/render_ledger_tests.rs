@@ -325,3 +325,55 @@ fn a_failed_ledger_write_takes_the_unrecorded_product_back_out() {
         "the ledger is unchanged"
     );
 }
+
+// Final review M7: a save leaves products' snapshots to the ledger, a
+// project FILE carries them (a restored product needs its edit). So a
+// project with many renders saves fine and its file is over the bound —
+// and the refusal used to read as if the project itself were too large,
+// contradicting the save that had just worked. It now says what is.
+#[test]
+fn an_export_over_the_bound_because_of_render_snapshots_says_so() {
+    use crate::editor::package_commands::export_package_in;
+    use crate::editor::package_test_support::FakeChooser;
+    use vault_buddy_core::editor::package_plan::PackageFormat;
+    let root = tempfile::tempdir().unwrap();
+    let state = EditorState::default();
+    opened(root.path(), &state);
+    let project = padded(&state, 300_000);
+    let products: Vec<_> = (0..30)
+        .map(|i| {
+            let id = format!("prod-{i}");
+            new_product(
+                &project,
+                1,
+                &id,
+                "big",
+                &product_file_name(&id),
+                10,
+                None,
+                "t",
+            )
+        })
+        .collect();
+    write_ledger(root.path(), PROJECT, &products).unwrap();
+    let rev = snapshot_revision(&state);
+    crate::editor::save_commands::save_project_in(&state, root.path(), SESSION, rev)
+        .expect("the project itself saves");
+
+    let chooser = FakeChooser::saving_to(root.path().join("out.vbproject.json"));
+    let e = export_package_in(
+        &state,
+        root.path(),
+        &chooser,
+        SESSION,
+        rev,
+        PackageFormat::Lightweight,
+    )
+    .unwrap_err();
+    assert_eq!(e.code, EditorErrorCode::InvalidRequest);
+    assert_eq!(
+        e.message,
+        crate::editor::package_commands::TOO_LARGE_WITH_RENDERS
+    );
+    assert_eq!(chooser.asked.get(), 0, "refused before the dialog");
+}

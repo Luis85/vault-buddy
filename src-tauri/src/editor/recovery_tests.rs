@@ -744,3 +744,29 @@ fn interrupted_publish_is_reported_not_deleted() {
     );
     assert_eq!(interrupted_publishes(f.root()).len(), 2, "reported again");
 }
+
+// Final review M5: `load_journal` refuses a journal over the 8 MiB project
+// bound, so writing one would record changes that can never be resumed —
+// and, replacing the last loadable journal, lose the ones that could. The
+// writer refuses at the same bound and leaves any older journal alone.
+#[test]
+fn a_journal_over_the_load_bound_is_never_written() {
+    let f = Fixture::new();
+    let state = EditorState::default();
+    let mut project = crate::editor::project_store::minimal_project("proj-big");
+    create_project(f.root(), &project, &std::collections::BTreeMap::new()).unwrap();
+    project.extra.insert(
+        "padding".into(),
+        serde_json::Value::String("x".repeat(limits::MAX_PROJECT_JSON_BYTES as usize)),
+    );
+    let session =
+        vault_buddy_core::editor::EditorSession::resume_recovered("ses-big", project, 3, 2);
+    lock_ignoring_poison(&state.sessions).insert("ses-big".into(), session);
+
+    let refused = write_locked(&state, f.root(), "ses-big").unwrap_err();
+    assert_eq!(refused.kind(), io::ErrorKind::InvalidData);
+    assert!(
+        !f.journal("proj-big").exists(),
+        "an unloadable journal was written"
+    );
+}

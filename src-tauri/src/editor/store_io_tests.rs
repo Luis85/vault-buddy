@@ -393,3 +393,65 @@ fn remove_project_proves_ownership_from_a_damaged_but_readable_project_json() {
     assert!(remove_project(root.path(), "proj1").is_err());
     assert!(dir.join(PROJECT_FILE).is_file(), "nothing was removed");
 }
+
+/// `bytes` of JSON whitespace after `json`, so the document still parses
+/// and only its SIZE is wrong.
+fn padded(json: &str, total: u64) -> Vec<u8> {
+    let mut bytes = json.as_bytes().to_vec();
+    bytes.resize(total as usize, b' ');
+    bytes
+}
+
+// Final review M4: every store read is bounded. An oversized `sources.json`
+// was read whole into memory (and, being valid JSON, accepted); the same
+// for `project.json` in the listing and in the removal's ownership check.
+#[test]
+fn oversized_store_files_are_refused_not_read_whole() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = project_with_content(root.path());
+    let over = limits::MAX_PROJECT_JSON_BYTES + 1;
+    std::fs::write(dir.join(SOURCES_FILE), padded("{}", over)).unwrap();
+    assert_eq!(
+        load_sources(root.path(), "proj1").unwrap_err().code,
+        EditorErrorCode::InvalidProject
+    );
+
+    let project_json = std::fs::read_to_string(dir.join(PROJECT_FILE)).unwrap();
+    std::fs::write(dir.join(SOURCES_FILE), b"{}").unwrap();
+    std::fs::write(dir.join(PROJECT_FILE), padded(&project_json, over)).unwrap();
+    assert!(
+        list_projects(root.path()).is_empty(),
+        "an oversized project.json is not listed"
+    );
+    assert_eq!(
+        remove_project(root.path(), "proj1").unwrap_err().code,
+        EditorErrorCode::InvalidProject
+    );
+    assert!(dir.join(PROJECT_FILE).is_file());
+}
+
+/// A file symlink, or `false` where this host cannot make one (Windows
+/// without Developer Mode or elevation).
+fn symlink_file(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(target, link);
+    made.is_ok()
+}
+
+// Final review M4: `read_bounded` checked the size of what a link pointed
+// at and then read through it — a store file replaced by a link was
+// followed out of the project.
+#[test]
+fn read_bounded_never_follows_a_link() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = root.path().join("outside.json");
+    std::fs::write(&outside, b"[]").unwrap();
+    let link = root.path().join("products.json");
+    if !symlink_file(&outside, &link) {
+        eprintln!("SKIP: this host cannot create a symlink; the no-follow read did not run");
+        return;
+    }
+    assert!(read_bounded(&link, 1024).is_err());
+}

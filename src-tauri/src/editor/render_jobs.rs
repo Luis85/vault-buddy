@@ -561,12 +561,22 @@ fn job_dir(job: &RenderJob) -> Result<PathBuf, EditorError> {
         .ok_or_else(|| internal("Not a valid project id."))
 }
 
-fn render_error(e: ScreenError) -> EditorError {
+/// A failed render as the webview sees it. Anything but a cancel, a missing
+/// tool or a capability refusal carries ffmpeg's stderr, which names every
+/// file it was handed (final review M8): the log gets it with those paths
+/// redacted, the webview a fixed sentence.
+fn render_error(e: ScreenError, work: &RenderWork<'_>) -> EditorError {
     match e {
         ScreenError::Cancelled => cancelled(),
         ScreenError::ToolMissing => no_ffmpeg(),
         ScreenError::Refused(message) => err(EditorErrorCode::EncoderUnavailable, message),
-        other => internal(format!("The render failed: {other}")),
+        other => {
+            let mut known: Vec<&Path> = work.inputs.iter().map(PathBuf::as_path).collect();
+            known.extend([work.dest, work.job_dir]);
+            let detail = super::redact::redact_paths_in(&other.to_string(), &known);
+            log::warn!("editor render: ffmpeg failed: {detail}");
+            internal("The render failed. See the log for details.")
+        }
     }
 }
 
@@ -669,7 +679,7 @@ fn render_and_publish(
         .render(&work, &job.cancel, &mut |percent| {
             reporter.progress(JobPhase::Rendering, percent as f64 / 100.0);
         })
-        .map_err(render_error)?;
+        .map_err(|e| render_error(e, &work))?;
     reporter.progress(JobPhase::Publishing, 1.0);
     publish(job, &dest, duration_ms, state)
 }
