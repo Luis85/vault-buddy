@@ -19,7 +19,7 @@
 //! 1000 Hz tone with no picture, D two seconds of blue then two of green,
 //! E plain black -- all 4 s at 30 fps.
 //!
-//! Skips VISIBLY without ffmpeg/ffprobe (the `export_roundtrip.rs` rule):
+//! Skips VISIBLY without ffmpeg/ffprobe (the retired export round trip's rule):
 //! a silent skip is indistinguishable from a pass. CI's `rust-core` job
 //! installs ffmpeg so these run there. The tools, the synthesized inputs
 //! and the decoders live in `render_support/` (the 800-line cap).
@@ -525,6 +525,46 @@ fn identity_render_is_a_remux() {
     let source = probe_duration_ms(&fx, &a);
     assert_duration_near(out.outcome.duration_ms as i64, source, "the remux");
     assert_duration_near(probe_duration_ms(&fx, &out.path), source, "the remux file");
+}
+
+// Task 59: the successor of the retired phase-5 export's fast-path proof
+// (`an_untouched_export_remuxes_to_the_same_length_without_re_encoding`).
+// "Save unchanged" is now Render (identity -> remux) + Publish, so the
+// promise that an untouched capture reaches the vault LOSSLESSLY lives
+// here. The packet md5 is what makes "lossless" an assertion rather than a
+// claim: a re-encode of the same footage produces a different bitstream
+// even when the length matches to the millisecond, so `remuxed` and a
+// duration alone could both be satisfied by a transcode.
+#[test]
+fn identity_render_of_an_untouched_capture_is_lossless() {
+    let fx = fixture_or_skip!();
+    let a = input_a(&fx);
+    let doc = project(
+        vec![asset("a", "video")],
+        vec![track("v", "video")],
+        vec![clip("ca", "a", "v", 0, 0, INPUT_MS)],
+    );
+    let out = render_project(&fx, doc, &[("a", video_source(0, W, H, true), &a)], None);
+    assert!(out.plan.is_identity(), "the fixture must be R1's identity");
+    assert!(out.outcome.remuxed, "an identity render must be a remux");
+    let md5 = |path: &Path| {
+        let mut args = strings(&["-v", "error", "-i"]);
+        args.push(path.to_string_lossy().into_owned());
+        args.extend(strings(&["-map", "0:v", "-c", "copy", "-f", "md5", "-"]));
+        String::from_utf8_lossy(&tool_stdout(&fx.ffmpeg, &args))
+            .trim()
+            .to_string()
+    };
+    let source = md5(&a);
+    assert!(
+        source.starts_with("MD5="),
+        "the fixture flaw: no md5 read: {source}"
+    );
+    assert_eq!(
+        source,
+        md5(&out.path),
+        "an untouched capture's render must copy the encoded video verbatim"
+    );
 }
 
 // Fix round 1 (review, Important): a staged capture's asset duration is

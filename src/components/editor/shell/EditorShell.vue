@@ -33,16 +33,13 @@
  * **The keyboard shortcut dispatcher (Task 21)** lives here — the carried
  * Task 17 finding ("there are no clip elements to focus until the timeline
  * … CARRY the wiring to Task 20/21") lands on THIS root element rather than
- * `window`, and deliberately so: `LegacyCaptureEditor.vue` (still mounted
- * alongside this shell — `SHOW_LEGACY_EDITOR`, `EditorRoot.vue`) binds its
- * OWN Ctrl+Z/Shift+Z/Y listener on `window` unconditionally, so a second
- * `window`-level listener here would double-fire on every undo/redo
- * keystroke while both surfaces are up. A `@keydown` on this shell's own
- * root instead only ever sees a keystroke whose focus target is somewhere
- * INSIDE this subtree (a toolbar button, a timeline clip, an inspector
- * field) — bubbling, no capture — and calls `event.stopPropagation()` for
- * every combo it actually handles, so a shortcut this dispatcher claims
- * never reaches the legacy surface's `window` listener at all; an
+ * `window`. A `@keydown` on this shell's own root only ever sees a
+ * keystroke whose focus target is somewhere INSIDE this subtree (a toolbar
+ * button, a timeline clip, an inspector field) — bubbling, no capture — and
+ * calls `event.stopPropagation()` for every combo it actually handles, so a
+ * shortcut this dispatcher claims reaches no `window`-level listener behind
+ * it (the retired phase-4 editor bound its own Ctrl+Z there until Task 59,
+ * which is why the rule was written); an
  * unmatched, currently-disabled, or nothing-to-send combo (F6 with the
  * guide closed, Ctrl+E with nothing on the timeline; F1/? and F6 are the
  * guide's, and Ctrl+S/Ctrl+E the header's Save and the toolbar's Review —
@@ -54,13 +51,11 @@
  *
  * **Height (Task 22).** The shell root, its grid and the preview slot's
  * wrapper all `grow`: the preview stage (`PreviewSurface`) takes whatever
- * height the window has left rather than a fixed or aspect-derived one.
- * While the legacy phase-4 surface still shares the window
- * (`SHOW_LEGACY_EDITOR`), its own `flex-1` preview and this shell split the
- * leftover height between them, and at the 960x640 floor both give theirs
- * up entirely — so the stage never pushes Save off-screen (the
- * `tests/e2e/editorLayout.spec.ts` contract). `min-height` stays `auto`
- * everywhere: the shell never shrinks below its own content.
+ * height the window has left rather than a fixed or aspect-derived one,
+ * and at the 960x640 floor gives it up entirely — so the stage never pushes
+ * the header's Save off-screen (the `tests/e2e/editorShell.spec.ts`
+ * contract). `min-height` stays `auto` everywhere: the shell never shrinks
+ * below its own content.
  *
  * **`NotificationHost` (Task 32 fix round 1).** The editor window had no
  * toast surface at all until `PreviewToolbar`'s ratio control needed one —
@@ -106,7 +101,7 @@ import PreviewToolbar from "./PreviewToolbar.vue";
 /** SCREENS-AND-INTERACTIONS.md §12's own breakpoint. */
 /** Task 39: the header's "Open a project file", forwarded to `EditorRoot`,
  * which owns which project the shell is showing. */
-const emit = defineEmits<{ (e: "open-project-file"): void }>();
+const emit = defineEmits<{ (e: "open-project-file"): void; (e: "discard-project"): void }>();
 
 const COMPACT_BREAKPOINT = 1180;
 
@@ -264,11 +259,10 @@ function onShellKeydown(event: KeyboardEvent) {
   );
   const acted = onAppKey(actionId, ctx) || activateEditorAction(actionId, ctx, (command) => editorProject.execute(command));
   if (!acted) return;
-  // Claimed: stop it here so `LegacyCaptureEditor.vue`'s own `window`
-  // listener (still mounted -- see the module doc) never double-handles the
-  // same keystroke. A disabled/unmatched/nothing-to-send combo returns
-  // above WITHOUT this, so it keeps bubbling exactly as it did before this
-  // dispatcher existed.
+  // Claimed: stop it here so no `window`-level listener behind the shell
+  // double-handles the same keystroke (see the module doc). A
+  // disabled/unmatched/nothing-to-send combo returns above WITHOUT this, so
+  // it keeps bubbling exactly as it did before this dispatcher existed.
   event.preventDefault();
   event.stopPropagation();
 }
@@ -289,6 +283,7 @@ function onShellKeydown(event: KeyboardEvent) {
       @toggle-inspector="inspectorOpen = !inspectorOpen"
       @toggle-theme="toggleTheme"
       @open-project-file="emit('open-project-file')"
+      @discard-project="emit('discard-project')"
     />
 
     <div

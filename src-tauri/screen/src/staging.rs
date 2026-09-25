@@ -251,8 +251,9 @@ pub struct StagedSidecar {
     ///
     /// The same forward-compatibility goal `source_kind`'s own doc states,
     /// applied to the whole file rather than one field. Phase 4 made the
-    /// sidecar a READ-MODIFY-WRITE surface (`save_capture_timeline` rewrites
-    /// it on every editor operation), and a plain struct round-trip drops
+    /// sidecar a READ-MODIFY-WRITE surface (its timeline write rewrote it on
+    /// every editor operation until Task 59; the pin write still does), and
+    /// a plain struct round-trip drops
     /// whatever it does not declare — so a downgrade, a rollback, or a
     /// mixed-version sync folder would have this build silently erase a
     /// newer one's fields on the user's next keystroke. Flattening them into
@@ -303,8 +304,9 @@ pub struct WebcamSidecar {
 /// **`base` is a separate argument on purpose (GAP-108).** The path is
 /// derived from the CALLER's base, never from `sidecar.base`, because a
 /// sidecar is a file on disk that `read_sidecar`'s own doc says may be
-/// hand-edited — so in a read-modify-write (phase 4's
-/// `save_capture_timeline`) that field is untrusted input that would
+/// hand-edited — so in a read-modify-write (the tutorial editor's pin
+/// write; phase 4's timeline write before Task 59) that field is untrusted
+/// input that would
 /// otherwise become a path. `dir.join("../../obsidian/obsidian.json")` lands
 /// outside staging entirely, and on Windows `"C:Windows"` reaches
 /// drive-C-relative and `"COM1"` reaches the serial port. The caller

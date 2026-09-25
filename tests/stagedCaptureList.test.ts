@@ -1,7 +1,9 @@
 /**
  * The resume-or-discard list (spec §10): "Opening Record Screen with staged
  * captures present shows them first: each with its source, duration and age,
- * offering *Resume editing* or *Discard*."
+ * offering *Resume editing* or *Discard*." Since Task 59 retired the
+ * phase-5 Save, "resume editing" reads *Edit to render and publish*: the
+ * tutorial editor's Render + Publish is how a capture reaches a vault.
  *
  * Presentational — no `invoke`, no store, no IPC mock. `ScreenSourcePicker`
  * owns the two commands behind it and `tests/screenSourcePicker.test.ts`
@@ -170,9 +172,9 @@ describe("StagedCaptureList", () => {
     expect(text).toContain("length unknown");
   });
 
-  // Save refuses a recovered capture outright (`export_worker::prepare`:
-  // it carries no vault id), and the editor it would open has a zero-length
-  // timeline. Offering Resume is offering a dead end.
+  // The editor refuses a recovered capture outright (`editor_open_staged`,
+  // F7: it carries no vault id and no length). Offering Edit is offering a
+  // dead end.
   it("does not offer to resume a capture that can never be saved", () => {
     const w = list([capture({ recovered: true, durationMs: 0, outputDurationMs: 0 })]);
     expect(w.find(resume("2026-09-20 1000 Figma")).exists()).toBe(false);
@@ -203,8 +205,8 @@ describe("StagedCaptureList", () => {
   });
 
   // F7 (partial): a recovered capture never offers Resume/Edit regardless
-  // of a pin (`export_worker::prepare` refuses a recovered capture's Save
-  // outright), and a pin still refuses Discard — so a pinned recovered row
+  // of a pin (`editor_open_staged` refuses a recovered capture outright),
+  // and a pin still refuses Discard — so a pinned recovered row
   // is left with neither action rendered. Task 10 is the enforcement point
   // that stops one from ever being created; this only pins the RENDERING.
   it("a pinned recovered row offers neither Edit nor Discard", () => {
@@ -213,11 +215,12 @@ describe("StagedCaptureList", () => {
     expect(w.find(discard("2026-09-20 1000 Figma")).exists()).toBe(false);
   });
 
-  // The paired negative: an ordinary (unpinned) capture keeps its old
-  // "Resume editing" label and says nothing about a tutorial project.
-  it("an unpinned capture keeps the resume-editing label and says nothing about a project", () => {
+  // The paired negative: an ordinary (unpinned) capture says what Edit is
+  // FOR now that the phase-5 Save is retired (Task 59) — render, then
+  // publish — and says nothing about a tutorial project.
+  it("an unpinned capture offers Edit to render and publish and says nothing about a project", () => {
     const w = list([capture()]);
-    expect(w.get(resume("2026-09-20 1000 Figma")).text()).toBe("Resume editing");
+    expect(w.get(resume("2026-09-20 1000 Figma")).text()).toBe("Edit to render and publish");
     expect(w.get(row("2026-09-20 1000 Figma")).text()).not.toContain("tutorial project");
   });
 
@@ -226,8 +229,8 @@ describe("StagedCaptureList", () => {
   // confirms it holds footage — but the row offered it as unknown-length with
   // a two-click permanent Discard as its only action, and said nothing about
   // the playable file. The one honest sentence in the feature
-  // (`export_worker::mod.rs`'s recovered-note body) sits behind a Save button
-  // this row never renders. Without this line the user's only readable option
+  // (the retired export's recovered-note body) sat behind a Save button this
+  // row never rendered. Without this line the user's only readable option
   // is to destroy the recording.
   it("tells the user a recovered capture's video is on disk, and where", () => {
     const w = list([capture({ recovered: true, durationMs: 0, outputDurationMs: 0 })]);
@@ -298,5 +301,14 @@ describe("StagedCaptureList", () => {
     const w = list([]);
     expect(w.find('[data-testid="staged-list"]').exists()).toBe(false);
     expect(w.text()).toBe("");
+  });
+
+  // Task 59: nothing here is "saved" any more — a capture reaches a vault
+  // by being rendered and published, so the section says what is missing.
+  it("names the section by what is missing, not by a save that no longer exists", () => {
+    const w = list([capture()]);
+    const text = w.get('[data-testid="staged-list"]').text();
+    expect(text).toContain("Not published yet");
+    expect(text.toLowerCase()).not.toContain("saved");
   });
 });

@@ -1,12 +1,19 @@
-//! The capture editor's IPC surface (spec 5.1, 8, 11).
+//! The editor window's panel-callable doors (spec 5.1, 11): opening it on a
+//! staged capture or a tutorial project, and listing the projects.
+//!
+//! Through phase 4 this module also carried the capture editor's own
+//! sidecar read and timeline write; Task 59 retired both with the phase-4
+//! editor. A staged capture now opens through the tutorial editor's
+//! session (`editor::session_commands::editor_open_staged`), which reads
+//! the sidecar natively and never writes a timeline back into it.
 //!
 //! **Why opening the editor takes two commands.** Spec 11 lists
 //! `open_capture_editor` as SYNC, because it shows and focuses a window and
-//! the window APIs are main-thread-only. But the editor also needs its
-//! capture's sidecar, which is disk I/O a sync command must never do. So the
-//! sync command shows the window and stashes the base name, and the editor
-//! webview drains that stash and fetches its own data asynchronously once it
-//! has mounted — the same split `document_commands::begin_document_import`
+//! the window APIs are main-thread-only. But opening a session over the
+//! capture is disk I/O a sync command must never do. So the sync command
+//! shows the window and stashes the base name, and the editor webview
+//! drains that stash and opens its session asynchronously once it has
+//! mounted — the same split `document_commands::begin_document_import`
 //! and `take_pending_import` already use, for the same reason: the target
 //! window has its own Pinia store and cannot be handed state directly.
 //!
@@ -27,9 +34,8 @@
 //! immediately before `show()`, so a listener installed once at mount (like
 //! `RegionRoot`'s for `region:begin`) re-fires the drain on every open,
 //! including one that lands on an editor already showing a different
-//! capture. Task 6, which writes `EditorRoot`, must subscribe to it.
+//! capture. `EditorRoot` subscribes to it.
 
-use std::path::Path;
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
@@ -65,34 +71,6 @@ pub enum EditorRequestKind {
 #[derive(Default)]
 pub struct EditorRequest(pub Mutex<Option<EditorRequestKind>>);
 
-/// What the editor renders. `asset_path` is the staged `.mp4`'s own ABSOLUTE
-/// path, which the webview hands to `convertFileSrc` to get a URL the asset
-/// protocol can serve.
-///
-/// It carried the bare file name until P-5: `convertFileSrc` does no joining
-/// — it percent-encodes its argument onto the asset origin — so a bare name
-/// produced a URL that resolved to no file on disk, matched no scope entry,
-/// and left the preview permanently blank. The opacity of the string was
-/// never the security boundary; the `assetProtocol.scope` in
-/// `tauri.conf.json` (`$APPLOCALDATA/screen-captures/*`) is, and it is
-/// enforced by Tauri on every request regardless of what this field says.
-/// Widening it is a `tauri.conf.json` edit, which no caller of this DTO can
-/// make. The path itself is not attacker-chosen either: it is
-/// `staging_dir(app_local_data_dir)` joined with an `is_safe_base`-validated
-/// base, and `load_from_staging_dir` has already confirmed the file is there.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StagedCaptureDetail {
-    pub base: String,
-    pub asset_path: String,
-    pub duration_ms: u64,
-    pub source_title: String,
-    pub width: u32,
-    pub height: u32,
-    pub recorded_at: String,
-    pub timeline: Option<serde_json::Value>,
-}
-
 /// Is this base name safe to turn into a path inside the staging directory?
 ///
 /// The base travels from the frontend, so it is untrusted input that becomes
@@ -115,8 +93,8 @@ pub struct StagedCaptureDetail {
 /// - a reserved device STEM (`CON`, `COM1`, `NUL`, …) resolves to the
 ///   PHYSICAL device regardless of directory or extension —
 ///   `dir.join("COM1.json")` is the COM1 serial port, and `std::fs::read`
-///   on an open port blocks forever, hanging `load_staged_capture`'s
-///   `spawn_blocking` closure and leaking the thread instead of erroring
+///   on an open port blocks forever, hanging whichever `spawn_blocking`
+///   closure reads the sidecar and leaking the thread instead of erroring
 ///   (GAP-108's hole at this end of the same pipe; `is_reserved_device_stem`
 ///   is shared with `staging` so both ends can draw from one list).
 ///
@@ -154,57 +132,6 @@ pub(crate) fn unsafe_base_reason(base: &str) -> Option<&'static str> {
     } else {
         None
     }
-}
-
-fn detail_from_sidecar(s: &staging::StagedSidecar, asset_path: &Path) -> StagedCaptureDetail {
-    StagedCaptureDetail {
-        base: s.base.clone(),
-        // Lossy because JSON carries UTF-8 and a Windows path is UTF-16: a
-        // path that does not round-trip would be unopenable, but it is also
-        // one this app could never have written — `sanitize_title` produces
-        // the base and `app_local_data_dir` produces the root.
-        asset_path: asset_path.to_string_lossy().into_owned(),
-        duration_ms: s.duration_ms,
-        source_title: s.source_title.clone(),
-        width: s.width,
-        height: s.height,
-        recorded_at: s.recorded_at.clone(),
-        timeline: s.timeline.clone(),
-    }
-}
-
-/// The disk read behind `load_staged_capture`, pulled out of its
-/// `spawn_blocking` closure so it takes a plain `&Path` rather than deriving
-/// one from `AppHandle` — which makes it unit-testable without a running
-/// Tauri app, and pins the "`asset_path` names a file INSIDE this staging
-/// directory" guarantee at the one call site that could actually break it
-/// (T-4): `detail_from_sidecar` takes `asset_path` as a separate argument
-/// precisely so nothing upstream of it can slip in a path from somewhere
-/// else.
-fn load_from_staging_dir(dir: &Path, requested_base: &str) -> Result<StagedCaptureDetail, String> {
-    let sidecar_path = dir.join(staging::sidecar_file_name(requested_base));
-    let sidecar = staging::read_sidecar(&sidecar_path)
-        .ok_or_else(|| "That capture's details could not be read.".to_string())?;
-    if sidecar.base != requested_base {
-        // M-1: `read_sidecar` exists precisely because a sidecar can be
-        // hand-edited (its own doc says so), so `sidecar.base` is untrusted.
-        // A hand-edited `"base": "../../evil"` would otherwise ride through
-        // validation on the REQUESTED name and come out the other side as
-        // the identity the editor holds and later hands to save/discard.
-        log::warn!(
-            "load_staged_capture: sidecar at {} carries base {:?}, which does not match the \
-             requested base {:?}; refusing",
-            sidecar_path.display(),
-            sidecar.base,
-            requested_base
-        );
-        return Err("That capture's details do not match its file name.".to_string());
-    }
-    let mp4 = dir.join(staging::mp4_file_name(requested_base));
-    if !mp4.is_file() {
-        return Err("That capture's video file is missing.".to_string());
-    }
-    Ok(detail_from_sidecar(&sidecar, &mp4))
 }
 
 /// The stash-then-emit-then-show sequence `open_capture_editor` and
@@ -320,95 +247,6 @@ pub async fn list_tutorial_projects(app: AppHandle) -> Result<Vec<ProjectSummary
     tauri::async_runtime::spawn_blocking(move || store_io::list_projects(&root))
         .await
         .map_err(|e| format!("Listing tutorial projects failed: {e}"))
-}
-
-/// ASYNC: reads the sidecar off disk, so it must not sit on the main thread.
-/// A thin `spawn_blocking` wrapper around `load_from_staging_dir` — see that
-/// function's doc for why the disk work lives there instead of here.
-#[tauri::command]
-pub async fn load_staged_capture(
-    app: AppHandle,
-    base: String,
-) -> Result<StagedCaptureDetail, String> {
-    if !is_safe_base(&base) {
-        log::warn!("load_staged_capture: refused a base outside staging: {base:?}");
-        return Err("That capture name is not one of ours.".to_string());
-    }
-    let dir = staging::staging_dir(
-        &app.path()
-            .app_local_data_dir()
-            .map_err(|e| format!("Could not resolve the staging directory: {e}"))?,
-    );
-    tauri::async_runtime::spawn_blocking(move || load_from_staging_dir(&dir, &base))
-        .await
-        .map_err(|e| format!("Loading the capture failed: {e}"))?
-}
-
-/// Return the sidecar with only its timeline replaced.
-///
-/// Read-modify-write, never rebuild. Everything else in the sidecar is the
-/// capture's own recorded truth — its duration, its inputs, the vault it was
-/// recorded for — and the editor does not know all of it. A save that
-/// reconstructed the struct from what the editor carries would silently drop
-/// whatever it does not.
-fn with_timeline(
-    mut sidecar: staging::StagedSidecar,
-    timeline: Option<serde_json::Value>,
-) -> staging::StagedSidecar {
-    sidecar.timeline = timeline;
-    sidecar
-}
-
-/// The disk write behind `save_capture_timeline`, pulled out of its
-/// `spawn_blocking` closure for the same reason `load_from_staging_dir` is:
-/// taking a plain `&Path` makes it unit-testable without a running Tauri
-/// app, and it pins the one thing that could actually break here — WHICH
-/// base names the file being written.
-///
-/// `requested_base` is the validated one from the command, and it is what
-/// both the read and the write are addressed by. `existing.base` is a field
-/// read off disk out of a file `read_sidecar`'s own doc says may be
-/// hand-edited, so it is untrusted input and must never become a path;
-/// `staging::write_sidecar` refuses the disagreement (C-1), which is the
-/// same refusal `load_from_staging_dir` already makes on the read side.
-fn save_to_staging_dir(
-    dir: &Path,
-    requested_base: &str,
-    timeline: Option<serde_json::Value>,
-) -> Result<(), String> {
-    let sidecar_path = dir.join(staging::sidecar_file_name(requested_base));
-    let existing = staging::read_sidecar(&sidecar_path)
-        .ok_or_else(|| "That capture's details could not be read.".to_string())?;
-    staging::write_sidecar(dir, requested_base, &with_timeline(existing, timeline))
-        .map_err(|e| format!("Could not save the edit: {e}"))?;
-    Ok(())
-}
-
-/// ASYNC: the sidecar rewrite is a temp + fsync + replacing rename
-/// (`staging::write_sidecar`, over `capture_note::write_atomic_replacing`),
-/// and that must not sit on the main thread — on every editor operation,
-/// no less.
-#[tauri::command]
-pub async fn save_capture_timeline(
-    app: AppHandle,
-    base: String,
-    timeline: Option<serde_json::Value>,
-) -> Result<(), String> {
-    if !is_safe_base(&base) {
-        // M-1: both siblings log their refusal, and this is the one of the
-        // three that WRITES -- the refusal you most want in the log when
-        // reading a bug report.
-        log::warn!("save_capture_timeline: refused a base outside staging: {base:?}");
-        return Err("That capture name is not one of ours.".to_string());
-    }
-    let dir = staging::staging_dir(
-        &app.path()
-            .app_local_data_dir()
-            .map_err(|e| format!("Could not resolve the staging directory: {e}"))?,
-    );
-    tauri::async_runtime::spawn_blocking(move || save_to_staging_dir(&dir, &base, timeline))
-        .await
-        .map_err(|e| format!("Saving the edit failed: {e}"))?
 }
 
 #[cfg(test)]

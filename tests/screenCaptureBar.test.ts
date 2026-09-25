@@ -220,6 +220,17 @@ describe("ScreenCaptureBar", () => {
     });
   });
 
+  // Task 59: Edit is the only way this finished capture reaches a vault
+  // now that the phase-5 Save is retired, so the control says so.
+  it("says Edit leads to render and publish", async () => {
+    mockIPC(() => undefined);
+    useScreenCaptureStore().$patch({ status: "idle", lastStaged: STAGED });
+    const w = mount(ScreenCaptureBar);
+    const edit = w.get('[data-testid="screen-edit"]');
+    expect(edit.attributes("aria-label")).toBe("Edit to render and publish");
+    expect(edit.attributes("title")).toBe("Edit to render and publish");
+  });
+
   // The Edit action is about a FINISHED capture. Offering it mid-recording
   // would invite a click that opens an editor on a file still being written.
   // `lastStaged` is deliberately POPULATED here: a gate that read only that

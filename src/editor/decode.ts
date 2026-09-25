@@ -52,6 +52,7 @@ import {
   ProtocolError,
 } from "./decodePrimitives";
 import { decodeProject } from "./decodeProject";
+import { withoutRedactionHandles } from "./errorCopy";
 
 export { decodeProject,ProtocolError };
 
@@ -92,13 +93,15 @@ function asEditorErrorCode(value: unknown, field: string): EditorErrorCode {
 }
 
 /** `core::editor::error::EditorError`. `retainedAssetIds` is present only
- * when an operation left assets behind — omitted, never `null`. */
+ * when an operation left assets behind — omitted, never `null`. The message
+ * loses its redaction handles here (`errorCopy.ts`): every surface that
+ * shows it reads the role wording alone. */
 export function decodeEditorError(value: unknown): EditorError {
   const v = asObject(value, "error");
   const retainedAssetIds = v.retainedAssetIds;
   return {
     code: asEditorErrorCode(v.code, "error.code"),
-    message: asString(v.message, "error.message"),
+    message: withoutRedactionHandles(asString(v.message, "error.message")),
     retryable: asBoolean(v.retryable, "error.retryable"),
     operationId: asString(v.operationId, "error.operationId"),
     ...(retainedAssetIds === undefined

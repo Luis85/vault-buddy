@@ -1,33 +1,57 @@
 //! The staged-capture surface: the captures waiting in staging to be
-//! resumed or discarded, and the Obsidian hand-off for one that has been
-//! saved.
+//! edited or discarded, and the Obsidian hand-off for one that has been
+//! published into a vault.
 //!
-//! Split out of `export_commands` for size (that module would otherwise sit
-//! 189 nonblank lines over the Rust LOC cap, and the baselines in this repo
-//! are shrink-only), and the seam is a real one: `export_commands` owns the
-//! export LIFECYCLE — the one-at-a-time reservation, the cancel flag and all
-//! five `screen:*` events — while everything here is about a staged capture
-//! as an OBJECT. The one crossing is deliberate: `screen:discarded` is
-//! emitted through `export_commands::emit_discarded`, because every event
-//! this feature sends goes through that module's single warning emitter and
-//! a structural test pins it at exactly one call site.
+//! A staged capture as an OBJECT. Until Task 59 its sibling was
+//! `export_commands`, the phase-5 export's lifecycle; that export is
+//! retired ("save unchanged" is now the tutorial editor's Render + Publish),
+//! and the one event this surface sends, `screen:discarded`, moved here
+//! with its single warning emitter (`emit_discarded`), which a structural
+//! test pins at exactly one call site.
 //!
 //! **`discard_staged_capture` is destructive**, and the second destructive
 //! command in the app after `delete_task`. It takes an untrusted name from
-//! the frontend and turns it into three paths, so it is gated by the shared
+//! the frontend and turns it into paths, so it is gated by the shared
 //! `editor_commands::is_safe_base` (never a second copy of those rules), it
-//! refuses while THAT capture is being exported, and it refuses a symlink
-//! leaf rather than deleting through one.
+//! refuses a capture a tutorial project has PINNED (R6), and it refuses a
+//! symlink leaf rather than deleting through one.
 
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Manager};
-use vault_buddy_core::sync_util::lock_ignoring_poison;
+use tauri::{AppHandle, Emitter, Manager};
+use vault_buddy_core::timeline::Timeline;
 use vault_buddy_core::uri;
 use vault_buddy_screen::{staging, staging_files};
 
 use crate::editor::project_store::pinned_project;
-use crate::export_commands::{emit_discarded, timeline_from_sidecar, ExportState};
+
+/// `screen:discarded`, and SAY SO when the send fails.
+///
+/// Not in the spec, and added deliberately. Without it a discarded capture
+/// leaves the panel store's `lastStaged` pointing at a base that is no
+/// longer on disk, so the capture bar keeps offering **Edit** on it and the
+/// editor opens on a sidecar that is gone. The single `app.emit` call site
+/// in this module (a structural test pins that): AGENTS.md's diagnostics
+/// invariant forbids a swallowed error, and a discarded emit result is the
+/// most invisible kind there is. `staging_commands`' bulk clear emits
+/// through here too.
+pub(crate) fn emit_discarded(app: &AppHandle, base: &str) {
+    if let Err(e) = app.emit("screen:discarded", serde_json::json!({ "base": base })) {
+        log::warn!("screen discard: could not emit screen:discarded: {e}");
+    }
+}
+
+/// The sidecar's hand-editable `timeline` field as a real timeline — a
+/// capture that predates the editor has no field at all, which is the
+/// WHOLE capture. `core::timeline::Timeline::from_sidecar_value` is the ONE
+/// place the field's value is interpreted (the tutorial editor's migration
+/// reads it through the same function); this is only the absent-field arm.
+fn timeline_from_sidecar(value: Option<serde_json::Value>, source_duration_ms: u64) -> Timeline {
+    match value {
+        Some(v) => Timeline::from_sidecar_value(&v, source_duration_ms),
+        None => Timeline::whole(source_duration_ms),
+    }
+}
 
 /// One resume-or-discard row (spec §10) — a staged capture as the UI sees it.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -38,18 +62,19 @@ pub struct StagedCaptureSummaryDto {
     pub source_title: String,
     /// What was RECORDED.
     pub duration_ms: u64,
-    /// What an export would PRODUCE — shorter whenever the editor cut
-    /// something out, and the number the user is really deciding about.
+    /// What the phase-4 editor's saved cut would PRODUCE — shorter whenever
+    /// it cut something out. A capture edited before Task 59 keeps its
+    /// sidecar timeline, and the tutorial editor migrates exactly that cut.
     pub output_duration_ms: u64,
     pub recorded_at: String,
     pub width: u32,
     pub height: u32,
     pub edited: bool,
     /// Rebuilt by `screen_recovery` after an interrupted session, so it knows
-    /// neither its vault nor its duration and CANNOT be saved (the export
-    /// refuses an empty `vault_id` outright). The sweep writes the marker
+    /// neither its vault nor its duration, and the tutorial editor refuses
+    /// to open it (`editor_open_staged`, F7). The sweep writes the marker
     /// into the sidecar's flattened catch-all; surfacing it is what stops
-    /// this list offering a save that provably cannot succeed.
+    /// this list offering an Edit that provably cannot succeed.
     pub recovered: bool,
     /// The tutorial project this capture is PINNED to (R6), if any —
     /// `crate::editor::project_store::pinned_project`. `Some` means a
@@ -67,13 +92,14 @@ pub(crate) fn summary_is_recovered(extra: &serde_json::Map<String, serde_json::V
     extra.get("recovered") == Some(&serde_json::Value::Bool(true))
 }
 
-/// Does this staged capture carry an edit? The SAME predicate the export
-/// fast path keys on, surfaced so the resume-or-discard list can say so.
+/// Does this staged capture carry a phase-4 edit? `Timeline::is_untouched`,
+/// the SAME predicate the tutorial editor's migration keys on, surfaced so
+/// the resume-or-discard list can say so.
 ///
 /// Deriving it from "the sidecar HAS a timeline field" would mark every
-/// capture the editor has ever been OPENED on as edited: the editor writes a
-/// timeline on every operation and never writes null (the rule `6944ac0`
-/// established and four tests forbid unlearning).
+/// capture the phase-4 editor was ever OPENED on as edited: it wrote a
+/// timeline on every operation and never wrote null (the rule `6944ac0`
+/// established).
 pub(crate) fn summary_is_edited(
     timeline: Option<serde_json::Value>,
     source_duration_ms: u64,
@@ -86,19 +112,19 @@ pub(crate) fn summary_is_edited(
     // capture was listed as "edited · 0:00".
     //
     // Deliberately NOT fixed in `Timeline::is_untouched`. That predicate is
-    // the export fast path's, held byte-for-byte against a TypeScript twin
-    // by `tests/fixtures/timeline-cases.json` (docs/Gaps.md GAP-136), and
-    // it is answering its own question correctly: an empty timeline really
-    // is not the whole of anything. The divergence is unreachable there —
-    // `export_worker::prepare` refuses a recovered capture before a timeline
-    // is ever consulted — so this stays a property of the SUMMARY.
+    // pinned by `tests/fixtures/timeline-cases.json` (docs/Gaps.md GAP-136),
+    // and it is answering its own question correctly: an empty timeline
+    // really is not the whole of anything. The divergence is unreachable
+    // there — `editor_open_staged` refuses a recovered capture before its
+    // timeline is ever migrated (F7) — so this stays a property of the
+    // SUMMARY.
     if source_duration_ms == 0 {
         return false;
     }
     !timeline_from_sidecar(timeline, source_duration_ms).is_untouched(source_duration_ms)
 }
 
-/// How long the exported file will be, so the list can show it beside the
+/// How long the saved cut is, so the list can show it beside the
 /// recording's own length.
 pub(crate) fn summary_output_duration_ms(
     timeline: Option<serde_json::Value>,
@@ -109,27 +135,14 @@ pub(crate) fn summary_output_duration_ms(
 
 /// Why this discard must be refused, or `None`.
 ///
-/// Deleting the `.mp4` out from under a running export would leave the
-/// re-encode reading a handle to an unlinked file on Windows and produce a
-/// truncated export with no error anywhere. Only the base being exported is
-/// refused: a second staged capture is nobody's business but its own.
-///
 /// `pinned` is `crate::editor::project_store::pinned_project`'s answer for
 /// this capture (R6): a tutorial project has adopted this exact staged
 /// capture by reference, so deleting it out from under the project would
-/// orphan the project's own source record. The export conflict is checked
-/// first — a save in progress is the more urgent reason, and either reason
-/// alone is enough to refuse.
-pub(crate) fn discard_conflict(
-    exporting: Option<&str>,
-    base: &str,
-    pinned: Option<&str>,
-) -> Option<String> {
-    if exporting == Some(base) {
-        return Some(format!(
-            "{base} is being saved right now. Cancel the save first, or wait for it to finish."
-        ));
-    }
+/// orphan the project's own source record. That is the ONLY refusal left:
+/// until Task 59 a capture being EXPORTED was refused too (F29), and the
+/// export is retired. The editor's render and publish jobs never read a
+/// staged capture that is not pinned, so they need no arm here.
+pub(crate) fn discard_conflict(pinned: Option<&str>) -> Option<String> {
     if pinned.is_some() {
         return Some(
             "This capture is used by a tutorial project. Discard the project first.".to_string(),
@@ -171,11 +184,11 @@ pub(crate) fn staging_dir_for(app: &AppHandle) -> Result<PathBuf, String> {
 /// removed.
 ///
 /// **The export `.part` is the third file and the one a two-file discard
-/// forgets.** It is often the LARGEST of the three, and `discard_conflict`
-/// has already established that no LIVE export owns it — so any `.part`
-/// bearing this base is abandoned by definition. Leaving it strands a file
-/// keyed to a capture the user just told us to forget, until some later
-/// session's `run_screen_recovery` sweep happens to reach it.
+/// forgets.** Nothing writes one since Task 59 retired the phase-5 export,
+/// so any `.part` bearing this base is abandoned by definition — left by an
+/// older build — and often the LARGEST file of the set. Leaving it strands
+/// a file keyed to a capture the user just told us to forget, until some
+/// later session's `run_screen_recovery` sweep happens to reach it.
 ///
 /// `NotFound` counts as success — "the path is clear", the
 /// `delete_transcription_model` precedent — so a capture a sweep already
@@ -279,8 +292,8 @@ pub(crate) fn staged_summaries(dir: &Path) -> Vec<StagedCaptureSummaryDto> {
 }
 
 /// Forget a staged capture — its video, its sidecar, its webcam file (F-22)
-/// and any abandoned export temp. Irreversible; the editor confirm-gates it
-/// (spec §10).
+/// and any abandoned export temp. Irreversible; the staged list
+/// confirm-gates it (spec §10).
 ///
 /// ASYNC: up to four unlinks on a volume that may be slow or networked.
 #[tauri::command]
@@ -289,9 +302,6 @@ pub async fn discard_staged_capture(app: AppHandle, base: String) -> Result<(), 
         log::warn!("discard_staged_capture: refused a base outside staging: {base:?}");
         return Err("That capture name is not one of ours.".to_string());
     }
-    let exporting = lock_ignoring_poison(&app.state::<ExportState>().0)
-        .as_ref()
-        .map(|active| active.base.clone());
     let dir = staging_dir_for(&app)?;
     let target = base.clone();
     // The pin check reads the sidecar, so it rides the same spawn_blocking
@@ -300,7 +310,7 @@ pub async fn discard_staged_capture(app: AppHandle, base: String) -> Result<(), 
     // the unlinks that already needed the blocking pool.
     tauri::async_runtime::spawn_blocking(move || {
         let pinned = pinned_project_of(&dir, &target);
-        if let Some(message) = discard_conflict(exporting.as_deref(), &target, pinned.as_deref()) {
+        if let Some(message) = discard_conflict(pinned.as_deref()) {
             return Err(message);
         }
         discard_staged_files(&dir, &target)
@@ -341,7 +351,8 @@ pub async fn list_staged_captures(app: AppHandle) -> Vec<StagedCaptureSummaryDto
     }
 }
 
-/// Open a SAVED capture — its video or its note — in Obsidian.
+/// Open a PUBLISHED capture — its video or its note — in Obsidian (the
+/// Publish dialog's Open).
 ///
 /// SYNC and read-only, `open_task`'s shape exactly: canonicalise both sides
 /// (so `strip_prefix` agrees on Windows' `\\?\` form), require containment
@@ -376,19 +387,39 @@ mod tests {
             .expect("the production prefix")
     }
 
-    fn export_src() -> &'static str {
-        include_str!("export_commands.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("the production prefix")
+    // Task 59 moved `screen:discarded`'s emitter here from the retired
+    // export module, and the rule came with it: the event goes through the
+    // ONE emitter that logs a failed send, from exactly one call site. A
+    // `let _ = app.emit(..)` is the most invisible swallowed error there is:
+    // the panel simply goes on offering Edit on a capture that is gone.
+    #[test]
+    fn screen_discarded_is_emitted_through_the_one_warning_emitter() {
+        let src = production_src();
+        assert!(!src.contains("let _ = app.emit"), "a swallowed emit");
+        assert_eq!(src.matches("app.emit(").count(), 1, "one emit site");
+        assert_eq!(src.matches("\"screen:discarded\"").count(), 1);
+        let clear = include_str!("staging_commands.rs");
+        let clear = clear.split("#[cfg(test)]").next().unwrap_or(clear);
+        assert!(
+            !clear.contains("app.emit(") && clear.contains("emit_discarded(&app,"),
+            "the bulk clear must emit through this module's emitter"
+        );
+    }
+
+    // A capture that predates the editor has NO timeline field, and that is
+    // the whole capture, never an empty edit.
+    #[test]
+    fn an_absent_sidecar_timeline_is_the_whole_capture() {
+        assert_eq!(timeline_from_sidecar(None, 5_000), Timeline::whole(5_000));
+        assert!(timeline_from_sidecar(None, 5_000).is_untouched(5_000));
     }
 
     #[test]
     fn a_staged_capture_is_summarised_as_edited_only_when_its_timeline_differs_from_the_whole() {
-        // The SAME predicate the export fast path keys on, surfaced to the
+        // The SAME predicate the editor's migration keys on, surfaced to the
         // UI. Deriving "edited" from the FIELD'S PRESENCE would mark every
-        // capture the editor has ever been opened on as edited: the editor
-        // writes a timeline on every operation and never writes null.
+        // capture the phase-4 editor was ever opened on as edited: it wrote
+        // a timeline on every operation and never wrote null.
         assert!(!summary_is_edited(None, 5_000));
         assert!(!summary_is_edited(
             Some(serde_json::json!({ "segments": [{"sourceStartMs": 0, "sourceEndMs": 5_000}] })),
@@ -489,29 +520,41 @@ mod tests {
         }
     }
 
+    // F29 (Task 59): the phase-5 export and its `ExportState` reservation
+    // are retired, so there is no "being exported" to refuse on any more --
+    // a pin (R6) is the ONLY reason a discard is refused. The render and
+    // publish jobs never route through here: they work on the PROJECT's own
+    // copies, and a pinned capture is refused whole before a job matters.
+    // Structural first, because an `exporting` parameter nobody sets would
+    // compile, pass every value test with `None`, and read to the next
+    // author as a live guard.
     #[test]
-    fn discard_refuses_while_that_capture_is_being_exported() {
+    fn discard_conflict_no_longer_takes_an_exporting_flag() {
+        let src = production_src();
+        let at = src
+            .find("pub(crate) fn discard_conflict(")
+            .expect("discard_conflict must exist");
+        let signature = &src[at..at + src[at..].find('{').expect("its body")];
         assert!(
-            discard_conflict(Some("2026-09-20 1432 Demo"), "2026-09-20 1432 Demo", None).is_some()
+            !signature.contains("exporting"),
+            "discard_conflict still takes the retired export's flag: {signature}"
         );
         assert!(
-            discard_conflict(Some("2026-09-20 1432 Other"), "2026-09-20 1432 Demo", None).is_none()
+            !src.contains("ExportState"),
+            "the staged-capture surface still reads the retired export reservation"
         );
-        assert!(discard_conflict(None, "2026-09-20 1432 Demo", None).is_none());
     }
 
     // R6, mutation check: drop the pin arm in `discard_conflict` and this
-    // test goes red because a pinned capture with no export in progress
-    // stops being refused.
+    // test goes red because a pinned capture stops being refused.
     #[test]
     fn pinned_capture_cannot_be_discarded() {
-        let msg = discard_conflict(None, "2026-09-20 1432 Demo", Some("proj1"))
-            .expect("a pinned capture must refuse discard");
+        let msg = discard_conflict(Some("proj1")).expect("a pinned capture must refuse discard");
         assert_eq!(
             msg,
             "This capture is used by a tutorial project. Discard the project first."
         );
-        assert!(discard_conflict(None, "2026-09-20 1432 Demo", None).is_none());
+        assert!(discard_conflict(None).is_none());
     }
 
     #[test]
@@ -704,15 +747,10 @@ mod tests {
 
         let mut all: Vec<&str> = Vec::new();
         let mut checked: Vec<&str> = Vec::new();
-        // BOTH modules, because this surface spans two files: the export
-        // lifecycle and the staged-capture surface it is split from (they
-        // are two files only because one would be 189 lines over the LOC
-        // cap). A scan of one of them goes quietly blind the moment a
-        // command moves across.
-        for (module, src) in [
-            ("export_commands", export_src()),
-            ("staged_commands", production_src()),
-        ] {
+        // One module since Task 59 retired its export-lifecycle sibling; a
+        // list of (module, source) pairs still, so a command split out into
+        // a new module is added here rather than scanned by nothing.
+        for (module, src) in [("staged_commands", production_src())] {
             // Matched by PREFIX, not against the literal `#[tauri::command]`: an
             // attribute written with arguments — `#[tauri::command(rename_all =
             // "snake_case")]`, a shape this codebase already uses — is invisible
@@ -778,8 +816,6 @@ mod tests {
         assert_eq!(
             all,
             [
-                "export_and_save_capture",
-                "cancel_export",
                 "discard_staged_capture",
                 "list_staged_captures",
                 "open_screen_capture",
@@ -789,7 +825,7 @@ mod tests {
         );
         assert_eq!(
             checked,
-            ["export_and_save_capture", "discard_staged_capture"],
+            ["discard_staged_capture"],
             "the set of commands taking a base changed; confirm the new one \
              guards it, then update this list"
         );

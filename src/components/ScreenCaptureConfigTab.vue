@@ -16,8 +16,10 @@ import VaultFolderSetting from "./VaultFolderSetting.vue";
 // never be auto-saved over a value we failed to read.
 //
 // Until this landed all seven fields (now eight) were config.json hand-edits — READ in
-// production (quality and fps by the capture worker, the rest by the
-// exporter) and settable nowhere.
+// production and settable nowhere. Since Task 59 retired the phase-5 export,
+// quality, fps and stems are read by the capture worker, and the folder and
+// the two templates by the tutorial editor's Publish; the date-folder and
+// note toggles are read by nothing (docs/Gaps.md GAP-211).
 const props = defineProps<{ vaultId: string }>();
 
 const { loading, loadError, load } = useSettingsLoad();
@@ -60,12 +62,13 @@ const FRAME_RATES = [
 // would terminate the interpolation early and corrupt it. Same note as
 // RecordingSettings.vue and DocumentsConfigTab.vue.
 //
-// The six names are READ OFF core::screen_note's own `vars` array, not
-// guessed from the sibling tabs: unlike the documents templates, both fields
-// here draw from the SAME set, and there is no {{title}} and no {{embed}} —
-// the body template is appended AFTER the embed rather than wrapping it.
+// The six names are READ OFF core::editor::note's own `vars` array — the
+// Tutorial note a Publish writes, the one reader of these templates since
+// Task 59 retired the phase-5 export's Screen Capture note: both fields draw
+// from the SAME set, and there is no {{title}} and no {{embed}} — the body
+// template is appended AFTER the embed rather than wrapping it.
 const TEMPLATE_PLACEHOLDER_HINT =
-  "Placeholders for both fields: {{date}}, {{recordedAt}}, {{duration}}, {{source}}, {{resolution}}, {{vault}}. Identity frontmatter (type, recorded, duration, source, inputs, resolution, vault, created-by) is always written and cannot be overridden.";
+  "Placeholders for both fields: {{date}}, {{recordedAt}}, {{duration}}, {{product}}, {{revision}}, {{range}}. Identity frontmatter (type, created-by, recorded, duration, product, revision, range, chapters) is always written and cannot be overridden.";
 
 const autosave = useAutosave(
   async () => {
@@ -204,8 +207,8 @@ function onBodyTemplateInput(event: Event) {
           @update:model-value="onQualityChange"
         />
         <p class="text-xs text-fg-subtle">
-          Applies to an EDITED save, which re-encodes. An untouched capture is
-          copied as recorded, so this does not affect it.
+          Applies to the NEXT recording. A render picks its own quality in the
+          editor's Render dialog.
         </p>
       </div>
       <div class="flex flex-col gap-1 rounded-xl border border-white/10 bg-white/5 p-2">

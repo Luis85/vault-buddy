@@ -3,8 +3,7 @@
  * window's X with `editor:closeRequested` (emitted to this window alone)
  * rather than hiding it, and `request()` decides what that close means:
  *
- * - no new-editor session open (the legacy phase-4 surface alone, until
- *   Task 59) → hide, exactly as before;
+ * - no session open (an empty window, or a refused open) → hide at once;
  * - a render or publish job still running → the render copy ("keep it
  *   running in the background, or cancel it"); nothing is cancelled unless
  *   the user asks — never on a close, never on unmount;

@@ -18,21 +18,15 @@ pub mod disk;
 // the shell cannot be cross-compiled to Windows on Linux, so an FFI call
 // written there would be type-checked by nothing until CI.
 pub mod exclusion;
-// Running the export: spawning ffmpeg, streaming its progress, cancelling it
-// by killing the child -- and the round-trip tests that are the first
-// executable proof anywhere in this feature that a cut lands where the editor
-// said it would. Its ffmpeg-backed tests skip VISIBLY where no ffmpeg exists.
-pub mod export;
-// The export's ffmpeg argument vectors and its -progress parsing. PURE, and
-// deliberately so: the route change from Media Foundation to a user-installed
-// ffmpeg moved the export's correctness out of untestable COM calls and into
-// this module, which is a plain function from an edit plan to an argv list.
+// The shared ffmpeg argument pieces (the identity remux, the encode and
+// output tails, the runner flags) and the -progress parsing. PURE, and
+// deliberately so: the editor's render builds its argv from these, and the
+// phase-5 export that first grew them (retired by Task 59) proved the route.
 pub mod ffmpeg_args;
 // ONE ffmpeg child, run: spawn, the -progress pipe, the bounded stderr
 // drain, the timed cancel poll, kill+reap and truncated-output removal.
-// Extracted from `export` (tutorial-editor Task 42) so the export and the
-// editor's render share one runner instead of two copies of the two-pipe
-// discipline.
+// Extracted from the retired phase-5 export (tutorial-editor Task 42); the
+// editor's render is its caller.
 pub mod ffmpeg_run;
 // The WGC frame callback. Windows-only: it exists solely to feed
 // `session`'s mux, and everything it decides is decided by a pure function
@@ -56,7 +50,6 @@ pub mod region;
 // invocation. PURE -- a function from a plan to an argv list, testable on
 // every platform; ffmpeg_run runs it.
 pub mod render;
-pub mod select;
 pub mod session;
 pub mod sink;
 // The sink's format contract -- the video/audio parameters, their boundary

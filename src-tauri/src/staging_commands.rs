@@ -1,12 +1,10 @@
 //! Staging as a WHOLE: what the directory is holding, and emptying it.
 //!
-//! The third module along a seam this feature already draws twice.
-//! `export_commands` owns the export LIFECYCLE, `staged_commands` owns a
-//! staged capture as an OBJECT — one capture, addressed by base — and this
-//! owns the DIRECTORY: a number the settings card can show, and the bulk
-//! clear spec §10 asks for beside it. It is also what the Rust LOC cap
-//! forces: `staged_commands` sits at 686 of 800 nonblank, and this feature
-//! plus its tests does not fit there.
+//! `staged_commands` owns a staged capture as an OBJECT — one capture,
+//! addressed by base — and this owns the DIRECTORY: a number the settings
+//! card can show, and the bulk clear spec §10 asks for beside it. It is
+//! also what the Rust LOC cap forces: `staged_commands` sits near its 800
+//! nonblank lines, and this feature plus its tests does not fit there.
 //!
 //! **Every rule here is borrowed, never re-grown.** Which captures exist is
 //! `staged_commands::staged_summaries`; which files one owns is
@@ -22,30 +20,27 @@
 //! staged capture owns, and it has no published `<base>.mp4`, so
 //! `staged_summaries` cannot see it and a clear cannot reach it. Adding a
 //! capture-guard refusal here would therefore block a safe operation and
-//! diverge from the single discard, which refuses on the export alone.
+//! diverge from the single discard, which refuses on a pin alone.
 
 use std::path::Path;
 
-use tauri::{AppHandle, Manager};
-use vault_buddy_core::sync_util::lock_ignoring_poison;
+use tauri::AppHandle;
 use vault_buddy_screen::staging_files::{self, StagingUsage};
 
-use crate::export_commands::{emit_discarded, ExportState};
 use crate::staged_commands::{
-    discard_conflict, discard_staged_files, staged_summaries, staging_dir_for,
+    discard_conflict, discard_staged_files, emit_discarded, staged_summaries, staging_dir_for,
 };
 
-/// What a bulk clear actually did. Five numbers rather than a bare success,
-/// because four different things can happen to a capture and a UI that
-/// reported only "done" would be claiming an export-skipped or a
-/// tutorial-project-pinned capture was removed.
+/// What a bulk clear actually did. Four numbers rather than a bare success,
+/// because three different things can happen to a capture and a UI that
+/// reported only "done" would be claiming a tutorial-project-pinned or a
+/// refused capture was removed. (Until Task 59 there was a fifth,
+/// `skipped`: a capture the retired phase-5 export was writing.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClearStagedResultDto {
     pub cleared: usize,
     pub bytes_freed: u64,
-    /// Left alone because an export is writing it right now.
-    pub skipped: usize,
     /// Left alone because a tutorial project has PINNED it (R6) — discard
     /// the project first, then Clear can reach it.
     pub skipped_pinned: u32,
@@ -58,17 +53,13 @@ pub struct ClearStagedResultDto {
 /// `discard_staged_files`/`discard_conflict` precedent. Every rule is
 /// borrowed (see the module doc): which captures exist, whether one may go,
 /// and the removal itself are all somebody else's function.
-fn clear_staged(dir: &Path, exporting: Option<&str>) -> (ClearStagedResultDto, Vec<String>) {
+fn clear_staged(dir: &Path) -> (ClearStagedResultDto, Vec<String>) {
     let mut result = ClearStagedResultDto::default();
     let mut cleared = Vec::new();
     for summary in staged_summaries(dir) {
         let pinned = summary.project_id.as_deref();
-        if discard_conflict(exporting, &summary.base, pinned).is_some() {
-            if pinned.is_some() {
-                result.skipped_pinned += 1;
-            } else {
-                result.skipped += 1;
-            }
+        if discard_conflict(pinned).is_some() {
+            result.skipped_pinned += 1;
             continue;
         }
         let bytes = staging_files::capture_bytes(dir, &summary.base);
@@ -133,13 +124,7 @@ pub async fn staging_usage(app: AppHandle) -> StagingUsage {
 #[tauri::command]
 pub async fn clear_staged_captures(app: AppHandle) -> Result<ClearStagedResultDto, String> {
     let dir = staging_dir_for(&app)?;
-    let exporting = lock_ignoring_poison(&app.state::<ExportState>().0)
-        .as_ref()
-        .map(|active| active.base.clone());
-
-    let worked =
-        tauri::async_runtime::spawn_blocking(move || clear_staged(&dir, exporting.as_deref()))
-            .await;
+    let worked = tauri::async_runtime::spawn_blocking(move || clear_staged(&dir)).await;
 
     let (result, cleared) = worked.map_err(|e| format!("Staging could not be cleared: {e}"))?;
     // One `screen:discarded` per capture actually removed. Without it the
@@ -150,9 +135,8 @@ pub async fn clear_staged_captures(app: AppHandle) -> Result<ClearStagedResultDt
         emit_discarded(&app, base);
     }
     log::info!(
-        "screen staging cleared: {} removed, {} skipped ({} pinned), {} failed, {} bytes freed",
+        "screen staging cleared: {} removed, {} kept (pinned), {} failed, {} bytes freed",
         result.cleared,
-        result.skipped,
         result.skipped_pinned,
         result.failed,
         result.bytes_freed
@@ -204,31 +188,16 @@ mod tests {
         stage(dir.path(), "A", Some("proj1"));
         stage(dir.path(), "B", None);
 
-        let (result, cleared) = clear_staged(dir.path(), None);
+        let (result, cleared) = clear_staged(dir.path());
 
         assert_eq!(result.cleared, 1);
         assert_eq!(result.skipped_pinned, 1);
-        assert_eq!(result.skipped, 0);
         assert_eq!(cleared, vec!["B".to_string()]);
         assert!(
             dir.path().join(staging::mp4_file_name("A")).is_file(),
             "a pinned capture was cleared"
         );
         assert!(!dir.path().join(staging::mp4_file_name("B")).exists());
-    }
-
-    #[test]
-    fn clear_still_skips_and_counts_an_exporting_capture_separately_from_a_pinned_one() {
-        let dir = tempfile::tempdir().unwrap();
-        stage(dir.path(), "A", Some("proj1"));
-        stage(dir.path(), "B", None);
-
-        let (result, cleared) = clear_staged(dir.path(), Some("B"));
-
-        assert_eq!(result.cleared, 0);
-        assert_eq!(result.skipped_pinned, 1, "the pinned capture");
-        assert_eq!(result.skipped, 1, "the exporting capture");
-        assert!(cleared.is_empty());
     }
 
     /// A file symlink, or `false` where this host cannot make one (Windows
@@ -261,7 +230,7 @@ mod tests {
         stage(dir.path(), "B", None);
         let webcam_b = dir.path().join(staging::webcam_file_name("B"));
         std::fs::write(&webcam_b, b"more webcam footage").unwrap();
-        let (result, _) = clear_staged(dir.path(), None);
+        let (result, _) = clear_staged(dir.path());
         assert_eq!(result.cleared, 1);
         assert!(!webcam_b.exists(), "Clear left the webcam file behind");
 
@@ -321,7 +290,7 @@ mod tests {
         std::fs::remove_file(stem("A", 3)).unwrap();
 
         with_stems("B");
-        let (result, _) = clear_staged(dir.path(), None);
+        let (result, _) = clear_staged(dir.path());
         assert_eq!(result.cleared, 1);
         assert!(
             !stem("B", 1).exists() && !stem("B", 2).exists(),
@@ -343,7 +312,6 @@ mod tests {
         let dto = ClearStagedResultDto {
             cleared: 2,
             bytes_freed: 2_000_000,
-            skipped: 1,
             skipped_pinned: 1,
             failed: 0,
         };
@@ -352,7 +320,6 @@ mod tests {
             serde_json::json!({
                 "cleared": 2,
                 "bytesFreed": 2_000_000,
-                "skipped": 1,
                 "skippedPinned": 1,
                 "failed": 0,
             }),

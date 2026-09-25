@@ -54,6 +54,7 @@ const emit = defineEmits<{
   (e: "toggle-inspector"): void;
   (e: "toggle-theme"): void;
   (e: "open-project-file"): void;
+  (e: "discard-project"): void;
 }>();
 
 const editorProject = useEditorProjectStore();
@@ -124,13 +125,15 @@ function onSave() {
 }
 
 /** Task 39: the Save project menu. A copy opens `SaveProjectDialog` on the
- * chosen format; opening a project file is `EditorRoot`'s (it owns which
- * project the shell is showing). */
+ * chosen format; opening a project file and (Task 59) discarding the
+ * project are `EditorRoot`'s (it owns which project the shell is showing,
+ * and a discard unmounts this header). */
 const packageDialogOpen = ref(false);
 const packageFormat = ref<PackageFormat>("portable");
-function onSaveMenu(item: "save" | "portable" | "lightweight" | "open") {
+function onSaveMenu(item: "save" | "portable" | "lightweight" | "open" | "discard") {
   if (item === "save") onSave();
   else if (item === "open") emit("open-project-file");
+  else if (item === "discard") emit("discard-project");
   else {
     packageFormat.value = item;
     packageDialogOpen.value = true;

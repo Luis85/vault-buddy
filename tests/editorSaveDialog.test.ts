@@ -202,6 +202,7 @@ describe("EditorHeader — Save project menu", () => {
       "Save a portable copy…",
       "Save a lightweight copy…",
       "Open a project file…",
+      "Discard project…",
     ]);
 
     await w.get('[data-testid="editor-header-menu-lightweight"]').trigger("click");
@@ -214,6 +215,12 @@ describe("EditorHeader — Save project menu", () => {
     await w.get('[data-testid="editor-header-save-menu-toggle"]').trigger("click");
     await w.get('[data-testid="editor-header-menu-open"]').trigger("click");
     expect(w.emitted("open-project-file")).toHaveLength(1);
+
+    // Task 59: Discard project is EditorRoot's (a discard unmounts this
+    // shell), so the shell only forwards it.
+    await w.get('[data-testid="editor-header-save-menu-toggle"]').trigger("click");
+    await w.get('[data-testid="editor-header-menu-discard"]').trigger("click");
+    expect(w.emitted("discard-project")).toHaveLength(1);
   });
 });
 

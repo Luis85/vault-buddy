@@ -1,16 +1,18 @@
 {
   "$comment": [
-    "The SHARED fixture table for the editor's segment algebra (spec 8.1).",
-    "Read by tests/timelineFixtures.test.ts and by the shared_fixture_table_*",
-    "tests in src-tauri/core/src/timeline.rs -- both by this exact path, so",
-    "moving this file breaks a Rust build (include_str!) and a Vitest run.",
-    "Why it exists, and what each row pins, is documented in those two files.",
+    "The fixture table for the phase-4 editor's segment algebra (spec 8.1).",
+    "Read by the shared_fixture_table_* tests in src-tauri/core/src/timeline.rs",
+    "by this exact path, so moving this file breaks a Rust build (include_str!).",
+    "Task 59 retired the phase-4 editor and its TypeScript twin of the algebra,",
+    "and with it tests/timelineFixtures.test.ts and its size guard: Rust keeps",
+    "the table because the tutorial editor's migration reads a phase-4 sidecar",
+    "timeline through core::timeline, and Timeline::is_untouched is the identity",
+    "cross-check. Why it exists, and what each row pins, is in timeline.rs.",
     "toSourceMs rows are [outputMs, expectedSourceMs]; null means past the end.",
     "isUntouched rows are [sourceDurationMs, expected] for Timeline::is_untouched",
-    "-- the predicate phase 5's export fast path keys on. RUST ASSERTS THESE;",
-    "the Vitest side deliberately does NOT reimplement the rule (6944ac0 chose",
-    "not to put a second copy of it one IPC hop from the original) and asserts",
-    "only that every case declares the field, so a new case cannot skip it."
+    "-- the predicate the retired phase-5 export's fast path keyed on, and the",
+    "migration still does. RUST ASSERTS THESE, and requires every case to",
+    "declare the field, so a new case cannot skip it."
   ],
   "whole": [
     {

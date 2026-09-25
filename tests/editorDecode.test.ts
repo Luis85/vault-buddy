@@ -232,6 +232,29 @@ describe("decodeEditorError", () => {
       decodeEditorError({ code: "bogus", message: "m", retryable: false, operationId: "op-x" }),
     ).toThrow(ProtocolError);
   });
+
+  // Task 59 (carried from Task 58): Rust names a file in an error by its
+  // ROLE plus a `redact_path` handle (`<path:#1a2b3c4d>`), which is for the
+  // log, not the user. Every surface that shows `error.message` reads the
+  // role-worded copy — the handle is taken out once, here, where every
+  // `editor_*` error and every job terminal's error is decoded.
+  it("takes redaction handles out of the message, keeping its role wording", () => {
+    const decoded = decodeEditorError({
+      code: "internal",
+      message: "Could not remove the project folder <path:#1a2b3c4d>: Access is denied. (os error 5)",
+      retryable: false,
+      operationId: "op-x",
+    });
+    expect(decoded.message).toBe("Could not remove the project folder: Access is denied. (os error 5)");
+    const named = decodeEditorError({
+      code: "invalidProject",
+      message: "The project folder <path:#00ff00aa> is a symlink; the capture <name:#deadbeef> was kept",
+      retryable: false,
+      operationId: "op-y",
+    });
+    expect(named.message).toBe("The project folder is a symlink; the capture was kept");
+    expect(named.message).not.toMatch(/<(path|name):#/);
+  });
 });
 
 describe("decodeProject", () => {

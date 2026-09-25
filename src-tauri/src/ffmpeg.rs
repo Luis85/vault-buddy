@@ -1,6 +1,6 @@
 //! ffmpeg toolchain: resolving a user-installed `ffmpeg` (config override →
 //! registry-augmented PATH → bare fallback), the `ffprobe` beside it, what
-//! H.264 encoder the build actually has, and the source facts an export needs.
+//! H.264 encoder the build actually has, and the source facts an import needs.
 //! The IPC surface (`detect_ffmpeg` / `set_ffmpeg_path`) mirrors
 //! `detect_pandoc` / `set_pandoc_path` exactly.
 //!
@@ -12,11 +12,11 @@
 //! `Command`, the bounded runner) is shared from `external_tool`.
 //!
 //! ffmpeg needs a **capability axis Pandoc never had**. Pandoc asks only "is
-//! it new enough"; ffmpeg must also answer "can it encode H.264", because the
-//! unedited export is a `-c copy` remux that needs no encoder at all while an
-//! edited one does, and minimal LGPL builds ship without `libx264`. A build
-//! with no H.264 encoder is still returned — it can remux — and only the
-//! edited path refuses, naming what is missing.
+//! it new enough"; ffmpeg must also answer "can it encode H.264", because an
+//! identity render is a `-c copy` remux that needs no encoder at all while
+//! any other render does, and minimal LGPL builds ship without `libx264`. A
+//! build with no H.264 encoder is still returned — it can remux — and only a
+//! graph render refuses, naming what is missing.
 
 use std::path::Path;
 use vault_buddy_core::capture_config;
@@ -99,17 +99,11 @@ pub(crate) fn pick_h264_encoder(encoders_stdout: &str) -> Option<String> {
         .map(|s| (*s).to_string())
 }
 
-/// What an export needs to know about the staged source file.
-///
-/// Read by the export worker: the encoder needs the real pixel dimensions
-/// and whether an audio track exists at all, and the companion note records
-/// the same dimensions -- the file's own, never the staged sidecar's
-/// hand-editable copies. `has_video`/`audio_rate` were added for the
-/// tutorial editor's media import (Task 24): a general import can probe a
-/// pure-audio file, which the screen-capture export path never could (a
-/// capture always has video) — see `probe_source` for how the export path
-/// keeps its own "no video, no export" refusal even though
-/// `parse_probe_output` itself now accepts an audio-only file.
+/// What the media import needs to know about a probed file: its real pixel
+/// dimensions, and whether it carries video and audio at all. Born for the
+/// phase-5 export's own probe (retired by Task 59); the tutorial editor's
+/// media import (Task 24) is its reader now, and a general import can probe
+/// a pure-audio file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SourceFacts {
     pub width: u32,
@@ -207,25 +201,9 @@ fn facts_from_streams(
     }
 }
 
-/// Parse `ffprobe -show_entries stream=codec_type,width,height,sample_rate
-/// -of default=noprint_wrappers=1` output for the EXPORT path.
-///
-/// Returns `None` when there is NEITHER a usable video stream NOR any audio
-/// stream. A video stream that IS present but whose dimensions are absent,
-/// zero, or ODD is also a hard `None`: the export encodes H.264 at the
-/// SOURCE size, 4:2:0 requires even dimensions, and a zero would reach the
-/// encoder as an invalid frame size and fail deep in the filter graph with
-/// an unreadable error. A file with no video but a real audio stream
-/// succeeds with `has_video: false`; the export's own "video required" rule
-/// lives in `probe_source`. The media import does NOT use this rule — see
-/// `parse_import_probe`.
-pub(crate) fn parse_probe_output(stdout: &str) -> Option<SourceFacts> {
-    facts_from_streams(&probe_streams(stdout), |w, h| {
-        w != 0 && h != 0 && w % 2 == 0 && h % 2 == 0
-    })
-}
-
-/// The media IMPORT's reading of the same output (Task 25 fix round 1):
+/// The media IMPORT's reading of `ffprobe -show_entries
+/// stream=codec_type,width,height,sample_rate -of default=noprint_wrappers=1`
+/// output (Task 25 fix round 1):
 /// non-zero dimensions, parity IGNORED — an imported asset is scaled onto
 /// one of the editor's even canvases, so its native frame size never
 /// reaches an encoder, and a 1366x767 capture or an odd-sized phone clip is
@@ -379,39 +357,6 @@ pub(crate) fn capabilities_from_listings(filters: &str, encoders: &str) -> Ffmpe
         log::warn!("ffmpeg -encoders filled the {CAPTURE_CAP}-byte capture cap");
     }
     caps.with_encoders_output(encoders)
-}
-
-/// Ask ffprobe for the facts an export needs about `path`.
-///
-/// NOTE: this invocation has NOT been executed against a real ffprobe in this
-/// repository's container (no ffmpeg installed); `parse_probe_output` is
-/// fixture-tested and is where the parsing correctness lives. Task 6 installs
-/// ffmpeg in CI, which is where this call first runs for real.
-pub(crate) fn probe_source(tools: &FfmpegTools, path: &Path) -> Result<SourceFacts, String> {
-    let mut cmd = tool_command(&tools.ffprobe);
-    cmd.args([
-        "-v",
-        "error",
-        "-show_entries",
-        "stream=codec_type,width,height",
-    ])
-    .args(["-of", "default=noprint_wrappers=1"])
-    .arg(path);
-    let (ok, stdout) = run_capturing(cmd, PROBE_TIMEOUT, Capture::Stdout)
-        .map_err(|e| format!("Could not run ffprobe: {e}"))?;
-    if !ok {
-        return Err("ffprobe could not read the capture.".to_string());
-    }
-    let facts = parse_probe_output(&stdout)
-        .ok_or_else(|| "The capture has no usable video stream.".to_string())?;
-    // `parse_probe_output` now succeeds for an audio-only file too (Task
-    // 24, for the general media-import prober) — the screen-capture
-    // export path keeps its OWN "video required" refusal here rather than
-    // silently exporting an audio-only "capture" with a 0x0 frame.
-    if !facts.has_video {
-        return Err("The capture has no usable video stream.".to_string());
-    }
-    Ok(facts)
 }
 
 /// The ffmpeg detection status the settings UI renders, mirroring
@@ -603,7 +548,7 @@ mod tests {
         // -show_entries stream=codec_type,width,height -of default=noprint_wrappers=1
         let both = "codec_type=video\nwidth=1920\nheight=1080\ncodec_type=audio\n";
         assert_eq!(
-            parse_probe_output(both),
+            parse_import_probe(both),
             Some(SourceFacts {
                 width: 1920,
                 height: 1080,
@@ -619,7 +564,7 @@ mod tests {
     fn a_capture_with_no_audio_track_probes_as_silent_rather_than_failing() {
         let video_only = "codec_type=video\nwidth=1280\nheight=720\n";
         assert_eq!(
-            parse_probe_output(video_only),
+            parse_import_probe(video_only),
             Some(SourceFacts {
                 width: 1280,
                 height: 720,
@@ -638,19 +583,18 @@ mod tests {
     // function to answer for an audio-only file instead of refusing it.
     #[test]
     fn a_file_with_no_stream_information_probes_as_none() {
-        assert_eq!(parse_probe_output(""), None);
-        assert_eq!(parse_probe_output("width=1920\n"), None);
+        assert_eq!(parse_import_probe(""), None);
+        assert_eq!(parse_import_probe("width=1920\n"), None);
     }
 
     // Task 24 (tutorial editor media import): a general import can probe a
-    // pure-audio file (no video stream), and this must now succeed rather
-    // than refuse — `probe_source` (the screen-capture export path) is what
-    // keeps requiring video, by checking `has_video` itself after this call.
+    // pure-audio file (no video stream), and this must succeed rather than
+    // refuse.
     #[test]
     fn probe_output_reports_audio_only_files() {
         let audio_only = "codec_type=audio\nsample_rate=44100\n";
         assert_eq!(
-            parse_probe_output(audio_only),
+            parse_import_probe(audio_only),
             Some(SourceFacts {
                 width: 0,
                 height: 0,
@@ -662,17 +606,12 @@ mod tests {
     }
 
     #[test]
-    fn an_odd_or_zero_dimension_is_refused_rather_than_reaching_the_encoder() {
-        // H.264 4:2:0 requires even dimensions; ffmpeg would fail with an
-        // unreadable error deep in the filter graph. A video stream that
-        // exists but is unusable must stay a hard refusal, never silently
-        // read as "no video, but there's audio".
+    fn a_zero_dimension_is_refused_rather_than_reaching_the_encoder() {
+        // A video stream that exists but is unusable must stay a hard
+        // refusal, never silently read as "no video, but there's audio".
+        // (Parity is the import's to ignore: it scales onto an even canvas.)
         assert_eq!(
-            parse_probe_output("codec_type=video\nwidth=0\nheight=1080\n"),
-            None
-        );
-        assert_eq!(
-            parse_probe_output("codec_type=video\nwidth=1921\nheight=1080\n"),
+            parse_import_probe("codec_type=video\nwidth=0\nheight=1080\n"),
             None
         );
     }

@@ -6,8 +6,8 @@ import { logWarning } from "../logging";
 import { withDialogSuppressed } from "../utils/nativeDialog";
 
 // The settings-card half of an external-tool integration, shared by the two
-// cards that have one: Pandoc (document import) and ffmpeg (the screen-capture
-// export). Both tools are USER-INSTALLED and detected, never bundled, so both
+// cards that have one: Pandoc (document import) and ffmpeg (the editor's
+// render). Both tools are USER-INSTALLED and detected, never bundled, so both
 // cards do the identical four things — probe on mount, Recheck, persist a path
 // override, and Browse for the executable — around a detection status whose
 // only common field is the override the card seeds itself from.

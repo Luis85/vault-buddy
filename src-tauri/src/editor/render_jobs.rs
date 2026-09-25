@@ -45,8 +45,9 @@
 //! **Shutdown (R12).** `blocks_shutdown` is the fourth term of
 //! `shutdown_gate::shutdown_blocker`: true while a render job has not ended
 //! (fix round 1 widened the ADR's `rendering`/`publishing` to every
-//! non-terminal phase, so the gate and the quit's cancel read one set). Both quit workers call `cancel_all_bounded` first, beside
-//! `export_shutdown::cancel_if_exporting`. A wedged render must not make
+//! non-terminal phase, so the gate and the quit's cancel read one set).
+//! Both quit workers call `cancel_all_bounded` first, before the publish
+//! cancel and the capture finalizes. A wedged render must not make
 //! the app unquittable: after the bound expires, the gate stops counting
 //! renders (`RENDERS_ABANDONED`), so Alt+F4's re-triggered close cannot loop.
 
@@ -743,7 +744,7 @@ pub(crate) fn render_blocks_shutdown(state: &EditorState) -> bool {
 /// `true` iff they did.
 pub(crate) fn cancel_all_in(state: &EditorState, limit: Duration, poll: Duration) -> bool {
     lock_ignoring_poison(&state.jobs).cancel_kind(JobKind::Render);
-    crate::export_shutdown::wait_until_cleared(
+    crate::shutdown_gate::wait_until_cleared(
         || !lock_ignoring_poison(&state.jobs).any_running(JobKind::Render),
         limit,
         poll,
@@ -755,8 +756,8 @@ pub fn blocks_shutdown(app: &AppHandle) -> bool {
     !RENDERS_ABANDONED.load(Ordering::SeqCst) && render_blocks_shutdown(&app.state::<EditorState>())
 }
 
-/// The quit workers' render step, beside `export_shutdown::
-/// cancel_if_exporting` and before the capture finalizes: kill every
+/// The quit workers' FIRST step, before the publish cancel and the
+/// capture finalizes: kill every
 /// render (its part is deleted) and wait, bounded. On expiry it LOGS and
 /// proceeds -- a wedged render must never make the app unquittable.
 ///

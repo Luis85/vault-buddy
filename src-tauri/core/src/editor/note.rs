@@ -2,12 +2,12 @@
 //! markdown a publication writes beside the video it copies into a vault --
 //! the TENTH sanctioned vault write's second file.
 //!
-//! `core::screen_note`'s discipline exactly: the managed keys are always
-//! emitted and never user-removable, the vault's `screen_extra_frontmatter`
-//! is filtered against them before injection (`RESERVED_TUTORIAL_NOTE_KEYS`),
-//! every string is YAML-quoted, and the embed goes through
-//! `screen_note::embed` -- wikilink-metacharacter safe, one rule for both
-//! notes.
+//! The retired phase-5 Screen Capture note's discipline exactly: the
+//! managed keys are always emitted and never user-removable, the vault's
+//! `screen_extra_frontmatter` is filtered against them before injection
+//! (`RESERVED_TUTORIAL_NOTE_KEYS`), every string is YAML-quoted, and the
+//! embed goes through `screen_note::embed` -- wikilink-metacharacter safe,
+//! the one piece of that note Task 59 kept.
 //!
 //! **The embed names the FINAL file (A21).** `render_tutorial_note` takes
 //! the name the video actually landed under -- the caller renders only
@@ -130,7 +130,7 @@ pub fn render_tutorial_note(meta: &TutorialNoteMeta, mp4_file_name: &str) -> Str
         ("range", range.as_deref().unwrap_or("")),
     ];
     if let Some(template) = &meta.extra_frontmatter {
-        // `""` or newline-terminated mapping lines (`screen_note`'s note).
+        // `""` or newline-terminated mapping lines.
         out.push_str(&render_extra_frontmatter(
             template,
             &vars,

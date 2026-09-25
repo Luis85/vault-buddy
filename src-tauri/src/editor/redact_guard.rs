@@ -1,7 +1,8 @@
 //! Structural pin for the editor's content-free logs (Task 58; F-50;
 //! test-only): every `log::` call in every `.rs` file under `src/editor/`
 //! — subdirectories included, so a module moved in later (Task 59's
-//! `export_worker/vault_dir.rs`) is covered the day it lands — formats a
+//! `vault_dir.rs`, from the retired `export_worker/`) is covered the day
+//! it lands — formats a
 //! path, a file or capture name, a title, a caption or cue text only
 //! through `redact::redact_path`/`redact_name`.
 //!
@@ -13,8 +14,8 @@
 //!    `redact` call. `base` is not in the brief's list; it is here because
 //!    a staged capture's base is `<date> <recorded window title>`.
 //! 2. **`.display()`, whatever the name** (F38). `dir.display()` matches no
-//!    word above and prints the whole path — exactly what
-//!    `export_worker/vault_dir.rs` does today. There is no content-free use
+//!    word above and prints the whole path — exactly what `vault_dir.rs`
+//!    did before Task 59 moved it here. There is no content-free use
 //!    of `.display()` in a log line, so none is allowed.
 //! 3. **`{:?}` of a `Path`/`PathBuf`, whatever the name** (F38). A scan has
 //!    no types, so "Path-typed" is what this file SAYS: an identifier
@@ -455,9 +456,42 @@ mod tests {
         );
     }
 
+    // F38 (Task 59): `vault_dir.rs` -- the publication's vault-directory
+    // create/confirm/roll-back, moved here from the retired
+    // `export_worker/` -- logs the vault folders it removes or keeps, and
+    // printed them whole with `.display()`. The directory walk above
+    // covers it at its new home by construction; this names the file, so
+    // the move cannot silently land somewhere the walk does not reach (or
+    // stay where it was), and so a raw `.display()` left in it reddens a
+    // test that says which file.
+    #[test]
+    fn moved_vault_dir_logs_still_redact_their_paths() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        assert!(
+            !root.join("export_worker").exists(),
+            "the retired export worker directory is still in the tree"
+        );
+        let moved = root.join("editor").join("vault_dir.rs");
+        let src = std::fs::read_to_string(&moved)
+            .expect("vault_dir.rs must live at src/editor/vault_dir.rs");
+        assert!(
+            src.contains("log::"),
+            "the fixture flaw: a vault_dir.rs with no log call proves nothing"
+        );
+        let found = findings("vault_dir.rs", &src);
+        assert!(
+            found.is_empty(),
+            "{}",
+            found.join(
+                "
+"
+            )
+        );
+    }
+
     #[test]
     fn editor_logs_redact_display_calls_regardless_of_argument_name() {
-        // `export_worker/vault_dir.rs`'s own shape: `dir` is none of the
+        // `vault_dir.rs`'s shape before Task 59: `dir` is none of the
         // name rule's words.
         let fixture =
             "fn f(dir: &Path) {\n    log::warn!(\"could not roll back {}\", dir.display());\n}\n";

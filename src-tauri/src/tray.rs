@@ -51,15 +51,15 @@ pub const POSITION_DENYLIST: [&str; 5] =
 ///
 /// The editor is deliberately absent: see `COMPANION_LABELS`.
 ///
-/// So is the EXPORT. This gate has the same two-predicate shape as `quit`
-/// below, which grew a third term for `export_shutdown::export_blocks_shutdown`
-/// — do not "unify" the two. The buddy is the RECORDING indicator, and hide is
-/// refused mid-capture so a recording can never run with nothing on screen
-/// saying so. An export needs no indicator: it renders its own progress in the
-/// editor window, which hide-to-tray does not touch. Blocking hide for the
-/// minutes an export runs would pin the app on screen during exactly the
-/// operation a user wants to walk away from. A structural test in
-/// `export_shutdown` pins this asymmetry in both directions.
+/// So are the editor's RENDERS and PUBLISHES. This gate reads the two
+/// capture predicates, while `quit` below reads `shutdown_gate`'s whole
+/// composition — do not "unify" the two. The buddy is the RECORDING
+/// indicator, and hide is refused mid-capture so a recording can never run
+/// with nothing on screen saying so. A render or a publish needs no
+/// indicator: each shows its own progress in the editor window, which
+/// hide-to-tray does not touch. Blocking hide for the minutes one runs would
+/// pin the app on screen during exactly the operation a user wants to walk
+/// away from. A structural test in `shutdown_gate` pins this asymmetry.
 pub fn hide_buddy(app: &AppHandle) {
     if crate::capture_commands::recording_blocks_shutdown(app)
         || crate::screen_commands::capture_blocks_shutdown(app)
@@ -84,29 +84,24 @@ pub fn quit(app: &AppHandle) {
     // encode. Park the wait on a worker thread and let it drive the exit
     // once the save has landed; the menu callback returns immediately.
     //
-    // An in-flight EXPORT is the third thing this must not abandon, and the
-    // only one of the three that is mid-write into a vault: quitting under it
-    // used to run `finish_quit` immediately, destroying every window and
-    // calling exit(0) while the `screen-export` thread was committing video →
-    // note → staged-removal, and leaving the ffmpeg CHILD — a separate
-    // process — writing into staging after the app was gone (GAP-155).
+    // The editor's renders and publishes are the other two things this must
+    // not abandon: each runs an ffmpeg child or a copy into a vault that
+    // nothing else on the way out would stop (Task 46, R12; Task 48, F19).
     //
-    // All three terms live in one place, `shutdown_gate::shutdown_is_blocked`
-    // — the updater's own door spelled none of them and nobody noticed
+    // Every term lives in one place, `shutdown_gate::shutdown_is_blocked`
+    // — the updater's own door once spelled none of them and nobody noticed
     // (GAP-160), so the disjunction is no longer written out per door.
     if crate::shutdown_gate::shutdown_is_blocked(app) {
         let app = app.clone();
         let spawned = std::thread::Builder::new()
             .name("shutdown-finalize".into())
             .spawn(move || {
-                // FIRST: it kills a child process and is bounded at a few
-                // seconds, while the two finalizes below are unbounded — an
-                // export left running behind them would go on writing into
-                // the vault for as long as they take.
-                crate::export_shutdown::cancel_if_exporting(&app);
-                // The editor's renders, for the same reasons (Task 46,
-                // R12): a child process, bounded, and cancel-not-finish
-                // because a render is repeatable and its project is kept.
+                // FIRST: the editor's renders (Task 46, R12). Each kills a
+                // child process and is bounded at a few seconds, while the
+                // two finalizes below are unbounded — a render left running
+                // behind them would go on writing for as long as they take.
+                // Cancel, not finish: a render is repeatable and its
+                // project is kept.
                 crate::editor::render_jobs::cancel_all_bounded(
                     &app,
                     std::time::Duration::from_secs(5),
@@ -476,8 +471,10 @@ mod tests {
     // The editor webview reads media through the asset protocol, and this
     // scope IS the security boundary (ADR R7): `$APPLOCALDATA` resolves to
     // the app's own local-data dir, and the scope is an ENUMERATED list --
-    // the staging directory (the legacy phase-4 preview, and every staged
-    // capture a project adopts by reference) plus exactly four
+    // the staging directory (every staged capture a project adopts by
+    // reference -- `project_store::resolve_source` answers a `staging`
+    // locator with the capture's own staged path, which is why Task 59 kept
+    // this entry when it retired the phase-4 preview) plus exactly four
     // sub-directories of each tutorial-editor project: `media` (copied
     // imports), `takes` (webcam takes), `products` (rendered outputs) and
     // `cache` (review renders). Deliberately NOT `jobs` (pre-flight ruling

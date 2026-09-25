@@ -113,21 +113,10 @@ export function matchShortcut(event: KeyboardEvent): ActionId | null {
  * text-entry surface (a plain `<input>`/`<textarea>` or a `contenteditable`
  * region — typing "s" into a rename field must not split a clip), and false
  * whenever a menu/dialog has already claimed the keyboard
- * (`opts.menuOwnsKeys` — e.g. `ContextMenu.vue`'s own open popover, or the
- * legacy capture editor's surface described below) so two owners can never
- * both react to the same keypress.
- *
- * The LEGACY capture editor (`useEditorExport.ts`/`EditorRoot.vue`,
- * AGENTS.md "Frontend state") already binds Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y
- * on `window` for its own undo/redo. This task wires NO window listener at
- * all (see the module doc), so there is nothing here to collide with it
- * yet — `shouldHandle` exists so that whenever a later task DOES install a
- * tutorial-editor dispatcher, routing every keydown through this gate first
- * is what keeps the two surfaces from double-handling the same combo once
- * both exist. A dispatcher for the new surface must check `document.
- * activeElement`/its own mount surface before calling this, since which
- * surface owns the window at all is a wiring decision this module cannot
- * see.
+ * (`opts.menuOwnsKeys` — e.g. `ContextMenu.vue`'s own open popover) so two
+ * owners can never both react to the same keypress. (The retired phase-4
+ * editor bound its own Ctrl+Z on `window` until Task 59; this gate is why
+ * the two never double-handled a combo while both were mounted.)
  */
 export function shouldHandle(event: KeyboardEvent, opts?: { menuOwnsKeys?: boolean }): boolean {
   if (opts?.menuOwnsKeys) return false;

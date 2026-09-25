@@ -11,7 +11,7 @@
 //! edge BLUE, a dissolve at the wrong offset is not half-way at 2.1 s, and
 //! a picture-in-picture drawn under the base layer is not green.
 //!
-//! Skips VISIBLY without ffmpeg (the `export_roundtrip.rs` rule): a silent
+//! Skips VISIBLY without ffmpeg (the retired export round trip's rule): a silent
 //! skip is indistinguishable from a pass.
 
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ use vault_buddy_core::editor::render_plan::{
 };
 use vault_buddy_core::screen_capture_config::ScreenQuality;
 use vault_buddy_screen::ffmpeg_args::EncodeSettings;
-use vault_buddy_screen::ffmpeg_run::run;
+use vault_buddy_screen::ffmpeg_run::{run_named, RENDER_RUNNER};
 use vault_buddy_screen::render::ass::build_cue_ass;
 use vault_buddy_screen::render::{render_args, AssHooks};
 
@@ -254,7 +254,8 @@ fn render_with_ass(
 ) -> PathBuf {
     let dest = dir.join("render.mp4.part");
     let args = render_args(plan, inputs, &dest, ass, &settings());
-    run(
+    run_named(
+        RENDER_RUNNER,
         ffmpeg,
         &args,
         &dest,

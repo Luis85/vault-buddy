@@ -2,7 +2,9 @@
 /**
  * The resume-or-discard list (spec §10): "Opening Record Screen with staged
  * captures present shows them first: each with its source, duration and age,
- * offering Resume editing or Discard."
+ * offering Resume editing or Discard." Since Task 59 retired the phase-5
+ * Save, editing is how a capture reaches a vault (Render + Publish), so the
+ * action says so: "Edit to render and publish".
  *
  * PRESENTATIONAL — no `invoke`, no store, no event listener. `ScreenSourcePicker`
  * owns `list_staged_captures` / `open_capture_editor` / `discard_staged_capture`,
@@ -40,7 +42,7 @@ const emit = defineEmits<{ resume: [base: string]; discard: [base: string] }>();
  *
  * Discard destroys the only copy of a recording (spec §10: "Discard is
  * confirm-gated, being irreversible. Nothing is ever deleted silently"), so
- * it takes two clicks, the `ExportBar` / `TaskSectionMenu` precedent rather
+ * it takes two clicks, the `TaskSectionMenu` precedent rather
  * than a native dialog (which steals OS focus, and `DIALOG_ACTIVE` is a
  * process-wide bool with two drivers already — docs/Gaps.md GAP-128).
  *
@@ -93,15 +95,16 @@ const discardLabel = (base: string) => (isArmed(base) ? "Delete it" : "Discard")
  * ("discard the project first"), so a button that always failed would be
  * worse than none.
  */
-const primaryActionLabel = (c: StagedCaptureSummary) => (c.projectId ? "Edit" : "Resume editing");
+const primaryActionLabel = (c: StagedCaptureSummary) => (c.projectId ? "Edit" : "Edit to render and publish");
 
 /** The chip is accent-toned only for an edit — a recovered capture carries
  * no edit to highlight. */
 const lengthVariant = (c: StagedCaptureSummary) => (c.edited ? "accent" : "neutral");
 
 /**
- * The chip: what an export will PRODUCE for an edited capture, and simply
- * what was recorded otherwise — the two are equal when nothing was cut.
+ * The chip: what a phase-4 edit's saved cut PRODUCES for an edited capture
+ * (the cut the editor migrates), and simply what was recorded otherwise —
+ * the two are equal when nothing was cut.
  *
  * Composed here rather than as a pair of template branches because the
  * per-row markup is what pushes this component's template past the
@@ -121,8 +124,8 @@ const lengthLabel = (c: StagedCaptureSummary) => {
  * directory ONLY after `mp4_boxes` confirms it holds real footage, so this
  * file exists and plays — which is the whole point of the fragmented-MP4
  * container. The row has to say so: a recovered capture carries no vault id,
- * so Save is refused and Resume is not rendered, leaving Discard as the only
- * BUTTON on a real recording.
+ * so the editor refuses it (F7) and Edit is not rendered, leaving Discard as
+ * the only BUTTON on a real recording.
  *
  * The literal `%LOCALAPPDATA%` form is what the user can paste into Explorer
  * or the Run box; the DTO carries no absolute path, and no IPC command opens
@@ -134,7 +137,7 @@ const stagedPath = (c: StagedCaptureSummary) => `${STAGING_DIR}\\${c.base}.mp4`;
 
 /**
  * The second line: the recorded length — worth saying only when an edit
- * makes it differ from the exported one — and the age.
+ * makes it differ from the cut one — and the age.
  *
  * Each part is dropped when it has nothing to say, so an unreadable
  * timestamp (the sidecar is hand-editable) leaves no stranded separator and
@@ -162,7 +165,7 @@ const subLabel = (c: StagedCaptureSummary) =>
     data-testid="staged-list"
     class="flex flex-col gap-1"
   >
-    <SectionHeader>Not saved yet</SectionHeader>
+    <SectionHeader>Not published yet</SectionHeader>
     <ul class="flex flex-col gap-1">
       <li
         v-for="c in captures"
@@ -174,7 +177,7 @@ const subLabel = (c: StagedCaptureSummary) =>
           <span class="min-w-0 flex-1 truncate text-sm font-medium text-fg">
             {{ c.sourceTitle }}
           </span>
-          <!-- The length the EXPORT will produce, which is what the user is
+          <!-- The length the saved cut produces, which is what the user is
                deciding about. An unedited capture's two durations are equal,
                so this is also the recorded length wherever it matters. -->
           <Chip :variant="lengthVariant(c)">
@@ -186,10 +189,9 @@ const subLabel = (c: StagedCaptureSummary) =>
             {{ subLabel(c) }}
           </span>
           <!-- The primary action is offered only where it leads somewhere.
-               A recovered capture carries no vault id, so
-               `export_worker::prepare` refuses its Save outright and the
-               editor would open on a zero-length timeline — true whether or
-               not it also carries a pin. -->
+               A recovered capture carries no vault id and no length, so
+               `editor_open_staged` refuses it outright (F7) — true whether
+               or not it also carries a pin. -->
           <AppButton
             v-if="!c.recovered"
             :data-testid="`staged-resume-${c.base}`"

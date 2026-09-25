@@ -5,24 +5,7 @@
 
 use super::*;
 use crate::editor::{project_store, EditorState};
-use vault_buddy_screen::staging::StagedSidecar;
-
-fn sidecar(base: &str) -> StagedSidecar {
-    StagedSidecar {
-        base: base.to_string(),
-        vault_id: "v1".into(),
-        source_title: "Screen 1".into(),
-        source_kind: "screen".into(),
-        inputs: vec!["Mic".into()],
-        duration_ms: 42_000,
-        paused_ms: 0,
-        width: 1920,
-        height: 1080,
-        recorded_at: "2026-09-20T10:00:00Z".into(),
-        timeline: None,
-        ..Default::default()
-    }
-}
+use std::path::Path;
 
 // A base name travels from the frontend, so it is untrusted input that
 // becomes a PATH. `..` or a separator in it would read a file outside
@@ -91,8 +74,8 @@ fn a_windows_drive_relative_or_alternate_stream_base_is_refused() {
 // STEM matches a reserved device name to the PHYSICAL device, regardless
 // of directory or extension -- `dir.join("COM1.json")` is the COM1
 // serial port, and `std::fs::read` on an open port blocks forever,
-// hanging `load_staged_capture`'s `spawn_blocking` closure (and leaking
-// the thread) instead of erroring. The match is case-insensitive and
+// hanging whichever `spawn_blocking` closure reads it (and leaking the
+// thread) instead of erroring. The match is case-insensitive and
 // applies even behind a real-looking extension.
 #[test]
 fn a_reserved_device_name_is_refused() {
@@ -112,148 +95,6 @@ fn a_base_with_a_control_character_is_refused() {
     assert!(!is_safe_base("\u{0}"));
 }
 
-// The detail the editor renders is derived, not echoed: every field the
-// wire contract names is mapped from the sidecar, and `asset_path` is
-// the file's own path — what `convertFileSrc` needs to build a URL the
-// asset protocol can serve.
-#[test]
-fn the_detail_maps_every_sidecar_field_and_carries_the_staged_path() {
-    let d = detail_from_sidecar(&sidecar("cap one"), Path::new("/staging/cap one.mp4"));
-    assert_eq!(d.base, "cap one");
-    assert_eq!(d.asset_path, "/staging/cap one.mp4");
-    assert_eq!(d.duration_ms, 42_000);
-    assert_eq!(d.width, 1920);
-    assert_eq!(d.height, 1080);
-    assert_eq!(d.source_title, "Screen 1");
-    // T-3: `recordedAt` is part of the wire contract the brief listed
-    // and was mapped but never asserted.
-    assert_eq!(d.recorded_at, "2026-09-20T10:00:00Z");
-    assert!(
-        d.timeline.is_none(),
-        "an untouched capture has no timeline yet"
-    );
-}
-
-// A sidecar written by a previous editing session must come back as a
-// timeline, or every crash would silently discard the edit it promised
-// to preserve.
-#[test]
-fn a_saved_timeline_round_trips_into_the_detail() {
-    let mut s = sidecar("cap");
-    s.timeline = Some(serde_json::json!({
-        "segments": [{"sourceStartMs": 0, "sourceEndMs": 1000}]
-    }));
-    let d = detail_from_sidecar(&s, Path::new("/staging/cap.mp4"));
-    let t = d
-        .timeline
-        .expect("a saved timeline must survive the round trip");
-    assert_eq!(t["segments"][0]["sourceEndMs"], 1000);
-}
-
-// P-5: `assetPath` must be a path `convertFileSrc` can turn into a URL
-// the asset protocol resolves -- i.e. THE STAGED FILE'S OWN path. It
-// carried the bare file name, which `convertFileSrc` percent-encodes
-// onto the asset origin without joining anything, so the URL named no
-// file on disk, matched no scope entry, and the preview stayed blank.
-// Pinned at the CALL SITE, which is the only place it can break:
-// `detail_from_sidecar` takes the path as a separate argument.
-//
-// The two halves are asserted separately on purpose. `parent == dir`
-// alone would also hold for a `dir`-relative name on some platforms, and
-// `is_absolute` alone would hold for any absolute path anywhere on the
-// disk -- it is the pair that says "this exact file, inside staging".
-#[test]
-fn load_from_staging_dir_returns_the_staged_mp4s_own_absolute_path() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let base = "cap one";
-    staging::write_sidecar(dir.path(), base, &sidecar(base)).expect("write sidecar");
-    std::fs::write(dir.path().join(staging::mp4_file_name(base)), b"x").expect("write mp4");
-
-    let detail = load_from_staging_dir(dir.path(), base).expect("load");
-    let asset = Path::new(&detail.asset_path);
-    assert!(
-        asset.is_absolute(),
-        "assetPath must be absolute: convertFileSrc joins nothing, so a bare name \
-         resolves to no file and matches no scope entry"
-    );
-    assert_eq!(
-        asset.parent(),
-        Some(dir.path()),
-        "assetPath must name a file inside the staging directory"
-    );
-    assert_eq!(
-        asset.file_name(),
-        Some(std::ffi::OsStr::new("cap one.mp4")),
-        "assetPath must name THIS capture's mp4"
-    );
-}
-
-// M-1: `read_sidecar` exists precisely because a sidecar can be
-// hand-edited (its own doc says so), so `sidecar.base` is untrusted. A
-// hand-edited base that disagrees with the file it lives in must not
-// become the identity `load_staged_capture` hands back -- that identity
-// is what the editor later hands to save and discard.
-#[test]
-fn a_sidecar_whose_base_disagrees_with_its_file_name_is_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut s = sidecar("cap");
-    s.base = "../../evil".to_string();
-    let json = serde_json::to_vec_pretty(&s).expect("serialize sidecar");
-    std::fs::write(dir.path().join("cap.json"), json).expect("write sidecar");
-    std::fs::write(dir.path().join("cap.mp4"), b"x").expect("write mp4");
-
-    assert!(load_from_staging_dir(dir.path(), "cap").is_err());
-}
-
-// C-1: the save path READ with the validated request base but WROTE
-// with `sidecar.base`, a field read off disk out of a file
-// `read_sidecar`'s own doc says may be hand-edited. `staging`'s own
-// tests pin that a base escaping the directory is refused; what this
-// pins is the shell's contribution -- WHICH base this call site hands
-// to the writer. The fixture is deliberately an ordinary, perfectly
-// safe name: "other" trips no containment or `is_safe_base` clause, so
-// nothing but the requested-vs-stored mismatch can fail it, and the
-// failure it demonstrates survives containment entirely -- saving an
-// edit to "cap" would create and own a DIFFERENT capture's sidecar.
-#[test]
-fn a_save_never_writes_to_a_name_other_than_the_one_it_was_asked_for() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut s = sidecar("cap");
-    s.base = "other".to_string();
-    std::fs::write(
-        dir.path().join("cap.json"),
-        serde_json::to_vec_pretty(&s).expect("serialize sidecar"),
-    )
-    .expect("write sidecar");
-
-    let result = save_to_staging_dir(
-        dir.path(),
-        "cap",
-        Some(serde_json::json!({"segments": [{"sourceStartMs": 0, "sourceEndMs": 1}]})),
-    );
-
-    assert!(result.is_err(), "a mismatched sidecar must not be written");
-    assert!(
-        !dir.path().join("other.json").exists(),
-        "the save must address the capture it was asked for, never the \
-         name the file on disk claims"
-    );
-}
-
-// The ordinary path: a save lands on the requested sidecar, in place.
-#[test]
-fn a_save_rewrites_the_requested_sidecar_in_place() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    staging::write_sidecar(dir.path(), "cap", &sidecar("cap")).expect("write sidecar");
-
-    save_to_staging_dir(dir.path(), "cap", Some(serde_json::json!({"segments": []})))
-        .expect("save");
-
-    let back = staging::read_sidecar(&dir.path().join("cap.json")).expect("reads back");
-    assert_eq!(back.timeline, Some(serde_json::json!({"segments": []})));
-    assert_eq!(back.duration_ms, 42_000, "the rest of the sidecar survives");
-}
-
 // T-2: `is_safe_base` is well tested as a function above, but its
 // APPLICATION was not -- removing the guard from a command body left
 // the whole shell test suite green, because `AppHandle` makes a unit
@@ -266,8 +107,9 @@ fn a_save_rewrites_the_requested_sidecar_in_place() {
 // failed exactly once it mattered: it named three commands and checked
 // the last of them against a slice running to end-of-file, so when a
 // fourth base-taking command was appended with its own guard, THAT
-// guard satisfied the assertion about `load_staged_capture` -- the test
-// stayed green with the load path unguarded (mutation-proven). Each
+// guard satisfied the assertion about the (since retired) sidecar-load
+// command -- the test stayed green with that path unguarded
+// (mutation-proven). Each
 // body is now bounded by its own column-0 closing brace, so a guard in
 // one command can never stand in for another's, and a command added
 // later is scanned without anybody remembering to widen this.
@@ -350,77 +192,17 @@ fn every_command_taking_a_base_guards_it_with_is_safe_base() {
             "open_capture_editor",
             "open_project_editor",
             "take_editor_request",
-            "list_tutorial_projects",
-            "load_staged_capture",
-            "save_capture_timeline"
+            "list_tutorial_projects"
         ],
         "this file's command set changed; confirm whether the new command \
          turns frontend text into a path, then update this list"
     );
     assert_eq!(
         checked,
-        [
-            "open_capture_editor",
-            "load_staged_capture",
-            "save_capture_timeline"
-        ],
+        ["open_capture_editor"],
         "the set of commands taking a base changed; confirm the new one \
          guards it, then update this list"
     );
-}
-
-// The sidecar is read-modify-written, never rebuilt: everything except
-// the timeline is the capture's own recorded truth (duration, inputs,
-// the vault it belongs to), and a save that reconstructed those fields
-// from what the editor happens to know would quietly lose whatever the
-// editor does not carry.
-#[test]
-fn saving_a_timeline_preserves_every_other_sidecar_field() {
-    let mut s = sidecar("cap");
-    s.inputs = vec!["Mic".into(), "Speakers".into()];
-    s.paused_ms = 7_000;
-    s.extra
-        .insert("exportedTo".into(), serde_json::json!("Work/cap.md"));
-    let timeline = serde_json::json!({"segments": [{"sourceStartMs": 5, "sourceEndMs": 9}]});
-    let updated = with_timeline(s.clone(), Some(timeline.clone()));
-
-    // I-2: this asserted six of eleven fields, and a mutation that
-    // rebuilt the struct while preserving those six -- blanking
-    // `source_title`, `source_kind`, `width` and `height` -- left it
-    // green. `width`/`height` are what phase 5's export encodes
-    // against. Comparing the WHOLE struct is what stops the assertion
-    // going stale the way a hand-listed six did: `..s` carries a field
-    // added later automatically, so the next field to join the sidecar
-    // is pinned here without anybody remembering to widen this.
-    assert_eq!(
-        updated,
-        StagedSidecar {
-            timeline: Some(timeline),
-            webcam: None,
-            ..s
-        }
-    );
-}
-
-// NO production caller passes `None` today, and that is deliberate
-// rather than an oversight: "clearing means untouched" WAS the design,
-// and it was removed (C-1) because it is true only for a capture opened
-// unedited — on spec 10's Resume the editor is handed a previous
-// session's edit, so undoing back to it cleared the field and told the
-// exporter the recording had never been touched. `useEditorTimeline`
-// therefore always writes the timeline, never `null`, and "untouched"
-// has exactly one authority: `Timeline::is_untouched(source_duration_ms)`.
-//
-// The `Option` stays for phase 5's discard, and this test stays with it:
-// it pins that clearing REMOVES the field rather than storing an empty
-// segment list — a timeline Save refuses (spec 8.1), which is not the
-// same thing as an absent one.
-#[test]
-fn clearing_a_timeline_removes_it_rather_than_storing_an_empty_one() {
-    let mut s = sidecar("cap");
-    s.timeline = Some(serde_json::json!({"segments": []}));
-    let updated = with_timeline(s, None);
-    assert!(updated.timeline.is_none());
 }
 
 // --- Task 37 Part B (F4): list_tutorial_projects / open_project_editor ---
@@ -634,4 +416,72 @@ fn an_unsafe_base_names_why_without_repeating_it() {
     let fine = "2026-09-20 1432 Saving... please wait";
     assert_eq!(unsafe_base_reason(fine), None);
     assert!(is_safe_base(fine));
+}
+
+// Task 59: the phase-4 editor and the phase-5 export are retired. Four
+// commands and four events went with them, and any reference left behind
+// is either a registration (a command the frontend could still reach with
+// nothing sound behind it), a listener waiting for an event nothing emits
+// (the "sits at exporting forever" class), or a comment steering the next
+// reader to a door that no longer exists. Scans every source file under
+// `src/` (the webview) and `src-tauri/src` (the shell), comments included.
+// The names are assembled from halves so this file does not match itself.
+#[test]
+fn no_source_file_references_a_retired_command() {
+    let retired: Vec<String> = [
+        ("load_staged", "_capture"),
+        ("save_capture", "_timeline"),
+        ("export_and_save", "_capture"),
+        ("cancel", "_export"),
+        ("screen:export", "Progress"),
+        ("screen:export", "ed"),
+        ("screen:export", "Failed"),
+        ("screen:export", "Cancelled"),
+    ]
+    .iter()
+    .map(|(a, b)| format!("{a}{b}"))
+    .collect();
+
+    fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir)
+            .expect("readable source dir")
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| matches!(e, "rs" | "ts" | "vue"))
+            {
+                out.push(path);
+            }
+        }
+    }
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    walk(&manifest.join("src"), &mut files);
+    walk(&manifest.join("..").join("src"), &mut files);
+    assert!(
+        files.len() > 200,
+        "the walk found only {} files -- it is broken, not the invariant",
+        files.len()
+    );
+    let mut found = Vec::new();
+    for path in files {
+        let src = std::fs::read_to_string(&path).expect("readable source file");
+        for (n, line) in src.lines().enumerate() {
+            for name in &retired {
+                if line.contains(name.as_str()) {
+                    found.push(format!("{}:{}: {name}", path.display(), n + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "a retired command or event is still referenced:\n{}",
+        found.join("\n")
+    );
 }

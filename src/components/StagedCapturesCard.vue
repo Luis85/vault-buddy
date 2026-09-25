@@ -24,7 +24,8 @@ import Banner from "./ui/Banner.vue";
 //
 // Clear is destructive and irreversible, so it sits behind a two-step
 // in-component confirm — spec §10: nothing is ever deleted silently. A
-// native dialog would be wrong here for the reason ExportBar records:
+// native dialog would be wrong here for the reason the retired ExportBar
+// recorded:
 // DIALOG_ACTIVE is a process-wide bool with two drivers already (GAP-128).
 
 const usage = ref<StagingUsage | null>(null);
@@ -56,11 +57,10 @@ async function refresh() {
 }
 
 /** Say what actually happened, including the parts that are not success.
- * A capture left behind because an export is writing it, or refused because
- * its leaf is a symlink, must never be reported as cleared. */
+ * A capture kept because a tutorial project uses it, or refused because its
+ * leaf is a symlink, must never be reported as cleared. */
 function describe(r: ClearStagedResult): string {
   const parts = [`Cleared ${r.cleared} · freed ${formatBytes(r.bytesFreed)}`];
-  if (r.skipped > 0) parts.push(`${r.skipped} left alone (being saved)`);
   if (r.skippedPinned > 0) parts.push(`${r.skippedPinned} kept (used by a tutorial project)`);
   if (r.failed > 0) parts.push(`${r.failed} could not be removed`);
   return parts.join(" · ");

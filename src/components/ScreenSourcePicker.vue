@@ -37,9 +37,10 @@ const screenCapture = useScreenCaptureStore();
 const ffmpeg = useFfmpegStore();
 
 /**
- * The export's toolchain, checked BEFORE the recording rather than at the
+ * The render's toolchain, checked BEFORE the recording rather than at the
  * payoff (docs/Gaps.md GAP-144). It WARNS and deliberately does not gate
- * `canStart`: ffmpeg is needed only by the final Save into a vault, so
+ * `canStart`: ffmpeg is needed only by the editor's Render (the retired
+ * phase-5 Save's role, Task 59), so
  * recording and editing are fully available without it. Disabling Start — the
  * shape a blocked document Import takes, because a Pandoc-less import cannot
  * proceed at all — would take away working functionality, which is a worse
@@ -49,7 +50,7 @@ const ffmpeg = useFfmpegStore();
  * is missing" at every open. A FAILED probe leaves the status null and the
  * notice shows: it blocks nothing, so warning on an unknown answer costs a
  * line of text, while staying silent costs the user a forty-minute recording
- * they cannot save.
+ * they cannot render.
  */
 const ffmpegMissing = computed(
   () => !ffmpeg.checking && !ffmpeg.status?.installed,
@@ -218,8 +219,8 @@ async function onResumeStaged(base: string) {
 /**
  * Discard, already confirm-gated by the list (spec §10).
  *
- * `discard_staged_capture` genuinely refuses — a base being exported right
- * now, or one that is not ours — and its message is user-facing, so a
+ * `discard_staged_capture` genuinely refuses — a base a tutorial project has
+ * pinned, or one that is not ours — and its message is user-facing, so a
  * refusal surfaces in the same banner as every other failure here and the
  * row STAYS. Only a successful discard re-reads the list, and it re-reads
  * rather than splicing: the discard also clears any abandoned export temp,
@@ -397,7 +398,7 @@ async function onStart() {
       :refresh-key="webcamRefresh"
     />
     <!-- Sits directly above Start because it qualifies exactly that button:
-         pressing it works, and the Save that follows will not. NOT above the
+         pressing it works, and the Render that follows will not. NOT above the
          staged list, which spec 10 requires to come first. -->
     <Banner
       v-if="ffmpegMissing"
@@ -405,7 +406,7 @@ async function onStart() {
       tone="warning"
     >
       <span class="block">
-        You can record and edit this capture now, but saving it into a vault
+        You can record and edit this capture now, but rendering and publishing it
         needs ffmpeg, which isn't installed.
       </span>
       <button

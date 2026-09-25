@@ -950,13 +950,13 @@ describe("ScreenSourcePicker", () => {
   });
 
   it("surfaces a refused discard and keeps the capture listed", async () => {
-    // `discard_staged_capture` really does refuse — a base being exported
-    // right now, or one that is not ours. The message is user-facing, and a
+    // `discard_staged_capture` really does refuse — a base a tutorial project
+    // has pinned, or one that is not ours. The message is user-facing, and a
     // row silently vanishing from the list would claim a delete that did not
     // happen.
     const calls = mockStaged([STAGED_ROW], (cmd) => {
       if (cmd === "discard_staged_capture") {
-        throw new Error("That capture is being saved right now.");
+        throw new Error("This capture is used by a tutorial project. Discard the project first.");
       }
       return undefined;
     });
@@ -965,7 +965,7 @@ describe("ScreenSourcePicker", () => {
     await w.get(`[data-testid="staged-discard-${base}"]`).trigger("click");
     await w.get(`[data-testid="staged-discard-${base}"]`).trigger("click");
     await flushPromises();
-    expect(w.get('[data-testid="screen-error"]').text()).toContain("being saved right now");
+    expect(w.get('[data-testid="screen-error"]').text()).toContain("used by a tutorial project");
     expect(w.find(`[data-testid="staged-row-${base}"]`).exists()).toBe(true);
     // Nothing to re-read: the list on screen is still true.
     expect(calls.filter((c) => c.cmd === "list_staged_captures")).toHaveLength(1);
@@ -979,7 +979,7 @@ describe("ScreenSourcePicker", () => {
   it("disarms the refused row, so the next single click cannot delete it", async () => {
     const calls = mockStaged([STAGED_ROW], (cmd) => {
       if (cmd === "discard_staged_capture") {
-        throw new Error("That capture is being saved right now.");
+        throw new Error("This capture is used by a tutorial project. Discard the project first.");
       }
       return undefined;
     });
@@ -1095,12 +1095,13 @@ describe("ScreenSourcePicker — the ffmpeg pre-flight", () => {
     // Both halves have to be true, or the notice is either a false alarm
     // ("you cannot record") or a useless one ("something is missing").
     expect(notice).toContain("record and edit");
-    expect(notice).toContain("saving it into a vault");
-    expect(notice).toContain("ffmpeg");
+    // Task 59: the phase-5 Save is retired; rendering is what needs ffmpeg.
+    expect(notice).toContain("rendering and publishing it needs ffmpeg");
+    expect(notice.toLowerCase()).not.toContain("saving");
   });
 
   // REGRESSION (the design decision this whole pre-flight turns on): ffmpeg
-  // is needed only by the export. A picker that disabled Start — or hid it
+  // is needed only by a render (the retired export's role). A picker that disabled Start — or hid it
   // behind a setup route, the way a blocked document Import does — would take
   // away a recording the user can perfectly well make and edit, which is a
   // worse bug than discovering the dependency at Save.

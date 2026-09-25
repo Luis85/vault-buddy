@@ -124,33 +124,27 @@ pub(crate) fn emit_screen_failed(app: &AppHandle, message: &str, retained: Optio
 
 /// The stop notification's copy, split out so it can be asserted directly.
 ///
-/// It deliberately does NOT say "saved", and that rule survives phase 5
-/// unchanged: this toast fires when the capture is STAGED, which is before
-/// any vault write exists for it. The wording started as a verbatim copy of
-/// the audio domain's stop toast, where "saved" is true because the MP3 and
-/// its companion note really are in the vault — the same words one domain
-/// over send the user hunting through Obsidian and concluding the app lost
-/// their recording.
+/// It deliberately does NOT say "saved", and that rule outlives every phase:
+/// this toast fires when the capture is STAGED, which is before any vault
+/// write exists for it. The wording started as a verbatim copy of the audio
+/// domain's stop toast, where "saved" is true because the MP3 and its
+/// companion note really are in the vault — the same words one domain over
+/// send the user hunting through Obsidian and concluding the app lost their
+/// recording.
 ///
-/// **What DID change is the trailing sentence, and it had to.** Through
-/// phases 2–4 it read "Editing and saving into a vault arrive in a later
-/// update." Phase 4 shipped the editor and phase 5 shipped the save, so that
-/// sentence became a false statement shown to every user at the end of every
-/// recording — and it pointed them away from the button that now does the
-/// thing. It names the capture bar instead, which is where **Edit** lives
-/// (`ScreenCaptureBar` on the panel's list view). Keep any future edit
-/// honest about what actually happened AND about what is now possible.
+/// **What changes is the trailing sentence, and each time it had to.**
+/// Through phases 2–4 it promised "Editing and saving into a vault arrive
+/// in a later update"; phase 5 pointed it at the capture bar's Save; Task 59
+/// retired that Save, so it now names what the tutorial editor does
+/// instead: render the recording, then publish the render. Keep any future
+/// edit honest about what actually happened AND about what is now possible.
 pub(crate) fn stopped_toast_copy(base: &str, warning: Option<&str>) -> (&'static str, String) {
     // The trailing sentence, shared by both arms, is what tells the user the
     // footage is not missing — only not in the vault YET — and where to go.
+    const NEXT: &str = "Open it in the editor to render and publish it.";
     let body = match warning {
-        Some(w) => format!(
-            "Recorded {base} with a warning: {w}. Edit it from the capture bar to \
-             save it into a vault."
-        ),
-        None => {
-            format!("Recorded {base}. Edit it from the capture bar to save it into a vault.")
-        }
+        Some(w) => format!("Recorded {base} with a warning: {w}. {NEXT}"),
+        None => format!("Recorded {base}. {NEXT}"),
     };
     ("Screen capture ready", body)
 }
@@ -580,27 +574,27 @@ mod tests {
     }
 
     #[test]
-    fn the_stop_notification_does_not_claim_a_save_that_did_not_happen() {
+    fn the_stop_toast_never_claims_a_save() {
         // A STOP is not a save, in any phase. The capture stages in
-        // `%LOCALAPPDATA%\\com.vaultbuddy.desktop\\screen-captures`; the ninth
-        // sanctioned vault write happens later, when the user presses Save
-        // in the editor. This copy was lifted verbatim from the audio
-        // domain, where "saved" is true because the MP3 and its note really
-        // are in the vault. Here it sends the user hunting through their
-        // vault for a file that was never put there, and concluding the app
-        // lost a ten-minute recording.
+        // `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures`, and
+        // nothing reaches a vault until the user renders it in the editor
+        // and publishes the result. This copy was lifted verbatim from the
+        // audio domain, where "saved" is true because the MP3 and its note
+        // really are in the vault. Here it sends the user hunting through
+        // their vault for a file that was never put there, and concluding
+        // the app lost a ten-minute recording.
         //
         // The trailing sentence is pinned for the opposite reason. It used
         // to promise that "editing and saving into a vault arrive in a later
-        // update"; phases 4 and 5 shipped both, so that sentence became a
-        // falsehood shown at the end of every recording AND pointed the user
-        // away from the button that does the thing.
+        // update", then pointed at the capture bar's phase-5 Save; Task 59
+        // retired that Save, so it now names what the editor does instead:
+        // render, then publish. Asserted WHOLE, so a lost line continuation
+        // (a run of spaces mid-sentence) fails here too.
         let (title, body) = stopped_toast_copy("2026-09-19 1432 Figma", None);
         assert_eq!(title, "Screen capture ready");
         assert_eq!(
             body,
-            "Recorded 2026-09-19 1432 Figma. Edit it from the capture bar to \
-             save it into a vault."
+            "Recorded 2026-09-19 1432 Figma. Open it in the editor to render and publish it."
         );
 
         // The warning arm keeps its meaning — a capture that finalized with
@@ -610,8 +604,8 @@ mod tests {
         assert_eq!(title, "Screen capture ready");
         assert_eq!(
             body,
-            "Recorded 2026-09-19 1432 Figma with a warning: a device vanished. \
-             Edit it from the capture bar to save it into a vault."
+            "Recorded 2026-09-19 1432 Figma with a warning: a device vanished. Open it in the \
+             editor to render and publish it."
         );
 
         // Belt for a future copy edit: whatever the wording becomes, it may
@@ -621,6 +615,7 @@ mod tests {
             let (title, body) = stopped_toast_copy("base", w);
             assert!(!title.to_lowercase().contains("saved"), "title: {title}");
             assert!(!body.to_lowercase().contains("saved"), "body: {body}");
+            assert!(!body.contains("  "), "a run of spaces: {body}");
         }
     }
 

@@ -19,9 +19,6 @@ mod document_commands;
 // the `editor_*` session commands behind R8's caller-window check.
 mod editor;
 mod editor_commands;
-mod export_commands;
-mod export_shutdown;
-mod export_worker;
 mod external_stream;
 mod external_tool;
 mod ffmpeg;
@@ -372,7 +369,6 @@ pub fn run() {
         .manage(document_commands::AddDocumentPending::default())
         .manage(editor_commands::EditorRequest::default())
         .manage(editor::EditorState::default())
-        .manage(export_commands::ExportState::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
         // destruction.
@@ -504,10 +500,6 @@ pub fn run() {
             editor_commands::open_project_editor,
             editor_commands::take_editor_request,
             editor_commands::list_tutorial_projects,
-            editor_commands::load_staged_capture,
-            editor_commands::save_capture_timeline,
-            export_commands::export_and_save_capture,
-            export_commands::cancel_export,
             staged_commands::discard_staged_capture,
             staged_commands::list_staged_captures,
             staging_commands::staging_usage,

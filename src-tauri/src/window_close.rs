@@ -92,23 +92,21 @@ fn handle_main_close(window: &Window, api: &CloseRequestApi) {
         // encode. Hold this close, finalize on a worker thread, then
         // re-trigger it via the app handle.
         //
-        // The export is the third term for the same reason it is one in
-        // `tray::quit`: it is the only one of the three mid-write into a
-        // vault, and its ffmpeg CHILD is a separate process nothing else on
-        // the way out would stop (GAP-155). All three now come from one
-        // place, `shutdown_gate::shutdown_is_blocked` — the updater's door
-        // spelled none of them and nobody noticed (GAP-160).
+        // The editor's renders and publishes are terms for the same reason
+        // they are in `tray::quit`: an ffmpeg child or a copy into a vault
+        // that nothing else on the way out would stop. Every term comes
+        // from one place, `shutdown_gate::shutdown_is_blocked` — the
+        // updater's door once spelled none of them (GAP-160).
         api.prevent_close();
         let app = app.clone();
         let spawned = std::thread::Builder::new()
             .name("close-finalize".into())
             .spawn(move || {
-                // FIRST: bounded at a few seconds and it kills a child
-                // process, where the two finalizes below are unbounded.
-                crate::export_shutdown::cancel_if_exporting(&app);
-                // Task 46 (R12): the renders too, bounded, beside the export.
-                // On expiry the gate stops counting renders, so this
-                // re-triggered close cannot loop on a wedged one.
+                // FIRST, Task 46 (R12): the renders, bounded at a few
+                // seconds (each kills a child process), where the two
+                // finalizes below are unbounded. On expiry the gate stops
+                // counting renders, so this re-triggered close cannot loop
+                // on a wedged one.
                 crate::editor::render_jobs::cancel_all_bounded(
                     &app,
                     std::time::Duration::from_secs(5),
@@ -119,14 +117,13 @@ fn handle_main_close(window: &Window, api: &CloseRequestApi) {
                 crate::editor::publish::cancel_all_bounded(&app, std::time::Duration::from_secs(5));
                 crate::capture_commands::finalize_if_recording(&app);
                 crate::screen_commands::finalize_if_capturing(&app);
-                // All five are dealt with, so the gate above normally reads
+                // All four are dealt with, so the gate above normally reads
                 // false and the re-triggered CloseRequested takes the else
                 // branch below (pass through to destruction). A render that
                 // outlived its bound stops counting (`RENDERS_ABANDONED`),
-                // and so does a publish (`PUBLISHES_ABANDONED`);
-                // an EXPORT that did does not — `cancel_if_exporting` only
-                // logs on expiry, so a wedged export re-enters this worker
-                // every 5 s until it ends (docs/Gaps.md GAP-190).
+                // and so does a publish (`PUBLISHES_ABANDONED`), so a
+                // wedged job cannot loop this close (GAP-190 closed with
+                // the export, the one term that had no such latch).
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.close();
                 }

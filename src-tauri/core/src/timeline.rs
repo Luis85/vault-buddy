@@ -1,10 +1,21 @@
-//! The editor's segment algebra: which spans of a staged Screen Capture play,
-//! and in what order. Pure arithmetic with no I/O, so the editor's correctness
-//! is testable on Linux even though a screen can only be captured on Windows
-//! (spec §4.2, §8.1).
+//! The phase-4 editor's segment algebra: which spans of a staged Screen
+//! Capture play, and in what order. Pure arithmetic with no I/O (spec §4.2,
+//! §8.1).
 //!
-//! Every operation returns a NEW `Timeline`, which is what makes undo/redo a
-//! stack of snapshots rather than a set of inverse operations.
+//! **Since Task 59 it is read, never written.** The phase-4 editor that
+//! wrote a `timeline` into the staging sidecar, and the phase-5 export that
+//! planned on it, are retired. What remains are two readers: the tutorial
+//! editor's MIGRATION (`core::editor::migrate`, through
+//! `from_sidecar_value`), which carries a capture's saved cut into its first
+//! project, and the `is_untouched` cross-check — the same "is this the
+//! whole capture" question R1's identity render answers for a project, and
+//! the staged list's "edited" label. The operations below stay because the
+//! shared fixture table (`tests/fixtures/timeline-cases.json`) pins the
+//! algebra those saved cuts were made with.
+//!
+//! Every operation returns a NEW `Timeline`, which is what made the phase-4
+//! editor's undo/redo a stack of snapshots rather than a set of inverse
+//! operations.
 
 /// A half-open span `[source_start_ms, source_end_ms)` of the staged capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -125,7 +136,8 @@ impl Timeline {
     }
 
     /// True when this timeline is exactly the whole source, unedited — the
-    /// export fast path (spec §8.3), which remuxes instead of re-encoding.
+    /// retired phase-5 export's fast path (spec §8.3) keyed on it; the
+    /// staged list's "edited" label and the migration's identity still do.
     pub fn is_untouched(&self, source_duration_ms: u64) -> bool {
         matches!(
             self.segments.as_slice(),
@@ -136,26 +148,24 @@ impl Timeline {
     /// Turn the staged sidecar's hand-editable `timeline` field into a real
     /// `Timeline`.
     ///
-    /// This is the ONE place that value is interpreted (moved here from
-    /// `export_commands::timeline_from_sidecar` by the tutorial-editor
-    /// migration task, so `core::editor::migrate` — which cannot depend on
-    /// the `vault-buddy` shell crate — reads the exact same reader the
-    /// export path does, rather than growing a second copy). Anything
+    /// This is the ONE place that value is interpreted (moved here from the
+    /// retired export's shell module by the tutorial-editor migration task,
+    /// so `core::editor::migrate` — which cannot depend on the `vault-buddy`
+    /// shell crate — and the staged list read the exact same reader). Anything
     /// malformed — absent, null, wrong-typed, a segment with a non-numeric,
     /// negative or fractional bound — degrades to the WHOLE capture, the
     /// same defensive-read posture as the rest of the vault domain.
     ///
     /// That default is safe only because `is_untouched` is the authority on
-    /// the fast path: a whole-capture timeline answers it exactly as an
-    /// absent field would, so a degraded read REMUXES rather than
-    /// re-encoding. An EXPLICITLY empty segment list (`{"segments": []}`) is
-    /// NOT degraded — the user deleted everything, and a caller like
-    /// `export_refusal` must see that rather than have their recording
-    /// silently restored underneath them.
+    /// "untouched": a whole-capture timeline answers it exactly as an absent
+    /// field would. An EXPLICITLY empty segment list (`{"segments": []}`) is
+    /// NOT degraded — the user deleted everything, and the migration must
+    /// see that rather than have their recording silently restored
+    /// underneath them.
     ///
     /// The key names come from `Timeline`'s own `rename_all = "camelCase"`
-    /// derive, never from a hand mapping (GAP-135): a rename on the
-    /// TypeScript side has to redden
+    /// derive, never from a hand mapping (GAP-135): a rename here has to
+    /// redden
     /// `the_on_disk_timeline_parses_from_the_spelling_the_editor_writes`
     /// below, rather than silently degrading every timeline on disk to the
     /// whole capture with every other test green.
@@ -347,19 +357,17 @@ mod tests {
 
     // ---- the SHARED fixture table -------------------------------------
     //
-    // This algebra exists twice, in two languages: here, and in
-    // `src/utils/timelineGeometry.ts` + `src/composables/useEditorTimeline.ts`
-    // -- the one phase 5's export plans on, and the one the user actually
-    // watches. Each had its own tests and no fixture in common, so a
-    // disagreement between them was invisible: the exported file would not
-    // match the preview the user approved, with every test in the repo green
-    // (docs/Gaps.md GAP-136). Running one table through both found two real
-    // disagreements, a backwards segment and `whole(0)`; both are rows below.
-    //
-    // `tests/timelineFixtures.test.ts` reads this exact file and asserts the
-    // same expectations. `include_str!` is what makes the sharing real: move
-    // or delete the fixture and this crate stops compiling, rather than
-    // quietly testing nothing.
+    // This algebra existed twice, in two languages, until Task 59: here, and
+    // in the phase-4 editor's TypeScript (`timelineGeometry.ts` +
+    // `useEditorTimeline.ts`). Each had its own tests and no fixture in
+    // common, so a disagreement between them was invisible (docs/Gaps.md
+    // GAP-136). Running one table through both found two real
+    // disagreements, a backwards segment and `whole(0)`; both are rows
+    // below. The TypeScript half and its size guard are retired with that
+    // editor; this half stays, because every saved cut on disk was made
+    // with this algebra and the migration reads them. `include_str!` keeps
+    // it honest: move or delete the fixture and this crate stops compiling,
+    // rather than quietly testing nothing.
     const SHARED_FIXTURES: &str = include_str!("../../../tests/fixtures/timeline-cases.json");
 
     fn fixtures() -> serde_json::Value {
@@ -369,10 +377,9 @@ mod tests {
     // Segment keys are read by the names the editor WRITES onto disk
     // (camelCase), through `Segment`'s own `rename_all` derive -- NOT by a
     // hand mapping. This used to be one of three independent spellings of
-    // that wire shape (GAP-135); it and
-    // `export_commands::timeline_from_sidecar` now both go through the
-    // derive, so the fixture table below cannot disagree with production
-    // about a key name. Renaming a field here fails
+    // that wire shape (GAP-135); it and `from_sidecar_value` both go
+    // through the derive, so the fixture table below cannot disagree with
+    // production about a key name. Renaming a field here fails
     // `the_on_disk_timeline_parses_from_the_spelling_the_editor_writes`,
     // which holds a literal of what the editor actually writes.
     fn segments_of(v: &serde_json::Value) -> Vec<Segment> {
@@ -384,8 +391,7 @@ mod tests {
         let table = fixtures();
         let cases = table["cases"].as_array().expect("cases");
         // A table nothing iterates proves nothing, and one that silently
-        // shrinks to a single row proves almost nothing. The TypeScript half
-        // asserts the same count against the same file.
+        // shrinks to a single row proves almost nothing.
         assert_eq!(cases.len(), 8, "the shared table lost or gained a case");
         for case in cases {
             let name = case["name"].as_str().expect("name");
@@ -464,9 +470,9 @@ mod tests {
         assert_eq!(applied, 6, "the shared table lost an operation row");
     }
 
-    // The predicate phase 5's export fast path keys on. It lives in the
-    // SHARED table rather than a Rust-only fixture so a later frontend
-    // change that reshapes a case cannot quietly stop exercising it.
+    // The predicate the retired phase-5 export's fast path keyed on, and the
+    // staged list's "edited" label still does. It lives in the shared table
+    // so a case reshaped later cannot quietly stop exercising it.
     #[test]
     fn shared_fixture_table_pins_is_untouched() {
         let table: serde_json::Value =
@@ -514,17 +520,18 @@ mod tests {
         );
     }
 
-    /// GAP-135. The on-disk timeline is written by `useEditorTimeline.ts` and
-    /// read back by `export_commands::timeline_from_sidecar`, and the export's
-    /// correctness depends on the two agreeing about four key names.
+    /// GAP-135. The on-disk timeline was written by the phase-4 editor
+    /// (retired by Task 59) and is read back by `from_sidecar_value` for the
+    /// migration, whose correctness depends on the two agreeing about four
+    /// key names.
     ///
     /// The JSON below is a LITERAL, spelled the way the shipped editor writes
     /// it — deliberately not a re-serialize of this struct, which would agree
     /// with itself under any renaming and prove nothing. Dropping
     /// `rename_all = "camelCase"` makes this fail, which is the exact defect
     /// GAP-135 predicted: the reader stops parsing every timeline the editor
-    /// has ever written, and `timeline_from_sidecar` degrades silently to the
-    /// whole capture — exporting footage the user deleted.
+    /// has ever written, and `from_sidecar_value` degrades silently to the
+    /// whole capture — migrating footage the user deleted back in.
     #[test]
     fn the_on_disk_timeline_parses_from_the_spelling_the_editor_writes() {
         let on_disk = r#"{"segments":[{"sourceStartMs":0,"sourceEndMs":2000},{"sourceStartMs":5000,"sourceEndMs":6000}]}"#;

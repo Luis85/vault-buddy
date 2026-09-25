@@ -1,11 +1,10 @@
 //! The media import's ffprobe call (Task 25) — split out of `ffmpeg.rs`,
-//! which owns resolving the toolchain and the EXPORT's probe. The two probes
-//! read the same `ffprobe` output through one stream grouping
-//! (`ffmpeg::parse_probe_output` vs `ffmpeg::parse_import_probe`) and differ
-//! on purpose in one rule: the export encodes at the source size and needs
-//! EVEN dimensions; an import is scaled onto an even canvas, so parity is
-//! ignored (fix round 1). Error strings are shown beside a file's display
-//! name and never carry a path.
+//! which owns resolving the toolchain. It reads `ffprobe` output through
+//! `ffmpeg::parse_import_probe`, which ignores frame-size parity on purpose:
+//! an import is scaled onto an even canvas (fix round 1; the retired
+//! phase-5 export's own probe, which encoded at the source size, needed
+//! even dimensions). Error strings are shown beside a file's display name
+//! and never carry a path.
 
 use std::path::Path;
 
@@ -73,7 +72,6 @@ pub(crate) fn probe_media(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ffmpeg::parse_probe_output;
 
     #[test]
     fn the_format_duration_is_read_in_whole_milliseconds() {
@@ -89,20 +87,14 @@ mod tests {
         }
     }
 
-    // Fix round 1: the import ignores parity (the export does not — its
-    // even rule is pinned unchanged here too), still refuses a zero or
-    // absent frame size, and treats cover art as not-video.
+    // Fix round 1: the import ignores parity (an import is scaled onto an
+    // even canvas), still refuses a zero or absent frame size, and treats
+    // cover art as not-video.
     #[test]
-    fn the_import_rule_ignores_parity_and_cover_art_the_export_rule_does_not() {
+    fn the_import_rule_ignores_parity_and_cover_art() {
         let odd = "codec_type=video\nwidth=1367\nheight=767\n";
         let facts = parse_import_probe(odd).expect("odd frames import");
         assert_eq!((facts.width, facts.height), (1367, 767));
-        assert_eq!(
-            parse_probe_output(odd),
-            None,
-            "the export keeps its even rule"
-        );
-        assert!(parse_probe_output("codec_type=video\nwidth=1366\nheight=768\n").is_some());
 
         assert_eq!(
             parse_import_probe("codec_type=video\nwidth=0\nheight=767\n"),

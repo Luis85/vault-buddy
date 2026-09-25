@@ -2,10 +2,10 @@
 /**
  * The coach's **Start over** (Task 56; ONBOARDING.md: "Start over requires
  * confirmation and resets guide state only"): a two-step, in-card confirm —
- * the `ExportBar` precedent, never a native dialog (that would suspend the
- * very coach it sits in). Confirming emits `restart`; the store resets the
- * guide's progress and nothing else. A lesson change disarms it (`key` on
- * the step id, from the card).
+ * the retired `ExportBar`'s precedent, never a native dialog (that would
+ * suspend the very coach it sits in). Confirming emits `restart`; the store
+ * resets the guide's progress and nothing else. A lesson change disarms it
+ * (`key` on the step id, from the card).
  */
 import { ref } from "vue";
 

@@ -4,13 +4,13 @@
  * Split out of `types.ts` when that file reached 521 nonblank against the
  * 500 cap. The seam is the domain, not the line count: every type here
  * describes something the screen feature alone puts on the wire — a capture
- * source, a region pick, a staged capture, a timeline, an export.
+ * source, a region pick, a staged capture, the staging directory.
  * `types.ts` re-exports the whole module, so every existing
  * `from "../types"` import keeps working and no call site moved.
  *
  * Several of these are pinned key-for-key against their Rust counterparts by
- * structural tests (`export_commands.rs` for `ExportResult`,
- * `screen_config_commands.rs` for `ScreenCaptureConfig`), because a JSON
+ * literal-JSON tests (`screen_config_commands.rs` for `ScreenCaptureConfig`,
+ * `staging_commands.rs` for `ClearStagedResult`), because a JSON
  * object literal crossing IPC is a seam no derive enforces — the GAP-135
  * class.
  */
@@ -93,99 +93,24 @@ export interface StagedCapture {
   height: number;
 }
 
-/** One cut of the source, in SOURCE milliseconds. Mirrors
- * `core::timeline::Segment`. */
-export interface SegmentDto {
-  sourceStartMs: number;
-  sourceEndMs: number;
-}
-
-/** The editor's in-progress edit. Mirrors `core::timeline::Timeline`, and is
- * what the staging sidecar's `timeline` field holds. */
-export interface TimelineDto {
-  segments: SegmentDto[];
-}
-
-/** What `load_staged_capture` returns. `assetPath` is the staged `.mp4`'s own
- * ABSOLUTE path; the editor hands it to `convertFileSrc(path, "asset")`.
- *
- * It was a bare file name until P-5. `convertFileSrc` JOINS NOTHING — it
- * percent-encodes its argument onto the asset origin — so a bare name became
- * a URL naming no file on disk, matching no entry in the asset protocol's
- * `$APPLOCALDATA/screen-captures/*` scope, and the preview never loaded. The
- * scope, not the opacity of this string, is what confines the webview: it
- * lives in `tauri.conf.json` and is enforced by Tauri on every request, and
- * nothing on this side of the wire can widen it. */
-export interface StagedCaptureDetail {
-  base: string;
-  assetPath: string;
-  durationMs: number;
-  sourceTitle: string;
-  width: number;
-  height: number;
-  recordedAt: string;
-  /** Whatever the sidecar held — NOT a guarantee. `editor_commands.rs`
-   * returns `Option<serde_json::Value>` and never inspects its shape, and the
-   * sidecar is hand-editable, so this annotation is a description of the
-   * happy path rather than a contract (docs/Gaps.md GAP-134, which also
-   * carries the fix: parse it into `core::timeline::Timeline` on the Rust
-   * side, where the untrusted value already crosses a typed boundary). */
-  timeline: TimelineDto | null;
-}
-
-/** The `screen:exportProgress` payload.
- *
- * `fraction` is 0..1, NEVER 0..100. Rust derives it from the same whole
- * percent its emit throttle gates on (`progress_payload_fraction`), so the
- * number that passed the gate and the number rendered here are one number;
- * a 0..100 payload would render a bar that is full from the first tick. */
-export interface ExportProgress {
-  base: string;
-  fraction: number;
-}
-
-/** The `screen:exported` payload — the ninth sanctioned vault write landing.
- *
- * `notePath` is null exactly when the vault has companion notes turned off.
- * `warning` is set when the video landed but its note did not: a degraded
- * SUCCESS, never a failure.
- *
- * `vaultId` is what `open_screen_capture` needs; `vaultName` is what a human
- * reads. Both are carried because the editor window installs no store and has
- * no vault list, so it cannot turn one into the other. */
-export interface ExportResult {
-  base: string;
-  videoPath: string;
-  notePath: string | null;
-  vaultId: string;
-  vaultName: string;
-  warning: string | null;
-}
-
-/** The `screen:exportFailed` payload. A cancel is not a failure and carries
- * no message at all (`screen:exportCancelled`, spec §14). */
-export interface ExportFailure {
-  base: string;
-  message: string;
-}
-
 /** One row of `list_staged_captures` (`StagedCaptureSummaryDto`) — a capture
- * that has been recorded but not yet saved into a vault or discarded.
+ * that has been recorded but not yet published into a vault or discarded.
  *
- * `durationMs` is what was RECORDED; `outputDurationMs` is what an export
- * would PRODUCE. They differ exactly when the editor cut something out, and
- * the second is the number the user is really deciding about.
+ * `durationMs` is what was RECORDED; `outputDurationMs` is what the
+ * phase-4 editor's saved cut PRODUCES (the cut the tutorial editor
+ * migrates). They differ exactly when that editor cut something out.
  *
  * `edited` is Rust's own `Timeline::is_untouched` answer, not "the sidecar
- * has a timeline field" — the editor writes a timeline on every operation
- * and never writes null, so the field's mere presence marks every capture
- * the editor was ever OPENED on. A capture whose source duration is unknown
+ * has a timeline field" — the phase-4 editor wrote a timeline on every
+ * operation and never wrote null, so the field's mere presence marks every
+ * capture it was ever OPENED on. A capture whose source duration is unknown
  * (`recovered`, below) is never `edited`: unknown is not an edit.
  *
  * `recovered` means `screen_recovery` rebuilt this capture's sidecar after
  * an interrupted session. It therefore records neither the vault it belongs
- * to nor its duration — nothing on disk remembers either — so Save refuses
- * it outright (`export_worker::prepare`) and the row must not offer one.
+ * to nor its duration — nothing on disk remembers either — so the editor
+ * refuses to open it (`editor_open_staged`, F7) and the row must not offer
+ * Edit.
  *
  * `projectId` is the tutorial project this capture is PINNED to (R6), when
  * one has adopted it by reference — `null` for an ordinary staged capture.
@@ -243,7 +168,7 @@ export interface ScreenCaptureConfig {
  * which vault it is FOR, but it lives in one shared directory outside every
  * vault, and the list surfaces are app-wide for the same reason. */
 export interface StagingUsage {
-  /** Staged captures waiting to be resumed, saved or discarded. */
+  /** Staged captures waiting to be edited, published or discarded. */
   captures: number;
   /** What a Clear would free: the bytes those captures occupy across their
    * video, sidecar and any abandoned export temp. NOT the directory's whole
@@ -252,15 +177,14 @@ export interface StagingUsage {
   bytes: number;
 }
 
-/** The outcome of `clear_staged_captures`. Five numbers, not a bare
- * success: a capture can be removed, left alone because an export is
- * writing it, left alone because a tutorial project has PINNED it (R6),
- * or refused (a symlinked leaf), and reporting only "done" would claim
- * the skipped ones were deleted. */
+/** The outcome of `clear_staged_captures`. Four numbers, not a bare
+ * success: a capture can be removed, left alone because a tutorial project
+ * has PINNED it (R6), or refused (a symlinked leaf), and reporting only
+ * "done" would claim the kept ones were deleted. (Task 59 dropped a fifth,
+ * `skipped`: a capture the retired phase-5 export was writing.) */
 export interface ClearStagedResult {
   cleared: number;
   bytesFreed: number;
-  skipped: number;
   skippedPinned: number;
   failed: number;
 }

@@ -8,7 +8,7 @@
 //! job registered. Then the job (`kind: "publish"`, `JobRegistry`) is
 //! registered BEFORE a byte is written, so `editor_get_jobs`, the close
 //! guard and the shutdown gate all see it (F19). Then, in the vault:
-//! `export_worker::vault_dir::prepare_export_dir` (containment asserted
+//! `editor::vault_dir::prepare_export_dir` (containment asserted
 //! before AND after `create_dir_all`), the free-space check, the journal's
 //! `reserved` step, the COPY (`core::editor::publish_io::copy_into_vault`:
 //! an owned hidden temp beside the target, `rename_noreplace` with the
@@ -68,8 +68,8 @@ use super::media_jobs::{start_job_in, JobKind, JobPhase, JobReporter, JobTermina
 use super::prefs_commands::{blocking, local_data, project_id_for};
 use super::project_store::project_dir;
 use super::render_jobs::{read_ledger, JOBS_DIR, PRODUCTS_DIR};
+use super::vault_dir::{prepare_export_dir, rollback_export_dir};
 use super::EditorState;
-use crate::export_worker::vault_dir::{prepare_export_dir, rollback_export_dir};
 
 /// The journal's file name inside `jobs\<jobId>\`.
 pub(crate) const PUBLISH_JOURNAL: &str = "publish.json";
@@ -595,7 +595,7 @@ pub(crate) fn publish_blocks_shutdown(state: &EditorState) -> bool {
 /// `true` iff they did.
 pub(crate) fn cancel_all_in(state: &EditorState, limit: Duration, poll: Duration) -> bool {
     lock_ignoring_poison(&state.jobs).cancel_kind(JobKind::Publish);
-    crate::export_shutdown::wait_until_cleared(|| !publish_blocks_shutdown(state), limit, poll)
+    crate::shutdown_gate::wait_until_cleared(|| !publish_blocks_shutdown(state), limit, poll)
 }
 
 /// `shutdown_gate`'s publish term (F19).

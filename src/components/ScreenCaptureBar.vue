@@ -35,9 +35,10 @@ const staged = computed(() => (store.status === "idle" ? store.lastStaged : null
 // nowhere.
 const now = useNowTicker(() => staged.value === null);
 
-/** Phase 4's ONE way into the editor. Phase 5 replaces it with spec 10's
- * staged-capture browser, which lists every staged capture rather than just
- * the last one; this is deliberately not that browser. */
+/** The quick way into the editor for the capture that just finished
+ * (`StagedCaptureList` in the Record Screen picker reaches every staged
+ * capture). Since Task 59 the editor's Render + Publish is the only way a
+ * capture reaches a vault, which is what the button's label says. */
 async function openEditor() {
   const capture = staged.value;
   if (capture === null) return;
@@ -134,7 +135,8 @@ const warning = computed(() => (staged.value ? null : store.warning));
         type="button"
         data-testid="screen-edit"
         class="cursor-pointer rounded-control bg-white/10 px-2 py-1 text-xs font-semibold text-white hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-        aria-label="Edit this screen capture"
+        aria-label="Edit to render and publish"
+        title="Edit to render and publish"
         @click="openEditor"
       >
         Edit

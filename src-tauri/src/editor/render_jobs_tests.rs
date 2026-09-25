@@ -735,8 +735,8 @@ fn discarding_a_project_while_rendering_stops_the_render_first() {
 
 // R12, structural: both quit workers cancel the render (bounded) BEFORE the
 // two unbounded capture finalizes -- a render left running behind them
-// would keep an ffmpeg child writing for as long as they take -- and
-// beside the export cancel. The hide chokepoint does not gate on renders.
+// would keep an ffmpeg child writing for as long as they take. The hide
+// chokepoint does not gate on renders.
 #[test]
 fn quit_cancels_a_render_before_finalizing_captures() {
     use crate::structural_scan::{fn_body, offset_of, shell_file};
@@ -757,7 +757,6 @@ fn quit_cancels_a_render_before_finalizing_captures() {
                 "{name}: the render must be cancelled before {later}"
             );
         }
-        assert!(body.contains("cancel_if_exporting("), "{name}");
     }
     let hide = fn_body(&tray, "pub fn hide_buddy(");
     assert!(!hide.contains("render_jobs"), "hide is not a quit (R12)");

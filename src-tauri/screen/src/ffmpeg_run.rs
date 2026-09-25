@@ -1,12 +1,11 @@
 //! Running ONE ffmpeg child: spawn it, stream its `-progress`, drain its
 //! stderr, honour a cancel by killing it, and remove a truncated output.
 //!
-//! Extracted from `export.rs` (tutorial-editor Task 42) so the phase-5
-//! export and the editor's render (`render/`) drive the SAME runner rather
-//! than two copies of the two-pipe discipline below. The extraction was
-//! behaviour-neutral: the export's own tests and `tests/export_roundtrip.rs`
-//! ran green before and after, and the tests that pin this runner moved here
-//! with it unchanged.
+//! Extracted from the phase-5 export (tutorial-editor Task 42) so the
+//! export and the editor's render (`render/`) drove the SAME runner rather
+//! than two copies of the two-pipe discipline below. Task 59 retired the
+//! export; the render is the runner's one caller, and its end-to-end proof
+//! is `tests/render_roundtrip.rs`.
 //!
 //! ## What a caller must know
 //!
@@ -31,7 +30,6 @@
 //! which a blocking `read_line` would not.
 
 use crate::ffmpeg_args::{parse_progress_line, ProgressTick};
-use crate::select::progress_percent;
 use crate::ScreenError;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
@@ -60,7 +58,7 @@ const STDERR_CAP: usize = 8 * 1024;
 /// Pandoc: this app is `windows_subsystem = "windows"` in release and owns
 /// no console, so a child spawned with default flags allocates a NEW console
 /// window that flashes up and grabs foreground focus. Pandoc's probe made
-/// that visible as the settings panel closing itself; an export runs for
+/// that visible as the settings panel closing itself; a render runs for
 /// minutes, so the console would simply sit there on top of the editor.
 ///
 /// Takes the platform as a parameter so BOTH arms are asserted on Linux --
@@ -74,33 +72,40 @@ pub(crate) const fn creation_flags_for(windows: bool) -> u32 {
     }
 }
 
-/// ffmpeg's `out_time_us` is MICROseconds; `select::progress_percent` takes
-/// output MILLIseconds. Nothing in `ffmpeg_args` enforces the divide, and
-/// getting it wrong is invisible in every argument test: a bar that runs
-/// 1000x fast pins at 100% within a frame and then sits there, which looks
-/// like a hang on exactly the long exports progress exists for.
+/// Progress as a whole percent, 0..=100 — moved here from the retired
+/// export's `select` module (Task 59), whose only other resident this was.
+///
+/// Integer arithmetic on purpose: this is what `core::throttle` gates on,
+/// so the number that passes the gate and the number the user sees are the
+/// same number. A zero-length output is COMPLETE rather than a division by
+/// zero — there is nothing left to write.
+fn progress_percent(written_output_ms: u64, total_output_ms: u64) -> u64 {
+    if total_output_ms == 0 {
+        return 100;
+    }
+    let scaled = written_output_ms.saturating_mul(100) / total_output_ms;
+    scaled.min(100)
+}
+
+/// ffmpeg's `out_time_us` is MICROseconds; `progress_percent` takes output
+/// MILLIseconds. Nothing in `ffmpeg_args` enforces the divide, and getting
+/// it wrong is invisible in every argument test: a bar that runs 1000x fast
+/// pins at 100% within a frame and then sits there, which looks like a hang
+/// on exactly the long renders progress exists for.
 fn percent_from_out_time_us(out_time_us: u64, total_output_ms: u64) -> u64 {
     progress_percent(out_time_us / 1_000, total_output_ms)
 }
 
 /// What one run's two reader threads and its log lines are called, so a
-/// crash record or a log line names the JOB that spawned the child -- the
-/// export and the editor's render share this runner (Task 42), and a render
-/// that died on a thread named `screen-export-*` would send a reader to the
-/// wrong feature (tutorial-editor Task 46).
+/// crash record or a log line names the JOB that spawned the child (Task
+/// 46: a render that died on a thread named after another feature would
+/// send a reader to the wrong one).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunnerNames {
     pub progress_thread: &'static str,
     pub stderr_thread: &'static str,
     pub log_prefix: &'static str,
 }
-
-/// The phase-5 export's names -- unchanged from before the runner took any.
-pub const EXPORT_RUNNER: RunnerNames = RunnerNames {
-    progress_thread: "screen-export-progress",
-    stderr_thread: "screen-export-stderr",
-    log_prefix: "screen export",
-};
 
 /// The editor render's names: its job thread is `editor-render`, and the
 /// readers are named after it.
@@ -109,26 +114,6 @@ pub const RENDER_RUNNER: RunnerNames = RunnerNames {
     stderr_thread: "editor-render-stderr",
     log_prefix: "editor render",
 };
-
-/// `run_named` under the export's names (`EXPORT_RUNNER`).
-pub fn run(
-    ffmpeg: &Path,
-    args: &[String],
-    dest: &Path,
-    total_output_ms: u64,
-    cancel: &AtomicBool,
-    on_progress: &mut dyn FnMut(u64),
-) -> Result<(), ScreenError> {
-    run_named(
-        EXPORT_RUNNER,
-        ffmpeg,
-        args,
-        dest,
-        total_output_ms,
-        cancel,
-        on_progress,
-    )
-}
 
 /// Run `ffmpeg args`, reporting whole-percent progress of `total_output_ms`
 /// and honouring `cancel`.
@@ -365,14 +350,14 @@ pub(crate) mod tests {
     // no test on any platform (the GAP-117 class). Deleting it left the
     // whole suite green on Linux AND on Windows while shipping an ffmpeg
     // console that flashes up and steals foreground focus for the MINUTES
-    // an export runs. So this scans the module's own production source --
+    // a render runs. So this scans the module's own production source --
     // `external_tool.rs`'s `the_windows_apply_site_still_passes_the_flag_\
     // from_one_chokepoint`, the sibling this file's flag helper was lifted
     // from, and the same `sink.rs` / `capture_exclusion` structural-pin
     // precedent -- and fails if the apply is deleted, duplicated, moved out
-    // of `run`, or rewired to a literal that could drift from
-    // `creation_flags_for`. (Task 42 moved `run` here from `export.rs`; the
-    // scan followed it with its assertions unchanged.)
+    // of `run_named`, or rewired to a literal that could drift from
+    // `creation_flags_for`. (Task 42 moved the runner here from the export;
+    // the scan followed it with its assertions unchanged.)
     #[test]
     fn the_windows_apply_site_still_passes_the_flag_from_one_chokepoint() {
         let production = production_src();
@@ -383,7 +368,7 @@ pub(crate) mod tests {
             production.matches(".creation_flags(").count(),
             1,
             "exactly one apply site -- a second Command builder that skipped it \
-             would pop a console window and steal focus for the length of an export"
+             would pop a console window and steal focus for the length of a render"
         );
         assert!(
             production.contains("command.creation_flags(creation_flags)"),
@@ -394,18 +379,19 @@ pub(crate) mod tests {
             "the applied value must come from the two-arm helper the VALUE test pins, \
              so a literal cannot drift away from it"
         );
-        // And that one site lives inside `run`, the single place a child is
-        // spawned -- not somewhere a future second spawn path could bypass.
+        // And that one site lives inside `run_named`, the single place a
+        // child is spawned -- not somewhere a future second spawn path could
+        // bypass.
         let body = production
-            .split_once("\npub fn run(")
-            .expect("the spawn chokepoint `run` must exist")
+            .split_once("\npub fn run_named(")
+            .expect("the spawn chokepoint `run_named` must exist")
             .1;
         let apply = body
             .find("command.creation_flags(creation_flags)")
-            .expect("the apply must live inside `run`");
+            .expect("the apply must live inside `run_named`");
         let spawn = body
             .find("command.spawn()")
-            .expect("`run` must be where the child is spawned");
+            .expect("`run_named` must be where the child is spawned");
         assert!(
             apply < spawn,
             "the flag must be applied BEFORE the child is spawned; applying it \
@@ -451,12 +437,10 @@ pub(crate) mod tests {
         assert!(!kept.is_empty(), "and it is not simply dropped");
         assert_eq!(drain_capped("one\ntwo\n".as_bytes()), "one\ntwo\n");
     }
-    // Task 46: the runner's threads and log lines carry the JOB's name. The
-    // export and the render share this runner, and a render that died on a
-    // thread named `screen-export-*` would send whoever reads the crash
-    // record to the wrong feature. So the spawn sites read the names they
-    // were given (no export name hard-wired into the shared body), and the
-    // render hands in its own.
+    // Task 46: the runner's threads and log lines carry the JOB's name, so a
+    // crash record names the feature that spawned the child. The spawn
+    // sites read the names they were given (no name hard-wired into the
+    // runner's body), and the render hands in its own.
     #[test]
     fn each_job_runs_its_child_under_its_own_thread_names() {
         let body = production_src()
@@ -470,9 +454,8 @@ pub fn run_named(",
         assert!(body.contains(".name(names.stderr_thread.into())"));
         assert!(
             !body.contains("\"screen-export-") && !body.contains("\"screen export"),
-            "the shared runner must not hard-wire the export's names"
+            "the runner must not hard-wire a job's names"
         );
-        assert_ne!(EXPORT_RUNNER, RENDER_RUNNER);
         for name in [RENDER_RUNNER.progress_thread, RENDER_RUNNER.stderr_thread] {
             assert!(name.starts_with("editor-render-"), "{name}");
         }
@@ -485,5 +468,20 @@ pub fn run_named(",
             ),
             "the render must run the child under RENDER_RUNNER"
         );
+    }
+
+    #[test]
+    fn progress_is_an_integer_percent_that_clamps_at_both_ends() {
+        assert_eq!(progress_percent(0, 8_000), 0);
+        assert_eq!(progress_percent(2_000, 8_000), 25);
+        assert_eq!(progress_percent(8_000, 8_000), 100);
+        // The last frame's duration can run a hair past the planned end; it
+        // must read 100, not 101.
+        assert_eq!(progress_percent(8_400, 8_000), 100);
+    }
+
+    #[test]
+    fn progress_of_an_empty_output_is_complete_rather_than_a_division_by_zero() {
+        assert_eq!(progress_percent(0, 0), 100);
     }
 }

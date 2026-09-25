@@ -49,6 +49,7 @@
 import { defineStore } from "pinia";
 import { markRaw } from "vue";
 
+import { withoutRedactionHandles } from "../editor/errorCopy";
 import type { EditorPort } from "../editor/port";
 import { createTauriEditorPort, EditorPortError } from "../editor/port";
 import type {
@@ -88,8 +89,11 @@ function nextCommandId(): string {
  * here (a bug in a test double, a non-Error throw) becomes a synthetic
  * `internal` error rather than crashing an action's catch block. */
 export function toEditorError(e: unknown): EditorError {
-  if (e instanceof EditorPortError) return e.error;
-  const message = e instanceof Error ? e.message : String(e);
+  // The port already took the redaction handles out (`errorCopy.ts`); this
+  // repeats it for an error built anywhere else — a test double's, a
+  // non-port throw — so no surface depends on WHERE an error was built.
+  if (e instanceof EditorPortError) return { ...e.error, message: withoutRedactionHandles(e.error.message) };
+  const message = withoutRedactionHandles(e instanceof Error ? e.message : String(e));
   return { code: "internal", message, retryable: false, operationId: "store-local" };
 }
 

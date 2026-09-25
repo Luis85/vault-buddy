@@ -161,71 +161,15 @@ pub(crate) fn call_args(needle: &str) -> Vec<(String, String)> {
     hits
 }
 
-/// How many fallible exits `assert_every_exit_is_paired` walked, and how
-/// many releases armed them. Returned so the caller can state its own
-/// vacuity floor — a region that walked nothing satisfies any pairing rule.
-pub(crate) struct ExitScan {
-    pub exits: usize,
-    pub releases: usize,
-}
-
-/// Assert that every fallible exit in `region` is preceded, ON ITS OWN
-/// BRANCH, by a line containing `release`.
-///
-/// A flat "has a release been seen yet" walk does NOT work and was written
-/// first: a release inside one `if let Err(..)` arm arms the flag for the
-/// whole rest of the function and lets a later unguarded `?` through with
-/// the test green. So this tracks BRACE DEPTH and arms per block — a
-/// release inside a nested block covers that block alone and is disarmed
-/// when it closes.
-///
-/// A line is checked BEFORE its closing braces are applied, because the
-/// idiomatic `.map_err(|e| { rollback(..); .. })?;` closes its arming block
-/// and takes the exit on the same line. The cost is one false negative: a
-/// `}` and an unguarded `return Err(` sharing a line are not distinguished.
-///
-/// Deliberately stricter than the language elsewhere: an exit inside a
-/// closure ahead of the release also trips it. That is the safe direction —
-/// the remedy is to move the release up, which is what correctness wants.
-pub(crate) fn assert_every_exit_is_paired(region: &str, release: &str, what: &str) -> ExitScan {
-    let mut armed = vec![false];
-    let mut scan = ExitScan {
-        exits: 0,
-        releases: 0,
-    };
-    for line in region.lines() {
-        let code = code_only(line);
-        if line.contains(release) {
-            scan.releases += 1;
-            *armed.last_mut().expect("the outermost block") = true;
-        }
-        if code.contains("?;") || code.contains("return Err(") {
-            scan.exits += 1;
-            assert!(
-                armed.iter().any(|a| *a),
-                "{what}: this exit is taken without {release}, so it leaks:\n  {}",
-                line.trim()
-            );
-        }
-        for _ in 0..code.matches('}').count() {
-            if armed.len() > 1 {
-                armed.pop();
-            }
-        }
-        armed.extend(std::iter::repeat_n(false, code.matches('{').count()));
-    }
-    scan
-}
-
 /// The production code of ONE shell source file, by file name — via
 /// `shell_sources`, so comments, doc comments and string literals are gone
 /// before anything is matched. This crate documents its invariants by
 /// quoting them, and prose naming a predicate must never satisfy an
 /// assertion that it is CALLED.
 ///
-/// Promoted out of `export_shutdown`'s test module when `shutdown_gate`
-/// needed the same two helpers: a scan helper that exists twice is the
-/// exact drift this module was created to stop.
+/// Promoted out of the (since retired) export-shutdown module's tests when
+/// `shutdown_gate` needed the same two helpers: a scan helper that exists
+/// twice is the exact drift this module was created to stop.
 pub(crate) fn shell_file(name: &str) -> String {
     shell_sources()
         .into_iter()

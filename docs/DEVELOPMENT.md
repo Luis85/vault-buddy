@@ -453,35 +453,40 @@ ever written into your vaults except recordings and their notes.
   `--extract-media`, so no media folder is created and no dangling image links
   remain. Per-vault, changes only NEW imports, omitted when `true` — the same
   discipline as `documentDateFolders`.
-- The seven `screen*` keys — the per-vault **Screen Capture** settings, edited
+- The eight `screen*` keys — the per-vault **Screen Capture** settings, edited
   in Vault settings → **Screen** (they were `config.json` hand-edits until
-  GAP-103 closed).
+  GAP-103 closed). Since tutorial-editor Task 59 retired the phase-5 export,
+  a capture reaches a vault through the editor's **Render** + **Publish**;
+  the notes below say which keys that still reads.
   - `screenCaptureFolder` (string or omit, default `"Screen Captures"`) — the
-    vault-relative folder a saved capture's `.mp4` and its note land in. The
-    ninth sanctioned vault write reserves the pair there.
+    vault-relative folder a Publish lands a video and its note in when the
+    Publish dialog's folder is left blank.
   - `screenCaptureDateFolders` (bool, default `false`) — the dated `YYYY/MM`
-    vs flat toggle, the same discipline and defaults as
-    `recordingDateFolders`/`documentDateFolders` above.
+    vs flat toggle. **Read by nothing since Task 59** (the Publish dialog asks
+    each time; docs/Gaps.md GAP-211).
   - `screenQuality` (`"low"` | `"balanced"` | `"high"`, default
-    `"balanced"`) — the bitrate target for an **edited** save, which
-    re-encodes. It does **not** affect an untouched capture: that takes the
-    `-c copy` fast path and is saved exactly as recorded.
+    `"balanced"`) — the capture's recording bitrate, applied when the
+    **next** recording starts. A render picks its own quality in the
+    editor's Render dialog.
   - `screenFps` (30 | 60, default 30) — the capture frame rate, applied when
     the **next** recording starts; a capture already staged keeps the rate it
     was recorded at. A value that is neither is normalized to 30 on read, so
     a hand-edited file still opens the app — but the settings command
     **refuses** it rather than normalizing, because a control the user is
     looking at must not quietly become something else.
-  - `screenCreateNote` (bool, default `true`) — whether an export writes the
-    companion note beside the video. Note-off is the one case where
-    `screen:exported` carries a null `notePath`.
+  - `screenCreateNote` (bool, default `true`) — whether the retired phase-5
+    export wrote a companion note. **Read by nothing since Task 59** (the
+    Publish dialog's own checkbox decides; docs/Gaps.md GAP-211).
+  - `screenAudioStems` (bool, default `false`) — keep each audio input as its
+    own stem beside the mixed track (new recordings only).
   - `screenExtraFrontmatter` / `screenBodyTemplate` (string or omit) — the
-    additive per-vault note template, the same machinery as the capture and
-    document templates. Placeholders for both: `{{date}}`, `{{recordedAt}}`,
-    `{{duration}}`, `{{source}}`, `{{resolution}}`, `{{vault}}`. The managed
-    identity keys (`type`, `recorded`, `duration`, `source`, `inputs`,
-    `resolution`, `vault`, `created-by`) are always written and cannot be
-    overridden; the body template is appended **below** the video embed.
+    additive per-vault template of the Tutorial note a Publish writes, the
+    same machinery as the capture and document templates. Placeholders for
+    both: `{{date}}`, `{{recordedAt}}`, `{{duration}}`, `{{product}}`,
+    `{{revision}}`, `{{range}}`. The managed identity keys (`type`,
+    `created-by`, `recorded`, `duration`, `product`, `revision`, `range`,
+    `chapters`) are always written and cannot be overridden; the body
+    template is appended **below** the video embed.
 - `followUpTemplate` (bool, default `true`) — append a `## Follow-up`
   scaffold (action items, decisions, notes) to each recording's companion
   note. Only applies when `createNote` is on.

@@ -664,7 +664,8 @@ fn register(
         replaced_from: None,
     };
     // Path-free, like every other message here: `store_io`'s read error
-    // names the file's full path under LOCALAPPDATA (the log keeps it).
+    // names the file by its role and a `redact_path` handle (Task 58), and
+    // the log line keeps that handle, never the path itself.
     let mut sources = load_sources(root, &slot.project_id).map_err(|e| {
         log::warn!("webcam take: could not read sources.json: {}", e.message);
         internal("The take could not be recorded in the project. See the log for details.")

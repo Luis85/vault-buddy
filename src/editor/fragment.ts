@@ -16,7 +16,7 @@
  * `editor_execute({kind: "pasteFragment", ...})` call sends, and never
  * mutates `project` or calls into Rust itself (R14: Rust is authoritative
  * for every committed edit — this is the clipboard's local, uncommitted
- * copy, the `useEditorSelection`-style read-side twin, not a write).
+ * copy, a read-side helper, not a write).
  */
 import type { CaptionCue, Clip, ClipboardFragment, Effect, Marker, Project } from "../editorTypes";
 

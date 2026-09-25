@@ -11,9 +11,12 @@
 //!
 //! Until this landed, all seven (now eight) `screen_*` fields were `config.json`
 //! hand-edits: they were READ in production (`screen_capture_worker` for
-//! quality and fps, `export_worker` for the other five) and settable
-//! nowhere, so a user could record and export but never choose a folder, a
-//! frame rate or whether a note was written.
+//! quality and fps, the since-retired phase-5 export for the other five)
+//! and settable nowhere, so a user could record and export but never choose
+//! a folder, a frame rate or whether a note was written. Since Task 59 the
+//! folder and the two templates are the tutorial editor's Publish's, and
+//! the date-folder and note toggles are read by nothing (docs/Gaps.md
+//! GAP-211).
 
 use std::path::Path;
 
@@ -234,8 +237,10 @@ mod tests {
     // types it, `substitute` renders it EMPTY (by design, so a typo never
     // leaks a literal), and the note is quietly missing the line they asked
     // for. The first draft of that hint claimed {{title}} and {{embed}};
-    // neither is real. So the hint is checked against screen_note's own vars
-    // rather than trusted.
+    // neither is real. So the hint is checked against the renderer's own
+    // vars rather than trusted -- since Task 59 retired the phase-5 Screen
+    // Capture note, that is the Tutorial note a Publish writes
+    // (`core::editor::note`), the one reader of these templates.
     #[test]
     fn the_settings_hint_names_only_placeholders_that_really_resolve() {
         let tab = include_str!("../../src/components/ScreenCaptureConfigTab.vue");
@@ -246,7 +251,7 @@ mod tests {
             .expect("the hint");
 
         // The real set, read off the one array that renders them.
-        let note = include_str!("../core/src/screen_note.rs");
+        let note = include_str!("../core/src/editor/note.rs");
         let vars: Vec<&str> = note
             .split("let vars = [")
             .nth(1)
@@ -265,7 +270,7 @@ mod tests {
         {
             assert!(
                 vars.contains(&claimed),
-                "the hint offers {{{{{claimed}}}}}, which screen_note does not \
+                "the hint offers {{{{{claimed}}}}}, which the Tutorial note does not \
                  resolve; it would render empty. Real: {vars:?}"
             );
         }
@@ -274,7 +279,7 @@ mod tests {
         for real in &vars {
             assert!(
                 hint.contains(&format!("{{{{{real}}}}}")),
-                "screen_note resolves {{{{{real}}}}} and the settings hint never mentions it"
+                "the Tutorial note resolves {{{{{real}}}}} and the settings hint never mentions it"
             );
         }
     }

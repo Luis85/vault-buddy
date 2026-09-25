@@ -9,9 +9,10 @@
  * `tests/fixtures/editor-time-cases.json`, read by both
  * `core/src/editor/time.rs` (`include_str!`) and
  * `tests/editorTimeFixtures.test.ts`. Moving or deleting that file breaks
- * the RUST build, not just a TypeScript import — the same discipline
- * `timeline-cases.json` uses (GAP-136), so a divergence between the two
- * languages can never pass with every test in the repo green.
+ * the RUST build, not just a TypeScript import — the discipline
+ * `timeline-cases.json` used while it had a TypeScript reader (GAP-136), so
+ * a divergence between the two languages can never pass with every test in
+ * the repo green.
  *
  * Half-open everywhere, exactly as the Rust twin: a clip's output span is
  * `[start_ms, end_ms)` and its source span is `[in_ms, out_ms)`.

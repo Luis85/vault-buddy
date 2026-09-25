@@ -277,6 +277,27 @@ describe("CloseGuardDialog", () => {
     expect(w.get('[role="alert"]').text()).toContain("Not enough disk space");
   });
 
+  // Task 59 (carried from Task 58): a refused discard's message names the
+  // file by its role and a `<path:#hash8>` handle — the log's, not the
+  // user's. The dialog says the role-worded sentence without the handle.
+  it("a refused discard shows role-worded copy, never a redaction handle", async () => {
+    const closeSession = vi.fn(async () => {
+      throw new EditorPortError({
+        code: "writeDenied",
+        message: "Could not remove the recovery journal <path:#1a2b3c4d>: Access is denied.",
+        retryable: true,
+        operationId: "op-2",
+      });
+    });
+    const { w, hideWindow } = await setup({ revision: 3, persisted: 2, overrides: { closeSession } });
+    await button(w, "Discard changes").trigger("click");
+    await flushPromises();
+    expect(hideWindow).not.toHaveBeenCalled();
+    const alert = w.get('[role="alert"]').text();
+    expect(alert).toContain("Could not remove the recovery journal: Access is denied.");
+    expect(alert).not.toContain("<path:#");
+  });
+
   it("Cancel keeps the editor open", async () => {
     const { w, hideWindow, closeSession } = await setup({ revision: 3, persisted: 2 });
     await button(w, "Cancel").trigger("click");
@@ -286,8 +307,8 @@ describe("CloseGuardDialog", () => {
     expect(w.find('[data-testid="close-guard"]').exists()).toBe(false);
   });
 
-  // The legacy phase-4 surface (still mounted until Task 59) has no
-  // new-editor session: a close behaves exactly as it did before.
+  // No session open (an empty window, or a refused open): a close hides
+  // the window at once and reads nothing.
   it("with no session open, a close hides as before and reads no jobs", async () => {
     const { hideWindow, getJobs } = await setup({ session: false });
     expect(hideWindow).toHaveBeenCalledTimes(1);
@@ -331,10 +352,9 @@ function opened(snap: EditorSnapshot): EditorOpenResult {
 }
 
 describe("EditorRoot close and recovery wiring", () => {
-  // The legacy phase-4 surface alone (the store's real port, whose
-  // `editor_open_staged` answer this mock cannot decode, so no session):
-  // the X hides the window exactly as it did before Task 37.
-  it("a close request with only the legacy editor open hides the window as before", async () => {
+  // No session (the store's real port, whose `editor_open_staged` answer
+  // this mock cannot decode): the X hides the window at once.
+  it("a close request with no session open hides the window", async () => {
     const seen = mockEditor();
     mount(EditorRoot);
     await flushPromises();

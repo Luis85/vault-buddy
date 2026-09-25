@@ -1,65 +1,25 @@
-//! The VAULT DIRECTORY an export writes into: create it contained, measure
-//! whether it can hold the result, and — when the save does not happen —
-//! put the vault back exactly as it was found.
+//! The VAULT DIRECTORY a publication writes into (Task 48, the tenth
+//! sanctioned vault write): create it contained, and -- when the copy does
+//! not happen -- put the vault back exactly as it was found.
 //!
-//! Split out of `mod.rs` for size (the fix that added the rollback took that
-//! file to 905 nonblank against the repo's 800-line Rust cap, and
-//! `scripts/loc-baseline.json` is shrink-only). The seam is a real one:
-//! everything here is about the DIRECTORY — the one thing an export touches
-//! in a user's vault before it has any bytes to put there — while `mod.rs`
-//! owns the export's sequence and the commit. `export_worker` is a directory
-//! module, so `lib.rs` is unchanged.
+//! Born as `export_worker/vault_dir.rs` for the phase-5 export (the ninth
+//! write), and moved here by Task 59 when that export was retired: the
+//! publication is its only caller now. Everything here is about the
+//! DIRECTORY -- the one thing a publication touches in a user's vault
+//! before it has any bytes to put there. The free-space check the export
+//! kept beside it went with the export; `publish` measures the product it
+//! copies itself.
+//!
+//! Its log lines name the folders they create and remove only through
+//! `redact::redact_path` (F38): a vault folder is the user's own path, and
+//! `redact_guard`'s scan covers this file because it lives under
+//! `src/editor/`.
 
 use std::path::{Path, PathBuf};
 
 use vault_buddy_core::capture_paths::assert_path_inside_vault;
-use vault_buddy_core::screen_capture_config::{export_size_estimate_bytes, export_space_shortfall};
-use vault_buddy_core::timeline::Timeline;
-use vault_buddy_core::vault_config::VaultCaptureConfig;
-use vault_buddy_screen::disk;
-use vault_buddy_screen::ffmpeg_args::EncodeSettings;
 
-/// Refuse a save that would fill a disk — on BOTH volumes it touches.
-///
-/// The temp is written into staging (`%LOCALAPPDATA%`) and only then lands
-/// in the vault, which is very often a different drive. Measuring one of
-/// them is measuring the wrong one half the time.
-pub(super) fn check_free_space(
-    timeline: &Timeline,
-    settings: &EncodeSettings,
-    cfg: &VaultCaptureConfig,
-    dirs: &[&Path],
-) -> Result<(), String> {
-    let needed = export_size_estimate_bytes(
-        timeline.output_duration_ms(),
-        settings.width,
-        settings.height,
-        cfg.screen_fps,
-        cfg.screen_quality,
-    );
-    let shortfall = dirs
-        .iter()
-        .filter_map(|dir| export_space_shortfall(needed, disk::free_bytes(dir)))
-        .max();
-    match shortfall {
-        // An UNMEASURABLE volume yields None and never refuses: a failed
-        // probe must not read as "no space left".
-        None => Ok(()),
-        Some(short) => Err(format!(
-            "There is not enough free space to save this capture — about {} more is needed.",
-            human_mib(short)
-        )),
-    }
-}
-
-fn human_mib(bytes: u64) -> String {
-    let mib = bytes.div_ceil(1024 * 1024);
-    if mib >= 1024 {
-        format!("{:.1} GB", mib as f64 / 1024.0)
-    } else {
-        format!("{mib} MB")
-    }
-}
+use super::redact::redact_path;
 
 /// The dated directory, asserted inside the vault BEFORE and AFTER creation.
 ///
@@ -165,18 +125,18 @@ pub(crate) fn rollback_export_dir(created: &[PathBuf]) {
         // them would keep every directory that really was created.
         if !dir.exists() {
             log::info!(
-                "screen export: {} was never created; continuing",
-                dir.display()
+                "vault folder: {} was never created; continuing",
+                redact_path(dir)
             );
             continue;
         }
         match std::fs::remove_dir(dir) {
             Ok(()) => log::info!(
-                "screen export: removed {}, empty after a save that did not happen",
-                dir.display()
+                "vault folder: removed {}, empty after a copy that did not happen",
+                redact_path(dir)
             ),
             Err(e) => {
-                log::info!("screen export: keeping {}: {e}", dir.display());
+                log::info!("vault folder: keeping {}: {e}", redact_path(dir));
                 return;
             }
         }
@@ -205,7 +165,7 @@ mod tests {
             // without either gets ERROR_PRIVILEGE_NOT_HELD (raw OS error
             // 1314) — an environment limitation, not a failure of the
             // security property this test guards. Skip with a SKIP line (shown
-            // under --nocapture, as test stderr is) rather than silently passing (the screen crate's export round-trip tests
+            // under --nocapture, as test stderr is) rather than silently passing (the screen crate's render round-trip tests
             // use the same posture when ffmpeg is absent) — any OTHER error
             // still panics, since that would be a real regression.
             if let Err(e) = std::os::windows::fs::symlink_dir(outside.path(), &link) {

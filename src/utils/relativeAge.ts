@@ -20,8 +20,8 @@ const UNITS: ReadonlyArray<readonly [ms: number, suffix: string]> = [
 
 export function relativeAgeLabel(recordedAt: string, nowMs: number): string {
   const then = Date.parse(recordedAt);
-  // The staging sidecar is hand-editable, so this string is not a guarantee
-  // (the same posture `StagedCaptureDetail.timeline` documents). An unparsed
+  // The staging sidecar is hand-editable, so this string is not a
+  // guarantee. An unparsed
   // date must render as NOTHING — a bare subtraction prints the literal
   // "NaN ago", which reads as a corrupted recording rather than as an
   // unknown timestamp.

@@ -11,27 +11,17 @@ import type { Page } from "@playwright/test";
  * module graph evaluates is all it takes.
  *
  * This is a stub of the RUNTIME, not of the app: every line of
- * `EditorRoot.vue`, `CapturePreview.vue`, `TimelineStrip.vue` and `ExportBar`
- * that the build emits is the code under test. Only the IPC replies and the
- * asset URL are ours.
+ * `EditorRoot.vue` and the tutorial editor it mounts that the build emits
+ * is the code under test. Only the IPC replies and the asset URL are ours.
+ * (Task 59 retired the phase-4 editor, and with it this stub's replies for
+ * its sidecar read and timeline write.)
  */
 
-/** The staged capture the editor opens. 1920x1080 matches the fixture clip. */
-export const DETAIL = {
+/** The staged capture the editor opens. */
+const DETAIL = {
   base: "2026-09-21 0848 Screen Capture",
-  assetPath: "C:\\Users\\me\\AppData\\Local\\com.vaultbuddy.desktop\\screen-captures\\cap.mp4",
   durationMs: 6000,
   sourceTitle: "Screen 1",
-  width: 1920,
-  height: 1080,
-  recordedAt: "2026-09-21T08:48:00Z",
-  timeline: {
-    segments: [
-      { sourceStartMs: 0, sourceEndMs: 2000 },
-      { sourceStartMs: 2000, sourceEndMs: 4000 },
-      { sourceStartMs: 4000, sourceEndMs: 6000 },
-    ],
-  },
 };
 
 /** Where the stubbed `convertFileSrc` points the preview. Same-origin on
@@ -42,11 +32,10 @@ export const FIXTURE_VIDEO_URL = "/__fixture__/capture.webm";
 /**
  * A decode-valid `EditorOpenResult` (`src/editor/decode.ts`'s
  * `decodeOpenResult`/`decodeProject`/`decodeSnapshot`) for `editor_open_staged`
- * — tutorial-editor Task 15's `EditorRoot` calls `editorProject.openStaged`
- * for every drained base UNCONDITIONALLY, alongside the legacy
- * `load_staged_capture` path this stub already served, so a stub that left
- * this command unanswered would make the store decode `undefined` and throw
- * a `ProtocolError` on every page load this spec drives.
+ * — `EditorRoot` opens every drained staged base through
+ * `editorProject.openStaged`, so a stub that left this command unanswered
+ * would make the store decode `undefined` and throw a `ProtocolError` on
+ * every page load a spec drives.
  */
 const EDITOR_OPEN_RESULT = {
   snapshot: {
@@ -96,7 +85,7 @@ export interface StubOptions {
 
 export async function installTauriStub(page: Page, options: StubOptions = {}) {
   await page.addInitScript(
-    ({ detail, videoUrl, openResult, replies, sequences }) => {
+    ({ base, videoUrl, openResult, replies, sequences }) => {
       const listeners = new Map<number, unknown>();
       let nextId = 1;
       // Every command the page invoked, in order — what a spec reads to
@@ -113,9 +102,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       // a behaviour change in the test rather than an unhandled rejection
       // that could be mistaken for a layout failure.
       const table: Record<string, unknown> = {
-        take_editor_request: { kind: "staged", value: detail.base },
-        load_staged_capture: detail,
-        save_capture_timeline: null,
+        take_editor_request: { kind: "staged", value: base },
         editor_open_staged: openResult,
         editor_get_jobs: [],
         ...replies,
@@ -146,7 +133,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       };
     },
     {
-      detail: DETAIL,
+      base: DETAIL.base,
       videoUrl: FIXTURE_VIDEO_URL,
       openResult: options.openResult ?? EDITOR_OPEN_RESULT,
       replies: options.replies ?? {},

@@ -146,38 +146,17 @@ pub(super) fn part_holds_footage(prefix: &[u8]) -> bool {
     scan.has_moov() && scan.fragment_count() > 0
 }
 
-/// Rule 3: never sweep while the app is WRITING into staging. Three ways it
-/// can be, and each has to be asked separately.
+/// Rule 3: never sweep while the app is WRITING into staging.
 ///
-/// `CaptureGuard` covers two of them — audio means the app is writing
-/// elsewhere, screen means a `.part` right here is live. **`exporting` is
-/// the third, and it was missing.** An export writes
-/// `.<base>.export.mp4.part` into this very directory, and it does NOT hold
-/// the capture guard (it only READS it, because a claim would need a second
-/// `release(CaptureKind::Screen)` site and a structural test pins that at
-/// exactly one — GAP-141). So the live temp was protected by the 60 s
-/// staleness window alone, and that window does not hold: `reencode_args`
-/// builds `trim`/`atrim` + `concat` with no `-ss`, so ffmpeg decodes from
-/// zero and emits no output packets until the first KEPT span. An edited
-/// export of a long recording that keeps only late footage writes its header
-/// at T0 and then nothing for minutes — its mtime never advances, it reads
-/// stale, and `sweep_staging_dir` classifies it `ExportTemp` and deletes it.
-/// The recovery thread is alive for exactly that long, because a `pending`
-/// file keeps it retrying every 90 s for up to 24 h.
-///
-/// On Windows the unlink itself then FAILS — ffmpeg's output handle is
-/// opened through the CRT without `FILE_SHARE_DELETE`, so both
-/// `DeleteFileW` and the `FileDispositionInfoEx` path `std::fs::remove_file`
-/// prefers return a sharing violation — and `delete` degrades to a
-/// `log::warn!`. That is luck, not a guard, and it is reasoned from the
-/// Win32 sharing rules rather than measured (no CI runner here is Windows).
-/// The guard below is the actual rule.
-///
-/// One process-wide `ExportState` reservation, so a bool is enough: any live
-/// export means somebody is writing a temp in this directory, and no sweep
-/// in this pass may run.
-pub(super) fn should_postpone(active: Option<CaptureKind>, exporting: bool) -> bool {
-    active.is_some() || exporting
+/// `CaptureGuard` answers it — audio means the app is writing elsewhere,
+/// screen means a `.part` right here is live. Until Task 59 there was a
+/// third writer, the phase-5 export (its `.<base>.export.mp4.part`, guarded
+/// by `ExportState` since the 2026-09-20 fix wave, GAP-152), and this took
+/// its reservation as a second argument. The export is retired, so nothing
+/// writes an export temp any more: one left behind by an older build is
+/// abandoned by definition, and the staleness window alone is enough.
+pub(super) fn should_postpone(active: Option<CaptureKind>) -> bool {
+    active.is_some()
 }
 
 /// Pure staleness, so the clock cases are testable without real mtimes — the
@@ -404,26 +383,9 @@ mod tests {
 
     #[test]
     fn recovery_is_postponed_while_a_capture_is_running() {
-        assert!(should_postpone(Some(CaptureKind::Screen), false));
-        assert!(should_postpone(Some(CaptureKind::Audio), false));
-        assert!(!should_postpone(None, false));
-    }
-
-    // REGRESSION (fix wave): the sweep knew about `CaptureGuard` and nothing
-    // about `ExportState`, so a LIVE export's `.<base>.export.mp4.part` was
-    // protected by the 60 s staleness window alone. `reencode_args` builds
-    // `trim`/`atrim` + `concat` with no `-ss`, so ffmpeg decodes from zero
-    // and emits nothing until the first kept span: an edited export keeping
-    // only late footage of a long recording writes its header at T0 and then
-    // nothing for minutes, its mtime never advances, and it reads stale.
-    // The recovery thread is alive for exactly that long, because `pending`
-    // stays non-zero.
-    #[test]
-    fn recovery_is_postponed_while_an_export_is_running() {
-        assert!(should_postpone(None, true));
-        // ...and an export plus a capture is still a postponement, not a
-        // cancellation of one by the other.
-        assert!(should_postpone(Some(CaptureKind::Audio), true));
+        assert!(should_postpone(Some(CaptureKind::Screen)));
+        assert!(should_postpone(Some(CaptureKind::Audio)));
+        assert!(!should_postpone(None));
     }
 
     #[test]

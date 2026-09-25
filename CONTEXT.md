@@ -21,20 +21,28 @@ The act of recording a piece of knowledge (voice, screenshot, clipboard, meeting
 _Avoid_: Recording — a Capture is not necessarily audio
 
 **Staged Capture**:
-A screen recording that has been made but not yet saved into a Vault: an `.mp4` plus a `.json` sidecar (source, duration, and the editor's in-progress timeline) living in the app's own staging directory, deliberately **outside every Vault**. An unedited, unapproved capture is not knowledge, so Discarding one must leave no litter in the user's notes. It stays staged until it is Exported or Discarded, and a crash leaves it recoverable rather than lost.
+A screen recording that has been made but not yet published into a Vault: an `.mp4` plus a `.json` sidecar (source, duration, and — for a capture edited before the tutorial editor — the phase-4 editor's saved timeline) living in the app's own staging directory, deliberately **outside every Vault**. An unedited, unapproved capture is not knowledge, so Discarding one must leave no litter in the user's notes. It stays staged until it is Discarded — Publishing a Render of it never removes it — and a crash leaves it recoverable rather than lost. A tutorial project that has opened it *pins* it, and a pinned Staged Capture cannot be Discarded until that project is discarded.
 _Avoid_: Draft, temp file — a Staged Capture is the user's footage, not scratch
 
 **Stem**:
 One audio input of a Staged Capture kept as its own mono file (`<base>.stem-<n>.m4a`) beside the capture's MIXED track, when the vault keeps them (off by default; new recordings only). A Stem is cut from the very samples the mix is made of, so the two cannot drift; it belongs to its capture only when the capture's sidecar lists it, and it is discarded with the capture. In the editor each Stem is its own audio track and the mix is muted.
 _Avoid_: Track (the editor's timeline word), channel (a stem is a whole device's input, downmixed), separate recording — nothing is recorded twice
 
-**Export**:
-Turning a Staged Capture into a playable `.mp4` plus a companion note inside a Vault — the act that ends a Staged Capture's life. An untouched timeline is remuxed losslessly; an edited one is re-encoded to exactly the spans the editor shows. The Staged Capture is removed only after the Vault write has landed.
-_Avoid_: Render, publish, upload — nothing leaves the machine; Save is the UI's word for it
+**Export** *(superseded)*:
+The phase-5 act of turning a Staged Capture straight into a `.mp4` plus a companion note inside a Vault, and removing the Staged Capture afterwards. Retired by the tutorial editor (Task 59): the same outcome is now a **Render** followed by a **Publish**, and the Staged Capture is kept. Use the word only for that history — and for the editor's own file exports (a project file, subtitles, diagnostics), which write outside every Vault.
+_Avoid_: Save (the phase-5 UI's word for it) — a tutorial project is *saved*, a Render is *published*
+
+**Render**:
+Producing a playable video (a **Product**) from a tutorial project's current edit, inside the project's own folder, never a Vault. An untouched Staged Capture renders as a lossless remux; any edit re-encodes exactly what the timeline shows. Repeatable and cancellable, because the project is kept.
+_Avoid_: Export, save — nothing reaches a Vault by rendering
+
+**Publish**:
+Copying one rendered Product, plus a companion note, into a Vault — the tenth sanctioned vault write. Never moves or deletes the Product or the Staged Capture it came from.
+_Avoid_: Export, upload — nothing leaves the machine
 
 **Discard**:
-Permanently deleting a Staged Capture — its video and its sidecar — without Exporting it. Always confirm-gated, because it destroys the only copy of a recording. The counterpart to Export: every Staged Capture ends as one or the other.
-_Avoid_: Cancel (that stops an Export in flight and keeps the footage), Archive (nothing is kept), Delete (reserved for the Task domain's own destructive write)
+Permanently deleting a Staged Capture — its video and its sidecar — from staging. Always confirm-gated, because it destroys the only copy of a recording that has not been Published. The only way a Staged Capture's life ends. Discarding a tutorial *project* is a different act: it deletes the project's edits and Renders and unpins its Staged Capture, and never deletes the recording.
+_Avoid_: Cancel (that stops a Render in flight and keeps the footage), Archive (nothing is kept), Delete (reserved for the Task domain's own destructive write)
 
 **Flat layout**:
 Vault Buddy's **default** on-disk layout for a capture/import domain: files live directly in `<folder>`, with no year/month subfolders. The timestamped base name encodes the full date, so the folders were never what identified a file.

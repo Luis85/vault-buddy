@@ -687,7 +687,7 @@ mod tests {
     // Unix-only: a Windows symlink needs `SeCreateSymbolicLinkPrivilege`
     // (Developer Mode or an elevated process). Skip VISIBLY rather than
     // silently passing when this account lacks it, the `981bf67` posture
-    // `export_worker::vault_dir`'s own symlink-escape test already uses for
+    // `editor::vault_dir`'s own symlink-escape test already uses for
     // the exact same reason.
     #[test]
     fn remove_project_never_follows_a_symlink() {

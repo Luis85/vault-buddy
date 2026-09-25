@@ -1,25 +1,25 @@
-//! The export's ffmpeg argument vectors, its `filter_complex` graph, and its
-//! `-progress` parsing — all PURE, and that is the whole point of the route.
+//! The ffmpeg argument pieces the editor's render builds its argv from —
+//! the identity remux, the H.264/AAC encode tails, the runner flags — and
+//! the `-progress` parsing. All PURE, and that is the whole point of the
+//! route (spec §3: a user-installed ffmpeg, never a bundled one): a function
+//! from a plan to an argv list is testable everywhere.
 //!
-//! Under the Media Foundation design the export's correctness lived in COM
-//! calls that execute in no automated test on any platform. Shelling out to a
-//! user-installed ffmpeg turns it into a function from an edit plan to an
-//! argv list, which is testable everywhere. Task 6 runs these arguments
-//! against a real binary in CI; the tests below pin the intent.
+//! Born as the phase-5 export's arguments; Task 59 retired that export, and
+//! with it the edited-export graph (`filter_complex`/`reencode_args`) the
+//! render's own `render::render_args` superseded.
 //!
-//! Three traps this module exists to design out:
+//! Two traps this module exists to design out:
 //!
 //! 1. **`out_time_ms` in ffmpeg's `-progress` output is NOT milliseconds.** It
 //!    is a long-standing quirk that the field reports MICROseconds, the same
 //!    value as `out_time_us`. A parser that read it as milliseconds would
 //!    report progress 1000x too fast, so the bar hits 100% almost at once and
-//!    then sits there for the rest of the export — which looks like a hang on
-//!    exactly the long exports progress exists for. `parse_progress_line`
+//!    then sits there for the rest of the run — which looks like a hang on
+//!    exactly the long runs progress exists for. `parse_progress_line`
 //!    reads `out_time_us` ONLY and a test forbids `out_time_ms`.
 //!
-//!    MEASURED, not assumed (this module was written with no ffmpeg
-//!    available). Against ffmpeg 6.1.1 the `-progress` stream carries
-//!    `bitrate drop_frames dup_frames fps frame out_time out_time_ms
+//!    MEASURED, not assumed. Against ffmpeg 6.1.1 the `-progress` stream
+//!    carries `bitrate drop_frames dup_frames fps frame out_time out_time_ms
 //!    out_time_us progress speed stream_0_0_q total_size` — so `out_time_us`
 //!    really is emitted and reading it alone loses nothing — and one tick
 //!    read `out_time_us=5990748`, `out_time_ms=5990748`,
@@ -29,28 +29,20 @@
 //!    AS MICROSECONDS — a deliberate design decision, not a relaxation of
 //!    `out_time_ms_is_refused_because_its_name_lies_about_its_units`.
 //! 2. **Times are formatted with integer arithmetic, never from a float.**
-//!    `4500 ms / 1000.0` can render as `4.4999999999999996`, and `trim=` takes
-//!    the string literally, so a cut would land a millisecond off the one the
-//!    user approved. `ms_to_ffmpeg_seconds` builds `{s}.{ms:03}` from integers.
-//! 3. **A zero-length span must never reach the filter graph.**
-//!    `trim=start=4:end=4` yields an EMPTY stream and `concat` then fails with
-//!    a message that names none of this. `select::plan` already drops them,
-//!    but it lives in another module and only one of the two is tested against
-//!    the editor's shared fixtures, so `filter_complex` ASSERTS the invariant
-//!    rather than assuming it. Callers plan through `select::plan`; a panic
-//!    here means a caller hand-built a span list, which is a defect, not a
-//!    user-reachable state.
+//!    `4500 ms / 1000.0` can render as `4.4999999999999996`, and a filter
+//!    takes the string literally, so a cut would land a millisecond off the
+//!    one the user approved. `ms_to_ffmpeg_seconds` builds `{s}.{ms:03}` from
+//!    integers.
 //!
 //! Every element of every returned vector is its own `String`. Joining them
 //! into one shell-style command line would make ffmpeg see a single unknown
 //! option, and would split any source path containing a space into two
 //! arguments — staged capture names routinely contain spaces.
 
-use crate::select::PlanSpan;
 use std::path::Path;
 use vault_buddy_core::screen_capture_config::{bitrate_bps, ScreenQuality};
 
-/// Audio bitrate for the re-encoded track. Fixed rather than quality-scaled:
+/// Audio bitrate for an encoded track. Fixed rather than quality-scaled:
 /// screen-capture audio is speech and system sound, where 192k is already
 /// transparent, and the quality preset exists to trade VIDEO size against
 /// detail (spec §12).
@@ -59,11 +51,11 @@ const AUDIO_BITRATE: &str = "192k";
 /// The output container, named EXPLICITLY rather than inferred.
 ///
 /// ffmpeg picks its muxer from the output's file EXTENSION unless `-f` says
-/// otherwise, and the export does not write to a `.mp4`: it writes to
-/// `staging::export_part_file_name(base)` -- `.<base>.export.mp4.part` -- so
-/// that a killed or crashed export can never be mistaken for a finished one.
-/// `.part` names no format, so without this every export died before writing
-/// a byte:
+/// otherwise, and a run never writes to a `.mp4`: the render writes
+/// `jobs\<jobId>\out.mp4.part` (the retired export wrote
+/// `.<base>.export.mp4.part`) so that a killed or crashed run can never be
+/// mistaken for a finished one. `.part` names no format, so without this
+/// every run died before writing a byte (GAP-161):
 ///
 /// ```text
 /// Unable to choose an output format for '....export.mp4.part';
@@ -76,7 +68,7 @@ const AUDIO_BITRATE: &str = "192k";
 /// called, and it is what makes the two facts independent.
 const OUTPUT_FORMAT: [&str; 2] = ["-f", "mp4"];
 
-/// What an edited export needs to know about the file it is producing.
+/// What an encode needs to know about the file it is producing.
 ///
 /// `Debug` so a failed export can name the settings it ran with in one log
 /// line; `Clone` because it costs nothing and the worker hands it around.
@@ -159,11 +151,12 @@ pub fn ms_to_ffmpeg_seconds(ms: u64) -> String {
     format!("{}.{:03}", ms / 1000, ms % 1000)
 }
 
-/// The flags every invocation carries, up to and including `-i <source>`.
+/// The flags a one-input invocation carries, up to and including
+/// `-i <source>`.
 ///
 /// `-nostdin` because the child inherits no console in a `windows_subsystem
 /// = "windows"` build and an ffmpeg that stops to ask a question would hang
-/// the export thread; `-progress pipe:1` puts the machine-readable progress
+/// the job thread; `-progress pipe:1` puts the machine-readable progress
 /// stream on stdout, where `parse_progress_line` reads it, leaving stderr for
 /// the error text a failure reports.
 fn common_prefix(source: &Path) -> Vec<String> {
@@ -187,12 +180,11 @@ pub(crate) fn runner_flags() -> Vec<String> {
     ]
 }
 
-/// The UNEDITED fast path: copy both streams into a new container.
+/// The IDENTITY fast path: copy both streams into a new container.
 ///
 /// No decode, no re-encode, no quality loss, and near-instant regardless of
-/// the recording's length. Keyed by the caller on
-/// `Timeline::is_untouched(source_duration_ms)` — never on `Option::is_none()`,
-/// which a resumed edit makes false.
+/// the recording's length. Keyed by the render on `RenderPlan::is_identity`
+/// (R1) — an untouched capture rendered whole.
 pub fn remux_args(source: &Path, dest: &Path) -> Vec<String> {
     let mut args = common_prefix(source);
     args.extend([
@@ -208,86 +200,8 @@ pub fn remux_args(source: &Path, dest: &Path) -> Vec<String> {
     args
 }
 
-/// The `trim`/`atrim` + `concat` graph for an edited export.
-///
-/// One pair per span, numbered by PLAN index — the order of the `concat`
-/// inputs IS the user's reorder. Emitting them in source order instead
-/// produces a file that is valid and playable and plays the blocks in the
-/// wrong sequence, which no later stage can detect.
-///
-/// # Panics
-/// On a zero-length span (trap 3). `select::plan` never produces one.
-pub fn filter_complex(spans: &[PlanSpan], has_audio: bool) -> String {
-    let mut chains: Vec<String> = Vec::with_capacity(spans.len() * 2);
-    let mut inputs = String::new();
-    for (i, span) in spans.iter().enumerate() {
-        assert!(
-            span.source_start_ms < span.source_end_ms,
-            "zero-length span {span:?} would make concat fail on an empty stream"
-        );
-        let start = ms_to_ffmpeg_seconds(span.source_start_ms);
-        let end = ms_to_ffmpeg_seconds(span.source_end_ms);
-        // setpts/asetpts rebase each trimmed piece to zero; without them
-        // concat receives its inputs still carrying source timestamps and the
-        // output holds the original gaps.
-        chains.push(format!(
-            "[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[v{i}]"
-        ));
-        inputs.push_str(&format!("[v{i}]"));
-        if has_audio {
-            chains.push(format!(
-                "[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{i}]"
-            ));
-            inputs.push_str(&format!("[a{i}]"));
-        }
-    }
-    // concat takes its inputs grouped per segment, video then audio.
-    let audio_streams = u8::from(has_audio);
-    let pads = if has_audio { "[outv][outa]" } else { "[outv]" };
-    chains.push(format!(
-        "{inputs}concat=n={}:v=1:a={audio_streams}{pads}",
-        spans.len()
-    ));
-    chains.join(";")
-}
-
-/// The EDITED path: one `filter_complex` pass that trims, restamps and
-/// concatenates, then re-encodes.
-///
-/// `-g <fps>` is a one-second keyframe interval, matching what the capture
-/// declared; without it ffmpeg's default GOP makes seeking in the saved file
-/// coarser than seeking in the staged one the user just edited.
-pub fn reencode_args(
-    source: &Path,
-    dest: &Path,
-    spans: &[PlanSpan],
-    settings: &EncodeSettings,
-) -> Vec<String> {
-    let mut args = common_prefix(source);
-    args.extend([
-        "-filter_complex".into(),
-        filter_complex(spans, settings.has_audio),
-        "-map".into(),
-        "[outv]".into(),
-    ]);
-    if settings.has_audio {
-        args.extend(["-map".into(), "[outa]".into()]);
-    }
-    args.extend(video_codec_args(settings));
-    if settings.has_audio {
-        args.extend([
-            "-c:a".into(),
-            "aac".into(),
-            "-b:a".into(),
-            AUDIO_BITRATE.into(),
-        ]);
-    }
-    args.extend(output_args(dest));
-    args
-}
-
-/// The H.264 video encode of an edited export -- shared with the editor's
-/// render, so a render and a legacy save encode at the same quality.
+/// The H.264 video encode every graph render carries (the phase-5 export's
+/// edited path encoded through it too, until Task 59).
 pub(crate) fn video_codec_args(settings: &EncodeSettings) -> Vec<String> {
     let bitrate = bitrate_bps(
         settings.quality,
@@ -309,12 +223,9 @@ pub(crate) fn video_codec_args(settings: &EncodeSettings) -> Vec<String> {
     args
 }
 
-/// The AAC encode every re-encoded output's sound carries -- shared with
-/// the editor's render (Task 44), so a render and a legacy save encode
-/// audio at the same bitrate. The render always names it: unlike the
-/// legacy export's `has_audio` gate, `render::audio_graph` never omits an
-/// audio stream (a silent project still gets `anullsrc`), so its caller
-/// never needs the conditional this crate's other callers do.
+/// The AAC encode every graph render's sound carries (Task 44). The render
+/// always names it: `render::audio_graph` never omits an audio stream (a
+/// silent project still gets `anullsrc`).
 pub(crate) fn audio_codec_args() -> Vec<String> {
     vec![
         "-c:a".into(),
@@ -325,7 +236,7 @@ pub(crate) fn audio_codec_args() -> Vec<String> {
 }
 
 /// faststart, the explicit container (see `OUTPUT_FORMAT`) and the
-/// destination -- the tail every re-encoded output shares.
+/// destination -- the tail every encoded output shares.
 pub(crate) fn output_args(dest: &Path) -> Vec<String> {
     let mut args: Vec<String> = vec!["-movflags".into(), "+faststart".into()];
     args.extend(OUTPUT_FORMAT.map(String::from));
@@ -360,8 +271,6 @@ pub fn parse_progress_line(line: &str) -> Option<ProgressTick> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::select::plan;
-    use vault_buddy_core::timeline::Timeline;
 
     fn settings(has_audio: bool) -> EncodeSettings {
         EncodeSettings {
@@ -405,66 +314,13 @@ mod tests {
         );
     }
 
+    // The encode tail every graph render carries: the probed encoder, its
+    // quality-scaled bitrate, 4:2:0 and a one-second keyframe interval.
     #[test]
-    fn a_single_span_trims_video_and_audio_and_concatenates_one_of_each() {
-        let spans = plan(&Timeline::whole(9_000).split_at(4_000).delete(0));
-        let f = filter_complex(&spans, true);
-        assert!(
-            f.contains("[0:v]trim=start=4.000:end=9.000,setpts=PTS-STARTPTS[v0]"),
-            "{f}"
-        );
-        assert!(
-            f.contains("[0:a]atrim=start=4.000:end=9.000,asetpts=PTS-STARTPTS[a0]"),
-            "{f}"
-        );
-        assert!(f.contains("[v0][a0]concat=n=1:v=1:a=1[outv][outa]"), "{f}");
-    }
-
-    // The ORDER of the concat inputs is the reorder. Emitting them in source
-    // order instead of plan order produces a file whose blocks play in the
-    // wrong sequence -- valid, playable, and not what the user approved.
-    #[test]
-    fn spans_are_concatenated_in_plan_order_not_source_order() {
-        let t = Timeline::whole(9_000)
-            .split_at(3_000)
-            .split_at(6_000)
-            .reorder(0, 2);
-        let spans = plan(&t);
-        let f = filter_complex(&spans, false);
-        let i0 = f.find("trim=start=3.000").expect("first plan span");
-        let i1 = f.find("trim=start=6.000").expect("second plan span");
-        let i2 = f.find("trim=start=0.000").expect("the moved span");
-        assert!(i0 < i1 && i1 < i2, "spans emitted out of plan order: {f}");
-        assert!(f.contains("[v0][v1][v2]concat=n=3:v=1:a=0[outv]"), "{f}");
-    }
-
-    // A silent capture is legal (spec 6.5). Emitting atrim for a file with
-    // no audio track makes ffmpeg fail with "Stream specifier ':a' matches
-    // no streams", which names nothing the user did.
-    #[test]
-    fn a_silent_capture_emits_no_audio_filters_and_no_audio_output_pad() {
-        let spans = plan(&Timeline::whole(5_000));
-        let f = filter_complex(&spans, false);
-        assert!(!f.contains("atrim"), "{f}");
-        assert!(!f.contains("[outa]"), "{f}");
-        assert!(f.contains("a=0"), "{f}");
-    }
-
-    #[test]
-    fn the_encode_maps_the_filter_outputs_and_carries_the_quality_bitrate() {
-        let spans = plan(&Timeline::whole(9_000).split_at(4_000).delete(0));
-        let args = reencode_args(
-            Path::new("in.mp4"),
-            Path::new("out.mp4"),
-            &spans,
-            &settings(true),
-        );
-        let joined = args.join(" ");
-        assert!(joined.contains("-map [outv]"), "{joined}");
-        assert!(joined.contains("-map [outa]"), "{joined}");
+    fn the_video_encode_carries_the_quality_bitrate_and_a_one_second_gop() {
+        let joined = video_codec_args(&settings(true)).join(" ");
         assert!(joined.contains("-c:v libx264"), "{joined}");
-        assert!(joined.contains("-c:a aac"), "{joined}");
-        // One-second keyframe interval, matching what the capture declared.
+        assert!(joined.contains("-pix_fmt yuv420p"), "{joined}");
         assert!(joined.contains("-g 30"), "{joined}");
         let expected = vault_buddy_core::screen_capture_config::bitrate_bps(
             ScreenQuality::Balanced,
@@ -473,32 +329,13 @@ mod tests {
             30,
         );
         assert!(joined.contains(&format!("-b:v {expected}")), "{joined}");
-    }
-
-    #[test]
-    fn a_silent_encode_maps_only_video_and_names_no_audio_codec() {
-        let spans = plan(&Timeline::whole(5_000));
-        let args = reencode_args(
-            Path::new("in.mp4"),
-            Path::new("out.mp4"),
-            &spans,
-            &settings(false),
-        );
-        let joined = args.join(" ");
-        assert!(joined.contains("-map [outv]"), "{joined}");
-        assert!(!joined.contains("[outa]"), "{joined}");
-        assert!(!joined.contains("-c:a"), "{joined}");
+        assert_eq!(audio_codec_args().join(" "), "-c:a aac -b:a 192k");
     }
 
     // Every argument is a separate argv entry. Building one string with
     // spaces makes ffmpeg see a single unknown option, and a source path
-    // containing a space becomes two arguments.
-    //
-    // BOTH builders are covered on purpose. The plan's mutation row for this
-    // test named `reencode_args` while the test as written only called
-    // `remux_args`, so collapsing the EDITED path's whole argv into one
-    // String left every test green -- and the edited path is the one this
-    // module exists for.
+    // containing a space becomes two arguments. (The render's own many-input
+    // argv is pinned the same way in `render::render_args_tests`.)
     #[test]
     fn a_path_with_spaces_and_quotes_survives_as_one_argument() {
         let src = Path::new("/tmp/2026-09-20 1432 Figma \"design\".mp4");
@@ -508,44 +345,28 @@ mod tests {
                 .any(|a| a == "/tmp/2026-09-20 1432 Figma \"design\".mp4"),
             "remux source path was split or escaped: {args:?}"
         );
-
-        let spans = plan(&Timeline::whole(9_000).split_at(4_000).delete(0));
-        let args = reencode_args(src, Path::new("/tmp/out.mp4"), &spans, &settings(true));
-        assert!(
-            args.iter()
-                .any(|a| a == "/tmp/2026-09-20 1432 Figma \"design\".mp4"),
-            "encode source path was split or escaped: {args:?}"
-        );
-        // The graph is one argument too: fused to -filter_complex or to the
-        // -map that follows it, ffmpeg reads it as an unknown option.
-        assert!(
-            args.iter().any(|a| a.starts_with("[0:v]trim=")),
-            "the filter graph must be its own argv entry: {args:?}"
-        );
     }
 
-    // REGRESSION: the export wrote to `.<base>.export.mp4.part` and named no
-    // format, so ffmpeg -- which infers its muxer from the extension -- died
-    // with "Unable to choose an output format" before writing a byte. EVERY
-    // export failed, on both paths, and it shipped green: every round trip in
-    // `tests/export_roundtrip.rs` invented a plain `.mp4` destination instead
-    // of the one production mints, so the muxer was always inferrable there.
-    //
-    // Those tests now use `staging::export_part_file_name` and would catch a
-    // regression themselves -- but they SKIP when ffmpeg is absent, so this is
-    // the half that runs everywhere. The dest here is deliberately the real
-    // shape rather than "out.mp4".
+    // REGRESSION: the export wrote    }
+
+    // REGRESSION (GAP-161): the phase-5 export wrote to
+    // `.<base>.export.mp4.part` and named no format, so ffmpeg -- which
+    // infers its muxer from the extension -- died with "Unable to choose an
+    // output format" before writing a byte, and it shipped green because
+    // every round trip invented a plain `.mp4` destination. The render
+    // writes a `.part` too (`jobs\<jobId>\out.mp4.part`); its round trips
+    // SKIP when ffmpeg is absent, so this is the half that runs everywhere.
+    // Both shapes that reach a dest: the identity remux, and the tail every
+    // graph render ends with.
     #[test]
-    fn both_paths_name_the_output_format_because_the_dest_is_a_dot_part() {
-        let dest = Path::new("/staging/.2026-09-21 0848 Screen Capture.export.mp4.part");
-        let spans = plan(&Timeline::whole(9_000).split_at(4_000).delete(0));
+    fn both_tails_name_the_output_format_because_the_dest_is_a_dot_part() {
+        let dest = Path::new("/jobs/job-1/out.mp4.part");
+        let mut graph = vec!["-i".to_string(), "in.mp4".to_string()];
+        graph.extend(output_args(dest));
 
         for (label, args) in [
             ("remux", remux_args(Path::new("in.mp4"), dest)),
-            (
-                "reencode",
-                reencode_args(Path::new("in.mp4"), dest, &spans, &settings(true)),
-            ),
+            ("graph", graph),
         ] {
             let f = args
                 .iter()
@@ -634,16 +455,10 @@ mod tests {
         );
     }
 
-    // The helper being right does not prove reencode_args consults it.
+    // The helper being right does not prove the encode tail consults it.
     #[test]
     fn the_encoders_preset_rule_reaches_the_argument_vector() {
-        let spans = plan(&Timeline::whole(5_000));
-        let args = reencode_args(
-            Path::new("in.mp4"),
-            Path::new("out.mp4"),
-            &spans,
-            &settings(false),
-        );
+        let args = video_codec_args(&settings(false));
         assert!(
             args.join(" ").contains("-c:v libx264 -preset medium"),
             "{args:?}"
@@ -651,23 +466,8 @@ mod tests {
 
         let mut hw = settings(false);
         hw.h264_encoder = "h264_nvenc".into();
-        let args = reencode_args(Path::new("in.mp4"), Path::new("out.mp4"), &spans, &hw);
-        let joined = args.join(" ");
+        let joined = video_codec_args(&hw).join(" ");
         assert!(joined.contains("-c:v h264_nvenc"), "{joined}");
         assert!(!joined.contains("-preset"), "{joined}");
-    }
-
-    // select::plan already drops zero-length spans, but it lives in another
-    // module and only one of the two is tested against the editor's shared
-    // fixtures. trim=start=4:end=4 yields an empty stream and concat then
-    // fails naming none of this.
-    #[test]
-    fn a_zero_length_span_is_refused_rather_than_emitted() {
-        let bad = [PlanSpan {
-            source_start_ms: 4_000,
-            source_end_ms: 4_000,
-            output_start_ms: 0,
-        }];
-        assert!(std::panic::catch_unwind(|| filter_complex(&bad, false)).is_err());
     }
 }

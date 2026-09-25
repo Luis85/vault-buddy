@@ -130,10 +130,10 @@ pub(crate) fn emit_buddy_facing(app: &tauri::AppHandle) {
 /// this codebase fixed — see `window_upkeep_tick`.
 ///
 /// Which is exactly why it REFUSES rather than waiting when a recording, a
-/// screen capture or an export is in flight (GAP-160). The two quit doors
-/// park a worker that finalizes and cancels; a synchronous main-thread
-/// command cannot sleep at all, let alone on the event loop the wait would
-/// depend on. Refusing is also the better answer here: unlike a tray quit,
+/// screen capture, a render or a publish is in flight (GAP-160). The two
+/// quit doors park a worker that finalizes and cancels; a synchronous
+/// main-thread command cannot sleep at all, let alone on the event loop the
+/// wait would depend on. Refusing is also the better answer here: unlike a tray quit,
 /// the user is present — they just clicked Install & restart — so naming
 /// what is running and letting them stop it keeps them in control, and the
 /// update is still there to install a minute later.

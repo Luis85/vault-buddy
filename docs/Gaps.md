@@ -2182,7 +2182,7 @@ is worth a consistent posture (both saturating, or both plain, with a
 comment on why) the next time either module is touched, so a future
 reader does not read the difference as meaningful when it isn't.
 
-### GAP-172 · Low · The timeline's track-label column scrolls with the content instead of staying pinned, and Task 20 widened one e2e overflow tolerance to make room for it
+### GAP-172 · Low (item 2 CLOSED 2026-09-25, Task 59) · The timeline's track-label column scrolls with the content instead of staying pinned, and Task 20 widened one e2e overflow tolerance to make room for it
 Two scoped, deliberate simplifications from Task 20 (the virtualized
 multi-track timeline, `src/components/editor/timeline/`), both documented
 inline where they live and recorded here per the tutorial-editor plan's
@@ -2249,6 +2249,12 @@ but no picture at all, and the only visible preview at that size is the
 legacy one below it. It gets height back as the window grows (77px at
 1280x820, 207px at 1920x1080, measured, split with the legacy preview), and
 the whole leftover height once the legacy surface retires (Task 59).
+
+> **2026-09-25 — item 2 is CLOSED by Task 59.** The legacy surface is gone,
+> `tests/e2e/editorLayout.spec.ts` was folded into `editorShell.spec.ts`, and
+> the column-fit assertion is back to a 1px tolerance at every size
+> (including the 960x640 floor), with the header's Save and Render video
+> asserted on screen at each. Item 1 (the unpinned label column) stands.
 
 ### GAP-173 · Medium (by design, until parity is proven) · The editor's preview approximates the render
 `src/editor/previewLayers.ts` + `src/editor/previewController.ts` +
@@ -2892,7 +2898,7 @@ directories older than an hour, and `products\<valid id>.mp4` files the
 ledger does not name, owned names only, no-follow
 (`store_io::remove_dir_no_follow`), the `sweep_stale_imports` posture.
 
-### GAP-190 · Low · Alt+F4 re-opens its own close every 5 s while a cancelled export will not unwind
+### GAP-190 · ~~Low~~ CLOSED 2026-09-25 (Task 59) · Alt+F4 re-opens its own close every 5 s while a cancelled export will not unwind
 `src-tauri/src/window_close.rs` (`handle_main_close`), found by Task 46
 while wiring the render term beside it. The close-finalize worker cancels an
 export bounded at 5 s and then re-triggers the close, and its comment says
@@ -2907,6 +2913,11 @@ does NOT have this problem: `render_jobs::cancel_all_bounded` latches
 `RENDERS_ABANDONED` on expiry and the gate stops counting renders. **Fix:**
 the same latch for the export (or have the worker exit through `finish_quit`
 rather than re-triggering the close).
+
+> **2026-09-25 — CLOSED by Task 59.** The export, its non-latching cancel and its
+> gate term are retired. Both remaining bounded cancels (renders, publishes)
+> latch on expiry (`RENDERS_ABANDONED`, `PUBLISHES_ABANDONED`), so the
+> re-triggered close cannot loop.
 
 ### GAP-191 · Low · A Review render survives a quit or a crash in the project's cache until that project's next review or close
 `src-tauri/src/editor/render_review.rs`, Task 47. A Review render (the
@@ -3047,7 +3058,7 @@ no-follow, staleness-gated like the screen sweep): remux-and-register a part
 that probes as video (or keep it raw, A09), remove a leftover
 `.remux.webm`, and report what it recovered in the next open of that project.
 
-### GAP-198 · Low · A capture's webcam file can outlive its capture as untracked staging litter
+### GAP-198 · Low (path 1 CLOSED 2026-09-25, Task 59) · A capture's webcam file can outlive its capture as untracked staging litter
 `src-tauri/src/export_worker/mod.rs` (`remove_staged_capture`),
 `src-tauri/src/screen_recovery/mod.rs`, Task 51 (F-22). A staged capture now
 owns a fourth file, `<base>.webcam.mp4` (`staging_files::capture_file_names`),
@@ -3079,6 +3090,14 @@ lines — promote a webcam part to the SAME ` (N)` its main part landed on
 (one pass that pairs them), and surface a companion with no capture in
 `StagedCaptureList` (or as a recovered capture of its own) rather than
 deleting footage.
+
+> **2026-09-25 — path (1) is CLOSED by Task 59**: the legacy export and its
+> post-save cleanup (`remove_staged_capture`, which removed only the `.mp4`
+> and the sidecar) are deleted, and nothing but `discard_staged_files` —
+> which reads `capture_file_names`, webcam file and listed stems included —
+> removes a staged capture now; the "split `export_worker/mod.rs` first"
+> step of the fix dissolved with the file. Paths (2)–(4) stand: they are the
+> recovery sweep's, and their fix is unchanged.
 
 ### GAP-199 · ~~Medium~~ FIXED in code 2026-09-24 (Task 52), hardware-unverified · A synchronized webcam track's length is derived, not measured
 `src-tauri/src/editor/session_commands.rs` (`staged_webcam`), Task 51
@@ -4452,7 +4471,7 @@ and add a test that round-trips a literal JSON string spelled the way
 fails if the names change on either side. GAP-134's fix (parse the field in
 `load_from_staging_dir`) needs this first and should carry it.
 
-### GAP-136 · Low · The output-to-source mapping exists twice, in two languages — now held apart by a shared fixture table, but only for the rows in it
+### GAP-136 · ~~Low~~ TS HALF RETIRED 2026-09-25 (Task 59) · The output-to-source mapping exists twice, in two languages — now held apart by a shared fixture table, but only for the rows in it
 `src-tauri/core/src/timeline.rs`'s `Timeline::to_source_ms` and
 `src/utils/timelineGeometry.ts`'s `toSourceMs` (plus their siblings —
 `output_duration_ms`/`outputDurationMs`, `whole`/`wholeTimeline`, and
@@ -4545,6 +4564,17 @@ against seven fixtures because every probe fell outside a segment under both
 rules), which is why `restamp` is half-open at the far edge and its fixtures
 probe a span's own end. **Fix shape:** add a `restamp`/`toOutputMs` row pair
 to the shared table. Add a ROW, never a Rust-only fixture.
+
+> **2026-09-25 — the TypeScript half is RETIRED (tutorial-editor Task 59).** The
+> phase-4 editor (`timelineGeometry.ts`, `useEditorTimeline.ts`) and with it
+> `tests/timelineFixtures.test.ts` and its size guard were deleted, so the
+> algebra exists ONCE again, in `core::timeline`, and no longer drives
+> anything the user edits: the tutorial editor migrates a phase-4 saved cut
+> through `Timeline::from_sidecar_value` and never writes one.
+> `tests/fixtures/timeline-cases.json` stays, read by `core/src/timeline.rs`
+> alone (its header says why). The tutorial editor's own two-language time
+> algebra is held apart by `tests/fixtures/editor-time-cases.json` — the same
+> discipline, a different table.
 
 ### GAP-137 · CLOSED · The asset protocol's staging-only scope
 `src-tauri/tauri.conf.json` — `app.security.assetProtocol = { "enable": true,
@@ -4702,7 +4732,7 @@ ships. **Fix shape:** none available in CI — this is checklist rows 29–36 an
 GAP-117's standing answer. Do not let a green `rust-core` be read as
 "the export works on Windows".
 
-### GAP-141 · Low · An export is refused while any capture is running, so a user cannot save an old capture while recording a new one
+### GAP-141 · ~~Low~~ RETIRED 2026-09-25 (Task 59) · An export is refused while any capture is running, so a user cannot save an old capture while recording a new one
 `src-tauri/src/export_commands.rs` — `busy_refusal(app.state::<CaptureGuard>()
 .active())`, checked before the `ExportState` reservation. An audio recording
 or a screen capture in progress refuses `export_and_save_capture` with the
@@ -4725,7 +4755,11 @@ queue the export behind the capture the way transcription already yields to a
 live recording. The transcription worker is the precedent worth copying, not
 a second `CaptureGuard` claim.
 
-### GAP-142 · Low · A saved capture cannot be renamed or re-exported, and the staged original is gone
+> **2026-09-25 — RETIRED with the export (Task 59).** The editor's render does not
+> read `CaptureGuard` at all (only a webcam take does, GAP-193), so an old
+> capture can be rendered and published while a new one records.
+
+### GAP-142 · Low (half ADDRESSED 2026-09-25, Task 59) · A saved capture cannot be renamed or re-exported, and the staged original is gone
 `src-tauri/src/export_worker.rs`'s `remove_staged_capture` (correctly, after
 the vault write lands) against the absence of any screen-capture analogue of
 `capture_commands::rename_capture`.
@@ -4752,6 +4786,13 @@ half. Re-export is a product decision, not a bug: keeping the staged copy
 after a save contradicts spec §10's discard-leaves-no-litter principle, so the
 honest options are "export is final, and the UI says so" or "an explicit Keep
 the original".
+
+> **2026-09-25 — the re-export half is ADDRESSED by Task 59.** Publishing never
+> removes the staged capture (R6), and a product can be re-rendered or
+> re-published at will, so a wrong trim or quality is no longer permanent.
+> The rename half stands: a published video is named from its product's
+> name (`YYYY-MM-DD HHmm <product name>`), and there is still no rename of
+> a staged capture or of a published file that retargets its note.
 
 ### GAP-143 · Low · Screen captures are invisible to the Recordings browser and are never transcribed
 `src-tauri/core/src/transcript.rs`'s `capture_mp3s` — the walker BOTH
@@ -4845,7 +4886,7 @@ plan's "honest limit" section does, and it is wrong.
 > 5. **Nothing exercises the reply shape against a real `ffmpeg -version`**
 >    from the frontend side; every new test mocks IPC.
 
-### GAP-145 · Low · The preview seeks at every cut, so what the user approves is not frame-exact — and the export now makes that difference land in their vault
+### GAP-145 · ~~Low~~ SUPERSEDED 2026-09-25 by GAP-173 (Task 59) · The preview seeks at every cut, so what the user approves is not frame-exact — and the export now makes that difference land in their vault
 `src/components/editor/CapturePreview.vue` — one `<video>` element seeking
 around a single source file, so a cut renders as a seek rather than a splice.
 Spec §8.2 accepted this explicitly ("boundaries are not gapless… the UI
@@ -4867,6 +4908,12 @@ multi-segment preview means either MSE or a pre-rendered proxy. The realistic
 mitigation is to say so at the moment it matters (a line in the editor, not
 only in the spec) and to keep row 30 as the thing that would catch a real
 divergence.
+
+> **2026-09-25 — SUPERSEDED by GAP-173.** Task 59 retired `CapturePreview.vue` and
+> the phase-5 export this entry compared it with. The same question — does
+> what the user approves match what reaches the vault — now lives between
+> the tutorial editor's layered webview preview and the ffmpeg render, and is
+> tracked, with the range Review renders that bridge it, as GAP-173.
 
 ### GAP-146 · Low · Export time on a long recording is unmeasured, and the progress bar is the only thing standing in for it
 `src-tauri/screen/src/export.rs`. An untouched capture takes the `-c copy`
@@ -5139,7 +5186,7 @@ Fix shape: route this arm through `tray::finish_quit`, or at minimum the
 `linux-app` only compiles the shell, and manual Windows verification is deferred
 by standing decision. Land it with a Windows check, not inside an unrelated PR.
 
-### GAP-155 · ~~Medium~~ PARTLY FIXED 2026-09-20 · No shutdown path consults `ExportState`, so quitting mid-export abandons the one write that touches a vault
+### GAP-155 · ~~Medium~~ FIXED 2026-09-20, RETIRED 2026-09-25 (Task 59) · No shutdown path consults `ExportState`, so quitting mid-export abandons the one write that touches a vault
 
 > **Closed for the two quit paths.** `tray::quit` and
 > `window_close::handle_main_close` now carry a third gate term, and both
@@ -5195,6 +5242,13 @@ reservation clearing — a cancel already kills the child, deletes the truncated
 output and rolls the directory back. Cancelling beats waiting: an export is
 repeatable and the staged capture is kept.
 
+> **2026-09-25 — RETIRED with the export (Task 59).** `export_shutdown.rs`,
+> `ExportState` and the shutdown gate's export term are gone; the gate
+> composes the two captures, the editor's renders and its publishes
+> (`shutdown_gate_composes_captures_and_renders` pins that, and the cancel
+> order in both quit workers). The publish — the one write that now touches
+> a vault — has its own term and bounded cancel since Task 48.
+
 ### GAP-156 · Medium · Spec §14 promises an explicit "disk full" stop during capture that does not exist
 
 The error-handling table says: *"Disk fills during capture | Capture stops and
@@ -5248,7 +5302,7 @@ across `.rs`/`.ts`/`.vue`). Those are task/document-domain entries closed and
 DELETED, whereas the screen era closes with a strikethrough and keeps the entry.
 Two conventions in one file.
 
-### GAP-159 · Low · `assert_every_exit_is_paired` has one documented false negative
+### GAP-159 · ~~Low~~ RETIRED 2026-09-25 (Task 59) · `assert_every_exit_is_paired` has one documented false negative
 
 `src-tauri/src/structural_scan.rs`. The shared exit-pairing walk tracks brace
 depth and arms per block, which is what lets the idiomatic
@@ -5264,6 +5318,10 @@ exit inside a closure ahead of the release also trips them), which is the safe
 direction — it produces false alarms, not false confidence. Recorded so the
 next author does not discover the gap by shipping through it.
 
+> **2026-09-25 — RETIRED.** Both call sites (the export's reservation release and
+> its directory rollback) were deleted with the phase-5 export, and
+> `assert_every_exit_is_paired` went with them rather than stay as an
+> uncalled helper.
 
 ### GAP-160 · ~~Medium~~ FIXED 2026-09-20 · The updater exits the process through a live recording, screen capture or export, gating on nothing at all
 
@@ -6281,7 +6339,7 @@ the only thing that closes this gap fully and lets the severity drop back
 down; everything above proves the DATA is right, never that the running
 app WIRES it up as documented.
 
-### GAP-171 · Low (by design, until Task 59) · A capture opened in the editor stays staged after a legacy Save, because opening it now pins it to a tutorial project
+### GAP-171 · ~~Low~~ CLOSED 2026-09-25 (Task 59) · A capture opened in the editor stays staged after a legacy Save, because opening it now pins it to a tutorial project
 Tutorial-editor Task 15 made `EditorRoot` open a Rust editor session
 (`editor_open_staged`) alongside EVERY legacy `load_staged_capture` call,
 unconditionally, for every staged capture the panel's Edit button or the
@@ -6323,6 +6381,14 @@ close-then-discard ordering fix in `useEditorExport.onDiscard`
 leftover staged copy always has a working way to remove it. The residual
 this gap tracks is purely "a Save alone does not clean it up," never "the
 user has no way to clean it up."
+
+> **2026-09-25 — CLOSED by Task 59.** There is no legacy Save any more. A staged
+> capture reaches a vault by being rendered and published, and publishing
+> NEVER removes it (R6) — so "still staged after saving" is now the design,
+> not a residual. What made this entry tolerable is kept: a pinned capture
+> can always be removed — the project menu's **Discard project…**
+> (`DiscardProjectDialog`) unpins it, and the Record Screen list's Discard
+> then removes it (checklist T63).
 
 ### GAP-203 · ~~Medium~~ FIXED 2026-09-24 (Task 56) · Several guide lessons describe the browser reference, not the native editor
 `src/editor/guide/steps.json` (Task 55, F-46; ADR R18). The lessons are
@@ -6592,8 +6658,13 @@ messages that quote a staged capture's base (`session_commands.rs`
 `project_store.rs` "no staged capture named …") still carry it if a caller
 logs them; (5) a `(`/`)`/`,` inside a char literal is blanked, but a raw
 string (`r#"…"#`) is read as an ordinary string. It covers `src/editor/**`
-only; `export_worker/vault_dir.rs` (the F38 `dir.display()` shape) is covered
-the day Task 59 moves it under `editor/`. **A handle is a correlation aid, not
+only; `vault_dir.rs` (the F38 `dir.display()` shape) is covered since Task 59
+moved it to `editor/vault_dir.rs` and redacted it
+(`moved_vault_dir_logs_still_redact_their_paths` names the file). Since Task
+59 the webview also takes the `<path:#…>`/`<name:#…>` handle OUT of every
+editor error message before any surface shows it (`src/editor/errorCopy.ts`,
+applied where an `EditorError` enters the webview), so a user reads the role
+wording ("Could not remove the project folder: …") and never a handle. **A handle is a correlation aid, not
 a secret:** `<path:#hash8>` is 32 bits of SHA-256, enough to tell a log's
 files apart, and a guessed path can be confirmed against it. **Diagnostics
 report `os` as `windows x86_64`**, not the Windows build (no dependency was
@@ -6601,3 +6672,24 @@ added to read it), and `webview2Version` is what `tauri::webview_version()`
 answers (`null` if the runtime query fails). Its `ffmpeg.filters` come from
 `screen::render::run::FEATURE_FILTERS`, which a screen test holds equal to
 the optional filters `required_filters` can ask for.
+
+### GAP-211 · Low · Two Screen-tab settings are read by nothing since the phase-5 export was retired
+`src/components/ScreenCaptureConfigTab.vue`, `src-tauri/src/screen_config_commands.rs`,
+`src/components/editor/dialogs/PublishDialog.vue` (found by Task 59). The
+per-vault **Screen** tab still offers *Date folders* (`screenCaptureDateFolders`)
+and *Write a companion note* (`screenCreateNote`), and saves both. Their only
+reader was the phase-5 export (`export_worker`), which Task 59 retired. The
+tutorial editor's **Publish** — the one way a capture reaches a vault now —
+takes `dated` and `createNote` from its own dialog, which defaults them from
+the project's destination (`dated`) and to on (`createNote`), never from these
+settings. The folder and the two templates ARE still read (by Publish, via
+`screen_capture_root()`, `screen_extra_frontmatter`, `screen_body_template`),
+and quality/fps/stems by the capture worker. **Failure scenario:** a user
+turns *Write a companion note* off, publishes, and gets a note anyway — the
+toggle looks broken (R20's "no control that silently succeeds" applies to a
+setting that silently does nothing). **Fix:** either default the Publish
+dialog's two checkboxes from the capture's vault's Screen settings (an
+`editor_*` read of the vault config through the port, or folding them into
+`project.destination` at migration), or remove the two toggles from the tab
+and say that Publish asks each time. Deliberately NOT done in Task 59, which
+retires paths rather than adding a new read to the Publish dialog.

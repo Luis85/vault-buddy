@@ -38,11 +38,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use tauri::{AppHandle, Manager};
-use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_screen::staging;
 
 use crate::capture_guard::CaptureGuard;
-use crate::export_commands::ExportState;
 
 mod decide;
 use decide::{classify, is_stale_at, part_holds_footage, should_postpone, Entry};
@@ -243,19 +241,17 @@ fn sweep_staging_dir(dir: &Path, now: SystemTime, stale_after: Duration) -> Swee
     let mut stems = Vec::new();
     for f in &found {
         if !is_stale_at(f.modified, now, stale_after) {
-            // Not yet stale: it may be a live capture's own file, or an
-            // export mid-write. Leave it and come back.
+            // Not yet stale: it may be a live capture's own file. Leave it
+            // and come back.
             sweep.pending += 1;
             continue;
         }
         match &f.entry {
             Entry::Part(base) => promote_or_delete_part(f, dir, base, &mut sweep),
-            // Abandoned by definition, and `should_postpone` is what makes
-            // that true: no export is reserved in this pass, so nothing is
-            // writing a temp here — and this one has been untouched for the
-            // staleness window on top of that. (The earlier reasoning,
-            // "the staged capture it came from is still on disk", is not
-            // the guard: it holds for a temp being written RIGHT NOW too.)
+            // Abandoned by definition: nothing has written an export temp
+            // since Task 59 retired the phase-5 export, so this one is an
+            // older build's leftover — and untouched for the staleness
+            // window on top of that.
             Entry::ExportTemp(_) => delete(
                 f,
                 "abandoned export temp",
@@ -405,13 +401,6 @@ fn write_minimal_sidecar(dir: &Path, base: &str, modified: SystemTime, sweep: &m
     }
 }
 
-/// Is an export reserved right now? One process-wide reservation, so this is
-/// a bool rather than a base: ANY live export is writing a temp into the
-/// directory this sweep is about to walk.
-fn is_exporting(app: &AppHandle) -> bool {
-    lock_ignoring_poison(&app.state::<ExportState>().0).is_some()
-}
-
 /// Startup janitor for the screen-capture staging directory. One named
 /// background thread; a pass that leaves nothing pending ends it.
 pub fn run_screen_recovery(app: &AppHandle) {
@@ -425,14 +414,12 @@ pub fn run_screen_recovery(app: &AppHandle) {
             };
             let dir = staging::staging_dir(&local);
             let pass = || -> bool {
-                // Two sources, read one after the other and never nested:
                 // `CaptureGuard::active()` takes its mutex, answers and
-                // drops it before `is_exporting` takes `ExportState`'s, so
-                // this needs no lock-ordering rule to remember (the posture
-                // AGENTS.md records for the guard itself).
+                // drops it, so this needs no lock-ordering rule to remember
+                // (the posture AGENTS.md records for the guard itself).
                 let active = app.state::<CaptureGuard>().active();
-                if should_postpone(active, is_exporting(&app)) {
-                    log::info!("screen-recovery: postponed while a capture or export is active");
+                if should_postpone(active) {
+                    log::info!("screen-recovery: postponed while a capture is active");
                     return true; // pending → retry
                 }
                 if !dir.is_dir() {
@@ -758,24 +745,21 @@ mod tests {
         assert!(sweep.actions.is_empty(), "{sweep:?}");
     }
 
-    // REGRESSION (fix wave), the OTHER half of the export guard. The pure
-    // `should_postpone` test in `decide` cannot see this: a perfectly
-    // correct predicate called with a hardcoded `false` postpones nothing,
-    // and the run loop needs a live `AppHandle`, so there is no behavioural
-    // seam. Pinned structurally instead — the `capture_exclusion` precedent.
+    // The pure `should_postpone` test in `decide` cannot see this: a
+    // perfectly correct predicate handed a hardcoded `None` postpones
+    // nothing, and the run loop needs a live `AppHandle`, so there is no
+    // behavioural seam. Pinned structurally instead — the
+    // `capture_exclusion` precedent.
     #[test]
-    fn the_recovery_pass_asks_both_the_capture_guard_and_the_export_state() {
+    fn the_recovery_pass_asks_the_capture_guard() {
         let src = include_str!("mod.rs")
             .split("#[cfg(test)]")
             .next()
             .expect("the production prefix");
         assert!(
-            src.contains("should_postpone(active, is_exporting(&app))"),
-            "the sweep no longer asks whether an export is writing a temp here"
-        );
-        assert!(
-            src.contains("lock_ignoring_poison(&app.state::<ExportState>().0).is_some()"),
-            "is_exporting no longer reads the export reservation"
+            src.contains("let active = app.state::<CaptureGuard>().active();")
+                && src.contains("should_postpone(active)"),
+            "the sweep no longer asks whether a capture is writing here"
         );
     }
 

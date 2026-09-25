@@ -6,9 +6,9 @@ import { useFfmpegStore } from "../stores/ffmpeg";
 import type { FfmpegStatus } from "../types";
 import Field from "./ui/Field.vue";
 
-// The screen-capture export's toolchain card — the screen `export_worker`'s
-// own refusal ("Install it, then set its location in Buddy settings →
-// Integrations…") names THIS card, so it lives in Buddy settings →
+// The editor render's toolchain card (the retired phase-5 export's before
+// Task 59) — a render's own refusal names ffmpeg and where to set it up, so
+// it lives in Buddy settings →
 // Integrations beside the Pandoc one: two user-installed, never-bundled
 // external tools, one place to set either up. Before it existed the refusal
 // pointed at a screen that did not exist (docs/Gaps.md GAP-144).

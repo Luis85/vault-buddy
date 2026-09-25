@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { defineStore } from "pinia";
 
 import { logWarning } from "../logging";
-import type { ExportResult, ScreenCaptureStatus, StagedCapture } from "../types";
+import type { ScreenCaptureStatus, StagedCapture } from "../types";
 import { useNotificationsStore } from "./notifications";
 
 /** The view's three-valued capture state. Rust reports `capturing` and
@@ -130,7 +130,7 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
     },
     /**
      * The staged capture `base` is no longer in the staging directory — it
-     * was exported into a vault, or discarded.
+     * was discarded (one row, or the bulk Clear).
      *
      * The SECOND clear site for `lastStaged`, and safe to add beside the
      * first because it is keyed on IDENTITY rather than on lifecycle: it
@@ -138,15 +138,17 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
      * behind it are app-wide, so an unkeyed clear would throw away the only
      * handle anything holds on a DIFFERENT capture's footage.
      *
-     * It deliberately does NOT bump `seq`. An export finishes long after its
+     * It deliberately does NOT bump `seq`. A discard lands long after its
      * capture ended and is not a capture-lifecycle transition, so bumping
      * would make an in-flight `start()` or `resync()` discard a reply that
      * is still true.
      *
      * Without it the panel's capture bar keeps offering Edit on a base that
-     * is gone, and `open_capture_editor` -> `load_staged_capture` answers
-     * with a banner the user cannot act on. Rust emits `screen:discarded`
-     * for exactly this (`export_commands::emit_discarded`).
+     * is gone, and the editor opens on a sidecar that no longer exists.
+     * Rust emits `screen:discarded` for exactly this
+     * (`staged_commands::emit_discarded`). (Until Task 59 the phase-5
+     * export's success event cleared it too: a save deleted the capture.
+     * Publishing never does — R6 — so there is nothing to forget.)
      */
     forgetStaged(base: string) {
       if (this.lastStaged?.base === base) {
@@ -224,9 +226,6 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
         if (this.status === "idle") {
           useNotificationsStore().warning(event.payload.message);
         }
-      });
-      await listen<ExportResult>("screen:exported", (event) => {
-        this.forgetStaged(event.payload.base);
       });
       await listen<{ base: string }>("screen:discarded", (event) => {
         this.forgetStaged(event.payload.base);

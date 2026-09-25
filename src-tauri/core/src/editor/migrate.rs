@@ -169,8 +169,8 @@ pub fn map_reference_destination(name_or_id: &str, vaults: &[(String, String)]) 
 /// `a1` "Audio" audio — `a1` starts empty; it exists for a later detached-
 /// audio edit, not because this task puts anything on it). The legacy
 /// sidecar `timeline` is read through `Timeline::from_sidecar_value` — the
-/// SAME degrade `export_commands::timeline_from_sidecar` uses, since both
-/// now call the one reader in `core::timeline` — and each surviving segment
+/// one reader in `core::timeline`, the staged list's too — and each
+/// surviving segment
 /// becomes a clip `c<n>` on `v1`, laid end to end from output `0`.
 ///
 /// A segment whose migrated `in_ms >= out_ms` (the `saturating_sub`

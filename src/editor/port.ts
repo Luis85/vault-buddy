@@ -78,6 +78,7 @@ import {
   decodeVaultChoices,
 } from "./decodeRender";
 import { decodeTakeDto, decodeTakeStarted } from "./decodeWebcam";
+import { withoutRedactionHandles } from "./errorCopy";
 import { noteTakeOpen, noteTakeSettled } from "./webcamTakes";
 
 /** Thrown by every `EditorPort` method on a rejected invoke — `error` is
@@ -112,10 +113,10 @@ function toPortError(e: unknown): EditorPortError {
       return new EditorPortError(decodeEditorError(e));
     } catch {
       const { code, message, retryable, operationId } = e;
-      return new EditorPortError({ code, message, retryable, operationId });
+      return new EditorPortError({ code, message: withoutRedactionHandles(message), retryable, operationId });
     }
   }
-  const message = e instanceof Error ? e.message : String(e);
+  const message = withoutRedactionHandles(e instanceof Error ? e.message : String(e));
   return new EditorPortError({
     code: "internal",
     message,

@@ -311,7 +311,8 @@ pub struct RepinReport {
 /// F34 (ADR R6): re-pin every project whose staged source's sidecar has
 /// lost its pin — the crash between `create_project` and `pin_staged` that
 /// Task 10's open-time adoption only repairs if the user reopens that exact
-/// capture, or a sidecar rewritten by the coexisting legacy export path.
+/// capture, or a sidecar rewritten by the (since retired, Task 59) legacy
+/// export path.
 ///
 /// A project is re-pinned (through `pin_staged` → `staging::write_sidecar`,
 /// the owned atomic sidecar rail) only when its staged capture still EXISTS

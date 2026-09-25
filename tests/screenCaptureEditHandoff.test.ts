@@ -33,7 +33,6 @@ import type { EditorOpenResult, EditorSnapshot, Project } from "../src/editorTyp
 import EditorRoot from "../src/roots/EditorRoot.vue";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useScreenCaptureStore } from "../src/stores/screenCapture";
-import { DETAIL } from "./helpers/editorMount";
 import { fakeEditorPort as fakePort } from "./helpers/fakeEditorPort";
 
 enableAutoUnmount(afterEach);
@@ -130,7 +129,6 @@ describe("EditorRoot — never reads a vault id from the screenCapture store", (
 
     mockIPC((cmd) => {
       if (cmd === "take_editor_request") return { kind: "staged", value: "cap one" };
-      if (cmd === "load_staged_capture") return DETAIL;
       return undefined;
     });
     const w = mount(EditorRoot);

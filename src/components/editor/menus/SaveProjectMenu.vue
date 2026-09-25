@@ -1,14 +1,16 @@
 <script setup lang="ts">
 /**
  * The Save project menu's toggle and popup (Task 39; F-40): Save, Save a
- * portable copy…, Save a lightweight copy…, Open a project file…. Purely
+ * portable copy…, Save a lightweight copy…, Open a project file… and, since
+ * Task 59, Discard project… (the retired phase-4 editor's Discard was the
+ * only other way to discard a project, and so to unpin its capture). Purely
  * presentational — it only says which item was chosen; `EditorHeader`
  * decides what each one does. Closes on a choice, on Escape (focus back on
  * the toggle) and on a pointer press anywhere outside it.
  */
 import { onBeforeUnmount, onMounted, ref } from "vue";
 
-type SaveMenuItem = "save" | "portable" | "lightweight" | "open";
+type SaveMenuItem = "save" | "portable" | "lightweight" | "open" | "discard";
 
 const props = defineProps<{
   disabled: boolean;
@@ -24,6 +26,7 @@ const ITEMS: readonly { id: SaveMenuItem; label: string }[] = [
   { id: "portable", label: "Save a portable copy…" },
   { id: "lightweight", label: "Save a lightweight copy…" },
   { id: "open", label: "Open a project file…" },
+  { id: "discard", label: "Discard project…" },
 ];
 
 const open = ref(false);
