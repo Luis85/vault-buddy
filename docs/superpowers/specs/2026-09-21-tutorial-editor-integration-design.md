@@ -12,6 +12,8 @@ The concept bundle was written against commit `3f330a9` (2026-09-19). Several of
 
 ## 1. Inventory of the current code (what exists, what is reused)
 
+*A historical snapshot of the code this design started from — see §9 for what changed while it was built and AGENTS.md for the code as it is now.*
+
 | Area | Where it lives today | Facts that matter to the editor | Decision |
 |---|---|---|---|
 | Editor window | `src-tauri/tauri.conf.json` window `editor` (960×640, min 720×480, decorated, resizable, not on top, `skipTaskbar:false`); `tray::ALL_WINDOW_LABELS` has it, `COMPANION_LABELS` and `POSITION_DENYLIST` treat it specially; `capture_exclusion::EXCLUDED_LABELS` excludes it (GAP-166) | Hidden-and-reused, never destroyed until `finish_quit`; its webview mounts ONCE per process; `window_close.rs` turns its X into `prevent_close()+hide()` | **Reuse the window label `editor`.** Resize defaults to 1280×820, min 960×640 (the bundle's compact target). No new window. |
@@ -138,7 +140,7 @@ No native WebView2 `PermissionRequested` handler is installed: doing so needs a 
 
 ### R12 — Render jobs replace export in the shutdown gate; quit cancels a render the way it cancels an export.
 
-`shutdown_gate::shutdown_is_blocked` gains `render_jobs::blocks_shutdown()` (true while any job is in `rendering` or `publishing` — *widened by Task 46 to every not-yet-ended RENDER job, §9 (f)*) and loses `export_shutdown` in Task 59. *(Amended by Task 60, §9 (f):)* publish has its OWN term, `publish::blocks_shutdown()`, and its own bounded cancel; the gate is recording + screen capture + render + publish. The quit workers call `render_jobs::cancel_all_bounded(5 s)` first, exactly as they call `export_shutdown::cancel_if_exporting` today. `tray::hide_buddy` does NOT gate on renders (the buddy is the recording indicator). Unsaved edits never block quit: the recovery journal is the durability mechanism, and the next launch offers Resume.
+`shutdown_gate::shutdown_is_blocked` gains `render_jobs::blocks_shutdown()` (true while any job is in `rendering` or `publishing` — *widened by Task 46 to every not-yet-ended RENDER job, §9 (f)*) and loses `export_shutdown` in Task 59. *(Amended by Task 60, §9 (f):)* publish has its OWN term, `publish::blocks_shutdown()`, and its own bounded cancel; the gate is recording + screen capture + render + publish. The quit workers call `render_jobs::cancel_all_bounded(5 s)` first (then `publish::cancel_all_bounded`), in the place the retired `export_shutdown::cancel_if_exporting` held until Task 59 removed the export and its module (final review M13). `tray::hide_buddy` does NOT gate on renders (the buddy is the recording indicator). Unsaved edits never block quit: the recovery journal is the durability mechanism, and the next launch offers Resume.
 
 ### R13 — Publication is the TENTH sanctioned vault write, on the ninth's rails.
 
@@ -209,7 +211,7 @@ No automatic transcription, no tracked redaction, no loudness normalization, no 
 
 ### 3.2 Frontend map (all under 500 nonblank lines)
 
-- `src/editorTypes.ts` (DTOs, split from `types.ts` like `screenTypes.ts`), `src/editor/decode.ts`, `src/editor/port.ts`, `src/editor/listenerScope.ts`, `src/editor/timeMap.ts`, `src/editor/actions.ts`, `src/editor/shortcuts.ts`, `src/editor/cueGeometry.ts`, `src/editor/previewController.ts`, `src/editor/guide/{steps.json,chapters.json,content.ts,targets.ts}`.
+- `src/editorTypes.ts` (DTOs, split from `types.ts` like `screenTypes.ts`), `src/editor/decode.ts`, `src/editor/port.ts`, `src/editor/listenerScope.ts` (removed by the final review, M11: nothing called it), `src/editor/timeMap.ts`, `src/editor/actions.ts`, `src/editor/shortcuts.ts`, `src/editor/cueGeometry.ts`, `src/editor/previewController.ts`, `src/editor/guide/{steps.json,chapters.json,content.ts,targets.ts}`.
 - Stores: `src/stores/{editorProject,editorWorkspace,editorJobs,editorOnboarding}.ts`.
 - Components: `src/components/editor/shell/{EditorShell,EditorHeader,PreviewToolbar,DialogHost}.vue`, `…/timeline/{TimelineView,TrackHeader,TrackLane,ClipItem,TimelineRuler,TimelineToolbar}.vue`, `…/preview/{PreviewSurface,CueOverlay,TransportBar}.vue`, `…/inspector/{InspectorPanel,ClipSection,LayoutSection,FadesSection,AudioSection,SpeedSection,ColorSection,EffectSection}.vue`, `…/library/{MediaLibrary,TitlesLibrary,CaptionsLibrary,ChaptersLibrary,ProductLibrary}.vue`, `…/dialogs/{SaveProjectDialog,RenderDialog,ChecksDialog,WebcamDialog,ReconnectDialog,CloseGuardDialog,RecoveryDialog}.vue`, `…/menus/ContextMenu.vue`, `…/guide/{GuideInvitation,GuideCoach,LearningCenter}.vue`.
 
@@ -252,6 +254,7 @@ No automatic transcription, no tracked redaction, no loudness normalization, no 
 | `editor_webcam_finish` | async | `sessionId, takeId, lastSeq` | `TakeDto` |
 | `editor_webcam_discard` | async | `sessionId, takeId` | `()` |
 | `editor_close_session` | async | `sessionId, disposition: "keep" \| "discardRecovery" \| "discardProject"` | `()` |
+| `editor_discard_project` | async | `projectFileId` | `()` (final review I3, §9 (i): a project with NO session) |
 | `editor_hide_window` | sync | — | `()` |
 | `editor_export_diagnostics` | async | — | `string \| null` |
 
@@ -429,3 +432,5 @@ The plan kept its own behaviour wherever it drifted from this record (controller
 **(g) The companion note's `created-by` value (Task 48).** The tutorial note (`core::editor::note`) writes `created-by: vault-buddy`, while every other Vault Buddy note (recording, transcript, imported document) writes `created-by: Vault Buddy`. Task 60 changes no behaviour, so the difference is recorded, not reconciled: docs/Gaps.md GAP-213 (a provenance query on the other notes' value misses tutorial notes).
 
 **(h) Smaller §3.3 drifts (Tasks 40, 47, 59).** `editor_relink_media` takes `confirmReplace` (Task 40); `editor_media_url`'s `ref` also accepts `{ reviewJobId }` for the one Review render in the project's `cache\` (Task 47), and `RenderRequest` carries an optional `review` flag; R13's `vault_dir` helpers moved to `src-tauri/src/editor/vault_dir.rs` when Task 59 retired `export_worker/` and the ninth vault write (nine of the ten numbered writes are live).
+
+**(i) The final whole-branch review (I1, I3, M3).** R6 said discarding the *project* goes through `editor_close_session` with `discardProject`; that still holds for a project with a session, which the discard now first marks CLOSING (every start path refuses it) and quiesces — renders, publishes, derived media and an import are cancelled and waited for, a take's write or finish and a reconnect are waited for, and the discard is REFUSED in plain words while one still runs — and the project directory is removed nested content first, `project.json` last, so a removal that fails part way can be retried. A project too damaged to open (its `sources.json` or `project.json` no longer parses) has no session to discard through, so a new §3.3 command, `editor_discard_project(projectFileId)`, discards a project no session holds: editor-window only (R8), under the `open` lock, unpinning every staged capture pinned to it by a staging scan; and `editor_open_staged` no longer refuses a capture whose pinned project cannot open it — it adopts or migrates the capture into a project of its own. Closing a session with ANY disposition cancels its renders and publishes (a render lands only in a live session); what never cancels a render is the window's X, which only hides the window.

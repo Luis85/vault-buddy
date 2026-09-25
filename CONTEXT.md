@@ -68,6 +68,18 @@ _Avoid_: Recording (a Capture), webcam track (the synchronized one that belongs 
 The immutable video a Render produces, kept in the Tutorial Project's `products\` folder with a record of the exact edit it was made from, which can be watched, restored as the current edit, and Published. Nothing ever writes to a Product after it lands.
 _Avoid_: Export, output file, render (the act, not its result)
 
+**Review**:
+A short, disposable Render of part of the timeline — the selection, or a few seconds either side of the playhead — made to check how a moment will really look and sound. Kept only in the project's cache, never recorded as a Product and never Published; the next Review or closing the project removes it.
+_Avoid_: Preview (the live, approximate playback in the editor), Product (a Review is never one)
+
+**Check** (and its **Finding**):
+The before-you-share checks run over a Tutorial Project on request: each problem they report is a **Finding** — blocking, a warning or a note — naming what it concerns and, usually, a button that reveals it. Only a blocking Finding (a missing file the Render reads, an empty timeline) stops a Render; there is no score.
+_Avoid_: Lint, validation (that is what the editor does to every command), warning (one severity of Finding)
+
+**Guide** (its **Lessons**, the **Walkthrough**):
+The editor's built-in onboarding. A **Lesson** is one step of it, pointing at one control; the **Walkthrough** is taking the Lessons in order with the coach card on screen; the **Guide** is the whole of it, including its progress, which is kept per user, apart from every project and from Undo.
+_Avoid_: Tutorial (that is what the user makes), tour, help (the Help menu leads to the Guide, it is not the Guide)
+
 **Flat layout**:
 Vault Buddy's **default** on-disk layout for a capture/import domain: files live directly in `<folder>`, with no year/month subfolders. The timestamped base name encodes the full date, so the folders were never what identified a file.
 _Avoid_: Migration — switching layouts never moves or rewrites existing files

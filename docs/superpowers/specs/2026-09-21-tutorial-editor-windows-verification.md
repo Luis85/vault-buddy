@@ -44,9 +44,10 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **66 rows** today (T1–T66), of which **0** carry a result
+This file carries **68 rows** today (T1–T68), of which **0** carry a result
 (T7 is obsolete since Task 59, which retired the legacy strip it guarded).
-Task 60 added T64–T66 and the residual-gate map at the end of the file. An
+Task 60 added T64–T66 and the residual-gate map; the final whole-branch
+review added T67–T68 at the end of the file. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -529,3 +530,18 @@ not reach; T66 is R-M1, which asks for a number on a named machine.
 | T64 | **The final representative journey** | With a person new to the editor at the keyboard (the observer only watches and notes): capture a short screen recording (or import one), remove a mistake, rearrange an explanation, add an arrow, a zoom and a text cue and a presenter overlay (webcam take or synchronized webcam), fade the audio and the video, correct the captions and add chapters, **Save project** without rendering, close the editor and reopen the project from the panel, **Render video** and watch the product, then make one more edit and render a second product. Use the guide along the way: start it, dismiss it, resume it. **Record**: where the user completed each step unaided, where they stalled and for how long, what they said was confusing, every error message they saw (verbatim), and whether both products play and match what was on screen. Blockers and confusion are the result, not a pass/fail tick. | |
 | T65 | **Disk full during Save project and during a render (R-H5)** | Put the local app data on, or junction `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects` to, a small volume (a VHD of a few hundred MB). (a) Fill it to a few KB free, make an edit and **Save project**. **Record**: the message (it must say the disk is full — `diskFull` — not a generic failure), that `project.json` is byte-identical to before (compare a hash taken beforehand), that the header still reads Unsaved changes, and that freeing space and saving again succeeds. (b) Free enough for the project but not for a product, and **Render video**. **Record**: whether the render is refused before it starts (the free-space check) or fails mid-way, the message, that no `jobs\<jobId>\` directory or `out.mp4.part` is left behind, that `products.json` gained nothing, and that the project still opens. | |
 | T66 | **Memory of a ten-minute 1080p30 tutorial (R-M1)** | On a named machine (record its CPU, RAM, GPU and Windows build), build a ten-minute tutorial from 1920×1080 30 fps footage (on the 16:9 canvas, 1280×720 — the largest the editor renders) with three video layers (the capture, a presenter picture-in-picture, a title card track) and two audio layers (the capture's sound and an imported music bed), with a few cues and captions. In Task Manager → Details (add the *Peak working set* column), watch `vault-buddy.exe`, its `msedgewebview2.exe` children and the `ffmpeg.exe` child. **Record**: steady and peak working set of each while editing (scrub, play, zoom the timeline), and during a High-quality render; the render's wall time; whether anything became unresponsive. The concept bundle's NFR is the reference; a number is the result, not a judgment. | |
+
+## Final whole-branch review fixes
+
+Two rows for what the final review's fixes changed that only the real app
+can show. The automated half is `editor::discard::tests` (a finish frozen
+in a fake remux, an import that will not stop), `store_io_tests`'
+`a_removal_that_fails_part_way_can_be_retried` (a file held without delete
+sharing, Windows only) and `editor::project_discard::tests`; what none of
+them has is a REAL ffmpeg holding a take's output open, or the live ACL
+admitting a new command from the editor window.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| T67 | **Discard project while a webcam take is being saved (I1)** | Open a capture in the editor, record a webcam take of a minute or more, stop it, and while **Finish** is still saving it choose **Discard project** from the project menu and confirm. **Expected**: the discard is refused in plain words ("A webcam take is still being saved. Wait for it to finish, then discard the project."), the editor stays open on the project, nothing in the project folder has gone. When the take has landed, **Discard project** again. **Expected**: it succeeds, the window hides, the project folder under `editor-projects` is gone, and the capture is back in the Record Screen list with **Discard** offered. Also try **Discard project** with an import of a large file still copying: refused with the import's own sentence, and fine once it ends. | |
+| T68 | **A project too damaged to open can be discarded (I3)** | Open a capture in the editor, close the editor, quit Vault Buddy, and replace that project's `sources.json` (under `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<id>\`) with `{`. Start the app. (a) **Edit** on the capture. **Expected**: the editor opens the capture in a FRESH project (a second folder appears under `editor-projects`; the damaged one is untouched). (b) **Resume** the damaged project from the panel's Tutorial projects list. **Expected**: "This could not be opened." with **Discard this project…**; confirm **Discard for good**. **Expected**: "The project was discarded…", its folder is gone, no capture names it any more, and the call was admitted by the live ACL from the editor window (GAP-170's live half, for the thirty-sixth `editor_*` command). | |

@@ -2466,7 +2466,11 @@ disk- or memory-only — no edit is lost and nothing wrong is shown:
    dot-prefixed `media\.<assetId>.<ext>.part`. Nothing sweeps `media\`
    (the staging sweep, `screen_recovery`, covers only the staging
    directory), and every later import mints a fresh asset id, so the part
-   is never reused either.
+   is never reused either. **Not only a crash** (final review M3): the
+   buddy's own quit doors — tray Quit, Alt+F4 on the buddy, the updater's
+   install — end the process without closing any editor SESSION, so an
+   import still copying at a quit leaves exactly this part and exactly
+   window 1's unreferenced copies, just as a kill would.
 3. ~~**`JobRegistry` is never pruned.**~~ **FIXED 2026-09-24 (Task 46)**,
    before render jobs could make it grow faster. A session now keeps at
    most `media_jobs::MAX_TERMINAL_RECORDS` (8) TERMINAL records — the most
@@ -3059,8 +3063,12 @@ sweeps (`screen_recovery`, `recovery::run_startup_repin`) never look in a
 project's `takes\`. This is lost recorded MEDIA, not scratch — unlike
 GAP-189's render/publish leftovers — and the screen-capture side already
 solved the same problem (`screen_recovery` promotes an orphaned `.part` that
-holds footage). A graceful close is covered: the close guard warns first, and
-a closing session removes its own unfinished parts. **Fix:** a startup pass
+holds footage). A graceful close of the EDITOR is covered: the close guard
+warns first, and a closing session removes its own unfinished parts. A quit
+is NOT (final review M3): the buddy's quit doors — tray Quit, Alt+F4 on the
+buddy, the updater's install — end the process without closing any editor
+session, so a take still recording (or finishing) at a quit is left exactly
+as a crash leaves it. **Fix:** a startup pass
 over each project's `takes\` (owned names `.<valid take id>.webm.part` only,
 no-follow, staleness-gated like the screen sweep): remux-and-register a part
 that probes as video (or keep it raw, A09), remove a leftover
@@ -6250,7 +6258,7 @@ measuring CPU time, whenever that file is next touched.
 > file: `screen/tests/export_roundtrip.rs` was deleted by Task 59 (commit
 > `1f3428f`) along with the phase-5 export it tested.
 
-### GAP-170 · High (unverified) · The app-wide ACL that now gates ALL 104 commands has never run inside a live app — if it resolves differently than the generated-artifact replica models, every IPC command from every window is refused, not just the editor ones
+### GAP-170 · High (unverified) · The app-wide ACL that now gates ALL the app's commands (131, measured at the final review) has never run inside a live app — if it resolves differently than the generated-artifact replica models, every IPC command from every window is refused, not just the editor ones
 Task 11 (tutorial editor, R8's app-manifest half) made `build.rs`'s
 `AppManifest::commands(ALL_COMMANDS)` list EVERY command in
 `generate_handler!`, not just the eight `editor_*` commands
@@ -6677,10 +6685,20 @@ listed (`write!` into a `String`, `concat!`) or by hand (`String` +
 capture NAME inside a message: the name rule applies to log calls only (a
 message builds `format!("{name}.json")` legitimately), so the user-facing
 messages that quote a staged capture's base (`session_commands.rs`
-"The capture … is linked to project …", "Could not unlink the capture …",
-`project_store.rs` "no staged capture named …") still carry it if a caller
-logs them; (5) a `(`/`)`/`,` inside a char literal is blanked, but a raw
-string (`r#"…"#`) is read as an ordinary string. It covers `src/editor/**`
+"Could not unlink the capture …", `project_store.rs` "no staged capture
+named …") still carry it if a caller logs them (the final review removed a
+third, "The capture … is linked to project …", which is now logged through
+`redact_name` only); (5) a `(`/`)`/`,` inside a char literal is blanked, but a raw
+string (`r#"…"#`) is read as an ordinary string; (6) a TOOL's own output
+(final review M8 — this entry used to claim the logs carried no path, and
+ffmpeg's stderr disproved it): ffmpeg names every file it was handed, and
+until the final review a failed render put that stderr raw into both the
+webview's message and the log, and a failed take remux into the log.
+Both now redact the paths they handed ffmpeg (`redact::redact_paths_in`,
+inputs + output + job folder for a render, part + output for a take) and
+the render's webview message is a fixed sentence; a path ffmpeg prints
+that it was NOT handed would still pass, and the scan cannot tell a
+redacted tool string from a raw one. It covers `src/editor/**`
 only; `vault_dir.rs` (the F38 `dir.display()` shape) is covered since Task 59
 moved it to `editor/vault_dir.rs` and redacted it
 (`moved_vault_dir_logs_still_redact_their_paths` names the file). Since Task
@@ -6769,3 +6787,76 @@ Buddy` and update its test in the same commit; a note already published with
 the old value is the user's file and is left alone (a vault write never
 rewrites an existing note), so the fix note should say that old notes keep
 `vault-buddy`. Not done in Task 60 because that task changes no behaviour.
+
+### GAP-214 · Low · What the final review's damaged-project fixes still cannot reach
+`src-tauri/src/editor/project_discard.rs`, `session_commands.rs`
+(`open_staged_in`), `store_io.rs` (`remove_project`, `list_projects`),
+`recovery.rs` (`run_startup_repin`), `discard.rs` (final whole-branch review
+I1/I3). The review found that a project whose `sources.json` or
+`project.json` stopped parsing could be neither opened nor discarded, and
+stranded the capture it pinned; `editor_discard_project` (offered on the
+editor's "could not be opened" line for an `invalidProject` project) and
+`editor_open_staged`'s re-migration close the common cases. Left:
+1. **A `project.json` that is not JSON at all** proves nothing about whose
+   folder it is, so `remove_project` refuses and nothing in the app removes
+   it. Its capture is no longer stranded (Edit re-migrates it into a fresh
+   project, which re-pins it), so what is left is a folder of the user's
+   old edit on disk. Remedy today: delete the folder by hand.
+2. **A `project.json` that is JSON but no longer a valid project** is
+   SKIPPED by `list_projects` (a view degrades), so the panel's Tutorial
+   projects list never offers it — and the editor's discard offer is reached
+   only by opening it. Its capture's Edit re-migrates past it, leaving it an
+   invisible orphan. `editor_discard_project` could remove it; nothing
+   surfaces it to click.
+3. **The startup re-pin sweep reads an unreadable `sources.json` as a
+   claim** it cannot evaluate, and so only REPORTS; it never unpins or
+   re-pins around a damaged project. Harmless now that the capture's own
+   Edit re-migrates, but the log keeps naming it on every start.
+4. **A discard refuses while a webcam take is finishing, an import copying
+   or a reconnect running** (after cancelling what can be cancelled and
+   waiting 5 s): a take's `-c copy` remux can legitimately run for minutes,
+   and the user is asked to wait for it and discard again rather than
+   having it killed mid-write. Deliberate — a finish that was killed would
+   lose the take's indexed copy — but it is a refusal the user can meet.
+**Fix (for 1 and 2):** a "Damaged projects" row in the Tutorial projects
+list that names what the store holds but cannot read, with the same
+confirmed discard, and a raw-bytes ownership proof (a `"project":{"id":…}`
+prefix match) for a file that is no longer JSON.
+
+### GAP-215 · Low · A project file's carried source facts are trusted, never re-probed
+`src-tauri/core/src/editor/package_plan.rs` (`SourceFacts`),
+`src-tauri/src/editor/package_import.rs` (final whole-branch review M9;
+recorded here rather than fixed — the implementer's call). A package carries
+each source's `hasAudio`/`hasVideo`/dimensions/kind/size/duration in
+`record.extra.vaultBuddySourceFacts`, and the import validates their SHAPE
+strictly but takes their VALUES as given, even for media the same file
+carries and the import has just extracted. `hasAudio` then decides
+`detachAudio`'s refusal and whether the render plan maps an audio stream.
+**Failure scenario:** a hand-edited (or foreign) project file claims
+`hasAudio: true` for a silent clip; after import, Detach audio is offered and
+accepted, and a render that plays that asset's sound fails in ffmpeg (a
+missing stream) with "The render failed. See the log for details." — no data
+is lost and nothing escapes the project, but the refusal is late and
+unspecific. The reverse (`hasAudio: false` for a clip with sound) only
+refuses a detach. **Fix:** re-probe every EXTRACTED file with ffprobe when
+ffmpeg is available and take the probe's facts over the carried ones
+(carried facts only for placeholders, whose media is not in the file); an
+import without ffmpeg keeps today's behaviour. Beside GAP-182, which is the
+older-file half of the same record.
+
+### GAP-216 · Low (tech debt) · The editor shell repeats its small helpers
+`src-tauri/src/editor/*.rs`, `src/composables/useTimelineDrag.ts`
+(final whole-branch review, "stay recorded"). The same few helpers are
+defined per file rather than once: `fn err(code, message)` and
+`fn internal(message)` in most `editor/*` modules (twenty-seven private
+`err`/`internal`/`local_data` definitions at the review), `local_data`
+(the app-data-dir resolver) four times, the `io::ErrorKind::StorageFull` /
+raw OS 112 → `diskFull` mapping six times, and `MIN_CLIP_MS` as a literal
+in both `core::editor::limits` and `useTimelineDrag.ts` (a comment, not a
+test, ties the two). Nothing is wrong today; the cost is drift — a seventh
+disk-full mapping that forgets raw error 112, or a Rust `MIN_CLIP_MS` change
+the trim preview does not follow. **Fix:** one `editor::errors` module
+(`err`, `internal`, `write_error` with the one disk-full rule) that every
+module imports, `prefs_commands::local_data` as the only resolver, and
+`MIN_CLIP_MS` read by a Vitest from `core::editor::mod.rs` the way
+`editorCaptions.test.ts`' `rustLimit` reads `MAX_CAPTIONS`.

@@ -100,11 +100,14 @@ cargo test -p vault_buddy_screen --test render_roundtrip -- --nocapture   # show
 and `render_graph_roundtrip.rs` render real tutorial projects through the
 `ffmpeg`/`ffprobe` on PATH and decode the result; the tutorial editor's
 cues, cards and burned-in captions go through ffmpeg's `ass` filter, so the
-build must be compiled with libass (the usual Windows "full" builds and
+build should be compiled with libass (the usual Windows "full" builds and
 distro packages are; `ffmpeg -filters | grep ass` shows it). Without ffmpeg
-those tests — and the shell's `*_round_trip_through_real_ffmpeg` waveform
-and thumbnail tests — print `SKIP:` and pass, which proves nothing: read the
-output. CI's `rust-core` job installs ffmpeg explicitly so they run.
+those round trips print a `SKIPPED <test>: …` line and pass (the shell's
+`*_round_trip_through_real_ffmpeg` waveform and thumbnail tests print
+`SKIP: …`), which proves nothing: read the output. A build WITHOUT libass
+skips only `text_cue_is_burned_in` (`SKIPPED text_cue_is_burned_in: …`);
+the rest still run. CI's `rust-core` job installs ffmpeg explicitly so they
+run.
 
 The Rust workspace is split into five member crates plus the shell.
 `src-tauri/core/` (`vault_buddy_core`) is a pure crate with all Obsidian
