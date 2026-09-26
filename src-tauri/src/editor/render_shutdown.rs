@@ -48,9 +48,36 @@ pub(crate) fn cancel_all_in(state: &EditorState, limit: Duration, poll: Duration
     )
 }
 
+/// The render term, given the latch it reads: true while a render has not
+/// ended, unless `latch` says an earlier bounded cancel gave up on them.
+/// The seam `blocks_shutdown` wraps (review finding I-4: the latch was
+/// unreachable from a test behind an `AppHandle`).
+pub(crate) fn blocks_shutdown_in(state: &EditorState, latch: &AtomicBool) -> bool {
+    !latch.load(Ordering::SeqCst) && render_blocks_shutdown(state)
+}
+
+/// Cancel every render and wait, bounded; on expiry set `latch` (and log)
+/// and proceed. With no render running it does nothing at all -- the
+/// latch is only ever set by a cancel that really expired.
+pub(crate) fn cancel_all_bounded_in(
+    state: &EditorState,
+    latch: &AtomicBool,
+    limit: Duration,
+    poll: Duration,
+) {
+    if !render_blocks_shutdown(state) {
+        return;
+    }
+    log::info!("editor render: cancelling every render before shutdown");
+    if !cancel_all_in(state, limit, poll) {
+        latch.store(true, Ordering::SeqCst);
+        log::warn!("editor render: a render did not stop within {limit:?}; exiting anyway");
+    }
+}
+
 /// `shutdown_gate`'s fourth term (R12).
 pub fn blocks_shutdown(app: &AppHandle) -> bool {
-    !RENDERS_ABANDONED.load(Ordering::SeqCst) && render_blocks_shutdown(&app.state::<EditorState>())
+    blocks_shutdown_in(&app.state::<EditorState>(), &RENDERS_ABANDONED)
 }
 
 /// The quit workers' FIRST step, before the publish cancel and the
@@ -60,13 +87,143 @@ pub fn blocks_shutdown(app: &AppHandle) -> bool {
 ///
 /// Callers must NOT be on the main/event-loop thread: this sleeps.
 pub fn cancel_all_bounded(app: &AppHandle, limit: Duration) {
-    let state = app.state::<EditorState>();
-    if !lock_ignoring_poison(&state.jobs).any_running(JobKind::Render) {
-        return;
+    cancel_all_bounded_in(
+        &app.state::<EditorState>(),
+        &RENDERS_ABANDONED,
+        limit,
+        CANCEL_POLL,
+    );
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    //! Review finding I-4: the latch is what keeps a wedged render from
+    //! looping Alt+F4's re-triggered close, and before the `_in` seam no
+    //! test could reach it (it hid behind an `AppHandle`). Every test here
+    //! owns a FRESH latch, so none of them can see another's expiry.
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use vault_buddy_core::sync_util::lock_ignoring_poison;
+
+    use super::*;
+    use crate::editor::media_jobs::{JobPhase, JobReporter, JobTerminal, NoSubscriber};
+    use crate::structural_scan::{fn_body, shell_file};
+
+    const SESSION: &str = "ses-shutdown";
+    /// Small enough that a never-ending job is abandoned at once.
+    const SHORT: Duration = Duration::from_millis(50);
+    /// Large enough that a job which DOES end is never mistaken for one
+    /// that did not, however slow the machine.
+    const LONG: Duration = Duration::from_secs(10);
+    const POLL: Duration = Duration::from_millis(5);
+
+    /// A job of `kind` that nothing will ever end: registered, and so
+    /// `queued`, with no runner behind it -- a wedged ffmpeg child or copy.
+    pub(crate) fn never_ending(state: &EditorState, kind: JobKind) -> Arc<AtomicBool> {
+        lock_ignoring_poison(&state.jobs).register(SESSION, kind).1
     }
-    log::info!("editor render: cancelling every render before shutdown");
-    if !cancel_all_in(&state, limit, CANCEL_POLL) {
-        RENDERS_ABANDONED.store(true, Ordering::SeqCst);
-        log::warn!("editor render: a render did not stop within {limit:?}; exiting anyway");
+
+    /// Run `body` beside a job of `kind` that ends -- `cancelled`, as a
+    /// real runner answers a cancel -- as soon as it is asked to stop.
+    pub(crate) fn with_job_ending_on_cancel(
+        state: &EditorState,
+        kind: JobKind,
+        body: impl FnOnce(),
+    ) {
+        let (job_id, cancel) = lock_ignoring_poison(&state.jobs).register(SESSION, kind);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                // Bounded, so a failing assertion in `body` ends the test
+                // instead of leaving this job waiting on a cancel nobody sends.
+                let deadline = Instant::now() + LONG;
+                while !cancel.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                JobReporter::new(&state.jobs, &NoSubscriber, SESSION, &job_id, kind)
+                    .finish(JobPhase::Cancelled, JobTerminal::default());
+            });
+            body();
+        });
+    }
+
+    #[test]
+    fn a_render_that_never_ends_is_abandoned_and_stops_blocking() {
+        let state = EditorState::default();
+        let latch = AtomicBool::new(false);
+        never_ending(&state, JobKind::Render);
+        assert!(
+            blocks_shutdown_in(&state, &latch),
+            "a running render blocks"
+        );
+        cancel_all_bounded_in(&state, &latch, SHORT, POLL);
+        assert!(
+            latch.load(Ordering::SeqCst),
+            "an expired cancel must set the abandon latch"
+        );
+        assert!(
+            render_blocks_shutdown(&state),
+            "the render is still running -- only the latch silences it"
+        );
+        assert!(
+            !blocks_shutdown_in(&state, &latch),
+            "an abandoned render must stop blocking, or Alt+F4's re-close loops"
+        );
+    }
+
+    #[test]
+    fn a_render_that_ends_inside_the_bound_leaves_the_latch_clear() {
+        let state = EditorState::default();
+        let latch = AtomicBool::new(false);
+        with_job_ending_on_cancel(&state, JobKind::Render, || {
+            cancel_all_bounded_in(&state, &latch, LONG, POLL);
+        });
+        assert!(
+            !latch.load(Ordering::SeqCst),
+            "a render that stopped was not abandoned"
+        );
+        assert!(!render_blocks_shutdown(&state));
+        assert!(!blocks_shutdown_in(&state, &latch));
+        // A LATER render must still be counted: the latch is for a wedged
+        // one only.
+        never_ending(&state, JobKind::Render);
+        assert!(blocks_shutdown_in(&state, &latch));
+    }
+
+    #[test]
+    fn a_set_latch_silences_a_running_render_and_a_clear_one_does_not() {
+        let state = EditorState::default();
+        never_ending(&state, JobKind::Render);
+        assert!(blocks_shutdown_in(&state, &AtomicBool::new(false)));
+        assert!(!blocks_shutdown_in(&state, &AtomicBool::new(true)));
+    }
+
+    #[test]
+    fn with_no_render_running_the_cancel_never_touches_the_latch() {
+        let state = EditorState::default();
+        // A publish is not a render: the render cancel has nothing to do.
+        never_ending(&state, JobKind::Publish);
+        let latch = AtomicBool::new(false);
+        cancel_all_bounded_in(&state, &latch, Duration::ZERO, POLL);
+        assert!(!latch.load(Ordering::SeqCst));
+        assert!(!blocks_shutdown_in(&state, &latch));
+    }
+
+    // The seam is only worth having if production goes through it with the
+    // MODULE's latch: a wrapper handed a fresh `AtomicBool` (or the
+    // publish term's) would latch nothing the gate ever reads.
+    #[test]
+    fn the_app_wrappers_pass_the_render_latch() {
+        let src = shell_file("render_shutdown.rs");
+        let gate = fn_body(&src, "pub fn blocks_shutdown(");
+        assert!(gate.contains("blocks_shutdown_in("), "{gate}");
+        assert!(gate.contains("&RENDERS_ABANDONED"), "{gate}");
+        let cancel = fn_body(&src, "pub fn cancel_all_bounded(");
+        assert!(cancel.contains("cancel_all_bounded_in("), "{cancel}");
+        assert!(cancel.contains("&RENDERS_ABANDONED"), "{cancel}");
+        assert!(cancel.contains("CANCEL_POLL"), "{cancel}");
+        assert!(!src.contains("PUBLISHES_ABANDONED"), "the publish latch");
     }
 }

@@ -19,6 +19,7 @@ use crate::editor::media_jobs::jobs_in;
 use crate::editor::project_store::minimal_project;
 use crate::editor::render_jobs::write_ledger;
 use crate::editor::render_shutdown::render_blocks_shutdown;
+use crate::editor::render_shutdown::tests::{never_ending, with_job_ending_on_cancel};
 use crate::editor::store_io::create_project;
 
 const SESSION: &str = "ses-pub";
@@ -652,4 +653,110 @@ fn discarding_a_project_while_publishing_stops_the_publish_first() {
         "the project is gone"
     );
     assert!(tree(vault.path()).is_empty(), "{:?}", tree(vault.path()));
+}
+
+// ---- the abandon latch (review finding I-4) ----
+
+// Every test here owns a FRESH latch; the module's own static is reached
+// only through the `AppHandle` wrappers, pinned structurally below.
+const SHORT: Duration = Duration::from_millis(50);
+const LONG: Duration = Duration::from_secs(10);
+const POLL: Duration = Duration::from_millis(5);
+
+#[test]
+fn a_publish_that_never_ends_is_abandoned_and_stops_blocking() {
+    let state = EditorState::default();
+    let latch = AtomicBool::new(false);
+    never_ending(&state, JobKind::Publish);
+    assert!(
+        blocks_shutdown_in(&state, &latch),
+        "a running publish blocks"
+    );
+    cancel_all_bounded_in(&state, &latch, SHORT, POLL);
+    assert!(
+        latch.load(Ordering::SeqCst),
+        "an expired cancel must set the abandon latch"
+    );
+    assert!(publish_blocks_shutdown(&state), "still running");
+    assert!(
+        !blocks_shutdown_in(&state, &latch),
+        "an abandoned publish must stop blocking, or Alt+F4's re-close loops"
+    );
+}
+
+#[test]
+fn a_publish_that_ends_inside_the_bound_leaves_the_latch_clear() {
+    let state = EditorState::default();
+    let latch = AtomicBool::new(false);
+    with_job_ending_on_cancel(&state, JobKind::Publish, || {
+        cancel_all_bounded_in(&state, &latch, LONG, POLL);
+    });
+    assert!(
+        !latch.load(Ordering::SeqCst),
+        "it stopped; nothing abandoned"
+    );
+    assert!(!blocks_shutdown_in(&state, &latch));
+    never_ending(&state, JobKind::Publish);
+    assert!(blocks_shutdown_in(&state, &latch), "a later publish counts");
+}
+
+#[test]
+fn a_set_latch_silences_a_running_publish_and_a_clear_one_does_not() {
+    let state = EditorState::default();
+    never_ending(&state, JobKind::Publish);
+    assert!(blocks_shutdown_in(&state, &AtomicBool::new(false)));
+    assert!(!blocks_shutdown_in(&state, &AtomicBool::new(true)));
+}
+
+// By KIND, both ways (GAP-190's loop): the publish term never reads a
+// render, the render term never reads a publish, and neither cancel ever
+// latches because of the other's job.
+#[test]
+fn the_publish_and_render_latches_never_answer_for_each_other() {
+    use crate::editor::render_shutdown as render;
+
+    let state = EditorState::default();
+    let (publish_latch, render_latch) = (AtomicBool::new(false), AtomicBool::new(false));
+    never_ending(&state, JobKind::Render);
+    assert!(
+        !blocks_shutdown_in(&state, &publish_latch),
+        "a render is not a publish"
+    );
+    cancel_all_bounded_in(&state, &publish_latch, SHORT, POLL);
+    assert!(
+        !publish_latch.load(Ordering::SeqCst),
+        "a wedged RENDER flipped the publish latch"
+    );
+    assert!(render::blocks_shutdown_in(&state, &render_latch));
+
+    let state = EditorState::default();
+    never_ending(&state, JobKind::Publish);
+    assert!(
+        !render::blocks_shutdown_in(&state, &render_latch),
+        "a publish is not a render"
+    );
+    render::cancel_all_bounded_in(&state, &render_latch, SHORT, POLL);
+    assert!(
+        !render_latch.load(Ordering::SeqCst),
+        "a wedged PUBLISH flipped the render latch"
+    );
+    assert!(blocks_shutdown_in(&state, &publish_latch));
+}
+
+// The seam is only worth having if production goes through it with the
+// MODULE's latch -- a wrapper handed a fresh `AtomicBool`, or the render
+// term's, would latch nothing this gate ever reads.
+#[test]
+fn the_app_wrappers_pass_the_publish_latch() {
+    use crate::structural_scan::{fn_body, shell_file};
+
+    let src = shell_file("publish.rs");
+    let gate = fn_body(&src, "pub fn blocks_shutdown(");
+    assert!(gate.contains("blocks_shutdown_in("), "{gate}");
+    assert!(gate.contains("&PUBLISHES_ABANDONED"), "{gate}");
+    let cancel = fn_body(&src, "pub fn cancel_all_bounded(");
+    assert!(cancel.contains("cancel_all_bounded_in("), "{cancel}");
+    assert!(cancel.contains("&PUBLISHES_ABANDONED"), "{cancel}");
+    assert!(cancel.contains("CANCEL_POLL"), "{cancel}");
+    assert!(!src.contains("RENDERS_ABANDONED"), "the render latch");
 }

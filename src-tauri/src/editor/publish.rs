@@ -601,10 +601,33 @@ pub(crate) fn cancel_all_in(state: &EditorState, limit: Duration, poll: Duration
     crate::shutdown_gate::wait_until_cleared(|| !publish_blocks_shutdown(state), limit, poll)
 }
 
+/// The publish term, given the latch it reads (the render term's seam,
+/// review finding I-4).
+pub(crate) fn blocks_shutdown_in(state: &EditorState, latch: &AtomicBool) -> bool {
+    !latch.load(Ordering::SeqCst) && publish_blocks_shutdown(state)
+}
+
+/// Cancel every publish and wait, bounded; on expiry set `latch` (and log)
+/// and proceed. With no publish running it does nothing at all.
+pub(crate) fn cancel_all_bounded_in(
+    state: &EditorState,
+    latch: &AtomicBool,
+    limit: Duration,
+    poll: Duration,
+) {
+    if !publish_blocks_shutdown(state) {
+        return;
+    }
+    log::info!("editor publish: cancelling every publish before shutdown");
+    if !cancel_all_in(state, limit, poll) {
+        latch.store(true, Ordering::SeqCst);
+        log::warn!("editor publish: a publish did not stop within {limit:?}; exiting anyway");
+    }
+}
+
 /// `shutdown_gate`'s publish term (F19).
 pub fn blocks_shutdown(app: &AppHandle) -> bool {
-    !PUBLISHES_ABANDONED.load(Ordering::SeqCst)
-        && publish_blocks_shutdown(&app.state::<EditorState>())
+    blocks_shutdown_in(&app.state::<EditorState>(), &PUBLISHES_ABANDONED)
 }
 
 /// The quit workers' publish step, beside the render cancel: stop every
@@ -613,15 +636,12 @@ pub fn blocks_shutdown(app: &AppHandle) -> bool {
 ///
 /// Callers must NOT be on the main/event-loop thread: this sleeps.
 pub fn cancel_all_bounded(app: &AppHandle, limit: Duration) {
-    let state = app.state::<EditorState>();
-    if !publish_blocks_shutdown(&state) {
-        return;
-    }
-    log::info!("editor publish: cancelling every publish before shutdown");
-    if !cancel_all_in(&state, limit, CANCEL_POLL) {
-        PUBLISHES_ABANDONED.store(true, Ordering::SeqCst);
-        log::warn!("editor publish: a publish did not stop within {limit:?}; exiting anyway");
-    }
+    cancel_all_bounded_in(
+        &app.state::<EditorState>(),
+        &PUBLISHES_ABANDONED,
+        limit,
+        CANCEL_POLL,
+    );
 }
 
 #[cfg(test)]

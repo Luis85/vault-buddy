@@ -260,6 +260,77 @@ fn chunk_headers_name_the_session_take_and_canonical_sequence() {
     }
 }
 
+/// Review finding I-5: `begin_is_refused_during_a_screen_capture` hands
+/// `begin_in` the capture kind itself, so it proves the refusal and not
+/// the WIRING -- a command that passed `None` would refuse nothing and
+/// stay green. This checks the command's body: it binds
+/// `state::<CaptureGuard>().active()` exactly once, BEFORE `begin_in(`,
+/// and passes that binding as one of `begin_in`'s own arguments.
+fn capture_refusal_wiring(body: &str) -> Result<(), String> {
+    const GUARD: &str = "state::<CaptureGuard>().active()";
+    let guard = body.find(GUARD).ok_or(format!("{GUARD} is never read"))?;
+    let call = body.find("begin_in(").ok_or("begin_in( is never called")?;
+    if guard > call {
+        return Err(format!("{GUARD} is read after begin_in("));
+    }
+    let line = &body[body[..guard].rfind('\n').map_or(0, |i| i + 1)..guard];
+    let binding = line
+        .trim()
+        .strip_prefix("let ")
+        .and_then(|rest| rest.split('=').next())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or(format!("{GUARD} is not bound by a plain let"))?;
+    if body.matches(&format!("let {binding} ")).count() != 1 {
+        return Err(format!("`{binding}` is re-bound before the call"));
+    }
+    // `begin_in`'s top-level arguments: split on the commas at depth one,
+    // stopping at the parenthesis that closes the call.
+    let (mut args, mut arg, mut depth) = (Vec::new(), String::new(), 1);
+    for c in body[call + "begin_in(".len()..].chars() {
+        match c {
+            '(' | '<' | '{' | '[' => depth += 1,
+            ')' | '>' | '}' | ']' => depth -= 1,
+            _ => {}
+        }
+        if depth == 0 || (c == ',' && depth == 1) {
+            args.push(std::mem::take(&mut arg).trim().to_string());
+            if depth == 0 {
+                break;
+            }
+        } else {
+            arg.push(c);
+        }
+    }
+    if !args.iter().any(|arg| arg == binding) {
+        return Err(format!("begin_in( is not handed `{binding}`: {args:?}"));
+    }
+    Ok(())
+}
+
+#[test]
+fn begin_hands_begin_in_the_live_capture_guard() {
+    use crate::structural_scan::{fn_body, shell_file};
+
+    let src = shell_file("webcam_commands.rs");
+    let body = fn_body(&src, "pub async fn editor_webcam_begin(");
+    assert_eq!(capture_refusal_wiring(body), Ok(()), "{body}");
+    // The scan is not vacuous: the one-line mutation the review names --
+    // the guard read replaced by a `None` -- fails it, and so do a
+    // shadowing re-bind and a call handed a literal instead.
+    let unwired = body.replace(
+        "let capture = app.state::<CaptureGuard>().active();",
+        "let capture = None;",
+    );
+    assert_ne!(unwired, body, "the mutation must apply to the real body");
+    assert!(capture_refusal_wiring(&unwired).is_err());
+    let shadowed = body.replace("blocking(move", "let capture = None;\n    blocking(move");
+    assert!(capture_refusal_wiring(&shadowed).is_err());
+    let literal = body.replace("            capture,\n", "            None,\n");
+    assert_ne!(literal, body, "the mutation must apply to the real body");
+    assert!(capture_refusal_wiring(&literal).is_err());
+}
+
 // F35: while a screen (or audio) capture holds `CaptureGuard`, a take is
 // refused natively, naming what to stop — and leaves no file and no take.
 #[test]
