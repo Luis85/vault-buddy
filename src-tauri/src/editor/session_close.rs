@@ -180,10 +180,19 @@ pub(crate) fn close_locked(
         // Task 10 fix round 1): a journal that was never readable to begin
         // with is kept aside instead of deleted -- `discard_or_quarantine_
         // journal`'s own call, never a bare `remove_journal` here.
+        //
+        // Hardening Task 18 fix round 1: a refusal keeps the session open,
+        // so its pending journal write is forgotten only once the discard
+        // has succeeded, and the user sees role wording -- the detail (a
+        // redacted handle at most) goes to the log.
         CloseDisposition::DiscardRecovery => {
+            super::journal_quarantine::discard_or_quarantine_journal(root, project_id).map_err(
+                |e| {
+                    log::warn!("editor recovery: discardRecovery failed for {project_id}: {e}");
+                    internal("The unsaved changes could not be discarded right now. Try again.")
+                },
+            )?;
             state.journal.forget(session_id);
-            super::journal_quarantine::discard_or_quarantine_journal(root, project_id)
-                .map_err(|e| internal(format!("Could not discard the unsaved changes: {e}")))?;
         }
         CloseDisposition::DiscardProject => {
             // GAP-214 item 7: the pins are found where they live — the

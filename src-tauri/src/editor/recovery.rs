@@ -287,7 +287,7 @@ fn write_journal(
 /// Perform `session_id`'s pending journal write now, if one is waiting.
 /// The caller holds the session's save lock. A write deferred by an
 /// unreadable earlier journal is scheduled again, never dropped.
-pub(crate) fn flush_locked(state: &EditorState, session_id: &str) {
+fn flush_locked(state: &EditorState, session_id: &str) {
     if let Some(root) = state.journal.take(session_id) {
         match write_locked(state, &root, session_id) {
             Ok(JournalWrite::Done) => {}

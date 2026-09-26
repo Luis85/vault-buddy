@@ -14,7 +14,7 @@ use vault_buddy_screen::staging::{self, StagedSidecar};
 
 use crate::editor::project_store::project_dir;
 use crate::editor::recovery::{flush_due, RecoveryJournal, JOURNAL_DEBOUNCE};
-use crate::editor::save_commands::open_project_session;
+use crate::editor::save_commands::{open_project_session, save_project_in};
 use crate::editor::session_close::close_in;
 use crate::editor::session_commands::{
     execute_in, open_staged_session, snapshot_in, CloseDisposition,
@@ -129,6 +129,8 @@ impl Fixture {
 
 const BLOCKER: &[u8] = b"blocker";
 
+const DISCARD_FAILED: &str = "The unsaved changes could not be discarded right now. Try again.";
+
 fn is_blocker(path: &Path) -> bool {
     std::fs::read(path).is_ok_and(|b| b == BLOCKER)
 }
@@ -142,7 +144,9 @@ fn block_set_aside(dir: &Path) -> Vec<PathBuf> {
         .unwrap()
         .as_secs();
     let mut taken = Vec::new();
-    for secs in now..now + 10 {
+    // A full minute ahead: a slow run cannot slip past it (and one that
+    // did would fail these tests, never pass them silently).
+    for secs in now..now + 60 {
         for attempt in 0..20u32 {
             let name = if attempt == 0 {
                 format!("recovery.unreadable-{secs}.json")
@@ -215,13 +219,18 @@ fn discard_recovery_that_cannot_set_an_unreadable_journal_aside_fails_and_keeps_
     let f = Fixture::new();
     let (sid, pid) = f.reopened_over_garbage();
     block_set_aside(&f.dir(&pid));
+    f.rename(&sid, "cmd-1", "Pending");
 
     let refused = f.close(&sid, CloseDisposition::DiscardRecovery);
 
-    assert!(refused.is_err(), "{refused:?}");
+    // Fix round 1: role wording, never a file handle.
+    assert_eq!(refused, Err(DISCARD_FAILED.to_string()));
     assert_eq!(std::fs::read_to_string(f.journal(&pid)).unwrap(), GARBAGE);
     assert!(f.set_aside(&pid).is_empty());
     assert!(snapshot_in(&f.state, &sid).is_ok(), "still open to retry");
+    // Fix round 1: the session stays open, so its pending journal write
+    // must survive the refusal too.
+    assert!(f.state.journal.is_pending(&sid));
 }
 
 // Carried item 3: a journal that could not even be READ is not deleted --
@@ -249,7 +258,7 @@ fn discard_recovery_never_deletes_a_journal_it_could_not_read() {
     let refused = f.close(&sid, CloseDisposition::DiscardRecovery);
 
     drop(held);
-    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(refused, Err(DISCARD_FAILED.to_string()));
     assert_eq!(std::fs::read(f.journal(&pid)).unwrap(), before);
     assert_eq!(
         snapshot_in(&f.state, &sid)
@@ -265,4 +274,35 @@ fn discard_recovery_never_deletes_a_journal_it_could_not_read() {
         snapshot_in(&f.state, &sid).unwrap_err().code,
         EditorErrorCode::SessionGone
     );
+}
+
+// Fix round 1 (Important): a save of the current revision removes the
+// journal -- but R7 holds there too. After "Open saved project" over an
+// unreadable journal the session is clean and Save is enabled; the save
+// used to DELETE those bytes. It now sets them aside, like the writer.
+#[test]
+fn a_save_sets_an_unreadable_journal_aside_instead_of_deleting_it() {
+    let f = Fixture::new();
+    let (sid, pid) = f.reopened_over_garbage();
+    let revision = snapshot_in(&f.state, &sid).unwrap().snapshot.revision;
+
+    save_project_in(&f.state, f.root(), &sid, revision).unwrap();
+
+    assert!(!f.journal(&pid).exists(), "the offer is answered");
+    assert_eq!(f.set_aside(&pid), [GARBAGE.to_string()]);
+}
+
+// ...and when it cannot be set aside, the save still succeeds and the
+// bytes stay exactly where they are.
+#[test]
+fn a_save_keeps_an_unreadable_journal_it_cannot_set_aside() {
+    let f = Fixture::new();
+    let (sid, pid) = f.reopened_over_garbage();
+    block_set_aside(&f.dir(&pid));
+    let revision = snapshot_in(&f.state, &sid).unwrap().snapshot.revision;
+
+    save_project_in(&f.state, f.root(), &sid, revision).unwrap();
+
+    assert_eq!(std::fs::read_to_string(f.journal(&pid)).unwrap(), GARBAGE);
+    assert!(f.set_aside(&pid).is_empty());
 }

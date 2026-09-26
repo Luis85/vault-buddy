@@ -392,8 +392,11 @@ pub(crate) fn start_job_in(
 /// ONLY the `jobs` leaf (hardening Task 18, C-3): the command is sync, so
 /// it runs on the main thread, and a `require_session` pre-check there
 /// waited on `sessions`, which an execute holds across `validate_project`.
-/// The registry already scopes a job to its session, so a session this
-/// process no longer holds names no job it can cancel (`invalidRequest`).
+/// The registry already scopes a job to its session, so a cancel is refused
+/// (`invalidRequest`) unless the job's record still exists under
+/// `session_id`. A closed session's render or publish still running keeps
+/// its record until its terminal lands, so it can still be cancelled --
+/// harmless: closing the session already cancelled it.
 pub(crate) fn cancel_job_in(
     state: &EditorState,
     session_id: &str,

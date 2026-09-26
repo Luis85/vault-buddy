@@ -2786,14 +2786,33 @@ user can export or discard it later.
 > The writer's check — which parsed the whole previous journal under the
 > save lock on EVERY debounced write — now runs once per session
 > (`PredecessorMemo`: once it clears, only this session writes that name).
-> One consequence, by design: while the set-aside keeps failing this
-> session's edits are not journaled, and a Keep close in that state closes
-> without a journal (logged). Pinned by `journal_quarantine::tests::
+> **The SAVE path too (Task 18 fix round 1).** A save of the current
+> revision removed `recovery.json` unconditionally — so "Open saved
+> project" over an unreadable journal, then Save, deleted exactly these
+> bytes (and released Task 9's take recovery). The save now runs the
+> writer's own check first (`journal_quarantine::remove_after_save`): an
+> unreadable journal is set aside, a blocked one is KEPT (the save still
+> succeeds, logged once, no path), and only what is left at the name — the
+> session's own journal, or a readable one — is removed. A failed Discard
+> now answers with role wording ("The unsaved changes could not be
+> discarded right now. Try again.", the detail logged) and keeps the
+> session's pending journal write, since the session stays open.
+>
+> **User-visible consequence, by design:** while the set-aside keeps
+> failing, this session's edits are NOT journaled — a crash, or a Keep
+> close, in that state loses the edits since the last save, silently in
+> the UI (the log says so). A Keep close cannot report it: its only caller
+> is the recovery dialog's Resume, which closes a CLEAN session and whose
+> store has already dropped that session before Rust answers. Saving the
+> project is the remedy — the save succeeds and keeps the unreadable file.
+> Pinned by `journal_quarantine::tests::
 > the_predecessor_is_checked_once_per_session`,
 > `…a_journal_that_cannot_be_set_aside_is_never_overwritten`,
-> `…discard_recovery_that_cannot_set_an_unreadable_journal_aside_fails_and_keeps_it`
-> and `…discard_recovery_never_deletes_a_journal_it_could_not_read` (a real
-> Windows handle that allows delete but not read).
+> `…discard_recovery_that_cannot_set_an_unreadable_journal_aside_fails_and_keeps_it`,
+> `…discard_recovery_never_deletes_a_journal_it_could_not_read` (a real
+> Windows handle that allows delete but not read),
+> `…a_save_sets_an_unreadable_journal_aside_instead_of_deleting_it` and
+> `…a_save_keeps_an_unreadable_journal_it_cannot_set_aside`.
 
 ### GAP-181 · Low · A caption or chapter trimmed out of its clip is kept but listed nowhere
 `src/editor/captionRules.ts` (`captionRows`, `chapterRows`),

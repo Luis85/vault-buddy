@@ -166,12 +166,36 @@ pub(super) fn predecessor_cleared(
             if memo.settle(session_id, Settled::Blocked) != Some(Settled::Blocked) {
                 log::warn!(
                     "editor recovery: an earlier recovery journal is in the way and {why}; \
-                     the unsaved changes are not journaled until it can be kept aside"
+                     it is kept where it is, and the unsaved changes are not journaled (nor \
+                     that journal removed by a save) until it can be set aside"
                 );
             }
             false
         }
     }
+}
+
+/// A save of the session's CURRENT revision removes `recovery.json` --
+/// nothing is left to recover -- but R7 holds here too (Task 18 fix round
+/// 1): the file may be an earlier process's unreadable journal this session
+/// never wrote, and deleting it is the same loss as overwriting it. So the
+/// save runs the writer's own check first: once it clears (nothing there,
+/// a readable journal, or the unreadable one moved aside), whatever is
+/// still at the name is removed; while it is blocked the file is kept and
+/// the save still succeeds (logged once by `predecessor_cleared`). The
+/// caller holds the session's save lock.
+pub(crate) fn remove_after_save(
+    state: &EditorState,
+    session_id: &str,
+    root: &Path,
+    project_id: &str,
+) -> io::Result<()> {
+    let path = journal_path(root, project_id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid project id"))?;
+    if !predecessor_cleared(state, session_id, root, project_id, &path) {
+        return Ok(());
+    }
+    remove_journal(root, project_id)
 }
 
 /// `discardRecovery`'s own action (R7b): DELETE a readable journal, as

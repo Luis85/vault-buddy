@@ -330,8 +330,13 @@ pub(crate) fn save_project_with(
     // for a session that really is clean costs nothing — the worker takes it
     // under this same save lock and `write_locked` writes nothing for a
     // clean session.
+    //
+    // An unreadable journal this session never wrote is set aside, never
+    // deleted (R7; hardening Task 18 fix round 1: `remove_after_save`).
     if current == Some(revision) {
-        if let Err(e) = super::recovery::remove_journal(root, &project_id) {
+        let removed =
+            super::journal_quarantine::remove_after_save(state, session_id, root, &project_id);
+        if let Err(e) = removed {
             log::warn!(
                 "editor_save_project: saved {project_id:?} but could not remove its \
                  recovery journal: {e}"
