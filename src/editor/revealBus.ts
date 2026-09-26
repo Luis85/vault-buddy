@@ -72,3 +72,14 @@ export function requestTimelineReveal(ms: number): void {
 export function revealedTimelineMs(): number {
   return timelineTarget;
 }
+
+/** The clip whose inspector name field should take focus — the clip
+ * menu's "Rename…" (visual-parity Task 5). The Clip section showing that
+ * clip answers and clears it; a section showing another clip ignores it,
+ * so a selection change on the way cannot swallow the request. */
+export const clipNameFocus = ref<string | null>(null);
+
+/** The track whose header should start its inline rename — the track
+ * menu's "Rename track…" (visual-parity Task 5). Every header watches it;
+ * the one it names answers and clears it. */
+export const trackRenameRequest = ref<string | null>(null);

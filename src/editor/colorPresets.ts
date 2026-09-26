@@ -76,3 +76,21 @@ export function adjustmentsFilter(adjustments: Adjustments | null | undefined): 
     `sepia(${sepia}) grayscale(${grayscale})`
   );
 }
+
+/** The concept's colour treatments (`reference/editing-features.js`'
+ * `FILTERS`), offered by the clip context menu's "Color treatment". Kept
+ * beside `COLOR_PRESETS` so the inspector's Color tab can adopt the same
+ * five when it takes the concept's layout. */
+export const COLOR_TREATMENTS: readonly { id: string; label: string; adjustments: Adjustments | null }[] = [
+  { id: "original", label: "Original", adjustments: null },
+  { id: "clear", label: "Clear", adjustments: { brightness: 1.07, contrast: 1.08, saturation: 0.94, sepia: 0, grayscale: 0 } },
+  { id: "warm", label: "Warm", adjustments: { brightness: 1.02, contrast: 1.04, saturation: 1.08, sepia: 0.18, grayscale: 0 } },
+  { id: "soft", label: "Soft", adjustments: { brightness: 1.06, contrast: 0.9, saturation: 0.8, sepia: 0, grayscale: 0 } },
+  { id: "mono", label: "Mono", adjustments: { brightness: 1, contrast: 1.12, saturation: 1, sepia: 0, grayscale: 1 } },
+];
+
+/** Whether a clip's adjustments are exactly `treatment`. A clip with none
+ * reads as Original (`null`): every field is absent on both sides. */
+export function isTreatment(current: Adjustments | null | undefined, treatment: Adjustments | null): boolean {
+  return (Object.keys(DEFAULT) as (keyof Adjustments)[]).every((k) => current?.[k] === treatment?.[k]);
+}

@@ -39,6 +39,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useWindowDismiss } from "../../../composables/useWindowDismiss";
 import { lockedReason } from "../../../editor/actionMeta";
+import { trackRenameRequest } from "../../../editor/revealBus";
 import type { Track } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 
@@ -153,6 +154,17 @@ function beginRename() {
   draft.value = props.track.name;
   void nextTick(() => nameInput.value?.select());
 }
+/** The track menu's "Rename track…" (visual-parity Task 5) asks the header
+ * that owns the name field to start its inline rename. */
+watch(
+  trackRenameRequest,
+  (id) => {
+    if (id !== props.track.id) return;
+    trackRenameRequest.value = null;
+    beginRename();
+  },
+  { immediate: true },
+);
 function commitRename() {
   editing.value = false;
   const trimmed = draft.value.trim();
@@ -192,6 +204,9 @@ const canMoveDown = computed(() => !locked.value && props.trackIndex < props.tra
 const canDelete = computed(() => !locked.value);
 
 const menuItemTitle = computed(() => (locked.value ? reason.value : undefined));
+/** Audit finding 6: an edge track's Move up/down says why it cannot move. */
+const moveUpTitle = computed(() => menuItemTitle.value ?? (canMoveUp.value ? undefined : "Already the top track"));
+const moveDownTitle = computed(() => menuItemTitle.value ?? (canMoveDown.value ? undefined : "Already the bottom track"));
 function menuItemClass(enabled: boolean): string {
   return enabled ? "cursor-pointer text-fg-secondary" : "cursor-default text-fg-subtle opacity-50";
 }
@@ -346,7 +361,7 @@ function deleteTrack() {
           role="menuitem"
           :data-testid="`track-header-${track.id}-move-up`"
           :aria-disabled="!canMoveUp"
-          :title="menuItemTitle"
+          :title="moveUpTitle"
           class="rounded px-1.5 py-0.5 text-left hover:bg-hover"
           :class="moveUpClass"
           @click="moveUp"
@@ -358,7 +373,7 @@ function deleteTrack() {
           role="menuitem"
           :data-testid="`track-header-${track.id}-move-down`"
           :aria-disabled="!canMoveDown"
-          :title="menuItemTitle"
+          :title="moveDownTitle"
           class="rounded px-1.5 py-0.5 text-left hover:bg-hover"
           :class="moveDownClass"
           @click="moveDown"

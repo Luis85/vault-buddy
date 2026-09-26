@@ -36,11 +36,10 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
+import type { TimelineViewOps } from "../../../composables/useEditorMenuContext";
 import { SNAP_THRESHOLD_PX, snappedMs } from "../../../composables/useTimelineDrag";
 import { baseActionContext } from "../../../editor/actionContext";
-import type { ActionId } from "../../../editor/actionMeta";
 import type { PointerTarget } from "../../../editor/actions";
-import { activateEditorAction } from "../../../editor/clipboard";
 import { onReveal, revealedTimelineMs } from "../../../editor/revealBus";
 import {
   fitZoom,
@@ -53,7 +52,8 @@ import {
   xToMs,
 } from "../../../editor/timelineLayout";
 import { draggedAssetId, draggedAssetKind } from "../../../editor/trackCompat";
-import type { Asset, Clip, TrackKind } from "../../../editorTypes";
+import { addTrackThenInsert } from "../../../editor/trackEdits";
+import type { Asset, Clip } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import ContextMenu from "../menus/ContextMenu.vue";
@@ -159,21 +159,30 @@ const clipsByTrack = computed(() => {
 
 // ---- fit -------------------------------------------------------------------
 
+function applyScrollLeft(left: number) {
+  if (scrollRef.value) scrollRef.value.scrollLeft = left;
+  scrollLeftPx.value = left;
+}
+
 function onFit() {
   const zoom = fitZoom(editorProject.durationMs, effectiveViewportWidth.value);
   workspace.setZoom(zoom);
   workspace.setTimelineScroll(0, workspace.timelineScrollTop);
-  if (scrollRef.value) scrollRef.value.scrollLeft = 0;
+  applyScrollLeft(0);
 }
+
+/** The context menu's view changes (visual-parity Task 5): only this
+ * component knows the viewport width and owns the scroller. */
+const menuView: TimelineViewOps = {
+  fitRange: (startMs, endMs) => applyScrollLeft(workspace.zoomToRange(startMs, endMs, effectiveViewportWidth.value)),
+  fitTimeline: onFit,
+};
 
 // ---- the one context menu ----------------------------------------------
 
-const CLIP_CONTEXT_ITEMS: ActionId[] = [
-  "split", "copy", "cut", "paste", "duplicate", "group", "ungroup", "earlier", "later", "transition", "deleteClose",
-  "delete",
-];
-
 const menuOpen = ref(false);
+/** Opened by the toolbar's Edit actions, for its `aria-expanded`. */
+const menuFromToolbar = ref(false);
 const menuX = ref(0);
 const menuY = ref(0);
 const menuTarget = ref<PointerTarget | null>(null);
@@ -194,23 +203,31 @@ function msFromClientX(clientX: number): number {
   return xToMs(Math.max(0, contentX), workspace.timelineZoom);
 }
 
-function onClipContextMenu(payload: { clip: Clip; clientX: number; clientY: number }) {
-  menuTarget.value = { kind: "clip", id: payload.clip.id, timeMs: msFromClientX(payload.clientX) };
-  menuX.value = payload.clientX;
-  menuY.value = payload.clientY;
+function openMenu(target: PointerTarget | null, x: number, y: number, fromToolbar = false) {
+  menuTarget.value = target;
+  menuX.value = x;
+  menuY.value = y;
+  menuFromToolbar.value = fromToolbar;
   menuOpen.value = true;
 }
 
-/** The toolbar's Edit actions (Task 55): the same menu, for the selection. */
+/** A right-click acts at the pointer's time; Shift+F10 at the playhead's. */
+function onClipContextMenu(payload: { clip: Clip; clientX: number; clientY: number; atPlayhead?: boolean }) {
+  const timeMs = payload.atPlayhead ? workspace.playheadMs : msFromClientX(payload.clientX);
+  openMenu({ kind: "clip", id: payload.clip.id, timeMs }, payload.clientX, payload.clientY);
+}
+
+/** A right-click on an empty stretch of a lane (visual-parity Task 5). */
+function onLaneContextMenu(payload: { trackId: string; clientX: number; clientY: number }) {
+  openMenu({ kind: "gap", id: payload.trackId, timeMs: msFromClientX(payload.clientX) }, payload.clientX, payload.clientY);
+}
+
+/** The toolbar's Edit actions (Task 55): the same menu, for the selection
+ * at the playhead, or the editor actions when nothing is selected. */
 function onToolbarMore(at: { x: number; y: number }) {
-  menuTarget.value = null;
-  menuX.value = at.x;
-  menuY.value = at.y;
-  menuOpen.value = true;
-}
-
-function onMenuActivate(actionId: ActionId) {
-  activateEditorAction(actionId, menuContext.value, (cmd) => editorProject.execute(cmd));
+  const first = workspace.selectionClipIds[0];
+  const target: PointerTarget | null = first ? { kind: "clip", id: first, timeMs: workspace.playheadMs } : null;
+  openMenu(target, at.x, at.y, true);
 }
 
 // ---- native drag-and-drop: place a library asset (Task 26) ----------------
@@ -246,16 +263,6 @@ async function onAssetDrop(payload: { assetId: string; trackId: string; clientX:
   });
 }
 
-/** The name a freshly-minted track gets when a drop below the last lane
- * creates one -- "Video N"/"Audio N", N = one past however many tracks of
- * that kind already exist. No contract value names a convention here (no
- * "Add track" UI has existed before this task), so this is this module's
- * own choice, kept in one place rather than inlined at the one call site. */
-function nextTrackName(kind: TrackKind): string {
-  const count = (editorProject.project?.tracks ?? []).filter((t) => t.kind === kind).length + 1;
-  return kind === "audio" ? `Audio ${count}` : `Video ${count}`;
-}
-
 function onBelowLanesDragOver(event: DragEvent) {
   const dt = event.dataTransfer;
   if (!dt || draggedAssetKind(dt) === null) return; // not one of ours
@@ -265,48 +272,29 @@ function onBelowLanesDragOver(event: DragEvent) {
   dt.dropEffect = "copy";
 }
 
-/** A native drag's asset id/kind pair, resolved into the real `Asset` and
- * the `TrackKind` a fresh track would need to hold it -- `null` for a drag
- * that is not one of ours, or whose id does not resolve (a payload from a
- * since-closed project). Split out of `onBelowLanesDrop` below purely to
- * keep that function's own branch count under the fallow complexity
- * ceiling; `AssetKind`/`TrackKind` share the exact same two literals, so
- * `draggedAssetKind`'s return needs no separate mapping to become one. */
-function resolveDraggedAsset(dt: DataTransfer): { asset: Asset; kind: TrackKind } | null {
+/** A native drag's asset, resolved -- `null` for a drag that is not one of
+ * ours, or whose id does not resolve (a payload from a since-closed
+ * project). The fresh track takes the asset's own kind. */
+function resolveDraggedAsset(dt: DataTransfer): Asset | null {
   const kind = draggedAssetKind(dt);
   if (kind === null) return null;
   const assetId = draggedAssetId(dt, kind);
-  const asset = assetId ? editorProject.project?.assets.find((a) => a.id === assetId) : undefined;
-  return asset ? { asset, kind } : null;
+  return (assetId && editorProject.project?.assets.find((a) => a.id === assetId)) || null;
 }
 
-/** Two `editorProject.execute` calls, deliberately -- `addTrack` then
- * `insertClip` -- rather than one command Rust has no shape for; Undo sees
- * both as separate, labelled steps (the brief's own "two undo steps"). If
- * `addTrack` is refused (e.g. `limits::MAX_TRACKS`) nothing is inserted. */
-async function addTrackThenInsert(kind: TrackKind, asset: Asset, startMs: number) {
-  const beforeIds = new Set((editorProject.project?.tracks ?? []).map((t) => t.id));
-  const index = editorProject.project?.tracks.length ?? 0;
-  const added = await editorProject.execute({ kind: "addTrack", trackKind: kind, name: nextTrackName(kind), index });
-  if (!added) return;
-  const newTrack = editorProject.project?.tracks.find((t) => !beforeIds.has(t.id));
-  if (!newTrack) return;
-  await editorProject.execute({
-    kind: "insertClip",
-    assetId: asset.id,
-    trackId: newTrack.id,
-    startMs,
-    inMs: 0,
-    outMs: asset.duration_ms,
-  });
-}
-
+/** `addTrack` then `insertClip` (`trackEdits.ts`): two undo steps, and
+ * nothing is inserted when Rust refuses the track. */
 async function onBelowLanesDrop(event: DragEvent) {
   const dt = event.dataTransfer;
-  const resolved = dt ? resolveDraggedAsset(dt) : null;
-  if (!resolved) return;
+  const asset = dt ? resolveDraggedAsset(dt) : null;
+  if (!asset) return;
   event.preventDefault();
-  await addTrackThenInsert(resolved.kind, resolved.asset, snappedMsFromClientX(event.clientX));
+  await addTrackThenInsert(
+    (command) => editorProject.execute(command),
+    () => editorProject.project,
+    asset,
+    snappedMsFromClientX(event.clientX),
+  );
 }
 </script>
 
@@ -316,7 +304,7 @@ async function onBelowLanesDrop(event: DragEvent) {
     class="flex h-full min-h-0 flex-col gap-1"
   >
     <TimelineToolbar
-      :more-open="menuOpen && menuTarget === null"
+      :more-open="menuOpen && menuFromToolbar"
       @fit="onFit"
       @more="onToolbarMore"
     />
@@ -348,6 +336,7 @@ async function onBelowLanesDrop(event: DragEvent) {
         :track-index="i"
         :track-order="orderedTrackIds"
         @context-menu="onClipContextMenu"
+        @lane-context-menu="onLaneContextMenu"
         @asset-drop="onAssetDrop"
       />
       <!-- Multi-track placement (Task 26): dropping a library asset here
@@ -364,12 +353,11 @@ async function onBelowLanesDrop(event: DragEvent) {
 
     <ContextMenu
       :open="menuOpen"
-      :items="CLIP_CONTEXT_ITEMS"
       :context="menuContext"
       :x="menuX"
       :y="menuY"
+      :view="menuView"
       @close="menuOpen = false"
-      @activate="onMenuActivate"
     />
   </div>
 </template>

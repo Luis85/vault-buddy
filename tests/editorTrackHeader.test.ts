@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import TrackHeader from "../src/components/editor/timeline/TrackHeader.vue";
 import TrackLane from "../src/components/editor/timeline/TrackLane.vue";
 import { lockedReason } from "../src/editor/actionMeta";
+import { trackRenameRequest } from "../src/editor/revealBus";
 import type { Asset, Clip, EditorCommand, EditorOpenResult, EditorSnapshot, Project, Track } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { fakeEditorPort as fakePort } from "./helpers/fakeEditorPort";
@@ -333,6 +334,19 @@ describe("TrackHeader — rename", () => {
   });
 });
 
+describe("TrackHeader — rename requested by the track menu", () => {
+  it("starts the inline rename on the header the request names, and only there", async () => {
+    await openProject();
+    const a = mount(TrackHeader, { props: { track: track("v1"), trackIndex: 0, trackCount: 2 } });
+    const b = mount(TrackHeader, { props: { track: track("v2"), trackIndex: 1, trackCount: 2 } });
+    trackRenameRequest.value = "v2";
+    await flushPromises();
+    expect(b.find('[data-testid="track-header-v2-name-input"]').exists()).toBe(true);
+    expect(a.find('[data-testid="track-header-v1-name-input"]').exists()).toBe(false);
+    expect(trackRenameRequest.value).toBeNull();
+  });
+});
+
 // ---- TrackHeader: track menu (move / delete) ---------------------------------
 
 describe("TrackHeader — track menu", () => {
@@ -367,6 +381,19 @@ describe("TrackHeader — track menu", () => {
     expect(w3.get('[data-testid="track-header-v3-move-down"]').attributes("aria-disabled")).toBe("true");
     await w3.get('[data-testid="track-header-v3-move-down"]').trigger("click");
     expect(executed).toEqual([]);
+  });
+
+  // Audit finding 6 (visual-parity Task 5, ruling P4): a disabled item says
+  // why — an edge track's Move up/down names the edge it is already at.
+  it("an edge track's disabled Move up/down carries its reason", async () => {
+    await openProject();
+    const w = mount(TrackHeader, { props: { track: track("v1"), trackIndex: 0, trackCount: 2 } });
+    await w.get('[data-testid="track-header-v1-menu"]').trigger("click");
+    expect(w.get('[data-testid="track-header-v1-move-up"]').attributes("title")).toBe("Already the top track");
+    expect(w.get('[data-testid="track-header-v1-move-down"]').attributes("title")).toBeUndefined();
+    const last = mount(TrackHeader, { props: { track: track("v2"), trackIndex: 1, trackCount: 2 } });
+    await last.get('[data-testid="track-header-v2-menu"]').trigger("click");
+    expect(last.get('[data-testid="track-header-v2-move-down"]').attributes("title")).toBe("Already the bottom track");
   });
 
   it("Delete track sends deleteTrack", async () => {

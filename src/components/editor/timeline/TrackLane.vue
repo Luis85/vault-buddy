@@ -63,7 +63,9 @@ const props = defineProps<{
   trackOrder: string[];
 }>();
 const emit = defineEmits<{
-  (e: "context-menu", payload: { clip: Clip; clientX: number; clientY: number }): void;
+  (e: "context-menu", payload: { clip: Clip; clientX: number; clientY: number; atPlayhead?: boolean }): void;
+  /** A right-click on the lane's empty body (visual-parity Task 5). */
+  (e: "lane-context-menu", payload: { trackId: string; clientX: number; clientY: number }): void;
   /** A `LibraryAssetCard` drop this lane accepted — `TimelineView.vue`
    * resolves `clientX` into a snapped `startMs` and sends the `insertClip`
    * (this component knows neither scroll position nor the label offset). */
@@ -106,6 +108,14 @@ function onDrop(event: DragEvent): void {
   if (assetId === null) return;
   event.preventDefault();
   emit("asset-drop", { assetId, trackId: props.track.id, clientX: event.clientX });
+}
+
+/** A clip answers its own right-click first (`@contextmenu.prevent`), so
+ * an event that arrives here already handled was a clip's, not the lane's. */
+function onLaneContextMenu(event: MouseEvent): void {
+  if (event.defaultPrevented) return;
+  event.preventDefault();
+  emit("lane-context-menu", { trackId: props.track.id, clientX: event.clientX, clientY: event.clientY });
 }
 
 function spanOf(c: Clip): ClipSpan {
@@ -161,6 +171,7 @@ function widthOf(clip: Clip): number {
       class="relative bg-stage"
       :class="[track.locked ? 'pointer-events-none' : '', dropReason ? 'cursor-not-allowed' : '']"
       :style="{ width: `${widthPx}px` }"
+      @contextmenu="onLaneContextMenu"
     >
       <ClipItem
         v-for="clip in sortedClips"

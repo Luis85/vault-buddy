@@ -108,6 +108,9 @@
   --editor-library-drawer: 250px;
   /* The drawers' lift (the concept's `--shadow`). */
   --editor-shadow: 0 18px 60px #0005;
+  /* Every menu's edge and lift (concept §8 `.context-panel`, Task 5). */
+  --color-menu-edge: color-mix(in srgb, var(--color-line) 65%, var(--color-fg-muted));
+  --editor-menu-shadow: 0 16px 55px #0006, 0 2px 6px #0003;
 }
 
 /* Tutorial editor light theme. The concept's `[data-theme=light]` values,

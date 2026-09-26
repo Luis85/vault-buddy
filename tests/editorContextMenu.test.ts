@@ -1,6 +1,7 @@
 /**
  * `ContextMenu.vue` and `PreviewToolbar.vue` (Task 17) — the two components
- * built on the `actions.ts` registry. Grouped in this one file per the
+ * built on the `actions.ts` registry (the context menu renders the concept's
+ * item sets through `MenuPanel` since visual-parity Task 5). Grouped in this one file per the
  * task's own "Files" list (no separate toolbar spec file is named).
  */
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
@@ -68,199 +69,95 @@ function ctx(overrides: Partial<ActionContext> = {}): ActionContext {
   };
 }
 
-describe("ContextMenu — arrow navigation wraps and Escape returns focus", () => {
-  it("wraps ArrowUp from the first item to the last and back, and Escape refocuses the invoker", async () => {
-    const trigger = document.createElement("button");
-    document.body.appendChild(trigger);
-    trigger.focus();
-    expect(document.activeElement).toBe(trigger);
+const view = () => ({ fitRange: vi.fn(), fitTimeline: vi.fn() });
 
-    const w = mount(ContextMenu, {
-      attachTo: document.body,
-      props: {
-        open: false,
-        items: ["split", "delete", "copy"],
-        context: ctx(),
-        x: 0,
-        y: 0,
-      },
-    });
+function mountMenu(props: Partial<{ open: boolean; context: ActionContext; x: number; y: number }> = {}) {
+  return mount(ContextMenu, {
+    attachTo: document.body,
+    props: { open: true, context: ctx(), x: 0, y: 0, view: view(), ...props },
+  });
+}
 
-    await w.setProps({ open: true });
+// Visual-parity Task 5: the menu renders the concept's item sets through
+// MenuPanel; the panel's own keyboard/submenu rules live in
+// editorMenuPanel.test.ts, the item sets in editorMenuSets.test.ts.
+describe("ContextMenu — which menu a target opens", () => {
+  it("a clip target opens the clip menu under the clip's name, first item focused", async () => {
+    const w = mountMenu();
     await flushPromises();
-
-    // Opening focuses the first item.
-    expect(document.activeElement?.getAttribute("data-testid")).toBe("editor-context-menu-item-split");
-
-    const menu = w.get('[data-testid="editor-context-menu"]');
-    await menu.trigger("keydown", { key: "ArrowUp" });
-    expect(document.activeElement?.getAttribute("data-testid")).toBe("editor-context-menu-item-copy");
-
-    await menu.trigger("keydown", { key: "ArrowDown" });
-    expect(document.activeElement?.getAttribute("data-testid")).toBe("editor-context-menu-item-split");
-
-    await menu.trigger("keydown", { key: "End" });
-    expect(document.activeElement?.getAttribute("data-testid")).toBe("editor-context-menu-item-copy");
-    await menu.trigger("keydown", { key: "Home" });
-    expect(document.activeElement?.getAttribute("data-testid")).toBe("editor-context-menu-item-split");
-
-    await menu.trigger("keydown", { key: "Escape" });
-    await flushPromises();
-
-    expect(w.emitted("close")).toHaveLength(1);
-    expect(document.activeElement).toBe(trigger);
-
-    trigger.remove();
+    expect(w.get('[data-testid="editor-context-menu-heading"]').text()).toBe("c1");
+    expect(w.get('[data-testid="editor-context-menu"]').attributes("aria-label")).toBe("c1");
+    expect(document.activeElement?.getAttribute("data-testid")).toBe("editor-context-menu-item-goTo");
   });
 
-  it("Enter activates the focused item only when it is enabled", async () => {
-    // "delete" is enabled (a real clip target); "split" at time 0 sits
-    // exactly on the clip boundary and is refused — Enter on it must be a
-    // no-op, not an activation of a disabled action.
-    const w = mount(ContextMenu, {
-      attachTo: document.body,
-      props: {
-        open: true,
-        items: ["split", "delete"],
-        context: ctx({ pointerTarget: { kind: "clip", id: "c1", timeMs: 0 } }),
-        x: 0,
-        y: 0,
-      },
-    });
-    await flushPromises();
-
-    const menu = w.get('[data-testid="editor-context-menu"]');
-    expect(w.get('[data-testid="editor-context-menu-item-split"]').attributes("aria-disabled")).toBe("true");
-
-    await menu.trigger("keydown", { key: "Enter" });
-    expect(w.emitted("activate")).toBeUndefined();
-
-    await menu.trigger("keydown", { key: "ArrowDown" });
-    await menu.trigger("keydown", { key: "Enter" });
-    expect(w.emitted("activate")).toEqual([["delete"]]);
-    expect(w.emitted("close")).toHaveLength(1);
+  it("a lane target opens the gap menu, and no target the editor actions", () => {
+    const lane = mountMenu({ context: ctx({ pointerTarget: { kind: "gap", id: "v1", timeMs: 1_500 } }) });
+    expect(lane.get('[data-testid="editor-context-menu-heading"]').text()).toBe("Timeline gap");
+    expect(lane.find('[data-testid="editor-context-menu-item-lane-close-gap"]').exists()).toBe(true);
+    const none = mountMenu({ context: ctx({ pointerTarget: null }) });
+    expect(none.get('[data-testid="editor-context-menu-heading"]').text()).toBe("Editor actions");
+    expect(none.find('[data-testid="editor-context-menu-item-lane-close-gap"]').exists()).toBe(false);
   });
 
-  it("shows a disabled item's reason as its title", () => {
-    const w = mount(ContextMenu, {
-      props: {
-        open: true,
-        items: ["split"],
-        context: ctx({ pointerTarget: { kind: "clip", id: "c1", timeMs: 0 } }),
-        x: 0,
-        y: 0,
-      },
-    });
-    expect(w.get('[data-testid="editor-context-menu-item-split"]').attributes("title")).toBe(
-      "The playhead is at a clip boundary",
-    );
-  });
-
-  it("clicking an item activates it directly, and an unrelated key is a no-op", async () => {
-    const w = mount(ContextMenu, {
-      props: { open: true, items: ["delete", "copy"], context: ctx(), x: 0, y: 0 },
-    });
-    await w.get('[data-testid="editor-context-menu-item-copy"]').trigger("click");
-    expect(w.emitted("activate")).toEqual([["copy"]]);
-
-    await w.get('[data-testid="editor-context-menu"]').trigger("keydown", { key: "a" });
-    expect(w.emitted("activate")).toEqual([["copy"]]); // unchanged
-  });
-
-  it("Space also activates the focused item", async () => {
-    const w = mount(ContextMenu, {
-      attachTo: document.body,
-      props: { open: true, items: ["delete"], context: ctx(), x: 0, y: 0 },
-    });
-    await flushPromises();
-    await w.get('[data-testid="editor-context-menu"]').trigger("keydown", { key: " " });
-    expect(w.emitted("activate")).toEqual([["delete"]]);
-  });
-
-  it("a click outside the menu closes it WITHOUT returning focus to the invoker", async () => {
-    const trigger = document.createElement("button");
-    document.body.appendChild(trigger);
-    trigger.focus();
-
-    const outside = document.createElement("div");
-    document.body.appendChild(outside);
-
-    const w = mount(ContextMenu, {
-      attachTo: document.body,
-      props: { open: false, items: ["delete"], context: ctx(), x: 0, y: 0 },
-    });
-    // Open via a prop transition (not the initial value) so the open-watcher
-    // actually fires and moves focus into the menu first -- otherwise
-    // `document.activeElement` never leaves `trigger` regardless of what the
-    // outside click does, and the assertion below would prove nothing.
-    await w.setProps({ open: true });
-    await flushPromises();
-    expect(document.activeElement).not.toBe(trigger);
-
-    outside.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-    await flushPromises();
-
-    expect(w.emitted("close")).toHaveLength(1);
-    // The invoker is NOT refocused on an outside click (the user aimed
-    // elsewhere on purpose) -- distinct from Escape's focus-return.
-    expect(document.activeElement).not.toBe(trigger);
-
-    trigger.remove();
-    outside.remove();
-  });
-
-  it("labels the menu by the pointer target's kind, and falls back to a generic label without one", () => {
-    const withTarget = mount(ContextMenu, {
-      props: { open: true, items: ["delete"], context: ctx({ pointerTarget: { kind: "track", id: "v1", timeMs: null } }), x: 0, y: 0 },
-    });
-    expect(withTarget.get('[data-testid="editor-context-menu"]').attributes("aria-label")).toBe("Actions for track");
-
-    const withoutTarget = mount(ContextMenu, {
-      props: { open: true, items: ["delete"], context: ctx({ pointerTarget: null }), x: 0, y: 0 },
-    });
-    expect(withoutTarget.get('[data-testid="editor-context-menu"]').attributes("aria-label")).toBe("Actions");
-  });
-
-  it("ignores keys and stays closed while `open` is false", () => {
-    const w = mount(ContextMenu, {
-      props: { open: false, items: ["delete"], context: ctx(), x: 0, y: 0 },
-    });
+  it("stays closed while `open` is false", () => {
+    const w = mountMenu({ open: false });
     expect(w.find('[data-testid="editor-context-menu"]').exists()).toBe(false);
   });
+});
 
-  // F-M5/GAP-207-adjacent: a right-click near the viewport edge used to
-  // render off-screen (`:style="{ left: x, top: y }"` took the raw pointer
-  // coordinates verbatim), stranding the menu's own lower/right items
-  // unreachable. Measured after nextTick (the TaskScheduleMenu precedent),
-  // once the menu's real rendered size is known.
-  it("clamps the menu fully inside the viewport when opened near the bottom-right edge", async () => {
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
-      new DOMRect(0, 0, 180, 220),
-    );
-    Object.defineProperty(window, "innerWidth", { value: 800, configurable: true });
-    Object.defineProperty(window, "innerHeight", { value: 600, configurable: true });
-
-    const w = mount(ContextMenu, {
-      attachTo: document.body,
-      props: {
-        open: true,
-        items: ["split", "delete", "copy"],
-        context: ctx(),
-        x: 790, // viewport width (800) - 10
-        y: 590, // viewport height (600) - 10
-      },
-    });
+describe("ContextMenu — reasons, focus and close", () => {
+  it("a disabled item keeps its reason as its title and in the hint, and does not close the menu", async () => {
+    const w = mountMenu({ context: ctx({ pointerTarget: { kind: "clip", id: "c1", timeMs: 0 } }) });
     await flushPromises();
+    const split = w.get('[data-testid="editor-context-menu-item-split"]');
+    expect(split.attributes("aria-disabled")).toBe("true");
+    expect(split.attributes("title")).toBe("The playhead is at a clip boundary");
+    await split.trigger("click");
+    expect(w.get('[data-testid="editor-context-menu-hint"]').text()).toBe("The playhead is at a clip boundary");
+    expect(w.emitted("close")).toBeUndefined();
+  });
 
-    const root = w.get('[data-testid="editor-context-menu-root"]').element as HTMLElement;
-    const left = Number.parseFloat(root.style.left);
-    const top = Number.parseFloat(root.style.top);
-    expect(left).toBeGreaterThanOrEqual(0);
-    expect(top).toBeGreaterThanOrEqual(0);
-    expect(left + 180).toBeLessThanOrEqual(800);
-    expect(top + 220).toBeLessThanOrEqual(600);
+  it("Escape closes and returns focus to what had focus when it opened", async () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+    const w = mountMenu({ open: false });
+    await w.setProps({ open: true });
+    await flushPromises();
+    expect(document.activeElement).not.toBe(trigger);
+    await w.get('[data-testid="editor-context-menu"]').trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(w.emitted("close")).toHaveLength(1);
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
+  });
 
-    vi.restoreAllMocks();
+  it("a click outside closes it without returning focus", async () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+    const w = mountMenu({ open: false });
+    await w.setProps({ open: true });
+    await flushPromises();
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    await flushPromises();
+    expect(w.emitted("close")).toHaveLength(1);
+    expect(document.activeElement).not.toBe(trigger);
+    trigger.remove();
+  });
+
+  it("the timeline's view changes reach the items (Fit this clip, Fit timeline)", async () => {
+    const ops = view();
+    const clipMenu = mount(ContextMenu, { attachTo: document.body, props: { open: true, context: ctx(), x: 0, y: 0, view: ops } });
+    await clipMenu.get('[data-testid="editor-context-menu-item-fitClip"]').trigger("click");
+    expect(ops.fitRange).toHaveBeenCalledWith(0, 1_000);
+    expect(clipMenu.emitted("close")).toHaveLength(1);
+    const lane = mount(ContextMenu, {
+      attachTo: document.body,
+      props: { open: true, context: ctx({ pointerTarget: null }), x: 0, y: 0, view: ops },
+    });
+    await lane.get('[data-testid="editor-context-menu-item-lane-fit"]').trigger("click");
+    expect(ops.fitTimeline).toHaveBeenCalledTimes(1);
   });
 });
 

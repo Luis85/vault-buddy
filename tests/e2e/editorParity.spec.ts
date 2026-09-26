@@ -28,6 +28,59 @@ test.describe("parity 1600x1000", () => {
   });
 });
 
+// Task 5 (screen 03, concept spec §8): the clip context menu through the
+// one MenuPanel.
+test.describe("parity 1600x1000: the clip context menu (screen 03)", () => {
+  test("right-clicking c2 opens its 282px menu with the concept's items", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("clip-c2").click({ button: "right" });
+    const menu = page.getByTestId("editor-context-menu");
+    await expect(menu).toBeVisible();
+    await page.screenshot({ path: "test-results/parity/built-03-context-menu.png" });
+    await composite(page, "03-context-menu.png", "test-results/parity/built-03-context-menu.png", "vs-03-context-menu");
+
+    expect(Math.abs((await box(page, "editor-context-menu")).width - 282)).toBeLessThanOrEqual(1);
+    await expect(page.getByTestId("editor-context-menu-heading")).toHaveText("Create a project");
+    const items = menu.locator('[role^="menuitem"]');
+    await expect(items.first()).toHaveText("Go to this clip");
+    await expect(menu.locator(".danger", { hasText: "Delete · leave gap" })).toHaveCount(1);
+    const count = await items.count();
+    expect(count).toBeGreaterThan(10);
+    for (let i = 0; i < count; i += 1) await expect(items.nth(i).locator("svg").first()).toBeAttached();
+    // The panel stays fully inside the window (clamped 8px in).
+    const b = await box(page, "editor-context-menu");
+    expect(b.x).toBeGreaterThanOrEqual(8);
+    expect(b.y + b.height).toBeLessThanOrEqual(1000 - 8 + 1);
+  });
+});
+
+// Review focus 4: the menu without a mouse, in a real browser.
+test.describe("the context menu from the keyboard", () => {
+  test("Shift+F10 opens it; → and Escape walk a submenu; Escape returns focus to the clip", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    const clip = page.getByTestId("clip-c2");
+    await clip.focus();
+    await page.keyboard.press("Shift+F10");
+    await expect(page.getByTestId("editor-context-menu-item-goTo")).toBeFocused();
+
+    const speed = page.getByTestId("editor-context-menu-item-speed");
+    for (let i = 0; i < 20 && !(await speed.evaluate((el) => el === document.activeElement)); i += 1) {
+      await page.keyboard.press("ArrowDown");
+    }
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByTestId("editor-context-menu-submenu")).toBeVisible();
+    await expect(page.getByTestId("editor-context-menu-item-speed-0.25")).toBeFocused();
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("editor-context-menu-submenu")).toHaveCount(0);
+    await expect(speed).toBeFocused();
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("editor-context-menu")).toHaveCount(0);
+    await expect(clip).toBeFocused();
+  });
+});
+
 test.describe("parity 960x640 (12-compact)", () => {
   test("frame: header 52, preview header 44, transport 40, timeline 270, status 23", async ({ page }) => {
     await openParity(page, { width: 960, height: 640 }, { invitation: false });

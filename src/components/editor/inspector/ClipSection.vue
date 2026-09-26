@@ -32,12 +32,13 @@
  * on the revision any more, which remounted the section — discarding the
  * user's in-progress keystrokes and focus — on every unrelated command.
  */
-import { computed } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 
 import type { InspectorDraft } from "../../../composables/useInspectorDraft";
 import { numberField, textField, useInspectorDraft } from "../../../composables/useInspectorDraft";
 import { baseActionContext } from "../../../editor/actionContext";
 import { commandFor, resolveActions } from "../../../editor/actions";
+import { clipNameFocus } from "../../../editor/revealBus";
 import { clipOutputDuration } from "../../../editor/timeMap";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -154,6 +155,23 @@ function onFieldInput(event: Event, field: FieldRow) {
   field.draft.draft.value = (event.target as HTMLInputElement).value;
 }
 
+/** The clip menu's "Rename…" (visual-parity Task 5): focus this clip's
+ * name field when the request names it. */
+const sectionRoot = ref<HTMLElement | null>(null);
+watch(
+  clipNameFocus,
+  (id) => {
+    if (id === null || id !== clip.value?.id) return;
+    clipNameFocus.value = null;
+    void nextTick(() => {
+      const input = sectionRoot.value?.querySelector<HTMLInputElement>('[data-testid="clip-section-name"]');
+      input?.focus();
+      input?.select();
+    });
+  },
+  { immediate: true },
+);
+
 // ---- Earlier / Later --------------------------------------------------
 // The SAME `actions.ts` registry the timeline toolbar and context menu
 // read (`baseActionContext`, the `PreviewToolbar`/`TimelineToolbar`
@@ -182,6 +200,7 @@ function reorderClass(direction: "earlier" | "later"): string {
 <template>
   <div
     v-if="drafts && clip"
+    ref="sectionRoot"
     data-testid="clip-section"
     class="flex flex-col gap-2"
   >

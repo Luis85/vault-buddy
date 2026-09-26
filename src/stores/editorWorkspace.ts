@@ -42,6 +42,7 @@ import { markRaw, ref, shallowRef, watch } from "vue";
 import { createPanelControls, TIMELINE_DEFAULT_HEIGHT } from "../editor/panelLayout";
 import type { EditorPort } from "../editor/port";
 import { createTauriEditorPort } from "../editor/port";
+import { fitZoom, msToX, TRACK_LABEL_WIDTH_PX } from "../editor/timelineLayout";
 import type { DeleteMode, Selected, Theme, Workspace } from "../editorTypes";
 import { logWarning } from "../logging";
 import { toEditorError, useEditorProjectStore } from "./editorProject";
@@ -380,6 +381,29 @@ function createMutators(f: WorkspaceFields, persist: () => void, getDurationMs: 
   };
 }
 
+/** The concept's fitted-range framing (`goToSelection(true)`): the lanes
+ * keep an 80 px margin, and the range starts 25 px in from their left. */
+const RANGE_MARGIN_PX = 80;
+const RANGE_LEAD_PX = 25;
+
+/** "Fit this clip" / "Fit selection" (visual-parity Task 5): zoom so the
+ * range fills the visible lanes, and scroll it into view — a view change
+ * only, never an edit. Returns the new scroll offset, which the timeline
+ * applies to its scroller (the store cannot reach the element). */
+function createRangeZoom(f: WorkspaceFields, persist: () => void) {
+  return {
+    zoomToRange(startMs: number, endMs: number, viewportPx: number): number {
+      const lanesPx = viewportPx - TRACK_LABEL_WIDTH_PX - RANGE_MARGIN_PX;
+      const zoom = clamp(fitZoom(endMs - startMs, lanesPx), ZOOM_RANGE);
+      const left = Math.max(0, Math.round(msToX(startMs, zoom) - RANGE_LEAD_PX));
+      f.timelineZoom.value = zoom;
+      f.timelineScrollLeft.value = left;
+      persist();
+      return left;
+    },
+  };
+}
+
 export const useEditorWorkspaceStore = defineStore("editorWorkspace", () => {
   // `markRaw`/`shallowRef`, the `editorProject` store's own precedent: this
   // holds no state worth making reactive, and proxying a test double's
@@ -453,6 +477,7 @@ export const useEditorWorkspaceStore = defineStore("editorWorkspace", () => {
     hydrate,
     persist,
     ...mutators,
+    ...createRangeZoom(fields, persist),
     ...panels,
   };
 });

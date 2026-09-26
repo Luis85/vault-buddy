@@ -32,6 +32,7 @@ import { lockedReason, NO_PROJECT } from "./actionMeta";
 import type { ActionContext, Verdict } from "./actionTargets";
 import { clipSpanOf, lockedTrackName, OK } from "./actionTargets";
 import type { AddEffectCommand } from "./editorCommandTypes";
+import { fieldsFor } from "./effectFields";
 import { clipIsActive, sourceAt } from "./timeMap";
 
 /** The default cue length, in OUTPUT ms. */
@@ -130,4 +131,28 @@ export function selectedEffectOf(
   const effect = project.effects.find((e) => e.id === selected.id);
   if (!effect || selectionClipIds.length !== 1 || selectionClipIds[0] !== effect.clip_id) return null;
   return effect;
+}
+
+/** How much later "Duplicate annotation" places its copy. */
+const DUPLICATE_OFFSET_MS = 500;
+
+/** A copy of a cue for the cue menu's "Duplicate annotation" (visual-parity
+ * Task 5): the same cue, `DUPLICATE_OFFSET_MS` later but still inside its clip's
+ * source range, carrying every field its kind has (`effectFields.ts`). */
+export function duplicateCueCommand(effect: Effect, clip: Clip): AddEffectCommand {
+  const length = effect.end_ms - effect.start_ms;
+  const latest = clip.out_ms - length;
+  const startMs = Math.max(clip.in_ms, Math.min(effect.start_ms + DUPLICATE_OFFSET_MS, latest));
+  const props: Record<string, unknown> = {};
+  for (const { key } of fieldsFor(effect.kind)) {
+    if (effect[key] !== undefined) props[key] = effect[key];
+  }
+  return {
+    kind: "addEffect",
+    clipId: clip.id,
+    effectKind: effect.kind,
+    startMs,
+    endMs: startMs + length,
+    props,
+  } as AddEffectCommand;
 }

@@ -89,6 +89,7 @@ import {
   primaryTargetClip,
   requireUnlockedTargetClip,
   targetClipIds,
+  targetClips,
   targetGroupId,
   targetTrackId,
 } from "./actionTargets";
@@ -385,10 +386,7 @@ function buildCut(ctx: ActionContext): EditorCommand {
  */
 function buildDuplicate(ctx: ActionContext): EditorCommand {
   const ids = targetClipIds(ctx);
-  const project = ctx.project as Project;
-  const targetClips = ids
-    .map((id) => project.clips.find((c) => c.id === id))
-    .filter((c): c is Clip => c !== undefined);
+  const clips = targetClips(ctx);
   // Task 20's own carried finding: `resolveClipMutation` only checks
   // `targetClipIds(ctx).length > 0` -- it never confirms those ids still
   // RESOLVE against `ctx.project.clips`. A stale id (a delete landing from
@@ -400,10 +398,9 @@ function buildDuplicate(ctx: ActionContext): EditorCommand {
   // `0` at least fails Rust's own overlap/range validation cleanly instead
   // of shipping a non-finite number over IPC.
   const offsetMs =
-    targetClips.length === 0
+    clips.length === 0
       ? 0
-      : Math.max(...targetClips.map((c) => clipOutputEnd(clipSpanOf(c)))) -
-        Math.min(...targetClips.map((c) => c.start_ms));
+      : Math.max(...clips.map((c) => clipOutputEnd(clipSpanOf(c)))) - Math.min(...clips.map((c) => c.start_ms));
   return { kind: "duplicateClips", clipIds: ids, offsetMs };
 }
 

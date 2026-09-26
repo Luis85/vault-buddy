@@ -368,8 +368,10 @@ describe("TimelineView — context menu (right-click and Shift+F10)", () => {
 
     await w.get('[data-testid="timeline-toolbar-more"]').trigger("click");
     expect(w.find('[data-testid="editor-context-menu-root"]').exists()).toBe(true);
-    // Nothing selected: the selection-scoped Delete says why it cannot run.
-    expect(w.get('[data-testid="editor-context-menu-item-delete"]').attributes("aria-disabled")).toBe("true");
+    // Nothing selected (visual-parity Task 5): the editor actions, at the
+    // playhead; Paste says why it cannot run.
+    expect(w.get('[data-testid="editor-context-menu-heading"]').text()).toBe("Editor actions");
+    expect(w.get('[data-testid="editor-context-menu-item-paste"]').attributes("title")).toBe("Clipboard is empty");
     await w.get('[data-testid="editor-context-menu"]').trigger("keydown", { key: "Escape" });
 
     useEditorWorkspaceStore().select(["c2"]);
@@ -578,6 +580,53 @@ describe("TimelineView — context menu activation", () => {
     await flushPromises();
 
     expect(executed).toEqual([{ kind: "duplicateClips", clipIds: ["c2"], offsetMs: 1_000 }]);
+  });
+});
+
+// Visual-parity Task 5: the lane opener, Shift+F10's time and the view-only
+// fit the menu drives.
+describe("TimelineView — the concept's context menus", () => {
+  it("right-click on an empty lane opens that track's gap menu; on a clip, only the clip's", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body, props: { viewportWidth: 1_000 } });
+    await flushPromises();
+
+    await w.get('[data-testid="track-lane-body-v1"]').trigger("contextmenu");
+    expect(w.get('[data-testid="editor-context-menu-heading"]').text()).toBe("Timeline gap");
+    await w.get('[data-testid="editor-context-menu"]').trigger("keydown", { key: "Escape" });
+
+    await w.get('[data-testid="clip-c2"]').trigger("contextmenu");
+    expect(w.get('[data-testid="editor-context-menu-heading"]').text()).toBe("c2");
+  });
+
+  it("Shift+F10 acts at the playhead, not at the clip's edge", async () => {
+    executed = [];
+    await openProject();
+    useEditorWorkspaceStore().setPlayhead(1_700);
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    await w.get('[data-testid="clip-c1"]').trigger("keydown", { key: "F10", shiftKey: true });
+    const split = w.get('[data-testid="editor-context-menu-item-split"]');
+    expect(split.text()).toContain("Split at 00:01.7");
+    expect(split.attributes("aria-disabled")).toBe("false");
+  });
+
+  it("Fit this clip zooms the clip to fill the lanes and scrolls to it, sending no edit", async () => {
+    executed = [];
+    await openProject();
+    const workspace = useEditorWorkspaceStore();
+    const w = mount(TimelineView, { attachTo: document.body, props: { viewportWidth: 1_000 } });
+    await flushPromises();
+
+    await w.get('[data-testid="clip-c1"]').trigger("contextmenu");
+    await w.get('[data-testid="editor-context-menu-item-fitClip"]').trigger("click");
+    // c1 is 500..3000: (1000 - 196 label - 80 margin) / (0.05 px/ms * 2500 ms).
+    expect(workspace.timelineZoom).toBeCloseTo(5.792, 3);
+    expect(workspace.timelineScrollLeft).toBe(120);
+    expect(executed).toEqual([]);
+    expect(w.find('[data-testid="editor-context-menu-root"]').exists()).toBe(false);
   });
 });
 

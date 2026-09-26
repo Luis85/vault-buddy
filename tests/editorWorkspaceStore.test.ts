@@ -679,3 +679,16 @@ describe("editorWorkspace — persist without a session", () => {
     }
   });
 });
+
+// Visual-parity Task 5: the clip menu's "Fit this clip".
+describe("editorWorkspace — zoomToRange", () => {
+  it("zooms the range to fill the visible lane width and scrolls it into view, without an edit", () => {
+    const ws = useEditorWorkspaceStore();
+    // 10 s at zoom 1 is 500 px; the lanes get the viewport minus the 196 px
+    // label column and an 80 px margin, and the range starts 25 px in.
+    const scrollLeft = ws.zoomToRange(10_000, 20_000, 776);
+    expect(ws.timelineZoom).toBeCloseTo(1, 5);
+    expect(scrollLeft).toBe(475);
+    expect(ws.timelineScrollLeft).toBe(475);
+  });
+});

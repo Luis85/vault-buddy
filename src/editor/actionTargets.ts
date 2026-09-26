@@ -79,6 +79,14 @@ export function targetClipIds(ctx: ActionContext): string[] {
   return ctx.selectedClipIds;
 }
 
+/** The target clips themselves, in `targetClipIds` order; an id that no
+ * longer resolves (a delete landing from another surface) is dropped. */
+export function targetClips(ctx: ActionContext): Clip[] {
+  return targetClipIds(ctx)
+    .map((id) => clipById(ctx.project, id))
+    .filter((c): c is Clip => c !== null);
+}
+
 /** The first locked track among the given clips' own tracks, by name —
  * `null` when none of them sit on a locked track. Mirrors
  * `core::editor::commands::clips::ensure_unlocked`'s own message shape

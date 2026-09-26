@@ -81,7 +81,7 @@ const props = defineProps<{
   trackOrder: string[];
 }>();
 const emit = defineEmits<{
-  (e: "context-menu", payload: { clip: Clip; clientX: number; clientY: number }): void;
+  (e: "context-menu", payload: { clip: Clip; clientX: number; clientY: number; atPlayhead?: boolean }): void;
 }>();
 
 const editorProject = useEditorProjectStore();
@@ -334,7 +334,7 @@ function onKeydown(event: KeyboardEvent) {
   if (isContextMenuShortcut(event)) {
     event.preventDefault();
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    emit("context-menu", { clip: props.clip, clientX: rect.left, clientY: rect.bottom });
+    emit("context-menu", { clip: props.clip, clientX: rect.left, clientY: rect.bottom, atPlayhead: true });
     return;
   }
   if (event.key === "Enter" || event.key === " ") {

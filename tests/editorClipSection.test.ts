@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import ClipSection from "../src/components/editor/inspector/ClipSection.vue";
 import { EditorPortError } from "../src/editor/port";
+import { clipNameFocus } from "../src/editor/revealBus";
 import type { Asset, Clip, EditorOpenResult, EditorSnapshot, Project, Track } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
@@ -120,6 +121,24 @@ describe("ClipSection — multi/no selection", () => {
 
     expect(w.find('[data-testid="clip-section-multi"]').exists()).toBe(true);
     expect(w.find('[data-testid="clip-section"]').exists()).toBe(false);
+  });
+});
+
+// Visual-parity Task 5: the clip menu's "Rename…" focuses the name field
+// of the section showing THAT clip; another clip's section ignores it.
+describe("ClipSection — a focus request from the clip menu", () => {
+  it("focuses and selects the name field when the request names this clip, and clears it", async () => {
+    await openProject();
+    const w = mount(ClipSection, { attachTo: document.body, props: { clipIds: ["c1"] } });
+    clipNameFocus.value = "other";
+    await flushPromises();
+    expect(document.activeElement?.getAttribute("data-testid")).not.toBe("clip-section-name");
+    expect(clipNameFocus.value).toBe("other");
+
+    clipNameFocus.value = "c1";
+    await flushPromises();
+    expect(document.activeElement).toBe(w.get('[data-testid="clip-section-name"]').element);
+    expect(clipNameFocus.value).toBeNull();
   });
 });
 
