@@ -164,16 +164,18 @@ mod tests {
             // (an elevated process, or Developer Mode on). A CI/dev account
             // without either gets ERROR_PRIVILEGE_NOT_HELD (raw OS error
             // 1314) — an environment limitation, not a failure of the
-            // security property this test guards. Skip with a SKIP line (shown
-            // under --nocapture, as test stderr is) rather than silently passing (the screen crate's render round-trip tests
-            // use the same posture when ffmpeg is absent) — any OTHER error
-            // still panics, since that would be a real regression.
+            // security property this test guards. Skip with a SKIP line
+            // (`announce_skip`, shown in every run, past libtest's output
+            // capture) rather than silently passing (the screen crate's
+            // render round-trip tests use the same posture when ffmpeg is
+            // absent) — any OTHER error still panics, since that would be a
+            // real regression.
             if let Err(e) = std::os::windows::fs::symlink_dir(outside.path(), &link) {
                 if e.raw_os_error() == Some(1314) {
-                    eprintln!(
-                        "SKIP: a_symlinked_capture_folder_is_refused_before_anything_is_created \
+                    crate::editor::test_announce::announce_skip(
+                        "a_symlinked_capture_folder_is_refused_before_anything_is_created \
                          — symlink_dir needs SeCreateSymbolicLinkPrivilege (Developer Mode or an \
-                         elevated process); this account lacks it (OS error 1314)"
+                         elevated process); this account lacks it (OS error 1314)",
                     );
                     return;
                 }

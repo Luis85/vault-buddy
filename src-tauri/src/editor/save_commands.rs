@@ -144,7 +144,19 @@ pub(crate) fn session_save_lock(
     state: &EditorState,
     session_id: &str,
 ) -> Result<Arc<Mutex<()>>, EditorError> {
+    session_save_lock_observed(state, session_id, || {})
+}
+
+/// `session_save_lock` with `past_check` run between the first check and
+/// the insert: the window the race test opens on purpose (hardening Task
+/// 21, T-7), where a 200 ms sleep only hoped the thread had reached it.
+pub(crate) fn session_save_lock_observed(
+    state: &EditorState,
+    session_id: &str,
+    past_check: impl FnOnce(),
+) -> Result<Arc<Mutex<()>>, EditorError> {
     drop(require_session(state, session_id)?);
+    past_check();
     let lock = lock_ignoring_poison(&state.save_locks)
         .entry(session_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(())))

@@ -50,6 +50,10 @@ pub mod session_commands;
 pub mod store_io;
 pub(crate) mod store_sweep;
 pub mod subtitle_commands;
+#[cfg(test)]
+pub(crate) mod test_announce;
+#[cfg(test)]
+pub(crate) mod test_wait;
 pub(crate) mod vault_dir;
 pub mod webcam_commands;
 pub mod webcam_finish;

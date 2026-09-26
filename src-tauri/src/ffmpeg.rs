@@ -451,9 +451,9 @@ mod tests {
     #[test]
     fn probe_capabilities_reads_the_installed_ffmpeg() {
         let Some(tools) = resolve_working_ffmpeg() else {
-            eprintln!(
-                "SKIP probe_capabilities_reads_the_installed_ffmpeg: no ffmpeg resolved, \
-                 so the capability probe is UNPROVEN in this run"
+            crate::editor::test_announce::announce_skip(
+                "probe_capabilities_reads_the_installed_ffmpeg: no ffmpeg resolved, \
+                 so the capability probe is UNPROVEN in this run",
             );
             return;
         };

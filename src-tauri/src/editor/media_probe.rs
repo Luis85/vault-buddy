@@ -142,7 +142,9 @@ mod tests {
     #[test]
     fn probe_media_reads_real_files_and_ignores_cover_art() {
         if !run_ffmpeg(&["-version"]) {
-            eprintln!("SKIP probe_media_reads_real_files_and_ignores_cover_art: no ffmpeg on PATH");
+            crate::editor::test_announce::announce_skip(
+                "probe_media_reads_real_files_and_ignores_cover_art: no ffmpeg on PATH",
+            );
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -201,7 +203,9 @@ mod tests {
             "attached_pic",
             song.to_str().unwrap(),
         ]) {
-            eprintln!("SKIP the MP3 half: this ffmpeg cannot write an MP3 with a picture");
+            crate::editor::test_announce::announce_skip(
+                "the MP3 half: this ffmpeg cannot write an MP3 with a picture",
+            );
             return;
         }
         let facts = probe_media(&tools(), &song, true).unwrap();
@@ -217,8 +221,8 @@ mod tests {
     #[test]
     fn import_probe_accepts_odd_frames_and_cover_art_only_mp4s() {
         if !run_ffmpeg(&["-version"]) {
-            eprintln!(
-                "SKIP import_probe_accepts_odd_frames_and_cover_art_only_mp4s: no ffmpeg on PATH"
+            crate::editor::test_announce::announce_skip(
+                "import_probe_accepts_odd_frames_and_cover_art_only_mp4s: no ffmpeg on PATH",
             );
             return;
         }

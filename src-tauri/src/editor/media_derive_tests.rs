@@ -1,6 +1,8 @@
 //! `media_derive.rs`'s tests: a real tempdir project and session. The
 //! ffmpeg round trips run the user-installed ffmpeg and SKIP VISIBLY
-//! without it (`eprintln!("SKIP: …")`) — a skip is not a pass.
+//! without it (`test_announce::announce_skip`, which writes past libtest's
+//! output capture — an `eprintln!` was shown only under `--nocapture`) — a
+//! skip is not a pass.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
@@ -88,7 +90,7 @@ fn no_ffmpeg() -> Option<String> {
 fn installed_ffmpeg(test: &str) -> Option<String> {
     let found = crate::ffmpeg::resolve_working_ffmpeg().map(|t| t.ffmpeg);
     if found.is_none() {
-        eprintln!("SKIP: {test} needs ffmpeg on PATH");
+        crate::editor::test_announce::announce_skip(&format!("{test} needs ffmpeg on PATH"));
     }
     found
 }
@@ -483,19 +485,28 @@ fn thumbnail_round_trip_through_real_ffmpeg() {
     assert_eq!(end, cache.join("pic-1750.jpg"));
 }
 
-/// A stand-in "ffmpeg" that ignores its arguments and runs for 30 s — the
-/// long decode a closing session must be able to stop.
-fn slow_tool(dir: &Path) -> String {
+/// A stand-in "ffmpeg" that ignores its arguments, writes `<dir>/spawned`
+/// the moment it runs and then runs for 30 s — the long decode a closing
+/// session must be able to stop. Returns the program and that marker.
+fn slow_tool(dir: &Path) -> (String, PathBuf) {
+    let marker = dir.join("spawned");
     let (name, body) = if cfg!(windows) {
         (
             "slow.cmd",
             // An ABSOLUTE ping: a bare `ping` was not found by cmd.exe under
             // `tool_command`'s augmented PATH on the dev host (docs/Gaps.md
             // GAP-177).
-            "@\"%SystemRoot%\\System32\\PING.EXE\" -n 30 127.0.0.1 >nul\r\n",
+            format!(
+                "@type nul > \"{}\"\r\n\
+                 @\"%SystemRoot%\\System32\\PING.EXE\" -n 30 127.0.0.1 >nul\r\n",
+                marker.display()
+            ),
         )
     } else {
-        ("slow.sh", "#!/bin/sh\nsleep 30\n")
+        (
+            "slow.sh",
+            format!("#!/bin/sh\n: > '{}'\nsleep 30\n", marker.display()),
+        )
     };
     let path = dir.join(name);
     std::fs::write(&path, body).unwrap();
@@ -504,7 +515,21 @@ fn slow_tool(dir: &Path) -> String {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    path.to_string_lossy().into_owned()
+    (path.to_string_lossy().into_owned(), marker)
+}
+
+/// Wait until `slow_tool`'s child has written its marker: from then on a
+/// cancel is a KILL of a running child, never the pre-spawn check (T-7 —
+/// a 700 ms sleep only hoped the child had started).
+fn wait_until_spawned(marker: &Path) {
+    let started = std::time::Instant::now();
+    while !marker.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "the stand-in ffmpeg never ran"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 // "Cancelable" end to end: a decode in flight is a registered `peaks` job
@@ -525,7 +550,7 @@ fn a_closing_session_cancels_a_running_decode() {
         )],
     );
     std::fs::write(media.join("snd.wav"), b"wav").unwrap();
-    let program = slow_tool(tools.path());
+    let (program, marker) = slow_tool(tools.path());
     let found = move || Some(program.clone());
     let started = std::time::Instant::now();
 
@@ -547,9 +572,9 @@ fn a_closing_session_cancels_a_running_decode() {
             live
         });
         assert!(running, "the decode is a registered, preparing peaks job");
-        // Long enough for the child to be spawned and running, so this is a
-        // KILL, not the pre-spawn check.
-        std::thread::sleep(Duration::from_millis(700));
+        // The child is spawned and running, so this is a KILL, not the
+        // pre-spawn check.
+        wait_until_spawned(&marker);
         lock_ignoring_poison(&state.jobs).cancel_session(SESSION);
         decode.join().unwrap()
     });
@@ -603,7 +628,7 @@ fn discarding_a_project_mid_render_stops_the_render() {
         )],
     );
     std::fs::write(media.join("pic.mp4"), b"mp4").unwrap();
-    let program = slow_tool(tools.path());
+    let (program, marker) = slow_tool(tools.path());
     let found = move || Some(program.clone());
     let started = std::time::Instant::now();
 
@@ -614,8 +639,8 @@ fn discarding_a_project_mid_render_stops_the_render() {
                 thumbnail_in(&state, root.path(), &req("pic"), 0, &found)
             })
             .unwrap();
-        // Long enough for the child to be running: this is a KILL.
-        std::thread::sleep(Duration::from_millis(700));
+        // The child is running: this is a KILL.
+        wait_until_spawned(&marker);
         let discard = close_in(
             &state,
             root.path(),

@@ -104,7 +104,7 @@ fn a_link_wearing_a_part_name_or_standing_in_for_media_is_kept() {
         .unwrap()
         .to_path_buf();
     if !dir_link(outside.path(), &project.join("media")) {
-        eprintln!("SKIP: this host cannot create a directory link");
+        crate::editor::test_announce::announce_skip("this host cannot create a directory link");
         return;
     }
     sweep_project_leftovers(root.path(), later(SystemTime::now()));
@@ -117,7 +117,7 @@ fn a_link_wearing_a_part_name_or_standing_in_for_media_is_kept() {
     let media = project_sub(other.path(), "media");
     let link = media.join(".asset-b2.mp4.part");
     if !file_link(&precious, &link) {
-        eprintln!("SKIP: this host cannot create a file symlink");
+        crate::editor::test_announce::announce_skip("this host cannot create a file symlink");
         return;
     }
     sweep_project_leftovers(other.path(), later(SystemTime::now()));
@@ -171,7 +171,7 @@ fn a_linked_job_directory_is_kept_with_everything_behind_it() {
     write(&outside.path().join("keep.txt"));
     let jobs = project_sub(root.path(), "jobs");
     if !dir_link(outside.path(), &jobs.join("job-1")) {
-        eprintln!("SKIP: this host cannot create a directory link");
+        crate::editor::test_announce::announce_skip("this host cannot create a directory link");
         return;
     }
     let report = sweep_project_leftovers(root.path(), later(SystemTime::now()));
@@ -194,7 +194,7 @@ fn a_linked_cache_folder_is_kept_with_everything_in_it() {
         .unwrap()
         .to_path_buf();
     if !dir_link(outside.path(), &project.join("cache")) {
-        eprintln!("SKIP: this host cannot create a directory link");
+        crate::editor::test_announce::announce_skip("this host cannot create a directory link");
         return;
     }
     let report = sweep_project_leftovers(root.path(), later(SystemTime::now()));
@@ -218,7 +218,7 @@ fn a_linked_products_folder_is_kept_with_everything_in_it() {
         .unwrap()
         .to_path_buf();
     if !dir_link(outside.path(), &project.join("products")) {
-        eprintln!("SKIP: this host cannot create a directory link");
+        crate::editor::test_announce::announce_skip("this host cannot create a directory link");
         return;
     }
     let report = sweep_project_leftovers(root.path(), later(SystemTime::now()));
@@ -244,7 +244,7 @@ fn a_project_folder_that_is_itself_a_link_is_left_entirely_alone() {
     let store = store_dir(root.path());
     std::fs::create_dir_all(&store).unwrap();
     if !dir_link(outside.path(), &store.join(PROJECT)) {
-        eprintln!("SKIP: this host cannot create a directory link");
+        crate::editor::test_announce::announce_skip("this host cannot create a directory link");
         return;
     }
     let report = sweep_project_leftovers(root.path(), later(SystemTime::now()));

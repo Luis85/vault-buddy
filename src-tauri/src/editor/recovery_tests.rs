@@ -742,12 +742,19 @@ fn session_save_lock_never_leaks_an_entry_for_a_session_dropped_mid_call() {
     let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
     let sid = open.snapshot.session_id.clone();
     let map_guard = lock_ignoring_poison(&state.save_locks);
+    let (past_tx, past_rx) = std::sync::mpsc::channel();
     let result = std::thread::scope(|s| {
         let t = std::thread::Builder::new()
             .name("editor-save-lock-race".into())
-            .spawn_scoped(s, || session_save_lock(&state, &sid).map(|_| ()))
+            .spawn_scoped(s, || {
+                let past = move || past_tx.send(()).unwrap();
+                crate::editor::save_commands::session_save_lock_observed(&state, &sid, past)
+                    .map(|_| ())
+            })
             .unwrap();
-        std::thread::sleep(Duration::from_millis(200));
+        // Past its first check, and (the map guard is held) not yet past
+        // its insert: exactly the window the re-check closes (T-7).
+        past_rx.recv_timeout(Duration::from_secs(10)).unwrap();
         lock_ignoring_poison(&state.sessions).remove(&sid);
         drop(map_guard);
         t.join().unwrap()
@@ -776,8 +783,11 @@ fn keep_and_discard_recovery_wait_for_the_save_lock() {
                     close_in(&state, f.root(), &f.staging(), &sid, disposition)
                 })
                 .unwrap();
-            std::thread::sleep(Duration::from_millis(200));
-            let was_blocked = !close.is_finished() && snapshot_in(&state, &sid).is_ok();
+            // The close holds its clone of the lock: queued behind the
+            // guard, not merely spawned (T-7).
+            let was_blocked = crate::editor::test_wait::wait_for_holders(&state, &sid, 3)
+                && !close.is_finished()
+                && snapshot_in(&state, &sid).is_ok();
             drop(guard);
             (was_blocked, close.join().unwrap())
         });

@@ -197,10 +197,10 @@ fn remove_project_never_follows_a_symlink() {
     {
         if let Err(e) = std::os::windows::fs::symlink_file(&precious, &link) {
             if e.raw_os_error() == Some(1314) {
-                eprintln!(
-                    "SKIP: remove_project_never_follows_a_symlink — symlink_file needs \
+                crate::editor::test_announce::announce_skip(
+                    "remove_project_never_follows_a_symlink — symlink_file needs \
                      SeCreateSymbolicLinkPrivilege (Developer Mode or an elevated process); \
-                     this account lacks it (OS error 1314)"
+                     this account lacks it (OS error 1314)",
                 );
                 return;
             }
@@ -242,10 +242,10 @@ fn remove_project_refuses_a_symlinked_project_directory_itself() {
     {
         if let Err(e) = std::os::windows::fs::symlink_dir(&real_dir, &link) {
             if e.raw_os_error() == Some(1314) {
-                eprintln!(
-                    "SKIP: remove_project_refuses_a_symlinked_project_directory_itself — \
+                crate::editor::test_announce::announce_skip(
+                    "remove_project_refuses_a_symlinked_project_directory_itself — \
                      symlink_dir needs SeCreateSymbolicLinkPrivilege (Developer Mode or an \
-                     elevated process); this account lacks it (OS error 1314)"
+                     elevated process); this account lacks it (OS error 1314)",
                 );
                 return;
             }
@@ -457,7 +457,9 @@ fn read_bounded_never_follows_a_link() {
     std::fs::write(&outside, b"[]").unwrap();
     let link = root.path().join("products.json");
     if !symlink_file(&outside, &link) {
-        eprintln!("SKIP: this host cannot create a symlink; the no-follow read did not run");
+        crate::editor::test_announce::announce_skip(
+            "this host cannot create a symlink; the no-follow read did not run",
+        );
         return;
     }
     assert!(read_bounded(&link, 1024).is_err());
@@ -548,7 +550,7 @@ fn remove_dir_no_follow_refuses_a_link_at_the_top() {
     std::fs::write(precious.join("keep.txt"), b"keep").unwrap();
     let link = root.path().join(".proj1.importing");
     if !dir_link(&precious, &link) {
-        eprintln!("SKIP: this host cannot create a directory link");
+        crate::editor::test_announce::announce_skip("this host cannot create a directory link");
         return;
     }
     remove_dir_no_follow(&link).expect_err("a link at the top is refused");

@@ -541,7 +541,9 @@ fn the_production_prober_measures_a_real_silent_video() {
             .is_ok_and(|s| s.success())
     };
     if !ffmpeg_ok(&["-version"]) {
-        eprintln!("SKIP the_production_prober_measures_a_real_silent_video: no ffmpeg on PATH");
+        crate::editor::test_announce::announce_skip(
+            "the_production_prober_measures_a_real_silent_video: no ffmpeg on PATH",
+        );
         return;
     }
     let (a, session_id, project_id) = machine_a();

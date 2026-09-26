@@ -641,8 +641,8 @@ fn concurrent_saves_on_one_session_serialize_and_leave_persisted_revision_matchi
         // threads are joined -- if this ever panics before A is released
         // and joined, `thread::scope` would otherwise deadlock waiting to
         // join a thread parked forever on `proceed.recv()`.
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        let b_was_still_blocked = !b.is_finished();
+        let b_was_still_blocked =
+            crate::editor::test_wait::wait_for_holders(&state, &sid, 3) && !b.is_finished();
 
         // Let A finish; only then can B proceed.
         proceed_tx.send(()).unwrap();
@@ -860,8 +860,8 @@ fn discard_project_waits_for_an_in_flight_save_rather_than_racing_it() {
         // Read the flag BEFORE unblocking the save, assert only AFTER both
         // threads are joined -- the same deadlock-avoidance ordering as the
         // concurrent-saves test above.
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        let close_was_still_blocked = !close.is_finished();
+        let close_was_still_blocked =
+            crate::editor::test_wait::wait_for_holders(&state, &sid, 3) && !close.is_finished();
 
         proceed_tx.send(()).unwrap();
         let save_result = save.join().unwrap();

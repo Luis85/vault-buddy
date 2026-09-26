@@ -251,7 +251,9 @@ fn a_symlink_wearing_a_part_name_is_left_alone() {
     #[cfg(not(windows))]
     let made = std::os::unix::fs::symlink(&outside, &link);
     if let Err(e) = made {
-        eprintln!("SKIP a_symlink_wearing_a_part_name_is_left_alone: cannot create a symlink: {e}");
+        crate::editor::test_announce::announce_skip(&format!(
+            "a_symlink_wearing_a_part_name_is_left_alone: cannot create a symlink: {e}"
+        ));
         return;
     }
     let opened = f.open(&FakeIo::default());
@@ -294,7 +296,9 @@ fn a_link_standing_in_for_the_takes_folder_or_a_part_is_left_alone() {
         .join(PROJECT)
         .join("takes");
     if !dir_link(outside.path(), &takes) {
-        eprintln!("SKIP a_link_standing_in_for_the_takes_folder_or_a_part_is_left_alone: no link");
+        crate::editor::test_announce::announce_skip(
+            "a_link_standing_in_for_the_takes_folder_or_a_part_is_left_alone: no link",
+        );
         return;
     }
     let opened = f.open(&FakeIo::default());

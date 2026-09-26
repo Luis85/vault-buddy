@@ -308,7 +308,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         stage(dir.path(), "A", Some("proj-gone"));
         if !block_sidecar_rewrite(dir.path(), "A") {
-            eprintln!("SKIP: this host writes through a read-only folder; the branch did not run");
+            crate::editor::test_announce::announce_skip(
+                "this host writes through a read-only folder; the branch did not run",
+            );
             return;
         }
 
@@ -363,7 +365,9 @@ mod tests {
         let precious = outside.path().join("precious.mp4");
         std::fs::write(&precious, b"not ours").unwrap();
         if !symlink_file(&precious, &dir.path().join(staging::webcam_file_name("C"))) {
-            eprintln!("SKIP: this host cannot create a symlink; the no-follow half did not run");
+            crate::editor::test_announce::announce_skip(
+                "this host cannot create a symlink; the no-follow half did not run",
+            );
             return;
         }
         discard_staged_files(dir.path(), "C").expect_err("a symlinked webcam leaf is refused");

@@ -431,13 +431,15 @@ fn a_workspace_save_waits_for_a_discard_in_progress_and_then_finds_the_session_g
     let (saved, early) = std::thread::scope(|scope| {
         let saving = scope
             .spawn(|| save_workspace_in(&f.state, f.root(), &f.session, serde_json::json!({})));
-        std::thread::sleep(Duration::from_millis(200));
+        // The save holds its clone of the lock: queued behind the discard.
+        let queued = crate::editor::test_wait::wait_for_holders(&f.state, &f.session, 3);
         let early = workspace.exists();
         // What the discard does under that lock: the folder goes, then the
         // session.
         crate::editor::store_io::remove_project(f.root(), &f.project).unwrap();
         lock_ignoring_poison(&f.state.sessions).remove(&f.session);
         drop(discarding);
+        assert!(queued, "the workspace save never queued on the save lock");
         (saving.join().unwrap(), early)
     });
     assert!(

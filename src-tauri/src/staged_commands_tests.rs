@@ -657,7 +657,9 @@ fn a_dangling_pin_that_cannot_be_cleared_refuses_the_discard() {
     stage(&dir, "A", "2026-09-20T14:32:00+02:00");
     crate::editor::project_store::pin_staged(&dir, "A", "proj-gone").unwrap();
     if !block_sidecar_rewrite(&dir, "A") {
-        eprintln!("SKIP: this host writes through a read-only folder; the branch did not run");
+        crate::editor::test_announce::announce_skip(
+            "this host writes through a read-only folder; the branch did not run",
+        );
         return;
     }
 
