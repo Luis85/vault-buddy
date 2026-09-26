@@ -23,6 +23,10 @@
  * own Space is its activation (a focused button would otherwise toggle
  * twice — its native click plus this), an open menu/dialog, and a
  * keystroke a focused timeline clip already claimed (`defaultPrevented`).
+ *
+ * **Frame (visual-parity Task 4, concept spec §4.3):** the bar is one 46px
+ * row (40 in a window 760px tall or less) on `--bg` under a `line` border;
+ * Task 12 restyles what is in it.
  */
 import { onBeforeUnmount, onMounted } from "vue";
 
@@ -84,7 +88,8 @@ function onVolume(event: Event) {
   <div
     :ref="transportTarget"
     data-testid="transport-bar"
-    class="flex flex-wrap items-center gap-2 text-micro text-fg-muted"
+    class="flex shrink-0 items-center gap-2 overflow-hidden border-t border-line bg-app px-[15px] text-micro text-fg-muted"
+    :class="workspace.shortWindow ? 'h-10' : 'h-[46px]'"
   >
     <button
       type="button"

@@ -519,47 +519,20 @@ describe("TimelineView — virtualization", () => {
   });
 });
 
-describe("TimelineView — resize handle (fix round 1, finding 4)", () => {
-  it("sits at the timeline's TOP edge, above the toolbar", async () => {
-    executed = [];
+describe("TimelineView — its height belongs to the frame (visual-parity Task 4)", () => {
+  // The resize handle moved out to the shell's own 8px splitter row
+  // (`TimelineSplitter`, tests/editorSplitter.test.ts), which sits above
+  // the timeline's row -- the top edge, where a drag up grows it. The view
+  // itself fills whatever row height the frame gives it.
+  it("fills its row instead of setting its own height, and draws no handle", async () => {
     await openProject();
     const w = mount(TimelineView);
     await flushPromises();
 
-    // The timeline panel is the last (bottom) row of the whole editor shell,
-    // so a block element's height grows DOWNWARD from a fixed top -- the
-    // handle has to sit at that TOP edge for its own position to move WITH
-    // an upward drag. A handle below the scroll area would move AWAY from
-    // the pointer on every drag (the defect this fix round named).
-    const root = w.get('[data-testid="timeline-view"]').element;
-    const handleIndex = Array.from(root.children).findIndex(
-      (el) => el.getAttribute("data-testid") === "timeline-resize-handle",
-    );
-    const toolbarIndex = Array.from(root.children).findIndex(
-      (el) => el.getAttribute("data-testid") === "timeline-toolbar",
-    );
-    expect(handleIndex).toBeGreaterThanOrEqual(0);
-    expect(handleIndex).toBeLessThan(toolbarIndex);
-  });
-
-  it("dragging UP grows the timeline -- consistent with the handle sitting at the top edge", async () => {
-    executed = [];
-    await openProject();
-    const workspace = useEditorWorkspaceStore();
-    const before = workspace.timelineHeight;
-    const w = mount(TimelineView, { attachTo: document.body });
-    await flushPromises();
-
-    const handle = w.get('[data-testid="timeline-resize-handle"]');
-    await handle.trigger("pointerdown", { clientY: 500, pointerId: 1 });
-    window.dispatchEvent(new PointerEvent("pointermove", { clientY: 440 }));
-    window.dispatchEvent(new PointerEvent("pointerup"));
-    await flushPromises();
-
-    // Dragging UP (a smaller clientY) grows the timeline -- and because the
-    // handle sits at the top edge (the test above), growth moves that same
-    // top edge further up, in the same direction the pointer moved.
-    expect(workspace.timelineHeight).toBeGreaterThan(before);
+    const root = w.get('[data-testid="timeline-view"]');
+    expect(root.attributes("style") ?? "").not.toContain("height");
+    expect(root.classes()).toContain("h-full");
+    expect(w.find('[role="separator"]').exists()).toBe(false);
   });
 });
 

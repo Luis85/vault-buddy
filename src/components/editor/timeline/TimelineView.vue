@@ -9,8 +9,10 @@
  * into it — SCREENS-AND-INTERACTIONS.md §03: "The same actions are reachable
  * from … Shift+F10"), virtualization (`timelineLayout.visibleClips`), the
  * REAL "fit" computation `editorWorkspace.fit()`'s own doc explicitly defers
- * to "a later task that DOES know the timeline's rendered width", and the
- * height resize handle (`editorWorkspace.timelineHeight`).
+ * to "a later task that DOES know the timeline's rendered width". Its
+ * height is the frame's (visual-parity Task 4): it fills the grid row the
+ * shell sizes from `editorWorkspace.timelineHeightPx`, and the resize
+ * handle is the shell's own splitter row above it (`TimelineSplitter`).
  *
  * `viewportWidth` is a TEST-ONLY prop override (the `PreviewToolbar.
  * overflowCount` precedent) — `undefined` in production, where a
@@ -164,24 +166,6 @@ function onFit() {
   if (scrollRef.value) scrollRef.value.scrollLeft = 0;
 }
 
-// ---- resize handle (workspace.timelineHeight) -------------------------------
-
-let resizeStartY = 0;
-let resizeStartHeight = 0;
-function onResizePointerMove(event: PointerEvent) {
-  workspace.setTimelineHeight(resizeStartHeight + (resizeStartY - event.clientY));
-}
-function onResizePointerUp() {
-  window.removeEventListener("pointermove", onResizePointerMove);
-  window.removeEventListener("pointerup", onResizePointerUp);
-}
-function onResizePointerDown(event: PointerEvent) {
-  resizeStartY = event.clientY;
-  resizeStartHeight = workspace.timelineHeight;
-  window.addEventListener("pointermove", onResizePointerMove);
-  window.addEventListener("pointerup", onResizePointerUp);
-}
-
 // ---- the one context menu ----------------------------------------------
 
 const CLIP_CONTEXT_ITEMS: ActionId[] = [
@@ -329,24 +313,8 @@ async function onBelowLanesDrop(event: DragEvent) {
 <template>
   <div
     data-testid="timeline-view"
-    class="flex flex-col gap-1"
-    :style="{ height: `${workspace.timelineHeight}px` }"
+    class="flex h-full min-h-0 flex-col gap-1"
   >
-    <!-- Fix round 1, finding 4: this panel is the LAST (bottom) row of the
-         whole editor shell, so a block element's height grows DOWNWARD from
-         a fixed top edge -- the handle has to sit AT that top edge for a
-         drag to move it the same direction as the pointer. It used to sit
-         below the scroll area, where growing the timeline moved the handle
-         AWAY from an upward drag instead of with it. -->
-    <div
-      data-testid="timeline-resize-handle"
-      role="separator"
-      aria-label="Resize the timeline"
-      aria-orientation="horizontal"
-      class="h-1.5 shrink-0 cursor-row-resize rounded bg-line"
-      @pointerdown="onResizePointerDown"
-    />
-
     <TimelineToolbar
       :more-open="menuOpen && menuTarget === null"
       @fit="onFit"

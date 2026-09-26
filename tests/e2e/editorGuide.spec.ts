@@ -147,7 +147,7 @@ test("the invitation leaves the editor usable and does not take focus", async ({
   // Focus is wherever the page left it — never inside the invitation.
   expect(await invitation.evaluate((el) => el.contains(document.activeElement))).toBe(false);
   // The header behind it still answers.
-  await page.getByTestId("editor-header-library-toggle").click();
-  await expect(page.getByTestId("editor-header-library-toggle")).toHaveAttribute("aria-expanded", "true");
+  await page.getByTestId("editor-header-inspector-toggle").click();
+  await expect(page.getByTestId("editor-header-inspector-toggle")).toHaveAttribute("aria-expanded", "true");
   await expect(invitation).toBeVisible();
 });

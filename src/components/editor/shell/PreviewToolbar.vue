@@ -63,6 +63,13 @@
  * store, so "one-time" is kept here instead: a second pick dismisses the
  * first toast before raising its replacement.
  *
+ * **Frame (visual-parity Task 4).** The row is the preview column's
+ * header: 48px (44 in a window 760px tall or less, `editorWorkspace.
+ * shortWindow`), `--bg` under a `line` border, flush with the column. Its
+ * library/inspector/Focus preview items are `editorWorkspace`'s panel
+ * toggles (the shell wires the emits), real at every width (design D5).
+ * Task 11 restyles the row's contents.
+ *
  * **Review (Task 47; F-42, F18)** is the registry's `render` action: it
  * opens `ReviewDialog` over the selection's output span, or 5 s either side
  * of the playhead (`renderRanges.reviewRange`), which renders that range
@@ -382,7 +389,8 @@ function itemClass(id: ActionId): string {
     data-testid="preview-toolbar"
     role="toolbar"
     aria-label="Preview tools"
-    class="flex h-8 w-full shrink-0 items-center gap-1 overflow-hidden rounded-control border border-line bg-raised px-2 text-micro text-fg-subtle"
+    class="flex w-full shrink-0 items-center gap-1 overflow-hidden border-b border-line bg-app px-3 text-micro text-fg-subtle"
+    :class="editorWorkspace.shortWindow ? 'h-11' : 'h-12'"
     @keydown="onRowKeydown"
   >
     <template

@@ -331,7 +331,7 @@ describe("editorWorkspace — every mutator persists the field it names", () => 
       saveCalls.length = 0;
 
       workspace.setTimelineHeight(5);
-      expect((await settle()).timeline_height).toBe(160);
+      expect((await settle()).timeline_height).toBe(170);
       saveCalls.length = 0;
 
       workspace.setPlaybackRate(10);

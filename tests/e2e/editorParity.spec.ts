@@ -14,24 +14,82 @@ import { box, composite, openParity } from "./parity";
  */
 
 test.describe("parity 1600x1000", () => {
-  // Confirmed failing today (Task 1's RED step): the header renders at 54px,
-  // not 56, and `editor-statusbar` does not exist yet. `test.fail()` marks
-  // that as the EXPECTED result so the suite stays green between tasks —
-  // Task 3 (tokens/frame sizing) and Task 4 (the status bar) turn each
-  // assertion green in turn.
-  // turned green by Task 4 (frame)
-  test.fail(
-    "frame: header 56, library 244, inspector 276, status 25",
-    async ({ page }) => {
-      await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
-      await page.screenshot({ path: "test-results/parity/built-02-workspace.png" });
-      await composite(page, "02-workspace.png", "test-results/parity/built-02-workspace.png", "vs-02-workspace");
-      expect((await box(page, "editor-header")).height).toBeCloseTo(56, 0);
-      expect((await box(page, "editor-shell-library")).width).toBeCloseTo(244, 0);
-      expect((await box(page, "editor-shell-inspector")).width).toBeCloseTo(276, 0);
-      expect((await box(page, "editor-statusbar")).height).toBeCloseTo(25, 0);
-    },
-  );
+  test("frame: header 56, library 244, inspector 276, status 25", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.screenshot({ path: "test-results/parity/built-02-workspace.png" });
+    await composite(page, "02-workspace.png", "test-results/parity/built-02-workspace.png", "vs-02-workspace");
+    expect((await box(page, "editor-header")).height).toBeCloseTo(56, 0);
+    expect((await box(page, "editor-shell-library")).width).toBeCloseTo(244, 0);
+    expect((await box(page, "editor-shell-inspector")).width).toBeCloseTo(276, 0);
+    expect((await box(page, "editor-statusbar")).height).toBeCloseTo(25, 0);
+    // §1.3: the splitter row and the default timeline height.
+    expect((await box(page, "editor-splitter")).height).toBeCloseTo(8, 0);
+    expect((await box(page, "editor-timeline")).height).toBeCloseTo(400, 0);
+  });
+});
+
+test.describe("parity 960x640 (12-compact)", () => {
+  test("frame: header 52, preview header 44, transport 40, timeline 270, status 23", async ({ page }) => {
+    await openParity(page, { width: 960, height: 640 }, { invitation: false });
+    await page.screenshot({ path: "test-results/parity/built-12-compact.png" });
+    await composite(page, "12-compact.png", "test-results/parity/built-12-compact.png", "vs-12-compact");
+    expect((await box(page, "editor-header")).height).toBeCloseTo(52, 0);
+    expect((await box(page, "preview-toolbar")).height).toBeCloseTo(44, 0);
+    expect((await box(page, "transport-bar")).height).toBeCloseTo(40, 0);
+    expect(Math.abs((await box(page, "editor-timeline")).height - 270)).toBeLessThanOrEqual(2);
+    expect((await box(page, "editor-statusbar")).height).toBeCloseTo(23, 0);
+    // §1.4: the library is still a 232px column here; the inspector is a
+    // closed drawer.
+    expect((await box(page, "editor-shell-library")).width).toBeCloseTo(232, 0);
+    await expect(page.getByTestId("editor-shell-inspector")).toBeHidden();
+  });
+
+  // The track label column is 174 at this width (§1.4); Task 17 builds it.
+  test.fixme("the timeline's label column is 174 (Task 17)", async ({ page }) => {
+    await openParity(page, { width: 960, height: 640 }, { invitation: false });
+    expect((await box(page, "timeline-label-column")).width).toBeCloseTo(174, 0);
+  });
+});
+
+/** Activates a preview-toolbar control whether it sits in the row or, at
+ * this width, in its More menu. Task 11 re-points this at the View menu. */
+async function previewTool(page: Page, id: string): Promise<void> {
+  const inline = page.getByTestId(`preview-toolbar-${id}`);
+  if (await inline.isVisible()) {
+    await inline.click();
+    return;
+  }
+  await page.getByTestId("preview-toolbar-more").click();
+  await page.getByTestId("preview-toolbar-more-menu").getByTestId(`preview-toolbar-${id}`).click();
+}
+
+async function collapsed(page: Page, testId: string): Promise<boolean> {
+  const b = await page.getByTestId(testId).boundingBox();
+  return b === null || b.width === 0;
+}
+
+test.describe("D5: the panel toggles work at full width (1600x1000)", () => {
+  test("Focus preview collapses both panels and gives their room to the preview", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    const before = (await box(page, "editor-shell-preview")).width;
+
+    await previewTool(page, "focusPreview");
+
+    await expect.poll(() => collapsed(page, "editor-shell-library")).toBe(true);
+    await expect.poll(() => collapsed(page, "editor-shell-inspector")).toBe(true);
+    expect((await box(page, "editor-shell-preview")).width - before).toBeGreaterThanOrEqual(500);
+  });
+
+  test("the library toggle alone gives the preview the library's 244px", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    const before = (await box(page, "editor-shell-preview")).width;
+
+    await previewTool(page, "toggleLibrary");
+
+    await expect.poll(() => collapsed(page, "editor-shell-library")).toBe(true);
+    await expect(page.getByTestId("editor-shell-inspector")).toBeVisible();
+    expect(Math.abs((await box(page, "editor-shell-preview")).width - before - 244)).toBeLessThanOrEqual(1);
+  });
 });
 
 /** Concept §1.1's surface/brand roles, as `--color-*` root tokens: the

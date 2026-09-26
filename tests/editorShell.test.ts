@@ -32,6 +32,7 @@ beforeEach(() => {
   // test that only incidentally passes at the shared-document's leftover
   // width proves nothing).
   setViewportWidth(1440);
+  setViewportHeight(768);
 });
 
 function snapshot(overrides: Partial<EditorSnapshot> = {}): EditorSnapshot {
@@ -152,8 +153,12 @@ describe("EditorShell — status text", () => {
   });
 });
 
-describe("EditorShell — responsive collapse (SCREENS-AND-INTERACTIONS.md §12)", () => {
-  it("below 1180px the library is a drawer, closed by default, and the header stays visible", async () => {
+function setViewportHeight(height: number) {
+  Object.defineProperty(window, "innerHeight", { writable: true, configurable: true, value: height });
+}
+
+describe("EditorShell — the frame (visual-parity Task 4; design D4, D5)", () => {
+  it("at or below 1080px the inspector is a closed drawer; the header's toggle opens it and the header stays", async () => {
     setViewportWidth(960);
     // `isVisible()` reads `getComputedStyle`, which happy-dom only resolves
     // for a node actually attached to `document` (the `TabGroup.vue`
@@ -162,55 +167,102 @@ describe("EditorShell — responsive collapse (SCREENS-AND-INTERACTIONS.md §12)
     // would make this test pass against BOTH a working and a broken drawer.
     const w = mount(EditorShell, { attachTo: document.body });
 
-    expect(w.find('[data-testid="editor-header"]').exists()).toBe(true);
-    const toggle = w.get('[data-testid="editor-header-library-toggle"]');
+    const toggle = w.get('[data-testid="editor-header-inspector-toggle"]');
     expect(toggle.attributes("aria-expanded")).toBe("false");
-    expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(false);
+    expect(w.get('[data-testid="editor-shell-inspector"]').isVisible()).toBe(false);
+    // The library is still a column at this width.
+    expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(true);
 
     await toggle.trigger("click");
 
     expect(toggle.attributes("aria-expanded")).toBe("true");
-    expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(true);
+    expect(w.get('[data-testid="editor-shell-inspector"]').isVisible()).toBe(true);
     // Opening the drawer must never remove or hide the header — "the route
-    // back" (this task's own Behavior section).
-    expect(w.find('[data-testid="editor-header"]').exists()).toBe(true);
+    // back".
     expect(w.get('[data-testid="editor-header"]').isVisible()).toBe(true);
   });
 
-  it("at or above 1180px there is no drawer toggle — library and inspector are always shown", () => {
-    setViewportWidth(1180);
+  it("at or below 860px the library is a closed drawer too", async () => {
+    setViewportWidth(820);
+    const w = mount(EditorShell, { attachTo: document.body });
+
+    const toggle = w.get('[data-testid="editor-header-library-toggle"]');
+    expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(false);
+    await toggle.trigger("click");
+    expect(toggle.attributes("aria-expanded")).toBe("true");
+    expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(true);
+  });
+
+  it("above 1080px there is no header toggle, and the preview toolbar's library toggle collapses the column", async () => {
+    setViewportWidth(1181);
     const w = mount(EditorShell, { attachTo: document.body });
 
     expect(w.find('[data-testid="editor-header-library-toggle"]').exists()).toBe(false);
     expect(w.find('[data-testid="editor-header-inspector-toggle"]').exists()).toBe(false);
     expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(true);
     expect(w.get('[data-testid="editor-shell-inspector"]').isVisible()).toBe(true);
+    const workspace = w.get('[data-testid="editor-workspace"]');
+    expect(workspace.attributes("style")).toContain(
+      "grid-template-columns: var(--editor-sidebar) minmax(0,1fr) var(--editor-inspector)",
+    );
+
+    await w.get('[data-testid="preview-toolbar-toggleLibrary"]').trigger("click");
+
+    expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(false);
+    expect(workspace.attributes("style")).toContain("grid-template-columns: 0px minmax(0,1fr) var(--editor-inspector)");
+    expect(w.get('[data-testid="preview-toolbar-toggleLibrary"]').attributes("aria-pressed")).toBe("false");
   });
-});
 
-describe("EditorShell — placeholders (later tasks fill these in)", () => {
-  it("renders exactly one preview toolbar row and the timeline/library/inspector regions", () => {
-    const w = mount(EditorShell);
-
-    expect(w.findAll('[data-testid="preview-toolbar"]')).toHaveLength(1);
-    expect(w.find('[data-testid="editor-shell-timeline"]').exists()).toBe(true);
-    expect(w.find('[data-testid="editor-shell-library"]').exists()).toBe(true);
-    expect(w.find('[data-testid="editor-shell-inspector"]').exists()).toBe(true);
-  });
-});
-
-describe("EditorShell — PreviewToolbar's focus-preview (Task 17)", () => {
-  it("collapses both drawers when the toolbar's Focus preview control fires", async () => {
-    setViewportWidth(960); // compact, so the drawer toggles' aria-expanded is observable
+  it("Focus preview collapses both columns at full width", async () => {
+    setViewportWidth(1440);
     const w = mount(EditorShell, { attachTo: document.body });
-
-    await w.get('[data-testid="editor-header-library-toggle"]').trigger("click");
-    expect(w.get('[data-testid="editor-header-library-toggle"]').attributes("aria-expanded")).toBe("true");
 
     await w.get('[data-testid="preview-toolbar-focusPreview"]').trigger("click");
 
-    expect(w.get('[data-testid="editor-header-library-toggle"]').attributes("aria-expanded")).toBe("false");
+    expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(false);
+    expect(w.get('[data-testid="editor-shell-inspector"]').isVisible()).toBe(false);
+    expect(w.get('[data-testid="editor-workspace"]').attributes("style")).toContain(
+      "grid-template-columns: 0px minmax(0,1fr) 0px",
+    );
+  });
+
+  it("Focus preview closes an open drawer", async () => {
+    setViewportWidth(960);
+    const w = mount(EditorShell, { attachTo: document.body });
+
+    await w.get('[data-testid="editor-header-inspector-toggle"]').trigger("click");
+    await w.get('[data-testid="preview-toolbar-focusPreview"]').trigger("click");
+
     expect(w.get('[data-testid="editor-header-inspector-toggle"]').attributes("aria-expanded")).toBe("false");
+  });
+
+  it("the rows are 56 / workspace / 8 / timeline / 25, and 52 / … / 23 in a window 760px tall or less", () => {
+    setViewportHeight(1000);
+    const tall = mount(EditorShell);
+    const tallStyle = tall.get('[data-testid="editor-shell"]').attributes("style");
+    expect(tallStyle).toContain("grid-template-rows: 56px minmax(170px,1fr) 8px var(--timeline) 25px");
+    expect(tallStyle).toContain("--timeline: 400px");
+    tall.unmount();
+
+    setActivePinia(createPinia());
+    setViewportHeight(640);
+    const short = mount(EditorShell);
+    const shortStyle = short.get('[data-testid="editor-shell"]').attributes("style");
+    expect(shortStyle).toContain("grid-template-rows: 52px minmax(160px,1fr) 8px var(--timeline) 23px");
+    expect(shortStyle).toContain("--timeline: 270px");
+  });
+});
+
+describe("EditorShell — regions", () => {
+  it("renders every region of the frame and exactly one preview toolbar row", () => {
+    const w = mount(EditorShell);
+
+    expect(w.findAll('[data-testid="preview-toolbar"]')).toHaveLength(1);
+    const regions = [
+      "editor-header", "editor-shell-library", "editor-shell-preview", "editor-shell-inspector",
+      "editor-splitter", "editor-timeline", "editor-statusbar",
+    ];
+    expect(regions.filter((id) => !w.find(`[data-testid="${id}"]`).exists())).toEqual([]);
   });
 });
 

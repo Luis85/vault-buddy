@@ -53,7 +53,7 @@ test("no horizontal page scroll at 960x640", async ({ page }) => {
   // Measured on `main`, the editor's own scroll container (AGENTS.md's
   // Testing conventions: "Measure the real scroll container") — the
   // retired `editorLayout.spec.ts`'s rule, with the shell's own grid
-  // (library/inspector drawers collapsed at this width, per §12).
+  // (the inspector a closed drawer at this width, concept spec §1.4).
   const overflow = await page.evaluate(() => {
     const m = document.querySelector("main")!;
     return m.scrollWidth - m.clientWidth;
@@ -64,22 +64,45 @@ test("no horizontal page scroll at 960x640", async ({ page }) => {
   ).toBeLessThanOrEqual(0);
 });
 
-test("below 1180px the library toggle is a real drawer control and the header stays on screen", async ({
-  page,
-}) => {
+// Visual-parity Task 4 (design D4, D5; concept spec §1.4): the inspector
+// becomes an overlay drawer at or below 1080px wide, the library at or
+// below 860px. Each drawer toggle is a real control, the drawer opens
+// BELOW the preview header (so the toggles that close it stay reachable),
+// and the header — "the route back" — is never covered.
+test("at or below 1080px the inspector is a real drawer and the header stays on screen", async ({ page }) => {
   await openEditor(page, { width: 960, height: 640 });
 
-  const toggle = page.getByTestId("editor-header-library-toggle");
+  const toggle = page.getByTestId("editor-header-inspector-toggle");
   await expect(toggle).toBeVisible();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  await expect(page.getByTestId("editor-shell-library")).toBeHidden();
+  await expect(page.getByTestId("editor-shell-inspector")).toBeHidden();
+  await expect(page.getByTestId("editor-shell-library")).toBeVisible();
 
   await toggle.click();
 
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByTestId("editor-shell-library")).toBeVisible();
-  // Opening the drawer must never cover or hide the header — "the route
-  // back" (this task's Behavior section).
+  const drawer = page.getByTestId("editor-shell-inspector");
+  await expect(drawer).toBeVisible();
+  expect((await drawer.boundingBox())!.width).toBeCloseTo(276, 0);
+  const toolbar = (await page.getByTestId("preview-toolbar").boundingBox())!;
+  expect((await drawer.boundingBox())!.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height - 1);
+  await expect(page.getByTestId("editor-header")).toBeInViewport();
+});
+
+test("at or below 860px the library is a 250px drawer under the preview header", async ({ page }) => {
+  await openEditor(page, { width: 840, height: 640 });
+
+  const toggle = page.getByTestId("editor-header-library-toggle");
+  await expect(page.getByTestId("editor-shell-library")).toBeHidden();
+  await toggle.click();
+
+  const drawer = page.getByTestId("editor-shell-library");
+  await expect(drawer).toBeVisible();
+  const b = (await drawer.boundingBox())!;
+  expect(b.x).toBeCloseTo(0, 0);
+  expect(b.width).toBeCloseTo(250, 0);
+  const toolbar = (await page.getByTestId("preview-toolbar").boundingBox())!;
+  expect(b.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height - 1);
   await expect(page.getByTestId("editor-header")).toBeInViewport();
 });
 
@@ -109,5 +132,12 @@ for (const size of [
     // stacked) goes back to 1 at every size, as that file's own lower-bound
     // check asked.
     expect(overflow, `the editor column overflowed by ${overflow}px at ${label}`).toBeLessThanOrEqual(1);
+
+    const sideways = await page.evaluate(() => {
+      const m = document.querySelector("main")!;
+      return m.scrollWidth - m.clientWidth;
+    });
+    expect(sideways, `the editor overflowed sideways by ${sideways}px at ${label}`).toBeLessThanOrEqual(0);
+    await expect(page.getByTestId("preview-toolbar")).toHaveCount(1);
   });
 }

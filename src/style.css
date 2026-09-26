@@ -101,6 +101,13 @@
   --editor-inspector: 276px;
   --editor-timeline: 400px;
   --editor-label: 196px;
+  /* The frame at narrower windows (concept spec §1.4, visual-parity Task
+     4): the library column at or below 1080px wide, and the library's
+     overlay drawer at or below 860. */
+  --editor-sidebar-compact: 232px;
+  --editor-library-drawer: 250px;
+  /* The drawers' lift (the concept's `--shadow`). */
+  --editor-shadow: 0 18px 60px #0005;
 }
 
 /* Tutorial editor light theme. The concept's `[data-theme=light]` values,
@@ -112,6 +119,7 @@
    - `hover-subtle`/`track`: no concept counterpart (above). */
 [data-theme="light"] {
   color-scheme: light;
+  --editor-shadow: 0 18px 60px #2b194025;
   --color-fg: #292632;
   --color-fg-secondary: #504b5d;
   --color-fg-muted: #5f5969;

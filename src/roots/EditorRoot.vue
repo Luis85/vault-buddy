@@ -311,8 +311,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <!-- No gutters (visual-parity Task 4): the shell's grid is the whole
+       window; only the no-session lines below keep a margin of their own. -->
   <main
-    class="vb-editor flex h-screen w-screen flex-col gap-3 overflow-y-auto bg-app p-4 text-fg"
+    class="vb-editor flex h-screen w-screen flex-col overflow-y-auto bg-app text-fg"
   >
     <!-- The responsive shell/header (Task 16, F-48), gated on the store's
          own reply matching the request this root drained (the module
@@ -412,13 +414,14 @@ onBeforeUnmount(() => {
          empty or refused open would be a blank window. -->
     <OpenFailureNotice
       v-else-if="openFailure"
+      class="m-4"
       :message="openFailure"
       :project-id="damagedProjectId"
     />
     <p
       v-else
       data-testid="editor-empty"
-      class="px-1 text-sm text-fg-muted"
+      class="m-4 px-1 text-sm text-fg-muted"
     >
       No capture open. Choose Edit on a staged capture in the panel, or resume a
       tutorial project there.

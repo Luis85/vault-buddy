@@ -14,21 +14,27 @@
  * tasks fill the four REMAINING region slots (`library`, `preview`,
  * `inspector`, `timeline`) with real content.
  *
- * Below 1180px (§12: "At 960×640 retain one preview toolbar and accessible
- * primary actions ... Side panels can use drawers; opening one must not
- * hide every route back") the library/inspector columns become toggled
- * disclosures instead of static columns — `EditorHeader` owns the toggle
- * buttons, this component owns the open/closed state and which rule
- * ("always shown" vs "shown only when open") applies. The header is a
- * SIBLING of the collapsible row, never inside it, so no drawer state can
- * ever cover or unmount it — that is what keeps it "the route back".
+ * **The frame (visual-parity Task 4; design D4, D5; concept spec §1.3–
+ * §1.5, §6.1, §7).** The root IS the concept's `.app` grid: header /
+ * workspace / 8px splitter / timeline / status bar, with 1px `line`
+ * separators and no gutters or rounded region cards. The workspace row is
+ * a second grid, library | preview | inspector; at or below 1080px wide
+ * the inspector becomes an overlay drawer, at or below 860 the library
+ * does too, and a window 760px tall or less shrinks the bars.
+ * `useShellLayout` turns `editorWorkspace`'s panel state into those rows,
+ * columns and drawer classes; every panel toggle — the header's, the
+ * preview toolbar's, Focus preview — is a store action, a real grid change
+ * at every width (D5, audit finding 2). The header is a SIBLING of the
+ * workspace row, never inside it, and the drawers open below the preview
+ * header, so no drawer can cover "the route back".
  *
- * `isCompact` is tracked from `window.innerWidth` in a plain `ref`, not a
- * CSS media query alone: `tests/editorShell.test.ts` has to be able to
- * assert the collapse in Vitest, and happy-dom has no layout engine to
- * evaluate a media query against (AGENTS.md's Testing conventions) — the
- * REAL, pixel-measured version of this rule is `tests/e2e/editorShell.
- * spec.ts`, driving the production bundle in real Chromium.
+ * The breakpoints come from `window.innerWidth`/`innerHeight` (kept in the
+ * store by `useShellLayout`), not a CSS media query alone:
+ * `tests/editorShell.test.ts` has to assert the collapse in Vitest, and
+ * happy-dom has no layout engine to evaluate a media query against
+ * (AGENTS.md's Testing conventions) — the REAL, pixel-measured version is
+ * `tests/e2e/editorShell.spec.ts` and `tests/e2e/editorParity.spec.ts`,
+ * driving the production bundle in real Chromium.
  *
  * **The keyboard shortcut dispatcher (Task 21)** lives here — the carried
  * Task 17 finding ("there are no clip elements to focus until the timeline
@@ -49,13 +55,11 @@
  * (`shouldHandle`'s `menuOwnsKeys`): Delete pressed in the context menu
  * must not delete the selection behind it.
  *
- * **Height (Task 22).** The shell root, its grid and the preview slot's
- * wrapper all `grow`: the preview stage (`PreviewSurface`) takes whatever
- * height the window has left rather than a fixed or aspect-derived one,
- * and at the 960x640 floor gives it up entirely — so the stage never pushes
- * the header's Save off-screen (the `tests/e2e/editorShell.spec.ts`
- * contract). `min-height` stays `auto` everywhere: the shell never shrinks
- * below its own content.
+ * **Height.** The grid fills the window (`EditorRoot`'s `main`); the
+ * workspace row takes what the fixed rows leave (at least 170px, 160 in a
+ * short window), and the preview stage takes what the workspace row leaves
+ * — so the stage never pushes the header's Save off-screen (the
+ * `tests/e2e/editorShell.spec.ts` contract).
  *
  * **`NotificationHost` (Task 32 fix round 1).** The editor window had no
  * toast surface at all until `PreviewToolbar`'s ratio control needed one —
@@ -80,14 +84,15 @@
  * pauses it once no menu is open. A pending progress save is flushed when
  * the window hides and when the shell unmounts.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 
+import { useShellLayout } from "../../../composables/useShellLayout";
 import { baseActionContext } from "../../../editor/actionContext";
 import type { ActionId } from "../../../editor/actionMeta";
 import type { ActionContext } from "../../../editor/actions";
 import { resolveActions } from "../../../editor/actions";
 import { activateEditorAction } from "../../../editor/clipboard";
-import { onReveal, requestReveal } from "../../../editor/revealBus";
+import { requestReveal } from "../../../editor/revealBus";
 import { isGuideDismissKey, matchShortcut, shouldHandle } from "../../../editor/shortcuts";
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
 import { useEditorProjectStore } from "../../../stores/editorProject";
@@ -95,22 +100,16 @@ import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import NotificationHost from "../../NotificationHost.vue";
 import GuideCoach from "../guide/GuideCoach.vue";
 import GuideInvitation from "../guide/GuideInvitation.vue";
+import TimelineSplitter from "../timeline/TimelineSplitter.vue";
 import EditorHeader from "./EditorHeader.vue";
+import EditorStatusBar from "./EditorStatusBar.vue";
 import PreviewToolbar from "./PreviewToolbar.vue";
 
-/** SCREENS-AND-INTERACTIONS.md §12's own breakpoint. */
 /** Task 39: the header's "Open a project file", forwarded to `EditorRoot`,
  * which owns which project the shell is showing. */
 const emit = defineEmits<{ (e: "open-project-file"): void; (e: "discard-project"): void }>();
 
-const COMPACT_BREAKPOINT = 1180;
-
-const viewportWidth = ref(window.innerWidth);
-function onResize() {
-  viewportWidth.value = window.innerWidth;
-}
-onMounted(() => window.addEventListener("resize", onResize));
-onBeforeUnmount(() => window.removeEventListener("resize", onResize));
+const { frameStyle, workspaceStyle, libraryClass, inspectorClass } = useShellLayout();
 
 const onboarding = useEditorOnboardingStore();
 onMounted(() => void onboarding.load());
@@ -124,29 +123,6 @@ onMounted(() => document.addEventListener("visibilitychange", onVisibilityChange
 onBeforeUnmount(() => {
   document.removeEventListener("visibilitychange", onVisibilityChange);
   void onboarding.flush();
-});
-
-const isCompact = computed(() => viewportWidth.value < COMPACT_BREAKPOINT);
-
-/** Drawer open/closed — local view state (ARCHITECTURE-AND-STACK.md's
- * `editorWorkspace` boundary: "panel sizes" is exactly this store's future
- * job; it does not exist yet, so this stays a plain ref, same as `theme`
- * below). Closed by default: a drawer starts collapsed, like any other
- * disclosure. */
-const libraryOpen = ref(false);
-const inspectorOpen = ref(false);
-/** Above the breakpoint both columns are always shown (a normal three-
- * column layout, no toggle semantics); below it, visibility follows the
- * drawer's own open state. */
-const showLibrary = computed(() => !isCompact.value || libraryOpen.value);
-const showInspector = computed(() => !isCompact.value || inspectorOpen.value);
-/** Task 54: a finding revealed in a closed drawer opens that drawer (at
- * full width both columns already show). */
-onReveal("library", () => {
-  if (isCompact.value) libraryOpen.value = true;
-});
-onReveal("inspector", () => {
-  if (isCompact.value) inspectorOpen.value = true;
 });
 
 /**
@@ -171,22 +147,6 @@ watch(
 );
 function toggleTheme() {
   workspace.toggleTheme();
-}
-
-/**
- * `focus-preview` (Task 17's `PreviewToolbar`, F-48): collapses both
- * drawers so the preview gets the room — a real, observable effect at the
- * compact width where drawers exist at all (`showLibrary`/`showInspector`
- * above always show both columns once `!isCompact`, so this is currently a
- * no-op at wide width, same as clicking a closed drawer's own toggle would
- * be). The dedicated distraction-free layout `Workspace.focus_preview`
- * already names (`editorTypes.ts`) is Task 18's `editorWorkspace` store to
- * build — this is the honest, minimal thing available before that store
- * exists, not a placeholder that pretends to do more.
- */
-function onFocusPreview() {
-  libraryOpen.value = false;
-  inspectorOpen.value = false;
 }
 
 // ---- keyboard shortcut dispatcher (Task 21) --------------------------------
@@ -280,30 +240,33 @@ function onShellKeydown(event: KeyboardEvent) {
 <template>
   <div
     data-testid="editor-shell"
-    class="relative flex grow flex-col gap-2 text-fg"
+    class="relative grid h-full min-h-[520px] min-w-0 grid-cols-[minmax(0,1fr)] text-fg"
+    :style="frameStyle"
     @keydown="onShellKeydown"
   >
     <EditorHeader
-      :is-compact="isCompact"
-      :library-open="libraryOpen"
-      :inspector-open="inspectorOpen"
+      :is-compact="workspace.inspectorIsDrawer"
+      :library-open="workspace.libraryVisible"
+      :inspector-open="workspace.inspectorVisible"
       :theme="workspace.theme"
-      @toggle-library="libraryOpen = !libraryOpen"
-      @toggle-inspector="inspectorOpen = !inspectorOpen"
+      @toggle-library="workspace.toggleLibrary()"
+      @toggle-inspector="workspace.toggleInspector()"
       @toggle-theme="toggleTheme"
       @open-project-file="emit('open-project-file')"
       @discard-project="emit('discard-project')"
     />
 
     <div
-      class="grid grow gap-2"
-      :class="isCompact ? 'grid-cols-1' : 'editor-shell-grid'"
+      data-testid="editor-workspace"
+      class="relative grid min-h-0 min-w-0"
+      :style="workspaceStyle"
     >
       <aside
-        v-show="showLibrary"
+        v-show="workspace.libraryVisible"
         data-testid="editor-shell-library"
-        :aria-hidden="!showLibrary"
-        class="rounded-control border border-line bg-panel p-2 text-micro text-fg-subtle"
+        :aria-hidden="!workspace.libraryVisible"
+        class="flex min-h-0 min-w-0 flex-col overflow-y-auto border-r border-line bg-panel p-2 text-micro text-fg-subtle"
+        :class="libraryClass"
       >
         <slot name="library">
           Library — arrives in a later task.
@@ -312,19 +275,17 @@ function onShellKeydown(event: KeyboardEvent) {
 
       <section
         data-testid="editor-shell-preview"
-        class="flex flex-col gap-2 rounded-control border border-line bg-stage p-2"
+        class="col-start-2 row-start-1 flex min-h-0 min-w-0 flex-col overflow-hidden bg-stage"
       >
-        <!-- DESIGN-SYSTEM.md: "The preview has one 48px control/header row."
-             `PreviewToolbar` (Task 17) owns the `data-testid="preview-toolbar"`
-             row itself now — the Playwright spec's "exactly one row" count
-             still holds because its root, not a wrapper here, carries the
-             testid. -->
+        <!-- The preview's one header row (§4.1). `PreviewToolbar` owns the
+             `data-testid="preview-toolbar"` row itself, so the Playwright
+             "exactly one row" count holds on its root. -->
         <PreviewToolbar
-          :library-open="libraryOpen"
-          :inspector-open="inspectorOpen"
-          @toggle-library="libraryOpen = !libraryOpen"
-          @toggle-inspector="inspectorOpen = !inspectorOpen"
-          @focus-preview="onFocusPreview"
+          :library-open="workspace.libraryVisible"
+          :inspector-open="workspace.inspectorVisible"
+          @toggle-library="workspace.toggleLibrary()"
+          @toggle-inspector="workspace.toggleInspector()"
+          @focus-preview="workspace.toggleFocusPreview()"
         />
         <div class="flex min-h-0 grow flex-col text-micro text-fg-subtle">
           <slot name="preview">
@@ -334,10 +295,11 @@ function onShellKeydown(event: KeyboardEvent) {
       </section>
 
       <aside
-        v-show="showInspector"
+        v-show="workspace.inspectorVisible"
         data-testid="editor-shell-inspector"
-        :aria-hidden="!showInspector"
-        class="rounded-control border border-line bg-panel p-2 text-micro text-fg-subtle"
+        :aria-hidden="!workspace.inspectorVisible"
+        class="flex min-h-0 min-w-0 flex-col overflow-y-auto border-l border-line bg-panel p-2 text-micro text-fg-subtle"
+        :class="inspectorClass"
       >
         <slot name="inspector">
           Inspector — arrives in a later task.
@@ -345,19 +307,18 @@ function onShellKeydown(event: KeyboardEvent) {
       </aside>
     </div>
 
-    <!-- `p-1`, not the library/inspector panels' `p-2` -- Task 20's real
-         `TimelineView` already draws its own toolbar/lane/resize-handle
-         chrome, so the extra 8px this wrapper used to reserve was pure
-         padding-on-padding. Trimmed once the slot stopped being a bare
-         placeholder line that needed the breathing room. -->
+    <TimelineSplitter />
+
     <section
-      data-testid="editor-shell-timeline"
-      class="rounded-control border border-line bg-panel p-1 text-micro text-fg-subtle"
+      data-testid="editor-timeline"
+      class="min-h-0 min-w-0 overflow-hidden bg-panel text-micro text-fg-subtle"
     >
       <slot name="timeline">
         Timeline — arrives in a later task.
       </slot>
     </section>
+
+    <EditorStatusBar />
 
     <NotificationHost />
     <GuideInvitation />
@@ -366,7 +327,23 @@ function onShellKeydown(event: KeyboardEvent) {
 </template>
 
 <style scoped>
-.editor-shell-grid {
-  grid-template-columns: var(--editor-sidebar) 1fr var(--editor-inspector);
+/* The overlay drawers (concept spec §1.4): below the preview header
+   (`--drawer-top`, set by `useShellLayout`), over the preview. */
+.library-drawer,
+.inspector-drawer {
+  position: absolute;
+  top: var(--drawer-top);
+  bottom: 0;
+  box-shadow: var(--editor-shadow);
+}
+.library-drawer {
+  left: 0;
+  width: var(--editor-library-drawer);
+  z-index: 20;
+}
+.inspector-drawer {
+  right: 0;
+  width: var(--editor-inspector);
+  z-index: 18;
 }
 </style>

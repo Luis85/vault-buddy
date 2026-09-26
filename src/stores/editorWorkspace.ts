@@ -39,6 +39,7 @@ import { defineStore } from "pinia";
 import type { Ref } from "vue";
 import { markRaw, ref, shallowRef, watch } from "vue";
 
+import { createPanelControls, TIMELINE_DEFAULT_HEIGHT } from "../editor/panelLayout";
 import type { EditorPort } from "../editor/port";
 import { createTauriEditorPort } from "../editor/port";
 import type { DeleteMode, Selected, Theme, Workspace } from "../editorTypes";
@@ -49,9 +50,10 @@ const PERSIST_DEBOUNCE_MS = 750;
 
 // The same clamp ranges `core::editor::workspace::sanitize` enforces on the
 // way back in — clamping here too means a value never visibly snaps to a
-// different number only once the round trip through Rust completes.
+// different number only once the round trip through Rust completes. The
+// timeline height's own, tighter range follows the window (visual-parity
+// Task 4, `panelLayout.ts`), always inside Rust's 160–900.
 const ZOOM_RANGE = [0.1, 20.0] as const;
-const HEIGHT_RANGE = [160.0, 900.0] as const;
 const PLAYBACK_RATE_RANGE = [0.25, 2.0] as const;
 
 function clamp(n: number, [lo, hi]: readonly [number, number]): number {
@@ -91,7 +93,7 @@ function createFields(): WorkspaceFields {
     libraryTab: ref<string | null>(null),
     propertyTab: ref<string | null>(null),
     timelineZoom: ref(1),
-    timelineHeight: ref(260),
+    timelineHeight: ref(TIMELINE_DEFAULT_HEIGHT),
     timelineScrollLeft: ref(0),
     timelineScrollTop: ref(0),
     snap: ref(true),
@@ -347,10 +349,6 @@ function createMutators(f: WorkspaceFields, persist: () => void, getDurationMs: 
       f.timelineScrollTop.value = top;
       persist();
     },
-    setTimelineHeight(height: number): void {
-      f.timelineHeight.value = clamp(height, HEIGHT_RANGE);
-      persist();
-    },
     setPlaybackRate(rate: number): void {
       f.playbackRate.value = clamp(rate, PLAYBACK_RATE_RANGE);
       persist();
@@ -365,10 +363,6 @@ function createMutators(f: WorkspaceFields, persist: () => void, getDurationMs: 
     },
     togglePropertiesOpen(): void {
       f.propertiesOpen.value = !f.propertiesOpen.value;
-      persist();
-    },
-    toggleFocusPreview(): void {
-      f.focusPreview.value = !f.focusPreview.value;
       persist();
     },
     toggleCaptionSettingsOpen(): void {
@@ -411,6 +405,18 @@ export const useEditorWorkspaceStore = defineStore("editorWorkspace", () => {
   // installed projection, not once per field inside it.
   const editorProject = useEditorProjectStore();
   const mutators = createMutators(fields, persist, () => editorProject.durationMs);
+
+  // Visual-parity Task 4 (D4, D5): the window's size (session state, never
+  // persisted — the shell keeps it current) and the library drawer, which
+  // the concept does not persist either; the panel rules live in
+  // `panelLayout.ts`.
+  const viewportWidth = ref(window.innerWidth);
+  const viewportHeight = ref(window.innerHeight);
+  const libraryDrawerOpen = ref(false);
+  const panels = createPanelControls(
+    { ...fields, libraryDrawerOpen, viewportWidth, viewportHeight },
+    persist,
+  );
   watch(
     () => editorProject.snapshot?.revision,
     () => {
@@ -440,9 +446,13 @@ export const useEditorWorkspaceStore = defineStore("editorWorkspace", () => {
     focusPreview: fields.focusPreview,
     captionSettingsOpen: fields.captionSettingsOpen,
     theme: fields.theme,
+    viewportWidth,
+    viewportHeight,
+    libraryDrawerOpen,
     setPort,
     hydrate,
     persist,
     ...mutators,
+    ...panels,
   };
 });

@@ -32,8 +32,11 @@
 import { computed, nextTick, ref } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
+import { useProjectSave } from "../../../composables/useProjectSave";
+import { SAVE_TEXT_MAX_WIDTH } from "../../../editor/panelLayout";
 import type { EditorCommand, PackageFormat } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
+import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import { formatDuration } from "../../../utils/formatDuration";
 import AppButton from "../../ui/AppButton.vue";
 import IconButton from "../../ui/IconButton.vue";
@@ -58,6 +61,7 @@ const emit = defineEmits<{
 }>();
 
 const editorProject = useEditorProjectStore();
+const workspace = useEditorWorkspaceStore();
 const projectbarTarget = useGuideTarget("projectbar");
 const saveTarget = useGuideTarget("header.save");
 
@@ -70,12 +74,10 @@ const vault = computed(() => editorProject.project?.destination.vault ?? null);
  * button (R20: "a disabled control carries a reason string") rather than
  * relying on a hover-only `title` attribute nobody sees on a touch device or
  * without hovering — the `TaskSubtasks.vue` `disabledReason` precedent.
+ * Save's rule and action are `useProjectSave`'s, shared with the status
+ * bar's recovery slot (visual-parity Task 4).
  */
-const saveDisabledReason = computed<string | null>(() => {
-  if (!editorProject.sessionId) return "No project is open.";
-  if (editorProject.saving) return "Saving…";
-  return null;
-});
+const { disabledReason: saveDisabledReason, save: onSave } = useProjectSave();
 /** Render video (Task 47) is `RenderVideoButton` — its own component, with
  * its own disabled reason and the Render dialog; a render's errors never
  * reach `saveError` below (Task 46's carry). */
@@ -94,6 +96,16 @@ const status = computed<string>(() => {
   if (editorProject.saveError) return "Save failed";
   return editorProject.dirty ? "Unsaved changes" : "Saved";
 });
+
+/** The concept drops the save text at or below 1350px (§1.4). */
+const showSaveText = computed(() => workspace.viewportWidth > SAVE_TEXT_MAX_WIDTH);
+
+/** The theme toggle names the theme it switches TO. */
+const themeToggle = computed(() =>
+  props.theme === "light"
+    ? { label: "Switch to dark theme", glyph: "🌙" }
+    : { label: "Switch to light theme", glyph: "☀️" },
+);
 
 const editingTitle = ref(false);
 const titleDraft = ref("");
@@ -120,10 +132,6 @@ function onTitleEnter() {
   titleInput.value?.blur();
 }
 
-function onSave() {
-  void editorProject.save();
-}
-
 /** Task 39: the Save project menu. A copy opens `SaveProjectDialog` on the
  * chosen format; opening a project file and (Task 59) discarding the
  * project are `EditorRoot`'s (it owns which project the shell is showing,
@@ -145,7 +153,7 @@ function onSaveMenu(item: "save" | "portable" | "lightweight" | "open" | "discar
   <header
     :ref="projectbarTarget"
     data-testid="editor-header"
-    class="flex flex-wrap items-center gap-2 rounded-control border border-line bg-panel px-3 py-2"
+    class="flex min-w-0 items-center gap-2 overflow-hidden border-b border-line bg-panel px-4"
   >
     <IconButton
       v-if="props.isCompact"
@@ -173,7 +181,7 @@ function onSaveMenu(item: "save" | "portable" | "lightweight" | "open" | "discar
       v-else
       type="button"
       data-testid="editor-shell-title"
-      class="max-w-[24ch] cursor-pointer truncate rounded-control px-1 text-left text-sm font-medium text-fg hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      class="min-w-0 max-w-[24ch] shrink cursor-pointer truncate rounded-control px-1 text-left text-sm font-medium text-fg hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       title="Rename project"
       @click="startRename"
     >
@@ -184,9 +192,12 @@ function onSaveMenu(item: "save" | "portable" | "lightweight" | "open" | "discar
       data-testid="editor-shell-duration"
       class="text-micro text-fg-subtle"
     >{{ durationLabel }}</span>
+    <!-- Hidden at or below 1350px (§1.4); the status bar's centre slot
+         still says it. -->
     <span
+      v-show="showSaveText"
       data-testid="editor-header-status"
-      class="text-micro text-fg-subtle"
+      class="shrink-0 text-micro text-fg-subtle"
     >{{ status }}</span>
     <span
       v-if="vault"
@@ -194,15 +205,15 @@ function onSaveMenu(item: "save" | "portable" | "lightweight" | "open" | "discar
       class="text-micro text-fg-subtle"
     >{{ vault }}</span>
 
-    <div class="ml-auto flex items-center gap-2">
+    <div class="ml-auto flex shrink-0 items-center gap-2">
       <GuideHelpButton />
       <ChecksButton />
       <IconButton
-        :label="props.theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'"
+        :label="themeToggle.label"
         data-testid="editor-header-theme-toggle"
         @click="emit('toggle-theme')"
       >
-        {{ props.theme === "light" ? "🌙" : "☀️" }}
+        {{ themeToggle.glyph }}
       </IconButton>
       <AppButton
         :ref="saveTarget"
