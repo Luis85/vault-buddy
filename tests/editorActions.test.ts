@@ -549,7 +549,7 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
 
   it("paste needs clipboard content AND a target track, and prefers the pointer's own time", () => {
     const proj = project({ tracks: [track("v1")] });
-    const fragment = { clips: [], effects: [], captions: [], markers: [], originMs: 0 };
+    const fragment = { clips: [], effects: [], captions: [], markers: [], transitions: [], originMs: 0 };
 
     const noClipboard = ctx({ project: proj, snapshot: snapshot(), pointerTarget: { kind: "track", id: "v1", timeMs: 100 } });
     expect(resolveActions(noClipboard).paste).toMatchObject({ enabled: false, reason: "Clipboard is empty" });

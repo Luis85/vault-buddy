@@ -160,8 +160,10 @@ describe("EditorPort", () => {
     // Typed as `EditorCommand` — not a looser inline object literal — so a
     // spelling drift in ClipboardFragment's own fields (document-spelled
     // clip entities vs. the envelope's camelCase trackId/atMs/originMs)
-    // fails vue-tsc, not merely this test. Copied verbatim from
-    // core/src/editor/commands/mod.rs's `paste_fragment_wire_literal`.
+    // fails vue-tsc, not merely this test. Copied from
+    // core/src/editor/commands/mod.rs's `paste_fragment_wire_literal`, plus
+    // the `transitions` this client always sends (GAP-178; that Rust literal
+    // leaves it out on purpose, to prove an older fragment still decodes).
     const command: EditorCommand = {
       kind: "pasteFragment",
       fragment: {
@@ -189,6 +191,7 @@ describe("EditorPort", () => {
         effects: [],
         captions: [],
         markers: [],
+        transitions: [],
         originMs: 0,
       },
       trackId: "t",

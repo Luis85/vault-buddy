@@ -539,6 +539,7 @@ mod tests {
             effects: Vec::new(),
             captions: Vec::new(),
             markers: Vec::new(),
+            transitions: Vec::new(),
             origin_ms: 0,
         };
         let paste_req = ExecuteRequest {

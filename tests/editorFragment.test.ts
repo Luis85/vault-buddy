@@ -122,6 +122,21 @@ describe("buildFragment", () => {
     expect(fragment.captions).toEqual([]);
   });
 
+  // GAP-178: a crossfade travels with its pair. t1 joins c1 and c2 (both
+  // copied); t2 joins c2 to c3, which is not -- it pairs a copied clip with
+  // one left behind, so it stays behind too.
+  it("copies a transition only when both of its clips are copied", () => {
+    const withTransitions: Project = {
+      ...project(),
+      transitions: [
+        { id: "t1", from: "c1", to: "c2", duration_ms: 100, kind: "dissolve" },
+        { id: "t2", from: "c2", to: "c3", duration_ms: 50, kind: "dissolve" },
+      ],
+    };
+    expect(buildFragment(withTransitions, ["c1", "c2"]).transitions.map((t) => t.id)).toEqual(["t1"]);
+    expect(buildFragment(withTransitions, ["c2"]).transitions).toEqual([]);
+  });
+
   it("originMs is the earliest start", () => {
     // c3's start_ms=50 is the earliest in the WHOLE project but c3 is not
     // in the selection -- originMs must be min(500, 1200) = 500, not 50.

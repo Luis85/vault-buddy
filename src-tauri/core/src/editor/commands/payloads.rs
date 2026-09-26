@@ -44,7 +44,7 @@ use crate::editor::model::{
     Adjustments, Asset, CardPreset, Clip, FadeCurve, Fit, FrameShape, Rotation, TrackKind,
 };
 use crate::editor::model_cues::{
-    CaptionCue, CaptionPosition, Effect, EffectKind, Marker, TransitionKind,
+    CaptionCue, CaptionPosition, Effect, EffectKind, Marker, Transition, TransitionKind,
 };
 use crate::editor::{Num, Project};
 
@@ -157,6 +157,10 @@ pub struct DuplicateClipsPayload {
 /// Task 8's own Rust behaviour). Every entity type here is the project
 /// model's own -- a fragment is a snippet of real clips/effects/captions/
 /// markers awaiting a new home, not a second parallel shape for them.
+/// `transitions` (GAP-178, ADR §9 (p)) carries each crossfade whose two
+/// clips are BOTH in the fragment; `#[serde(default)]` so a fragment
+/// without the field (an older client, a stored fixture) still decodes, as
+/// a fragment that carries none.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardFragment {
@@ -164,6 +168,8 @@ pub struct ClipboardFragment {
     pub effects: Vec<Effect>,
     pub captions: Vec<CaptionCue>,
     pub markers: Vec<Marker>,
+    #[serde(default)]
+    pub transitions: Vec<Transition>,
     pub origin_ms: u64,
 }
 

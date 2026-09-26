@@ -59,7 +59,7 @@ describe("baseActionContext — clipboard wiring", () => {
     expect(ctx.hasClipboard).toBe(false);
     expect(ctx.clipboardFragment).toBeNull();
 
-    const fragment = { clips: [clip("c1")], effects: [], captions: [], markers: [], originMs: 0 };
+    const fragment = { clips: [clip("c1")], effects: [], captions: [], markers: [], transitions: [], originMs: 0 };
     setClipboard(fragment, "p1");
     ctx = baseActionContext(p1, null, 0, []);
     expect(ctx.hasClipboard).toBe(true);
@@ -75,7 +75,7 @@ describe("baseActionContext — clipboard wiring", () => {
   // project it was copied from.
   it("a fragment copied in one project is not offered in another", () => {
     clearClipboardForTest();
-    const fragment = { clips: [clip("c1")], effects: [], captions: [], markers: [], originMs: 0 };
+    const fragment = { clips: [clip("c1")], effects: [], captions: [], markers: [], transitions: [], originMs: 0 };
     setClipboard(fragment, "p1");
 
     const other = { ...project([clip("c9")]), id: "p2" };
@@ -98,6 +98,22 @@ describe("activateEditorAction — copy", () => {
     expect(execute).not.toHaveBeenCalled();
     expect(clipboardFragment.value?.fragment.clips.map((c) => c.id)).toEqual(["c1"]);
     expect(clipboardFragment.value?.projectId).toBe("p1");
+  });
+});
+
+describe("activateEditorAction — copy a crossfaded pair", () => {
+  // GAP-178: copying both clips of a crossfade carries the transition, so
+  // pasteFragment can land the pair with its blend instead of refusing
+  // the copies' overlap.
+  it("the clipboard fragment carries the pair's transition", () => {
+    clearClipboardForTest();
+    const transition = { id: "t1", from: "c1", to: "c2", duration_ms: 300, kind: "dissolve" as const };
+    const crossfaded = { ...project([clip("c1"), clip("c2", { start_ms: 700 })]), transitions: [transition] };
+    const ctx = baseActionContext(crossfaded, { sessionId: "s", projectId: "p1", revision: 1, persistedRevision: null, title: "T", durationMs: 1_700, canUndo: false, canRedo: false, undoLabel: null, redoLabel: null }, 0, ["c1", "c2"]);
+
+    expect(activateEditorAction("copy", ctx, vi.fn())).toBe(true);
+
+    expect(clipboardFragment.value?.fragment.transitions).toEqual([transition]);
   });
 });
 

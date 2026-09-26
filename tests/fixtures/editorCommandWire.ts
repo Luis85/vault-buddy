@@ -37,7 +37,14 @@ export const EDITOR_COMMAND_WIRE = // BEGIN WIRE
   { "kind": "duplicateClips", "clipIds": ["c6"], "offsetMs": 1500 },
   {
     "kind": "pasteFragment",
-    "fragment": { "clips": [], "effects": [], "captions": [], "markers": [], "originMs": 2100 },
+    "fragment": {
+      "clips": [],
+      "effects": [],
+      "captions": [],
+      "markers": [],
+      "transitions": [{ "id": "t1", "from": "c1", "to": "c2", "duration_ms": 400, "kind": "dissolve" }],
+      "originMs": 2100
+    },
     "trackId": "v1",
     "atMs": 6300
   },

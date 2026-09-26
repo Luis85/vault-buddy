@@ -2659,7 +2659,7 @@ The Task 28 test uses an absolute `%SystemRoot%\System32\PING.EXE` meanwhile.
 > is the user's, not cargo's. Production is still unaffected (tools are
 > spawned by absolute path, see above).
 
-### GAP-178 · Low · Duplicating or pasting a crossfaded pair is refused as an overlap instead of carrying its transition
+### GAP-178 · ~~Low~~ CLOSED 2026-09-26 (hardening Task 25 — decision D3) · Duplicating or pasting a crossfaded pair is refused as an overlap instead of carrying its transition
 `src-tauri/core/src/editor/commands/groups.rs` (`check_no_overlap`),
 `src/editor/fragment.ts` (`ClipboardFragment` has no `transitions`).
 Found by Task 30. A transition IS an overlap (`commands::transitions`): the
@@ -2683,6 +2683,20 @@ fresh clip ids, and let `check_no_overlap` accept an overlap inside the
 batch exactly when a carried transition explains it — the
 `transitions::overlap_refusal` shape. A wire change to `ClipboardFragment`,
 so it needs the TS decoder/type and a literal-JSON pin in the same commit.
+
+**CLOSED 2026-09-26 (hardening Task 25, decision D3; ADR §9 (p)):** the fix
+above, as written. `ClipboardFragment.transitions` is additive
+(`#[serde(default)]` — `commands::tests::paste_fragment_wire_literal` decodes
+a fragment without it); `buildFragment` copies a transition only when both of
+its clips are copied; `duplicate_clips`/`paste_fragment` re-point each carried
+transition at the fresh clip ids (`carry_transitions`), refuse one naming a
+clip outside the fragment or failing its side, geometry or kind rule on the
+new clips (`check_carried`), and `check_no_overlap` excuses only the overlap
+a carried transition explains between its own two new clips. Pinned by
+`src-tauri/core/src/editor/commands/groups_transitions_tests.rs`,
+`tests/editorFragment.test.ts#copies a transition only when both of its clips are copied`,
+`tests/editorClipboard.test.ts#the clipboard fragment carries the pair's transition`
+and the shared wire table.
 
 ### GAP-179 · ~~Low~~ FIXED 2026-09-23 · `validate_project` did not bound caption settings or text (the trimmed-away listing half is now GAP-181)
 `src/editor/captionRules.ts` (`captionRows`, `chapterRows`),

@@ -432,6 +432,9 @@ mod tests {
         // silently reverting to `origin_ms`, or a clip entity field
         // losing document spelling) reddens this even if `Serialize`/
         // `Deserialize` still agree with EACH OTHER.
+        // The literal carries NO `transitions` (GAP-178's additive field):
+        // a fragment an older client built must still decode, as one that
+        // carries none -- `#[serde(default)]` is what keeps it green.
         let json = serde_json::json!({
             "kind": "pasteFragment",
             "fragment": {
@@ -474,6 +477,7 @@ mod tests {
                     effects: Vec::new(),
                     captions: Vec::new(),
                     markers: Vec::new(),
+                    transitions: Vec::new(),
                     origin_ms: 0,
                 },
                 track_id: "t".to_string(),

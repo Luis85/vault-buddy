@@ -213,14 +213,15 @@ export interface Project {
  * fields are camelCase (`origin_ms` → `originMs`, per
  * `commands::payloads::ClipboardFragment`'s own
  * `#[serde(rename_all = "camelCase")]`), but the entities it carries
- * (`Clip`/`Effect`/`CaptionCue`/`Marker`) stay in document spelling, same
- * as everywhere else in the project graph.
+ * (`Clip`/`Effect`/`CaptionCue`/`Marker`/`Transition`) stay in document
+ * spelling. `transitions` (GAP-178): each crossfade whose two clips are both copied.
  */
 export interface ClipboardFragment {
   clips: Clip[];
   effects: Effect[];
   captions: CaptionCue[];
   markers: Marker[];
+  transitions: Transition[];
   originMs: number;
 }
 

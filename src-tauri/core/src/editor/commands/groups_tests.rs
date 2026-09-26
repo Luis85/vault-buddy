@@ -379,6 +379,7 @@ fn paste_repoints_cues_to_new_clips() {
         effects: vec![effect("e1", "c1", 0, 100)],
         captions: vec![caption("cap1", "c1", 0, 100)],
         markers: vec![marker("m1", "c1", 50)],
+        transitions: Vec::new(),
         origin_ms: 100,
     };
 
@@ -449,6 +450,7 @@ fn paste_preserves_relative_offsets_and_remints_groups() {
         effects: Vec::new(),
         captions: Vec::new(),
         markers: Vec::new(),
+        transitions: Vec::new(),
         origin_ms: 700,
     };
 
@@ -496,6 +498,7 @@ fn paste_of_unknown_asset_is_source_missing() {
         effects: Vec::new(),
         captions: Vec::new(),
         markers: Vec::new(),
+        transitions: Vec::new(),
         origin_ms: 0,
     };
 
@@ -521,6 +524,7 @@ fn paste_refuses_onto_a_locked_track() {
         effects: Vec::new(),
         captions: Vec::new(),
         markers: Vec::new(),
+        transitions: Vec::new(),
         origin_ms: 0,
     };
 
@@ -550,6 +554,7 @@ fn paste_refuses_an_overlap_on_the_target_track() {
         effects: Vec::new(),
         captions: Vec::new(),
         markers: Vec::new(),
+        transitions: Vec::new(),
         origin_ms: 0,
     };
 
@@ -575,6 +580,7 @@ fn paste_refuses_a_kind_mismatched_track() {
         effects: Vec::new(),
         captions: Vec::new(),
         markers: Vec::new(),
+        transitions: Vec::new(),
         origin_ms: 0,
     };
 

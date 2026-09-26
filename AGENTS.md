@@ -3420,7 +3420,10 @@ card ↔ control focus, Task 56) are answered by the same dispatcher — F6
 alone skips the text-field rule (it types nothing, and a lesson's control
 can be an input), still yielding to an open menu or dialog.
 Its clipboard (`src/editor/clipboard.ts`) is window-local, in-memory state,
-never sent to Rust and never persisted.
+never sent to Rust and never persisted — only a Paste sends its fragment,
+inside `pasteFragment`. A fragment carries each transition whose two clips
+are both copied (`fragment.transitions`, additive; GAP-178), and
+`pasteFragment`/`duplicateClips` land it re-pointed at the new clips.
 **`RegionRoot` and `RegionIndicatorRoot` install no store** — the two roots
 that mirror no Rust state and need no per-window `init()` wiring; the
 indicator mirrors ONE boolean (paused or not) from four app-wide `screen:*`

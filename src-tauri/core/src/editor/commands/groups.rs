@@ -26,9 +26,10 @@ use crate::editor::error::{EditorError, EditorErrorCode};
 use crate::editor::ids::new_entity_id;
 use crate::editor::limits;
 use crate::editor::model::{AssetKind, Clip, TrackKind};
-use crate::editor::model_cues::{CaptionCue, CaptionPosition, CaptionSettings};
+use crate::editor::model_cues::{CaptionCue, CaptionPosition, CaptionSettings, Transition};
 use crate::editor::time::ClipSpan;
 use crate::editor::validate::speed_or_default;
+use crate::editor::validate_media::{transition_geometry_error, transition_kind_for};
 use crate::editor::{Map, Num, Project};
 
 /// `base + delta`, checked against both u64 overflow (an adversarial
@@ -56,8 +57,15 @@ fn checked_add_bounded(base: u64, delta: u64, what: &str) -> Result<u64, EditorE
 /// (not the plain `clip_end`) for each NEW clip's own span, since its
 /// `in_ms`/`out_ms` may come straight from an unvalidated `ClipboardFragment`
 /// (`pasteFragment`'s case) rather than an already-`validate_project`-
-/// checked clip.
-fn check_no_overlap(project: &Project, new_clips: &[Clip]) -> Result<(), EditorError> {
+/// checked clip. Two NEW clips a `carried` transition joins are the one
+/// in-batch overlap accepted (GAP-178) -- `check_carried` has already held
+/// that transition to its exact geometry, so the overlap is its window.
+/// A carried transition never excuses an overlap with an EXISTING clip.
+fn check_no_overlap(
+    project: &Project,
+    new_clips: &[Clip],
+    carried: &[Transition],
+) -> Result<(), EditorError> {
     for (i, added) in new_clips.iter().enumerate() {
         let added_span = ClipSpan {
             start_ms: added.start_ms,
@@ -80,7 +88,10 @@ fn check_no_overlap(project: &Project, new_clips: &[Clip]) -> Result<(), EditorE
             }
         }
         for other in new_clips.iter().skip(i + 1) {
-            if other.track_id != added.track_id {
+            let joined = carried.iter().any(|t| {
+                (t.from == added.id && t.to == other.id) || (t.from == other.id && t.to == added.id)
+            });
+            if other.track_id != added.track_id || joined {
                 continue;
             }
             let other_span = ClipSpan {
@@ -129,6 +140,79 @@ fn extend_captions(project: &mut Project, new_cues: Vec<CaptionCue>) {
             });
         }
     }
+}
+
+/// Each transition in `source` re-pointed at the fresh clip ids
+/// (`clip_id_map`) under a fresh transition id (GAP-178). A transition
+/// naming a clip the map does not hold -- a fragment carrying a crossfade
+/// whose partner was not copied -- is refused; `duplicateClips` only ever
+/// passes transitions with both endpoints duplicated.
+fn carry_transitions<'a>(
+    source: impl IntoIterator<Item = &'a Transition>,
+    clip_id_map: &HashMap<String, String>,
+) -> Result<Vec<Transition>, EditorError> {
+    source
+        .into_iter()
+        .map(|t| {
+            let endpoint = |id: &str| {
+                clip_id_map.get(id).cloned().ok_or_else(|| {
+                    invalid_request(format!(
+                        "transition {} joins clip {id}, which is not in the fragment",
+                        t.id
+                    ))
+                })
+            };
+            Ok(Transition {
+                id: new_entity_id("transition"),
+                from: endpoint(&t.from)?,
+                to: endpoint(&t.to)?,
+                ..t.clone()
+            })
+        })
+        .collect()
+}
+
+/// Every carried transition must hold on the NEW clips exactly as
+/// `validate_project` will demand (`validate_media::check_transitions`),
+/// refused here as an `invalidRequest` rather than reaching that
+/// `invalidProject` backstop: one transition per clip side, its geometry
+/// (`transition_geometry_error`, the one statement of it) and the kind its
+/// media takes. A pasted fragment is untrusted, so none of this is assumed
+/// from its having been copied.
+fn check_carried(
+    project: &Project,
+    new_clips: &[Clip],
+    carried: &[Transition],
+) -> Result<(), EditorError> {
+    let mut from_seen: HashSet<&str> = HashSet::new();
+    let mut to_seen: HashSet<&str> = HashSet::new();
+    for t in carried {
+        let clip = |id: &str| {
+            new_clips
+                .iter()
+                .find(|c| c.id == id)
+                .ok_or_else(|| invalid_request(format!("transition {} does not resolve", t.id)))
+        };
+        let (from, to) = (clip(&t.from)?, clip(&t.to)?);
+        if !from_seen.insert(&t.from) || !to_seen.insert(&t.to) {
+            return Err(invalid_request(format!(
+                "transition {}: a clip already has a transition on this side",
+                t.id
+            )));
+        }
+        if let Some(reason) = transition_geometry_error(t, from, to) {
+            return Err(invalid_request(reason));
+        }
+        let media = find_asset(project, &from.asset_id)?.kind;
+        let expected = transition_kind_for(media);
+        if t.kind != expected {
+            return Err(invalid_request(format!(
+                "transition {}: a {media:?} clip needs a {expected:?} transition, not {:?}",
+                t.id, t.kind
+            )));
+        }
+    }
+    Ok(())
 }
 
 // ---- groupClips / ungroupClips -------------------------------------------
@@ -211,7 +295,10 @@ pub(super) fn ungroup_clips(
 /// "one shared delta" posture `moveClips`'s group expansion uses. Each
 /// duplicate lands on the SAME track as its source, which must be
 /// unlocked and free of overlap at the new position -- checked in a
-/// read-only pass over `project` before `candidate` is ever built.
+/// read-only pass over `project` before `candidate` is ever built. A
+/// transition whose two clips are BOTH duplicated is duplicated with them,
+/// joining the copies (GAP-178); one joining a duplicated clip to one that
+/// is not stays with the originals.
 pub(super) fn duplicate_clips(
     project: &Project,
     payload: &DuplicateClipsPayload,
@@ -249,7 +336,15 @@ pub(super) fn duplicate_clips(
         new_clips.push(duplicate);
     }
 
-    check_no_overlap(project, &new_clips)?;
+    let carried = carry_transitions(
+        project
+            .transitions
+            .iter()
+            .filter(|t| ids.contains(t.from.as_str()) && ids.contains(t.to.as_str())),
+        &clip_id_map,
+    )?;
+    check_carried(project, &new_clips, &carried)?;
+    check_no_overlap(project, &new_clips, &carried)?;
 
     let mut candidate = project.clone();
     let new_effects: Vec<_> = project
@@ -290,6 +385,7 @@ pub(super) fn duplicate_clips(
     candidate.clips.extend(new_clips);
     candidate.effects.extend(new_effects);
     candidate.markers.extend(new_markers);
+    candidate.transitions.extend(carried);
     extend_captions(&mut candidate, new_captions);
 
     Ok((candidate, "Duplicate clips".to_string()))
@@ -309,7 +405,9 @@ pub(super) fn duplicate_clips(
 /// or the whole paste is refused as `sourceMissing` BEFORE anything else
 /// is even computed -- a fragment copied in a different session (or after
 /// its source asset was removed) must not silently invent a dangling
-/// `asset_id`.
+/// `asset_id`. The fragment's `transitions` (GAP-178) land re-pointed at
+/// the pasted clips; one naming a clip the fragment does not carry, or one
+/// that does not hold on the pasted clips, refuses the whole paste.
 pub(super) fn paste_fragment(
     project: &Project,
     payload: &PasteFragmentPayload,
@@ -373,7 +471,9 @@ pub(super) fn paste_fragment(
         new_clips.push(pasted);
     }
 
-    check_no_overlap(project, &new_clips)?;
+    let carried = carry_transitions(&fragment.transitions, &clip_id_map)?;
+    check_carried(project, &new_clips, &carried)?;
+    check_no_overlap(project, &new_clips, &carried)?;
 
     let mut candidate = project.clone();
     let new_effects: Vec<_> = fragment
@@ -416,6 +516,7 @@ pub(super) fn paste_fragment(
     candidate.clips.extend(new_clips);
     candidate.effects.extend(new_effects);
     candidate.markers.extend(new_markers);
+    candidate.transitions.extend(carried);
     extend_captions(&mut candidate, new_captions);
 
     Ok((candidate, "Paste".to_string()))
@@ -446,3 +547,7 @@ pub(super) fn cut_clips(
 #[cfg(test)]
 #[path = "groups_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "groups_transitions_tests.rs"]
+mod transitions_tests;

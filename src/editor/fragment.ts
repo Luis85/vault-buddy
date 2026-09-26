@@ -8,9 +8,11 @@
  * a later `pasteFragment{trackId, atMs}` call can reconstruct every
  * clip's relative offset from one anchor point exactly as
  * `core::editor::commands::groups::paste_fragment` expects. A transition
- * is deliberately never copied — it pairs two SPECIFIC clips rather than
- * belonging to one, the same reason `core::editor::commands::payloads::
- * ClipboardFragment` carries no `transitions` field at all.
+ * pairs two SPECIFIC clips rather than belonging to one, so it is copied
+ * only when BOTH of its clips are (GAP-178, the reference editor's rule):
+ * Rust re-points it at the pasted clips, and the copies' overlap it
+ * explains is then a crossfade rather than a refusal. One joining a copied
+ * clip to one left behind stays behind.
  *
  * This is a READ helper only: it builds the payload a later
  * `editor_execute({kind: "pasteFragment", ...})` call sends, and never
@@ -18,7 +20,7 @@
  * for every committed edit — this is the clipboard's local, uncommitted
  * copy, a read-side helper, not a write).
  */
-import type { CaptionCue, Clip, ClipboardFragment, Effect, Marker, Project } from "../editorTypes";
+import type { CaptionCue, Clip, ClipboardFragment, Effect, Marker, Project, Transition } from "../editorTypes";
 
 export function buildFragment(project: Project, clipIds: string[]): ClipboardFragment {
   const idSet = new Set(clipIds);
@@ -29,7 +31,11 @@ export function buildFragment(project: Project, clipIds: string[]): ClipboardFra
     idSet.has(cue.clip_id),
   );
 
+  const transitions: Transition[] = project.transitions.filter(
+    (transition) => idSet.has(transition.from) && idSet.has(transition.to),
+  );
+
   const originMs = clips.length > 0 ? Math.min(...clips.map((clip) => clip.start_ms)) : 0;
 
-  return { clips, effects, captions, markers, originMs };
+  return { clips, effects, captions, markers, transitions, originMs };
 }
