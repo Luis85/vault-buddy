@@ -96,11 +96,11 @@ pub fn fold_s16le(chunk: &[u8], state: &mut PeakState) {
         state.push(i16::from_le_bytes([low, high]));
         rest = tail;
     }
-    let mut pairs = rest.chunks_exact(2);
-    for pair in &mut pairs {
-        state.push(i16::from_le_bytes([pair[0], pair[1]]));
+    let (pairs, remainder) = rest.as_chunks::<2>();
+    for pair in pairs {
+        state.push(i16::from_le_bytes(*pair));
     }
-    if let [odd] = pairs.remainder() {
+    if let [odd] = remainder {
         state.carry = Some(*odd);
     }
 }
