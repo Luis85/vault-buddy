@@ -39,6 +39,18 @@
  * checks for unsaved changes an earlier run left behind. Task 59: the
  * project menu's Discard project opens `DiscardProjectDialog` here, outside
  * the shell a discard unmounts.
+ *
+ * **A reload (hardening Task 15, GAP-208, decision D1-a).** WebView2's
+ * browser accelerator keys are on in every build, so this root prevents
+ * F5 / Ctrl+R / Ctrl+Shift+R / Ctrl+F / Ctrl+P window-wide
+ * (`isBrowserAcceleratorKey`). A reload that still happens (a devtools
+ * build) mounts this root again over fresh stores: with nothing new
+ * stashed, `take_editor_request` hands back the project ON SCREEN, which
+ * reopens here through Rust's reuse of the live session; a drain that
+ * names the project this root is already showing is "nothing new" and
+ * ignored. Every new session also reconciles its jobs (`editorJobs`), which
+ * is how a render still running after a reload is found and followed
+ * (`RenderVideoButton`).
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -61,7 +73,9 @@ import EditorShell from "../components/editor/shell/EditorShell.vue";
 import OpenFailureNotice from "../components/editor/shell/OpenFailureNotice.vue";
 import TimelineView from "../components/editor/timeline/TimelineView.vue";
 import { importProjectPackage } from "../composables/useProjectPackage";
+import { isBrowserAcceleratorKey } from "../editor/shortcuts";
 import { logWarning } from "../logging";
+import { useEditorJobsStore } from "../stores/editorJobs";
 import { useEditorOnboardingStore } from "../stores/editorOnboarding";
 import { toEditorError, useEditorProjectStore } from "../stores/editorProject";
 import { useEditorWorkspaceStore } from "../stores/editorWorkspace";
@@ -85,11 +99,22 @@ const recovery = ref<InstanceType<typeof RecoveryDialog> | null>(null);
 const discardOpen = ref(false);
 
 /** Hydrate `editorWorkspace` for the session `editorProject` now holds —
- * only when it is a genuinely NEW one (Task 18 fix round 2's rule, below). */
+ * only when it is a genuinely NEW one (Task 18 fix round 2's rule, below) —
+ * and read its jobs: after a reload, a render Rust is still running is
+ * known only to its registry (GAP-208). */
 function hydrateNewSession(): boolean {
   if (!editorProject.sessionId || editorProject.sessionId === editorWorkspace.sessionId) return false;
   void editorWorkspace.hydrate(editorProject.sessionId);
+  void useEditorJobsStore().reconcile();
   return true;
+}
+
+/** A drain naming the project already on screen (Rust hands back the
+ * request on screen when nothing new was stashed, GAP-208): nothing new.
+ * Reopening it would start a new store generation and drop the reply of an
+ * edit still in flight. */
+function alreadyShowing(r: EditorRequest): boolean {
+  return r.kind === "project" && sessionMatchesRequest.value && editorProject.snapshot?.projectId === r.value;
 }
 
 /** True once the store's OWN reply for the current session agrees with the
@@ -142,7 +167,7 @@ async function openRequested() {
   } catch (e) {
     logWarning(`take_editor_request failed: ${String(e)}`);
   }
-  if (request === null) return;
+  if (request === null || alreadyShowing(request)) return;
   // Set at drain time, before the open resolves — the gate's race safety.
   // The store's own same-base guard (Task 15) is what makes a re-drain of
   // the capture already showing safe rather than a duplicate
@@ -224,7 +249,18 @@ async function onDiscarded() {
 
 const unlisteners: (() => void)[] = [];
 
+/** F5, Ctrl+R, Ctrl+Shift+R, Ctrl+F, Ctrl+P do nothing in this window
+ * (GAP-208, D1-a). Capture phase, on `window`, so no handler and no focused
+ * element comes first. The assumption only hardware can prove (checklist
+ * row T72): WebView2 skips a browser accelerator whose keydown the page
+ * prevented. */
+function suppressBrowserKeys(event: KeyboardEvent): void {
+  if (isBrowserAcceleratorKey(event)) event.preventDefault();
+}
+
 onMounted(async () => {
+  window.addEventListener("keydown", suppressBrowserKeys, true);
+  unlisteners.push(() => window.removeEventListener("keydown", suppressBrowserKeys, true));
   // Subscribed BEFORE the first drain, so a request arriving while that
   // drain is in flight is not lost — the `region:begin` rule applied here.
   unlisteners.push(await listen("editor:open", () => void openRequested()));

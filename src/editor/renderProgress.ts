@@ -22,6 +22,15 @@ export function isComplete(job: RenderProgressView): boolean {
   return job.phase === "complete" && job.terminal !== null;
 }
 
+/** The Render dialog's line for a `complete` terminal. `name` is empty for
+ * a render the dialog did not start — one still running when the editor
+ * webview reloaded (GAP-208) — and a complete terminal without a product
+ * is a Review render's. */
+export function completionText(name: string, productId: string | undefined): string {
+  if (name) return `Render complete. “${name}” is now one of this project's products.`;
+  return productId ? "Render complete. The new video is now one of this project's products." : "Render complete.";
+}
+
 /** The bar's whole percent: 100 only for `isComplete`, else at most 99. */
 export function renderPercent(job: RenderProgressView): number {
   if (isComplete(job)) return 100;

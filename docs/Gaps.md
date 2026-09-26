@@ -6906,7 +6906,7 @@ no arrow-key roving (deferred from Task 57's review).
 The shipped retired map is empty, so only the injected-map test exercises
 it today.
 
-### GAP-208 · Medium · The Render dialog does not reattach to a running render after a webview reload
+### GAP-208 · ~~Medium~~ Low (FIXED 2026-09-26, hardening Task 15 — decision D1, option a; what remains is below, unverified on Windows) · The Render dialog does not reattach to a running render after a webview reload
 `src/components/editor/dialogs/RenderDialog.vue`, `src/composables/useRenderJob.ts`,
 `src/stores/editorJobs.ts`, `src/roots/EditorRoot.vue` (Task 47 carry; recorded
 by Task 58). A render's progress travels on the Channel the webview opened for
@@ -6928,6 +6928,34 @@ project, the render finishes into `products\` unseen (it is in the Products
 tab the next time the project opens) and a close/quit still waits on it
 through the shutdown gate. Not small: it needs a session re-attach path in
 `EditorRoot`, a review flag on the job record and a polling reconcile.
+
+**Fixed (hardening Task 15, review finding I-3; the user approved D1 option
+(a): no new dependency).** (i) `EditorRoot` prevents F5 (any modifier),
+Ctrl+R, Ctrl+Shift+R, Ctrl+F and Ctrl+P window-wide, in the capture phase
+(`shortcuts.ts`' `isBrowserAcceleratorKey`; an Alt or Meta chord is never
+one, review finding M-V5). (ii) Item (1): `take_editor_request`
+(`editor_commands.rs`' `RequestSlots`, no new command) answers the project
+ON SCREEN when nothing new is stashed — recorded by every successful editor
+open (`editor_open_staged`, `editor_open_project`, `editor_import_package`),
+forgotten by `editor_close_session` and `editor_discard_project` — so a
+reload reopens the project over the live session (`editor_commands_tests.rs`
+`a_drain_with_nothing_new_hands_back_the_request_on_screen` and siblings;
+`tests/editorReload.test.ts`). (iii) Item (3): every new session reconciles
+its jobs; a running render the store did not hold is ADOPTED
+(`editorJobs.adopted`), `RenderVideoButton` opens the Render dialog on it,
+and `editorJobs.follow` polls `editor_get_jobs` once a second until its
+terminal. **What remains:** (a) WHETHER WebView2 skips a browser accelerator
+whose keydown the page prevented is an assumption only checklist row T72 can
+prove — if it does not hold, a release-build F5 still reloads, and (ii)/(iii)
+are then what keeps the project and the render reachable; (b) item (2)
+stands while the render RUNS: the registry still has no review flag, so an
+adopted Review render is followed in the Render dialog, not the Review
+dialog (its completion line is inferred — a complete terminal with no
+`productId` is a Review's, `renderProgress.completionText` — and its outcome
+button reads "Try again"); (c) `follow` retries a failed registry read on
+every tick and stops only on a terminal, the job leaving the registry or a
+session change, so a registry that fails for good keeps the dialog busy
+(Cancel stays, as before).
 
 ### GAP-209 · ~~Medium~~ FIXED 2026-09-25 (Task 58 fix round 1) · The editor's DARK theme misses 4.5:1 for subtle text, clip labels and the primary button
 `src/style.css` (`@theme` defaults), `src/components/ui/AppButton.vue`

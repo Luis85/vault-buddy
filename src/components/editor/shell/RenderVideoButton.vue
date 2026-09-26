@@ -11,13 +11,19 @@
  * dialog opens. A render's errors stay inside the dialog and never reach
  * the header's save status (Task 46's carry). The Checks dialog's
  * "Continue to render" opens it too (`onReveal("render")`, Task 54).
+ *
+ * Hardening Task 15 (GAP-208): a render still running when the editor
+ * webview reloaded has no Channel and no dialog; `editorJobs` adopts it on
+ * the new session's reconcile, and this opens the dialog on it
+ * (`resumeJobId`) so its progress is on screen until it ends.
  */
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { selectionRange } from "../../../editor/renderRanges";
 import { onReveal } from "../../../editor/revealBus";
 import type { RenderRange } from "../../../editorTypes";
+import { useEditorJobsStore } from "../../../stores/editorJobs";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import AppButton from "../../ui/AppButton.vue";
@@ -37,12 +43,32 @@ const title = computed(() => reason.value ?? undefined);
 
 const open = ref(false);
 const initialRange = ref<RenderRange | null>(null);
+/** A running render the dialog follows instead of offering a new one. */
+const resumeJobId = ref<string | null>(null);
 
 function onRender(): void {
   if (reason.value) return;
+  resumeJobId.value = null;
   initialRange.value = selectionRange(editorProject.project, workspace.selectionClipIds, editorProject.durationMs);
   open.value = true;
 }
+
+function onClose(): void {
+  open.value = false;
+  resumeJobId.value = null;
+}
+
+const jobs = useEditorJobsStore();
+watch(
+  () => jobs.adoptedRender,
+  (jobId) => {
+    if (!jobId || open.value) return;
+    resumeJobId.value = jobId;
+    initialRange.value = null;
+    open.value = true;
+  },
+  { immediate: true },
+);
 
 /** Task 54: the Checks dialog's "Continue to render". */
 onReveal("render", onRender);
@@ -68,6 +94,7 @@ onReveal("render", onRender);
   <RenderDialog
     :open="open"
     :initial-range="initialRange"
-    @close="open = false"
+    :resume-job-id="resumeJobId"
+    @close="onClose"
   />
 </template>

@@ -157,3 +157,25 @@ export function isGuideDismissKey(event: KeyboardEvent): boolean {
   if (event.key !== "Escape" || event.defaultPrevented) return false;
   return document.querySelector('[role="menu"], [role="dialog"]:not([aria-modal="true"])') === null;
 }
+
+/** The letters whose Ctrl chord WebView2 answers as a browser, not an app:
+ * reload (R, and Ctrl+Shift+R), find (F) and print (P). */
+const BROWSER_CTRL_KEYS = new Set(["r", "f", "p"]);
+
+/**
+ * A key WebView2's browser accelerators would act on in the editor window
+ * (hardening Task 15, GAP-208, decision D1-a): F5 with any modifier and
+ * Ctrl(+Shift)+R reload the webview — dropping its stores and every job
+ * Channel while Rust keeps the session and any render running — and Ctrl+F
+ * / Ctrl+P open the browser's find bar and print dialog, neither of which
+ * belongs in this app. `EditorRoot` prevents their default everywhere in
+ * the window, text fields included (there is no find feature to protect).
+ *
+ * An Alt or Meta chord is never one of them (review finding M-V5): AltGr
+ * arrives as Ctrl+Alt and types a character on some layouts.
+ */
+export function isBrowserAcceleratorKey(event: KeyboardEvent): boolean {
+  if (event.key === "F5") return true;
+  if (!event.ctrlKey || event.altKey || event.metaKey) return false;
+  return BROWSER_CTRL_KEYS.has(event.key.toLowerCase());
+}

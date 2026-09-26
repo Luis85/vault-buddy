@@ -610,7 +610,7 @@ pub async fn editor_open_staged(
 ) -> Result<EditorOpenResult, EditorError> {
     require_editor_window(&window)?;
     let root = local_data(&app)?;
-    blocking(move || {
+    let opened = blocking(move || {
         let staging_dir = staging::staging_dir(&root);
         open_staged_session(
             &app.state::<EditorState>(),
@@ -619,7 +619,10 @@ pub async fn editor_open_staged(
             &staged_base,
         )
     })
-    .await
+    .await?;
+    // GAP-208: a reload of the editor webview reopens this capture's project.
+    crate::editor_commands::note_editor_opened(&window, &opened.snapshot.project_id);
+    Ok(opened)
 }
 
 /// `knownRevision` is accepted for the contract (a later task may answer
@@ -658,17 +661,17 @@ pub async fn editor_close_session(
 ) -> Result<(), EditorError> {
     require_editor_window(&window)?;
     let root = local_data(&app)?;
-    blocking(move || {
+    let closed = blocking(move || {
+        let state = app.state::<EditorState>();
+        let project_id = project_id_for(&state, &session_id)?;
         let staging_dir = staging::staging_dir(&root);
-        super::session_close::close_in(
-            &app.state::<EditorState>(),
-            &root,
-            &staging_dir,
-            &session_id,
-            disposition,
-        )
+        super::session_close::close_in(&state, &root, &staging_dir, &session_id, disposition)?;
+        Ok(project_id)
     })
-    .await
+    .await?;
+    // GAP-208: a closed project is not what a reload reopens.
+    crate::editor_commands::note_editor_closed(&window, &closed);
+    Ok(())
 }
 
 /// SYNC: a window call, so it runs on the main thread; it never blocks.

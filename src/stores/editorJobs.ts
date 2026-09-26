@@ -39,6 +39,14 @@
  * the product library. A render's refusal lands in `renderError`, never in
  * `lastError` (the media library's import line) and never in
  * `editorProject.saveError` (the header's "Save failed") — Task 46's carry.
+ *
+ * **A render nobody is following (hardening Task 15, GAP-208).** After a
+ * reload of the editor webview a render Rust is still running has no
+ * Channel here; the reconcile that runs for every new session is the first
+ * to see it. A RUNNING render the store did not hold before that read is
+ * `adopted` — `RenderVideoButton` opens the Render dialog on it, and
+ * `follow` polls `editor_get_jobs` every `FOLLOW_INTERVAL_MS` until its
+ * terminal, the only progress source left.
  */
 import { defineStore } from "pinia";
 
@@ -83,6 +91,21 @@ interface RenderOptions {
 
 type StartJob = (onProgress: (m: JobProgressDto) => void) => Promise<{ jobId: string }>;
 
+/** How often `follow` re-reads the registry for a render with no Channel. */
+const FOLLOW_INTERVAL_MS = 1000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** The registry's running renders the store does not hold — renders this
+ * webview has no Channel for (module doc). Read against what the store holds
+ * when the reply lands, so a render whose Channel opened while the read was
+ * in flight is not mistaken for one. */
+function unfollowedRenders(rows: JobRecordDto[], held: Record<string, JobView>): string[] {
+  return rows.filter((r) => r.kind === "render" && r.terminal === null && !held[r.jobId]).map((r) => r.jobId);
+}
+
 /** `jobs` without the session's RUNNING rows that the store already held
  * before the registry was read (`heldBefore`) and that the registry no
  * longer lists (`listed`). Rust forgets a job only once its result has
@@ -108,12 +131,20 @@ export const useEditorJobsStore = defineStore("editorJobs", {
     /** The last refused render or review start (or a refused cancel of
      * one) — the Render/Review dialogs' own, never `lastError`. */
     renderError: null as EditorError | null,
+    /** Running renders a reconcile found with no Channel in this webview
+     * (module doc) and nothing follows yet. */
+    adopted: [] as string[],
   }),
   getters: {
     /** The current session's jobs, in the order they were first seen. */
     sessionJobs(state): JobView[] {
       const sessionId = useEditorProjectStore().sessionId;
       return Object.values(state.jobs).filter((j) => j.sessionId === sessionId);
+    },
+    /** The current session's first adopted render still running, if any. */
+    adoptedRender(): string | null {
+      const job = this.sessionJobs.find((j) => this.adopted.includes(j.jobId) && j.terminal === null);
+      return job?.jobId ?? null;
     },
     /** The current session's running import, if any. */
     activeImport(): JobView | null {
@@ -246,6 +277,7 @@ export const useEditorJobsStore = defineStore("editorJobs", {
       }
       if (project.sessionId !== sessionId) return;
       this.jobs = withoutForgotten(this.jobs, sessionId, heldBefore, new Set(rows.map((r) => r.jobId)));
+      this.adopted = [...this.adopted, ...unfollowedRenders(rows, this.jobs)];
       for (const row of rows) {
         const held = this.jobs[row.jobId];
         // A job the store already holds as terminal keeps its outcome: the
@@ -253,6 +285,19 @@ export const useEditorJobsStore = defineStore("editorJobs", {
         // BEFORE the terminal can land after it (fix round 1).
         if (held && held.terminal !== null) continue;
         this.install({ ...row, sessionId }, held?.sequence ?? 0);
+      }
+    },
+    /** Follow an adopted render (module doc): re-read the registry every
+     * `FOLLOW_INTERVAL_MS` until the job has its terminal, leaves the
+     * registry or the session changes. A failed read is retried on the next
+     * tick — only a terminal ends a render. */
+    async follow(jobId: string): Promise<void> {
+      this.adopted = this.adopted.filter((id) => id !== jobId);
+      const sessionId = useEditorProjectStore().sessionId;
+      const following = () => this.jobs[jobId]?.terminal === null && useEditorProjectStore().sessionId === sessionId;
+      while (following()) {
+        await sleep(FOLLOW_INTERVAL_MS);
+        await this.reconcile();
       }
     },
   },

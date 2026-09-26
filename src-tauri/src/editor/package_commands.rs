@@ -600,7 +600,8 @@ pub async fn editor_import_package(
 ) -> Result<Option<EditorOpenResult>, EditorError> {
     require_editor_window(&window)?;
     let root = local_data(&app)?;
-    blocking(move || {
+    let tracker = app.clone();
+    let opened = blocking(move || {
         on_package_thread(move || {
             let chooser = DialogChooser {
                 app: &app,
@@ -610,7 +611,12 @@ pub async fn editor_import_package(
             import_package_in(&app.state::<EditorState>(), &root, &chooser, &prober)
         })
     })
-    .await
+    .await?;
+    // GAP-208: the imported project is now the one on screen.
+    if let Some(result) = &opened {
+        crate::editor_commands::note_editor_opened(&tracker, &result.snapshot.project_id);
+    }
+    Ok(opened)
 }
 
 /// Test-only seam (fix round 1): runs once, on the exporting thread, after

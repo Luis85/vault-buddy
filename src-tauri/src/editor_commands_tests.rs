@@ -216,14 +216,14 @@ fn every_command_taking_a_base_guards_it_with_is_safe_base() {
 #[test]
 fn editor_request_stash_carries_staged_or_project() {
     let state = EditorRequest::default();
-    *lock_ignoring_poison(&state.0) = Some(EditorRequestKind::Staged("cap one".to_string()));
+    lock_ignoring_poison(&state.0).stash(EditorRequestKind::Staged("cap one".to_string()));
     let taken = lock_ignoring_poison(&state.0).take();
     assert_eq!(
         taken,
         Some(EditorRequestKind::Staged("cap one".to_string()))
     );
     assert!(
-        lock_ignoring_poison(&state.0).is_none(),
+        lock_ignoring_poison(&state.0).pending.is_none(),
         "take() must leave the stash empty"
     );
 
@@ -370,7 +370,7 @@ fn open_project_editor_stashes_and_emits_like_open_capture_editor() {
 
     let body = bounded_body(production, "fn stash_and_open");
     let stash_at = body
-        .find(".0) = Some(request)")
+        .find(".stash(request)")
         .expect("stash_and_open must stash the request");
     let emit_at = body
         .find("emit_to(EDITOR_LABEL, EDITOR_OPEN_EVENT")
@@ -386,7 +386,7 @@ fn open_project_editor_stashes_and_emits_like_open_capture_editor() {
     // Both failure branches roll the stash back to None -- a failed emit or
     // a failed show must never leave a request a LATER drain would silently
     // open.
-    let rollbacks = body.matches(".0) = None;").count();
+    let rollbacks = body.matches(".rollback();").count();
     assert_eq!(
         rollbacks, 2,
         "stash_and_open must roll the stash back on BOTH the failed-emit and the failed-show \
@@ -484,4 +484,128 @@ fn no_source_file_references_a_retired_command() {
         "a retired command or event is still referenced:\n{}",
         found.join("\n")
     );
+}
+
+// --- Hardening Task 15 (review finding I-3, GAP-208, decision D1-a): a
+// reload of the editor webview must not orphan the project on screen. ---
+
+fn project(id: &str) -> EditorRequestKind {
+    EditorRequestKind::Project(id.to_string())
+}
+
+// A reload (F5 in a devtools build, or one WebView2 did not suppress) mounts
+// the editor webview again with the stash already drained. Before this task
+// the second drain answered `None`, so the window showed "No capture open"
+// while the session -- and any render it ran -- stayed live in Rust with
+// nothing on screen that could reach it.
+#[test]
+fn a_drain_with_nothing_new_hands_back_the_request_on_screen() {
+    let mut slots = RequestSlots::default();
+    assert_eq!(slots.take(), None, "a fresh window has nothing to reopen");
+    slots.stash(project("proj1"));
+    assert_eq!(slots.take(), Some(project("proj1")));
+    assert_eq!(
+        slots.peek_current(),
+        Some(project("proj1")),
+        "the drained request is the one on screen"
+    );
+    assert_eq!(
+        slots.take(),
+        Some(project("proj1")),
+        "a reload's drain must hand back the request on screen, not None"
+    );
+}
+
+// Every successful open records the PROJECT it opened, whatever asked for
+// it: a staged capture's drain, a Recovery Resume (which closes the session
+// first and reopens it) or a project file import (which never went through
+// the stash at all).
+#[test]
+fn a_successful_open_makes_its_project_the_request_on_screen() {
+    let mut slots = RequestSlots::default();
+    slots.stash(EditorRequestKind::Staged("cap one".to_string()));
+    let _ = slots.take();
+    slots.opened("proj1");
+    assert_eq!(slots.take(), Some(project("proj1")));
+    slots.opened("proj2");
+    assert_eq!(slots.take(), Some(project("proj2")));
+}
+
+#[test]
+fn closing_the_project_on_screen_forgets_it_and_closing_another_does_not() {
+    let mut slots = RequestSlots::default();
+    slots.opened("proj1");
+    slots.closed("other");
+    assert_eq!(
+        slots.take(),
+        Some(project("proj1")),
+        "closing a project that is not on screen leaves the one that is"
+    );
+    slots.closed("proj1");
+    assert_eq!(slots.take(), None, "a closed project is not reopened");
+}
+
+// A new request stashed while one is on screen wins the next drain; a stash
+// rolled back (a failed emit or show) leaves the request on screen alone.
+#[test]
+fn a_new_stash_wins_and_a_rolled_back_stash_leaves_the_request_on_screen() {
+    let mut slots = RequestSlots::default();
+    slots.opened("proj1");
+    slots.stash(project("proj2"));
+    slots.rollback();
+    assert_eq!(slots.take(), Some(project("proj1")));
+    slots.stash(project("proj2"));
+    assert_eq!(slots.take(), Some(project("proj2")));
+}
+
+// The Rust half is only as good as its callers: every command that opens a
+// session for the editor window records it, and every command that removes
+// one forgets it -- AFTER its own work succeeded, never before (a refused
+// discard leaves the session, and so the project on screen, as it was).
+#[test]
+fn every_open_and_close_command_keeps_the_request_on_screen_current() {
+    let files: [(&str, &str, &str); 5] = [
+        (
+            include_str!("editor/session_commands.rs"),
+            "pub async fn editor_open_staged",
+            "note_editor_opened(",
+        ),
+        (
+            include_str!("editor/save_commands.rs"),
+            "pub async fn editor_open_project",
+            "note_editor_opened(",
+        ),
+        (
+            include_str!("editor/package_commands.rs"),
+            "pub async fn editor_import_package",
+            "note_editor_opened(",
+        ),
+        (
+            include_str!("editor/session_commands.rs"),
+            "pub async fn editor_close_session",
+            "note_editor_closed(",
+        ),
+        (
+            include_str!("editor/project_discard.rs"),
+            "pub async fn editor_discard_project",
+            "note_editor_closed(",
+        ),
+    ];
+    for (src, command, call) in files {
+        let start = src
+            .find(command)
+            .unwrap_or_else(|| panic!("{command} not found"));
+        let rest = &src[start..];
+        let body = &rest[..rest.find("\n}\n").map_or(rest.len(), |i| i + 3)];
+        let called = body
+            .find(call)
+            .unwrap_or_else(|| panic!("{command} must call {call} (GAP-208)"));
+        let awaited = body
+            .find(".await?")
+            .unwrap_or_else(|| panic!("{command} must `.await?` its own work first"));
+        assert!(
+            awaited < called,
+            "{command} must call {call} only after its own work succeeded"
+        );
+    }
 }

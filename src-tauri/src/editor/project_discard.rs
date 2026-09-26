@@ -199,6 +199,7 @@ pub async fn editor_discard_project(
 ) -> Result<(), EditorError> {
     require_editor_window(&window)?;
     let root = local_data(&app)?;
+    let discarded = project_file_id.clone();
     blocking(move || {
         let staging_dir = staging::staging_dir(&root);
         discard_project_in(
@@ -208,7 +209,10 @@ pub async fn editor_discard_project(
             &project_file_id,
         )
     })
-    .await
+    .await?;
+    // GAP-208: a discarded project is not what a reload reopens.
+    crate::editor_commands::note_editor_closed(&window, &discarded);
+    Ok(())
 }
 
 #[cfg(test)]

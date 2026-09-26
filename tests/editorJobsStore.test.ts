@@ -289,3 +289,64 @@ describe("editorJobs — reconcile", () => {
     expect(cancelJob).toHaveBeenCalledWith("ses-a", "job-1");
   });
 });
+
+// Hardening Task 15 (GAP-208): after a reload of the editor webview a render
+// Rust is still running has no Channel here. The reconcile that runs for the
+// new session adopts it; a render this webview started itself never is —
+// its own dialog already follows it.
+describe("editorJobs — renders nobody follows", () => {
+  const running = (jobId: string): JobRecordDto => ({
+    jobId,
+    kind: "render",
+    phase: "rendering",
+    fraction: 0.5,
+    terminal: null,
+  });
+
+  it("adopts a running render only when this webview did not start it", async () => {
+    let rows: JobRecordDto[] = [running("job-mine"), running("job-orphan")];
+    const { jobs } = await setup({
+      startRender: () => Promise.resolve({ jobId: "job-mine", revision: 3 }),
+      getJobs: () => Promise.resolve(rows),
+    });
+    await jobs.startRender({ name: "v1", range: null, quality: "balanced" });
+    await jobs.reconcile();
+    expect(jobs.adoptedRender).toBe("job-orphan");
+    // An import or a finished render is never adopted.
+    rows = [
+      { ...running("job-imp"), kind: "import" },
+      { ...running("job-done"), phase: "complete", terminal: { productId: "p" } },
+    ];
+    jobs.adopted = [];
+    await jobs.reconcile();
+    expect(jobs.adoptedRender).toBeNull();
+  });
+
+  it("follow polls the registry until the render's terminal, retrying a failed read", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const reads: (JobRecordDto[] | Error)[] = [
+        [running("job-7")],
+        new Error("transport down"),
+        [{ ...running("job-7"), phase: "complete", fraction: 1, terminal: { productId: "p" } }],
+      ];
+      const getJobs = vi.fn(() => {
+        const next = reads.length > 1 ? reads.shift() : reads[0];
+        return next instanceof Error ? Promise.reject(next) : Promise.resolve(next ?? []);
+      });
+      const { jobs } = await setup({ getJobs, getProducts: () => Promise.resolve([]) });
+      await jobs.reconcile();
+      expect(jobs.adoptedRender).toBe("job-7");
+      const followed = jobs.follow("job-7");
+      expect(jobs.adoptedRender, "a followed render is no longer waiting for a follower").toBeNull();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(jobs.jobs["job-7"].terminal).toBeNull();
+      await vi.advanceTimersByTimeAsync(1000);
+      await followed;
+      expect(jobs.jobs["job-7"].phase).toBe("complete");
+      expect(getJobs).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

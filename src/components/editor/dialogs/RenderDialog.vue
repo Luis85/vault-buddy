@@ -25,11 +25,19 @@
  * then would leave a render nobody is following) — the dialog cannot be
  * dismissed by Close, Escape or the backdrop: Cancel is the explicit way
  * out (`DialogHost`'s `closable`).
+ *
+ * `resumeJobId` (hardening Task 15, GAP-208): a render that was already
+ * running when the editor webview reloaded. The dialog opens on its
+ * progress instead of the form and follows it by polling the job registry
+ * (`editorJobs.follow`), since its Channel went with the old webview; the
+ * name it was started under went too, so its completion line says so
+ * without one — and a Review render (no product) says only that it
+ * finished.
  */
 import { computed, ref, watch } from "vue";
 
 import { useRenderJob } from "../../../composables/useRenderJob";
-import { isComplete } from "../../../editor/renderProgress";
+import { completionText, isComplete } from "../../../editor/renderProgress";
 import { msFromSeconds, secondsText } from "../../../editor/renderRanges";
 import { openChecks } from "../../../editor/revealBus";
 import type { RenderQuality, RenderRange } from "../../../editorTypes";
@@ -43,7 +51,7 @@ import PublishDialog from "./PublishDialog.vue";
 import RenderOutcome from "./RenderOutcome.vue";
 import RenderSettingsForm from "./RenderSettingsForm.vue";
 
-const props = defineProps<{ open: boolean; initialRange: RenderRange | null }>();
+const props = defineProps<{ open: boolean; initialRange: RenderRange | null; resumeJobId?: string | null }>();
 const emit = defineEmits<{ (e: "close"): void }>();
 
 const editorProject = useEditorProjectStore();
@@ -102,6 +110,11 @@ watch(
   (open) => {
     if (!open) return;
     reset();
+    if (props.resumeJobId) {
+      startedName.value = "";
+      jobId.value = props.resumeJobId;
+      void jobs.follow(props.resumeJobId);
+    }
     void products.refresh();
     void checks.refresh();
   },
@@ -138,7 +151,7 @@ const status = computed<{ text: string; alert: boolean } | null>(() => {
   if (refusal.value) return { text: `The render could not start. ${refusal.value.message}`, alert: true };
   const j = job.value;
   if (!j || j.terminal === null) return null;
-  if (isComplete(j)) return { text: `Render complete. “${startedName.value}” is now one of this project's products.`, alert: false };
+  if (isComplete(j)) return { text: completionText(startedName.value, j.terminal.productId), alert: false };
   if (j.phase === "cancelled") return { text: "Render cancelled. Nothing was created, and your project is unchanged.", alert: false };
   return { text: `The render did not finish. ${j.terminal.error?.message ?? ""}`.trim(), alert: true };
 });

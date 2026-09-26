@@ -525,7 +525,7 @@ pub async fn editor_open_project(
 ) -> Result<EditorOpenResult, EditorError> {
     require_editor_window(&window)?;
     let root = local_data(&app)?;
-    blocking(move || {
+    let opened = blocking(move || {
         open_project_session(
             &app.state::<EditorState>(),
             &root,
@@ -533,7 +533,10 @@ pub async fn editor_open_project(
             use_recovery,
         )
     })
-    .await
+    .await?;
+    // GAP-208: a reload of the editor webview reopens this project.
+    crate::editor_commands::note_editor_opened(&window, &opened.snapshot.project_id);
+    Ok(opened)
 }
 
 #[cfg(test)]

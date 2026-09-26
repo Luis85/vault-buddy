@@ -67,9 +67,94 @@ pub enum EditorRequestKind {
 /// What the editor window should open when it next mounts (or, via
 /// `EDITOR_OPEN_EVENT`, the next time it is asked to check again).
 /// Rust-owned because the panel and the editor are separate webviews with
-/// separate stores; a one-shot slot, drained by `take_editor_request`.
+/// separate stores; drained by `take_editor_request`.
 #[derive(Default)]
-pub struct EditorRequest(pub Mutex<Option<EditorRequestKind>>);
+pub struct EditorRequest(pub Mutex<RequestSlots>);
+
+/// The stash plus the request ON SCREEN (hardening Task 15, review finding
+/// I-3, GAP-208, decision D1-a).
+///
+/// `pending` is the one-shot slot `open_capture_editor`/`open_project_editor`
+/// fill and `take_editor_request` drains. `current` is what the editor window
+/// is showing: the last request drained, replaced by the project of every
+/// successful open (`note_editor_opened` — a staged capture's open, a
+/// Recovery Resume's reopen and a project file import alike) and forgotten
+/// when that project's session is closed or the project is discarded
+/// (`note_editor_closed`).
+///
+/// Why it exists: a reload of the editor webview (F5/Ctrl+R that WebView2's
+/// browser accelerator keys still answer — `EditorRoot` suppresses them, but
+/// only a hardware run can prove that holds — or a devtools reload) mounts
+/// `EditorRoot` again with the stash already drained. Draining `None` then
+/// showed "No capture open" while the session, and any render it was
+/// running, stayed live in Rust with nothing on screen able to reach it. So
+/// a drain that finds nothing new hands back `current` instead, and the
+/// reloaded window reopens the project — Rust's open paths REUSE the live
+/// session for it — and reconciles its jobs.
+///
+/// A hidden window deliberately keeps `current`: hiding (the X, "Keep for
+/// later") never closes the session, and the next `open_*_editor` stashes a
+/// new request that wins the drain anyway. `EditorRoot` ignores a handed-back
+/// request for the project it is already showing, so a spurious or
+/// double-fired `editor:open` costs nothing.
+#[derive(Default)]
+pub struct RequestSlots {
+    pub(crate) pending: Option<EditorRequestKind>,
+    current: Option<EditorRequestKind>,
+}
+
+impl RequestSlots {
+    pub(crate) fn stash(&mut self, request: EditorRequestKind) {
+        self.pending = Some(request);
+    }
+
+    /// A failed emit or show leaves nothing a later drain would silently
+    /// open — and leaves what is on screen alone.
+    pub(crate) fn rollback(&mut self) {
+        self.pending = None;
+    }
+
+    /// The new request, remembered as the one on screen; or, with nothing
+    /// new stashed, the one already on screen (`peek_current`).
+    pub(crate) fn take(&mut self) -> Option<EditorRequestKind> {
+        match self.pending.take() {
+            Some(request) => {
+                self.current = Some(request.clone());
+                Some(request)
+            }
+            None => self.peek_current(),
+        }
+    }
+
+    fn peek_current(&self) -> Option<EditorRequestKind> {
+        self.current.clone()
+    }
+
+    pub(crate) fn opened(&mut self, project_id: &str) {
+        self.current = Some(EditorRequestKind::Project(project_id.to_string()));
+    }
+
+    pub(crate) fn closed(&mut self, project_id: &str) {
+        if self.current == Some(EditorRequestKind::Project(project_id.to_string())) {
+            self.current = None;
+        }
+    }
+}
+
+/// An editor-window open succeeded: its project is now the one on screen
+/// (`RequestSlots`). Called by `editor_open_staged`, `editor_open_project`
+/// and `editor_import_package` after their own work returned `Ok`.
+pub(crate) fn note_editor_opened<R: tauri::Runtime>(app: &impl Manager<R>, project_id: &str) {
+    lock_ignoring_poison(&app.state::<EditorRequest>().0).opened(project_id);
+}
+
+/// A project's session was closed (any disposition) or the project was
+/// discarded: a reload must not reopen it (`RequestSlots`). Called by
+/// `editor_close_session` and `editor_discard_project` after their own work
+/// returned `Ok` — a refused discard leaves the project on screen.
+pub(crate) fn note_editor_closed<R: tauri::Runtime>(app: &impl Manager<R>, project_id: &str) {
+    lock_ignoring_poison(&app.state::<EditorRequest>().0).closed(project_id);
+}
 
 /// Is this base name safe to turn into a path inside the staging directory?
 ///
@@ -152,7 +237,7 @@ fn stash_and_open(
     caller: &str,
     request: EditorRequestKind,
 ) -> Result<(), String> {
-    *lock_ignoring_poison(&app.state::<EditorRequest>().0) = Some(request);
+    lock_ignoring_poison(&app.state::<EditorRequest>().0).stash(request);
     // Emitted BEFORE `show()`, the `region:begin` shape: the editor's own
     // listener is installed once at mount (the webview loads regardless of
     // `visible: false`, same as panel/bubble/overlay), so by the time this
@@ -160,12 +245,12 @@ fn stash_and_open(
     // ALREADY-mounted editor re-drain the stash instead of doing nothing
     // (see the module doc's "why the stash alone is not enough").
     if let Err(e) = app.emit_to(EDITOR_LABEL, EDITOR_OPEN_EVENT, ()) {
-        *lock_ignoring_poison(&app.state::<EditorRequest>().0) = None;
+        lock_ignoring_poison(&app.state::<EditorRequest>().0).rollback();
         log::warn!("{caller}: could not signal the editor window: {e}");
         return Err(format!("Could not signal the editor: {e}"));
     }
     if let Err(e) = window.show() {
-        *lock_ignoring_poison(&app.state::<EditorRequest>().0) = None;
+        lock_ignoring_poison(&app.state::<EditorRequest>().0).rollback();
         return Err(format!("Could not open the editor: {e}"));
     }
     let _ = window.unminimize();
@@ -222,11 +307,12 @@ pub fn open_project_editor(app: AppHandle, project_file_id: String) -> Result<()
     )
 }
 
-/// SYNC, one-shot: the editor webview drains this on mount, and again on
-/// every `EDITOR_OPEN_EVENT`. Returns `None` when nothing is staged, which
-/// is not an error — a user can alt-tab back to an editor that is already
-/// showing a capture, and `EDITOR_OPEN_EVENT` is only emitted when
-/// `open_capture_editor`/`open_project_editor` actually staged something.
+/// SYNC: the editor webview drains this on mount, and again on every
+/// `EDITOR_OPEN_EVENT`. A stashed request is drained once; with nothing new
+/// stashed it answers the request ON SCREEN (`RequestSlots`, hardening Task
+/// 15 / GAP-208) — which is how a reloaded editor webview finds its project
+/// again — and `None` only when the window shows nothing. Neither is an
+/// error.
 #[tauri::command]
 pub fn take_editor_request(app: AppHandle) -> Option<EditorRequestKind> {
     lock_ignoring_poison(&app.state::<EditorRequest>().0).take()
