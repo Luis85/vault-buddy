@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::*;
+use crate::editor::redact::redact_name;
 use crate::editor::session_commands::open_staged_session;
 use crate::editor::store_io::create_project;
 use vault_buddy_screen::staging::StagedSidecar;
@@ -269,15 +270,19 @@ fn interrupted_publish_is_reported_not_deleted() {
 
     let reports = interrupted_publishes(f.root());
 
+    // M-V3 (hardening Task 11): the vault-relative names are handles.
     assert_eq!(
         reports,
         vec![
-            "A publish was interrupted before its video was saved as Tutorials/Other.mp4. \
-             A hidden partial copy may be left in that folder; publish it again."
-                .to_string(),
-            "A publish was interrupted: the video was saved as Tutorials/Demo (2).mp4 but \
-             its note was not."
-                .to_string(),
+            format!(
+                "A publish was interrupted before its video was saved as {}. A hidden \
+                 partial copy may be left in that folder; publish it again.",
+                redact_name("Tutorials/Other.mp4")
+            ),
+            format!(
+                "A publish was interrupted: the video was saved as {} but its note was not.",
+                redact_name("Tutorials/Demo (2).mp4")
+            ),
         ]
     );
     assert_eq!(std::fs::read(&video).unwrap(), before, "never rewritten");
@@ -287,4 +292,49 @@ fn interrupted_publish_is_reported_not_deleted() {
         "a finished one is swept"
     );
     assert_eq!(interrupted_publishes(f.root()).len(), 2, "reported again");
+}
+
+// M-V3 (hardening Task 11): the report is logged on every start, and the
+// journal's names are vault-relative -- a folder and the product's title.
+// Every arm of the report names them only as `<name:#...>` handles.
+#[test]
+fn a_publish_report_names_no_vault_file() {
+    let journal = |step, note: Option<&str>| PublishJournal {
+        step,
+        video: "Secret/Plan (2).mp4".to_string(),
+        note: note.map(str::to_string),
+    };
+    let video = redact_name("Secret/Plan (2).mp4");
+    let note = redact_name("Secret/Plan (2).md");
+    let cases = [
+        (
+            journal(PublishStep::Reserved, None),
+            format!(
+                "A publish was interrupted before its video was saved as {video}. A hidden \
+                 partial copy may be left in that folder; publish it again."
+            ),
+        ),
+        (
+            journal(PublishStep::Video, Some("Secret/Plan (2).md")),
+            format!(
+                "A publish was interrupted: the video was saved as {video} but its note was not."
+            ),
+        ),
+        (
+            journal(PublishStep::Note, Some("Secret/Plan (2).md")),
+            format!(
+                "A publish was interrupted after it saved the video as {video} and its note \
+                 as {note}."
+            ),
+        ),
+        (
+            journal(PublishStep::Note, None),
+            format!("A publish was interrupted after it saved the video as {video}."),
+        ),
+    ];
+    for (journal, want) in cases {
+        let shown = publish_report(&journal);
+        assert_eq!(shown, want);
+        assert!(!shown.contains("Secret") && !shown.contains('/'), "{shown}");
+    }
 }

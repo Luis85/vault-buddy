@@ -4,15 +4,23 @@
 //! `vault_dir.rs`, from the retired `export_worker/`) is covered the day
 //! it lands — formats a
 //! path, a file or capture name, a title, a caption or cue text only
-//! through `redact::redact_path`/`redact_name`.
+//! through `redact::redact_path`/`redact_name`. Since Task 11 (S-5, S-7,
+//! S-15, GAP-210's residual) the walk also reads `core/src/editor/**`,
+//! `src/screen_recovery/**` and `EXTRA_FILES` — the shell and core files
+//! whose lines name staged captures, publish temps and ffmpeg outputs.
 //!
-//! Three rules, each naming the file and line of the offending call:
+//! Four rules, each naming the file and line of the offending call:
 //!
 //! 1. **By name.** A formatted argument whose expression has a word
-//!    `path`, `file`, `name`, `title`, `text`, `caption` or `base` in it
-//!    (`webcam.file`, `entry.file_name()`, an inline `{base:?}`) and no
-//!    `redact` call. `base` is not in the brief's list; it is here because
-//!    a staged capture's base is `<date> <recorded window title>`.
+//!    `path`, `file`, `name`, `title`, `text`, `caption`, `base`, `video`,
+//!    `note`, `report` or `dest` in it (`webcam.file`, `entry.file_name()`,
+//!    an inline `{base:?}`, a publish report) and no `redact` call. `base`
+//!    is here because a staged capture's base is `<date> <recorded window
+//!    title>`; `video`/`note`/`report`/`dest` because a publish's journal
+//!    and an ffmpeg output carry vault-relative names (M-V3). A word that
+//!    is only the ROOT of a field projection (`report.orphaned`,
+//!    `report.repinned.len()`) names the struct, not the value printed: the
+//!    field decides, so `webcam.file` is still caught.
 //! 2. **`.display()`, whatever the name** (F38). `dir.display()` matches no
 //!    word above and prints the whole path — exactly what `vault_dir.rs`
 //!    did before Task 59 moved it here. There is no content-free use
@@ -25,6 +33,12 @@
 //!    that is itself such a call. A path reached some other way (a
 //!    function returning `PathBuf`, a tuple field) is not seen — rules 1
 //!    and 2 still catch the common spellings of it.
+//! 4. **`{:?}` of a capture-ish name in a MESSAGE** (Task 11, S-15): a
+//!    message may BUILD names (`format!("{base}.mp4")`, Display), but
+//!    Debug only ever quotes a value for a reader, and a message is logged
+//!    as-is. `name`/`file`/`path` are left to rules 2–3 here: an export
+//!    dialog's refusal quoting the name the user just typed in it is a
+//!    deliberate choice (docs/Gaps.md GAP-210 item 4).
 //!
 //! Known limits: a value formatted into a `String` first and then logged
 //! (`log::warn!("{msg}")`) is not followed, and a `Display` impl that
@@ -34,7 +48,13 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// The words rule 1 looks for, as whole identifier segments.
-const WORDS: &[&str] = &["path", "file", "name", "title", "text", "caption", "base"];
+const WORDS: &[&str] = &[
+    "path", "file", "name", "title", "text", "caption", "base", "video", "note", "report", "dest",
+];
+/// The words rule 4 looks for in a message's `{:?}`.
+const MESSAGE_WORDS: &[&str] = &[
+    "title", "text", "caption", "base", "video", "note", "report", "dest",
+];
 const LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 
 /// `src` with every `//` and `/* */` comment and every char literal
@@ -322,6 +342,34 @@ fn segments(expr: &str) -> impl Iterator<Item = &str> {
         .filter(|s| !s.is_empty())
 }
 
+/// `expr` with every identifier that is only the root of a field
+/// projection (`report` in `report.orphaned`, but not `path` in
+/// `path.to_string_lossy()`) blanked, so rule 1 judges the field printed.
+fn without_projected_roots(expr: &str) -> String {
+    let bytes = expr.as_bytes();
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let ident_end = |from: usize| (from..bytes.len()).find(|&i| !is_ident(bytes[i]));
+    let mut out = expr.to_string();
+    let mut i = 0;
+    while i < bytes.len() {
+        if !(bytes[i].is_ascii_alphabetic() || bytes[i] == b'_')
+            || (i > 0 && is_ident(bytes[i - 1]))
+        {
+            i += 1;
+            continue;
+        }
+        let end = ident_end(i).unwrap_or(bytes.len());
+        let field = bytes.get(end) == Some(&b'.')
+            && bytes.get(end + 1).is_some_and(|b| b.is_ascii_alphabetic());
+        let after = ident_end(end + 1).unwrap_or(bytes.len());
+        if field && bytes.get(after) != Some(&b'(') {
+            out.replace_range(i..end, &" ".repeat(end - i));
+        }
+        i = end;
+    }
+    out
+}
+
 /// Why `expr`, formatted by a log call, breaks a rule — or `None`.
 fn problem(expr: &str, debug: bool, paths: &HashSet<String>, call: Call) -> Option<&'static str> {
     if expr.contains("redact") {
@@ -330,12 +378,16 @@ fn problem(expr: &str, debug: bool, paths: &HashSet<String>, call: Call) -> Opti
     if expr.contains(".display()") {
         return Some(".display() prints the whole path");
     }
-    if call == Call::Log && segments(expr).any(|s| WORDS.contains(&s)) {
+    let judged = without_projected_roots(expr);
+    if call == Call::Log && segments(&judged).any(|s| WORDS.contains(&s)) {
         return Some("names a path, file, name, title, text, caption or base");
     }
     let bare = expr.trim_start_matches('&').trim();
     if debug && (paths.contains(bare) || is_formatted_path_expr(expr, paths)) {
         return Some("{:?} of a Path/PathBuf prints the whole path");
+    }
+    if call == Call::Message && debug && segments(&judged).any(|s| MESSAGE_WORDS.contains(&s)) {
+        return Some("{:?} of a capture name in a message quotes it for a reader");
     }
     None
 }
@@ -407,7 +459,7 @@ pub(crate) fn findings(file: &str, src: &str) -> Vec<String> {
 
 fn editor_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir)
-        .expect("src/editor is readable")
+        .expect("a scanned directory is readable")
         .flatten()
     {
         let path = entry.path();
@@ -423,19 +475,40 @@ fn editor_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// The files outside the editor's directories whose log lines and
+/// messages name staged captures, vault files or publish temps (Task 11:
+/// S-5, S-7, S-15 and GAP-210's `ffmpeg_run.rs` residual), relative to
+/// `src-tauri`.
+const EXTRA_FILES: &[&str] = &[
+    "src/editor_commands.rs",
+    "src/staged_commands.rs",
+    "src/staging_commands.rs",
+    "screen/src/ffmpeg_run.rs",
+    "core/src/capture_paths.rs",
+    "core/src/screen_capture_paths.rs",
+];
+
+/// Every file the scan reads: `src/editor/**`, `core/src/editor/**`,
+/// `src/screen_recovery/**` and `EXTRA_FILES`.
+fn scanned_files(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for dir in ["src/editor", "core/src/editor", "src/screen_recovery"] {
+        editor_files(&root.join(dir), &mut out);
+    }
+    out.extend(EXTRA_FILES.iter().map(|f| root.join(f)));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn editor_logs_redact_paths() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("editor");
-        let mut files = Vec::new();
-        editor_files(&dir, &mut files);
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let files = scanned_files(root);
         assert!(
-            files.len() > 20,
+            files.len() > 40,
             "the walk found only {} files",
             files.len()
         );
@@ -443,17 +516,36 @@ mod tests {
         for path in files {
             let src = std::fs::read_to_string(&path).expect("readable");
             let name = path
-                .strip_prefix(&dir)
+                .strip_prefix(root)
                 .unwrap_or(&path)
                 .display()
-                .to_string();
+                .to_string()
+                .replace('\\', "/");
             all.extend(findings(&name, &src));
         }
         assert!(
             all.is_empty(),
-            "log lines under src/editor/ print content; format it with redact_path/redact_name:\n{}",
+            "log lines print content; format it with redact_path/redact_name:\n{}",
             all.join("\n")
         );
+    }
+
+    // Task 11 (S-5, S-7, S-15, GAP-210 residual): the scan's scope is
+    // wider than `src/editor/`. Each entry is named so a rename or a move
+    // out of the walk reddens this rather than silently shrinking it.
+    #[test]
+    fn the_scan_reaches_every_file_outside_the_editor_that_logs_capture_names() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let files = scanned_files(root);
+        for file in EXTRA_FILES
+            .iter()
+            .chain(&["src/screen_recovery/companions.rs"])
+        {
+            assert!(
+                files.contains(&root.join(file)),
+                "{file} is not scanned (moved or renamed?)"
+            );
+        }
     }
 
     // F38 (Task 59): `vault_dir.rs` -- the publication's vault-directory
@@ -584,6 +676,31 @@ mod tests {
             found[2].starts_with("fixture.rs:4: {:?} of a Path"),
             "{found:?}"
         );
+    }
+
+    // Task 11 (M-V3, S-15): rule 4, and rule 1's field-projection reading.
+    #[test]
+    fn a_quoted_capture_name_in_a_message_and_a_named_root_are_judged_by_what_is_printed() {
+        let fixture = concat!(
+            "fn f(base: &str, report: Report) {\n",
+            "    let a = format!(\"no staged capture named {base:?} to pin\");\n",
+            "    let b = format!(\"{base}.mp4\");\n",
+            "    log::info!(\"re-pinned {} project(s)\", report.repinned.len());\n",
+            "    log::warn!(\"sweep: {report}\");\n",
+            "    log::warn!(\"left {}\", report.video);\n",
+            "    log::warn!(\"gone {}\", tmp.file_name().unwrap_or_default());\n",
+            "}\n",
+        );
+        let found = findings("fixture.rs", fixture);
+        assert_eq!(found.len(), 4, "{found:?}");
+        assert!(
+            found[0].starts_with("fixture.rs:2: {:?} of a capture name"),
+            "{found:?}"
+        );
+        for (at, line) in [(1, 5), (2, 6), (3, 7)] {
+            let want = format!("fixture.rs:{line}: names");
+            assert!(found[at].starts_with(&want), "{found:?}");
+        }
     }
 
     #[test]

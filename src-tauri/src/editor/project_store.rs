@@ -230,7 +230,7 @@ pub fn pin_staged(staging_dir: &Path, base: &str, project_id: &str) -> std::io::
     let mut sidecar = staging::read_sidecar(&path).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!("no staged capture named {base:?} to pin"),
+            "no staged capture by that name to pin",
         )
     })?;
     sidecar.extra.insert(

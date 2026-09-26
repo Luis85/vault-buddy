@@ -180,7 +180,10 @@ fn stash_and_open(
 #[tauri::command]
 pub fn open_capture_editor(app: AppHandle, base: String) -> Result<(), String> {
     if !is_safe_base(&base) {
-        log::warn!("open_capture_editor: refused a base outside staging: {base:?}");
+        log::warn!(
+            "open_capture_editor: refused a base outside staging: {}",
+            crate::editor::redact::redact_name(&base)
+        );
         return Err("That capture name is not one of ours.".to_string());
     }
     let window = app

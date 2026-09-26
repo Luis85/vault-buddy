@@ -75,7 +75,7 @@ use vault_buddy_screen::staging;
 use super::package_import::importing_project_id;
 use super::project_store::{pin_staged, pinned_project, project_dir, store_dir, SourceLocator};
 use super::publish::{PublishJournal, PublishStep, PUBLISH_JOURNAL};
-use super::redact::redact_path;
+use super::redact::{redact_name, redact_path};
 use super::render_jobs::JOBS_DIR;
 use super::save_commands::session_save_lock;
 use super::store_io::{load_sources, read_bounded, remove_dir_no_follow, RECOVERY_FILE};
@@ -605,10 +605,12 @@ fn valid_dir_names(dir: &Path) -> Vec<String> {
 /// The largest `publish.json` read: three short fields.
 const PUBLISH_JOURNAL_MAX_BYTES: u64 = 64 * 1024;
 
-/// What one interrupted publish's journal says, in words (F36).
+/// What one interrupted publish's journal says, in words (F36) -- logged on
+/// every start, so its vault-relative names (a folder, the product's
+/// title) are handles (M-V3, hardening Task 11).
 fn publish_report(journal: &PublishJournal) -> String {
-    let video = &journal.video;
-    match (journal.step, &journal.note) {
+    let video = redact_name(&journal.video);
+    match (journal.step, journal.note.as_deref().map(redact_name)) {
         (PublishStep::Reserved, _) => format!(
             "A publish was interrupted before its video was saved as {video}. A hidden partial copy \
              may be left in that folder; publish it again."
@@ -728,8 +730,9 @@ pub fn spawn_startup_repin(app: &AppHandle) {
             };
             let state = app.state::<EditorState>();
             let _open = lock_ignoring_poison(&state.open);
-            for report in interrupted_publishes(&root) {
-                log::warn!("editor-recovery-sweep: {report}");
+            // `publish_report` redacts every name it carries (tested).
+            for redacted in interrupted_publishes(&root) {
+                log::warn!("editor-recovery-sweep: {redacted}");
             }
             let now = std::time::SystemTime::now();
             let swept = sweep_stale_imports(&root, now);

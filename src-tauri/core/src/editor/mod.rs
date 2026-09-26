@@ -33,6 +33,7 @@ pub mod peaks;
 pub mod probe;
 pub mod projection;
 pub mod publish_io;
+pub mod redact;
 pub mod relink;
 pub mod render_plan;
 mod render_plan_audio;

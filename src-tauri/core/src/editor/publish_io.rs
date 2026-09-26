@@ -92,8 +92,8 @@ pub fn copy_into_vault(
 fn remove_temp(tmp: &Path) {
     match std::fs::remove_file(tmp) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => log::warn!(
-            "publish: could not remove the temporary file {:?}: {e}",
-            tmp.file_name().unwrap_or_default()
+            "publish: could not remove the temporary file {}: {e}",
+            super::redact::redact_path(tmp)
         ),
         _ => {}
     }

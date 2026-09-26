@@ -301,7 +301,7 @@ fn remove_output(dest: &Path, log_prefix: &str) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => log::warn!(
             "{log_prefix}: could not remove the abandoned output {}: {e}",
-            dest.display()
+            vault_buddy_core::editor::redact::redact_path(dest)
         ),
     }
 }

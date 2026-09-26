@@ -6899,12 +6899,24 @@ contrast e2e check now runs in both themes and failed on the old dark values
 (31 texts at 2.99–4.40:1).
 
 ### GAP-210 · Low · Content-free logs and diagnostics: what the scan and the export cannot see
-`src-tauri/src/editor/redact.rs`, `redact_guard.rs`, `diagnostics.rs`
-(Task 58, F-50; fix round 1). **What the scan sees**, in every `.rs` under
-`src/editor/**` except `*_tests.rs`/`*_guard.rs` (subdirectories included):
+`src-tauri/core/src/editor/redact.rs` (re-exported by the shell's
+`src-tauri/src/editor/redact.rs` since hardening Task 11), `redact_guard.rs`,
+`diagnostics.rs` (Task 58, F-50; fix round 1; hardening Task 11). **What the
+scan sees**, in every `.rs` under `src/editor/**`, `core/src/editor/**` and
+`src/screen_recovery/**` except `*_tests.rs`/`*_guard.rs` (subdirectories
+included), plus — since hardening Task 11 — `src/editor_commands.rs`,
+`src/staged_commands.rs`, `src/staging_commands.rs`,
+`screen/src/ffmpeg_run.rs`, `core/src/capture_paths.rs` and
+`core/src/screen_capture_paths.rs` (each named by
+`the_scan_reaches_every_file_outside_the_editor_that_logs_capture_names`):
 every LOG call (`log::error!`…`trace!`, a bare level macro, `log::log!(Level::…,
 …)`) formatting an argument named `path`/`file`/`name`/`title`/`text`/
-`caption`/`base` without `redact`; any `.display()` inside a log call OR a
+`caption`/`base`/`video`/`note`/`report`/`dest` without `redact` (a word that
+is only the ROOT of a field projection, `report.orphaned`, is judged by the
+field printed); any message construction quoting a
+`title`/`text`/`caption`/`base`/`video`/`note`/`report`/`dest` with `{:?}`
+(Debug only ever quotes for a reader — `format!("{base}.mp4")` builds a name
+and passes); any `.display()` inside a log call OR a
 MESSAGE construction (`format!`, `format_args!`, `io::Error::new`,
 `Error::other`, `anyhow!` — a message is logged as-is by whoever receives it,
 `e.message` or `{e}`); and `{:?}` of an identifier the file declares or binds
@@ -6921,13 +6933,18 @@ returning `PathBuf` formatted with `{:?}`, a tuple field, `to_string_lossy()`
 of a path pushed into a message; (2) a value formatted through a macro not
 listed (`write!` into a `String`, `concat!`) or by hand (`String` +
 `push_str`); (3) a third-party error whose `Display` names a path; (4) a
-capture NAME inside a message: the name rule applies to log calls only (a
-message builds `format!("{name}.json")` legitimately), so the user-facing
-messages that quote a staged capture's base (`session_commands.rs`
-"Could not unlink the capture …", `project_store.rs` "no staged capture
-named …") still carry it if a caller logs them (the final review removed a
-third, "The capture … is linked to project …", which is now logged through
-`redact_name` only); (5) a `(`/`)`/`,` inside a char literal is blanked, but a raw
+NAME inside a message formatted with `{}`: the full name rule applies to log
+calls only (a message builds `format!("{name}.json")` legitimately), and
+rule 4's `{:?}` check leaves `name`/`file`/`path` out on purpose — the export
+dialogs' refusals quote the file name the user just typed in that dialog
+(`package_commands.rs`, `subtitle_commands.rs`, `guide_commands.rs`
+"“notes.json” already exists…"), a deliberate UX choice; the webview no longer
+re-logs such messages once hardening Task 12 lands (S-15's frontend half).
+The two capture-base messages this item used to name are gone:
+`session_commands.rs` "Could not unlink the capture …" went with hardening
+Task 2's discard rework, and `project_store.rs` now says "no staged capture
+by that name to pin" (hardening Task 11; the final review had already removed
+a third, "The capture … is linked to project …"); (5) a `(`/`)`/`,` inside a char literal is blanked, but a raw
 string (`r#"…"#`) is read as an ordinary string; (6) a TOOL's own output
 (final review M8 — this entry used to claim the logs carried no path, and
 ffmpeg's stderr disproved it): ffmpeg names every file it was handed, and
@@ -6935,10 +6952,16 @@ until the final review a failed render put that stderr raw into both the
 webview's message and the log, and a failed take remux into the log.
 Both now redact the paths they handed ffmpeg (`redact::redact_paths_in`,
 inputs + output + job folder for a render, part + output for a take) and
-the render's webview message is a fixed sentence; a path ffmpeg prints
-that it was NOT handed would still pass, and the scan cannot tell a
-redacted tool string from a raw one. It covers `src/editor/**`
-only; `vault_dir.rs` (the F38 `dir.display()` shape) is covered since Task 59
+the render's webview message is a fixed sentence; since hardening Task 11
+(S-14) `redact_paths_in` also replaces each known path's filtergraph-escaped
+spellings of a render's `ass=filename=` option — the option level
+(`C\:\\Users\\…`, what the option parser reads, and so what its errors can
+echo) and the graph level over it — so an ASS document in the job
+folder is caught too (`filter_escaped_spellings_of_a_known_path_become_handles`);
+a path ffmpeg prints that it was NOT handed would still pass, and the scan
+cannot tell a redacted tool string from a raw one. `uri::launch`'s audit log
+of every launched `obsidian://` URI (vault-relative file included) is the
+product's deliberate audit trail and outside this entry; `vault_dir.rs` (the F38 `dir.display()` shape) is covered since Task 59
 moved it to `editor/vault_dir.rs` and redacted it
 (`moved_vault_dir_logs_still_redact_their_paths` names the file). Since Task
 59 the webview also takes the `<path:#…>`/`<name:#…>` handle OUT of every
@@ -6951,11 +6974,27 @@ report `os` as `windows x86_64`**, not the Windows build (no dependency was
 added to read it), and `webview2Version` is what `tauri::webview_version()`
 answers (`null` if the runtime query fails). Its `ffmpeg.filters` come from
 `screen::render::run::FEATURE_FILTERS`, which a screen test holds equal to
-the optional filters `required_filters` can ask for. **Still unredacted**
+the optional filters `required_filters` can ask for. ~~**Still unredacted**
 (final re-review, out of the scan's scope): `screen/src/ffmpeg_run.rs`
 logs a render's output path raw when it cannot remove an abandoned output
-file — the screen crate is outside `src/editor/**`, so `redact_guard` does
-not see it.
+file.~~ **CLOSED 2026-09-26 (hardening Task 11):** it logs
+`redact_path(dest)`, and the file is in the scan. **Fixed with it** (the
+post-merge review's findings, all in hardening Task 11): **M-V3** — the
+interrupted-publish report, logged on every start, names the journal's
+vault-relative video and note only as `<name:#…>` handles
+(`a_publish_report_names_no_vault_file`); **S-5/S-15 (Rust half)** — the raw
+capture bases and paths in `editor_commands.rs`, `staged_commands.rs`
+(the symlink refusal, the refused/forgotten base, `open_screen_capture`'s
+out-of-vault path), `publish_io.rs`'s temp name and `project_store.rs`'s pin
+message (the `staging_commands.rs` and `screen_recovery` lines the review
+cited were already redacted by hardening Tasks 4/8, and are now scanned);
+**S-7** — `capture_paths::rename_noreplace` and
+`screen_capture_paths::copy_noreplace` log handles, the latter with advice
+that fits Publish's own temp in the vault (nothing sweeps a vault folder)
+instead of the retired export's "the staging sweep will collect it", and
+`commit_screen_capture`'s give-up message no longer quotes the base;
+**S-14** — the escaped ASS spelling above. The scan went RED on all thirteen
+still-raw sites before they were fixed.
 
 ### GAP-211 · ~~Low~~ FIXED 2026-09-25 (Task 59 fix round 1) · Two Screen-tab settings are read by nothing since the phase-5 export was retired
 `src/components/ScreenCaptureConfigTab.vue`, `src-tauri/src/screen_config_commands.rs`,

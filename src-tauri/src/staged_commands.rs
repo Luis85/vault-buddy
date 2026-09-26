@@ -25,7 +25,7 @@ use vault_buddy_core::uri;
 use vault_buddy_screen::{staging, staging_files};
 
 use crate::editor::project_store::{pinned_project, unpin_staged};
-use crate::editor::redact::redact_name;
+use crate::editor::redact::{redact_name, redact_path};
 use crate::editor::store_io::{pin_liveness, PinLiveness};
 use crate::editor::EditorState;
 
@@ -219,7 +219,7 @@ pub(crate) fn discard_staged_files(dir: &Path, base: &str) -> Result<(), String>
             Ok(meta) if meta.file_type().is_symlink() => {
                 log::warn!(
                     "screen discard: {} is a symlink; refusing to delete through it",
-                    path.display()
+                    redact_path(&path)
                 );
                 return Err("That capture is not one Vault Buddy can discard.".to_string());
             }
@@ -307,7 +307,10 @@ pub(crate) fn staged_summaries(dir: &Path) -> Vec<StagedCaptureSummaryDto> {
 #[tauri::command]
 pub async fn discard_staged_capture(app: AppHandle, base: String) -> Result<(), String> {
     if !crate::editor_commands::is_safe_base(&base) {
-        log::warn!("discard_staged_capture: refused a base outside staging: {base:?}");
+        log::warn!(
+            "discard_staged_capture: refused a base outside staging: {}",
+            redact_name(&base)
+        );
         return Err("That capture name is not one of ours.".to_string());
     }
     let root = local_root_for(&app)?;
@@ -323,7 +326,10 @@ pub async fn discard_staged_capture(app: AppHandle, base: String) -> Result<(), 
     })
     .await
     .map_err(|e| format!("That capture could not be discarded: {e}"))??;
-    log::info!("screen discard: forgot the staged capture {base}");
+    log::info!(
+        "screen discard: forgot the staged capture {}",
+        redact_name(&base)
+    );
     emit_discarded(&app, &base);
     Ok(())
 }
@@ -447,11 +453,17 @@ pub fn open_screen_capture(id: String, path: String) -> Result<(), String> {
     let canon_path = std::fs::canonicalize(Path::new(&path))
         .map_err(|e| format!("Cannot resolve the saved capture: {e}"))?;
     if !canon_path.starts_with(&canon_vault) {
-        log::warn!("open_screen_capture: {path} is outside the vault it names");
+        log::warn!(
+            "open_screen_capture: {} is outside the vault it names",
+            redact_path(&canon_path)
+        );
         return Err("That capture is outside its vault.".to_string());
     }
     let rel = capture_file_param(&canon_path, &canon_vault).ok_or_else(|| {
-        log::warn!("open_screen_capture: {path} resolved outside its vault");
+        log::warn!(
+            "open_screen_capture: {} resolved outside its vault",
+            redact_path(&canon_path)
+        );
         "That capture is outside its vault.".to_string()
     })?;
     uri::launch(&uri::open_file_uri(&id, &rel))

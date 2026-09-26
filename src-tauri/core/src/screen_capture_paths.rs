@@ -11,6 +11,7 @@
 
 use crate::capture_note::NOTE_TMP_SUFFIX;
 use crate::capture_paths::{candidate, rename_noreplace};
+use crate::editor::redact::redact_path;
 use std::path::{Path, PathBuf};
 
 /// How many times `commit_screen_capture` may lose the move race before it
@@ -203,10 +204,10 @@ fn copy_noreplace_with(
     }
     if let Err(e) = std::fs::remove_file(from) {
         log::warn!(
-            "screen export: copied {} to {} but could not remove the source ({e}); \
-             the staging sweep will collect it",
-            from.display(),
-            to.display()
+            "publish: copied {} to {} but could not remove the source ({e}); it is a \
+             hidden, marked temp beside the video, and nothing sweeps a vault folder",
+            redact_path(from),
+            redact_path(to)
         );
     }
     Ok(())
@@ -294,7 +295,7 @@ pub fn commit_screen_capture(
     }
     Err(format!(
         "the exported video could not be moved into the vault: gave up after \
-         {MAX_COMMIT_ATTEMPTS} attempts to find a free name for {base:?}"
+         {MAX_COMMIT_ATTEMPTS} attempts to find a free name"
     ))
 }
 
