@@ -53,14 +53,91 @@ pub(crate) fn code_only(line: &str) -> String {
     out
 }
 
-/// `production_half` with every line run through `code_only`, line
-/// structure preserved.
+/// `production_half` with its `/* */` comments blanked and then every line
+/// run through `code_only`, line structure preserved.
 pub(crate) fn production_code(src: &str) -> String {
-    production_half(src)
+    without_block_comments(production_half(src))
         .lines()
         .map(code_only)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// `src` with every `/* */` comment (nested, as Rust nests them) replaced
+/// by spaces, its newlines kept (hardening Task 21, carried from Task 19):
+/// `code_only` is per line and sees only `//`, so a guard read left inside
+/// a block comment satisfied a pin that it is CALLED. String and char
+/// literals and `//` comments are stepped over, so a `/*` inside one opens
+/// nothing. A block comment still open at the end of the text panics: the
+/// scanner has misread something, and blanking the rest of the file would
+/// make every pin built on it vacuous.
+fn without_block_comments(src: &str) -> String {
+    let chars: Vec<char> = src.chars().collect();
+    let mut out = String::with_capacity(src.len());
+    let (mut i, mut depth, mut in_str) = (0, 0usize, false);
+    while i < chars.len() {
+        let (c, next) = (chars[i], chars.get(i + 1).copied());
+        let step = if depth > 0 {
+            match (c, next) {
+                ('/', Some('*')) => depth += 1,
+                ('*', Some('/')) => depth -= 1,
+                _ => {
+                    out.push(if c == '\n' { '\n' } else { ' ' });
+                    i += 1;
+                    continue;
+                }
+            }
+            out.push_str("  ");
+            2
+        } else if in_str {
+            in_str = c != '"';
+            if c == '\\' {
+                out.extend(&chars[i..(i + 2).min(chars.len())]);
+                i += 2;
+                continue;
+            }
+            out.push(c);
+            1
+        } else {
+            match (c, next) {
+                ('/', Some('*')) => {
+                    depth = 1;
+                    out.push_str("  ");
+                    2
+                }
+                ('/', Some('/')) => {
+                    let end = chars[i..].iter().position(|&c| c == '\n');
+                    let end = end.map_or(chars.len(), |n| i + n);
+                    out.extend(&chars[i..end]);
+                    end - i
+                }
+                ('\'', _) => {
+                    // `'x'`, `'"'` and `'\x'` are literals; `'a` is a lifetime.
+                    let len = match next {
+                        Some('\\') => chars
+                            .get(i + 3..)
+                            .and_then(|rest| rest.iter().position(|&c| c == '\''))
+                            .map_or(1, |at| at + 4),
+                        Some(_) if chars.get(i + 2) == Some(&'\'') => 3,
+                        _ => 1,
+                    };
+                    out.extend(&chars[i..(i + len).min(chars.len())]);
+                    len
+                }
+                _ => {
+                    in_str = c == '"';
+                    out.push(c);
+                    1
+                }
+            }
+        };
+        i += step;
+    }
+    assert!(
+        depth == 0,
+        "a block comment never closes -- the scanner misread this file"
+    );
+    out
 }
 
 /// Byte offset of `needle`, with a message that names it.
@@ -243,4 +320,47 @@ pub(crate) fn fn_body<'a>(code: &'a str, sig: &str) -> &'a str {
         .map(|i| start + i)
         .unwrap_or_else(|| panic!("{sig} must have a closing brace at column 0"));
     &code[start..end]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn production_code_blanks_block_comments_and_keeps_lines() {
+        let src =
+            "let a = /* guard() */ None;\n/* alpha\n   /* nested */ two */ call();\nfn f() {}\n";
+        let code = production_code(src);
+        assert_eq!(code.lines().count(), 4, "{code:?}");
+        assert!(
+            !code.contains("guard") && !code.contains("alpha"),
+            "{code:?}"
+        );
+        assert!(!code.contains("two") && code.contains("call()"), "{code:?}");
+        assert!(
+            code.contains("let a =") && code.contains("None;"),
+            "{code:?}"
+        );
+    }
+
+    #[test]
+    fn a_comment_opener_inside_a_literal_or_line_comment_opens_nothing() {
+        for src in [
+            "let glob = \"dir/*\"; kept();\n",
+            "// see dir/* here\nkept();\n",
+            "let q = '\"'; let s = \"/*\"; kept();\n",
+            "let q = '\\''; let s = \"/*\"; kept(); // x\n",
+            "fn f<'a>(x: &'a str) { kept() }\n",
+        ] {
+            // `without_block_comments` itself: `code_only`, run after it,
+            // has its own (older) char-literal limit.
+            assert_eq!(without_block_comments(src), src);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "never closes")]
+    fn an_unclosed_block_comment_is_a_scanner_error_not_a_blank_file() {
+        production_code("let a = 1; /* never closed\nfn f() {}\n");
+    }
 }

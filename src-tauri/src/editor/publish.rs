@@ -36,8 +36,8 @@
 //! strands a half-written file in a vault; once the video has landed the
 //! note is written regardless (it is the only thing still missing). After
 //! the bound expires the gate stops counting publishes
-//! (`PUBLISHES_ABANDONED`), the render term's latch. A DISCARD cancels and
-//! waits for it too (`media_derive::stop_session_derivations`): the product
+//! (`PUBLISHES_ABANDONED`), like the render term's latch. A DISCARD cancels
+//! and waits for it too (`media_derive::stop_session_derivations`): the product
 //! it reads and the journal it writes live in the directory a discard
 //! removes.
 

@@ -268,7 +268,13 @@ fn interrupted_publish_is_reported_not_deleted() {
     );
     let before = std::fs::read(&video).unwrap();
 
-    let reports = interrupted_publishes(f.root());
+    let reports: Vec<String> = interrupted_publishes(f.root())
+        .iter()
+        .map(|found| match found {
+            Interrupted::Publish(journal) => redact_publish_journal(journal),
+            Interrupted::Unreadable(job) => unreadable_publish(job),
+        })
+        .collect();
 
     // M-V3 (hardening Task 11): the vault-relative names are handles.
     assert_eq!(
@@ -333,7 +339,7 @@ fn a_publish_report_names_no_vault_file() {
         ),
     ];
     for (journal, want) in cases {
-        let shown = publish_report(&journal);
+        let shown = redact_publish_journal(&journal);
         assert_eq!(shown, want);
         assert!(!shown.contains("Secret") && !shown.contains('/'), "{shown}");
     }

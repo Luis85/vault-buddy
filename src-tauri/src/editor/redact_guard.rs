@@ -370,9 +370,32 @@ fn without_projected_roots(expr: &str) -> String {
     out
 }
 
+/// The redactors whose CALL exempts an argument: the three in
+/// `core::editor::redact`, and `recovery::redact_publish_journal`, which
+/// runs every name a publish journal carries through `redact_name` (held to
+/// that by `recovery_sweep_tests::a_publish_report_names_no_vault_file`).
+const REDACTORS: &[&str] = &[
+    "redact_path(",
+    "redact_name(",
+    "redact_paths_in(",
+    "redact_publish_journal(",
+];
+
+/// Whether `expr` calls one of `REDACTORS` — as a whole identifier, so a
+/// value merely NAMED `redacted`/`unredacted_dir` is judged like any other
+/// (carried from Task 11).
+fn calls_a_redactor(expr: &str) -> bool {
+    REDACTORS.iter().any(|call| {
+        expr.match_indices(call).any(|(at, _)| {
+            let before = expr[..at].chars().next_back();
+            !before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+    })
+}
+
 /// Why `expr`, formatted by a log call, breaks a rule — or `None`.
 fn problem(expr: &str, debug: bool, paths: &HashSet<String>, call: Call) -> Option<&'static str> {
-    if expr.contains("redact") {
+    if calls_a_redactor(expr) {
         return None;
     }
     if expr.contains(".display()") {
@@ -545,6 +568,11 @@ mod tests {
                 files.contains(&root.join(file)),
                 "{file} is not scanned (moved or renamed?)"
             );
+            // `scanned_files` appends EXTRA_FILES whether or not they exist,
+            // so the check above cannot fail for one of them: read it here.
+            let text = std::fs::read_to_string(root.join(file))
+                .unwrap_or_else(|e| panic!("{file} is listed but cannot be read: {e}"));
+            assert!(!text.trim().is_empty(), "{file} is listed but empty");
         }
     }
 
@@ -701,6 +729,30 @@ mod tests {
             let want = format!("fixture.rs:{line}: names");
             assert!(found[at].starts_with(&want), "{found:?}");
         }
+    }
+
+    // Carried (Task 11): the exemption is a CALL to a redactor, not the
+    // letters "redact" anywhere in the expression -- `unredacted_dir` and
+    // a variable merely NAMED `video_redacted` print exactly what they
+    // hold.
+    #[test]
+    fn only_a_call_to_a_redactor_exempts_an_argument() {
+        let fixture = concat!(
+            "fn f(unredacted_dir: &Path, video_redacted: &str) {\n",
+            "    log::warn!(\"gone {}\", unredacted_dir.display());\n",
+            "    log::warn!(\"left {}\", video_redacted);\n",
+            "    log::warn!(\"left {}\", redact_name(video_redacted));\n",
+            "    log::warn!(\"gone {}\", redact::redact_path(unredacted_dir));\n",
+            "    log::warn!(\"ffmpeg: {}\", redact_paths_in(&text, &[dir]));\n",
+            "}\n",
+        );
+        let found = findings("fixture.rs", fixture);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found[0].starts_with("fixture.rs:2: .display()"),
+            "{found:?}"
+        );
+        assert!(found[1].starts_with("fixture.rs:3: names"), "{found:?}");
     }
 
     #[test]

@@ -46,24 +46,63 @@ mod tests {
             .collect()
     }
 
-    /// Every name this file can already reach unqualified via a `use`.
+    /// Every name this file can already reach unqualified via a `use`: the
+    /// LAST item of each path in the tree (`self` naming its parent, `as`
+    /// its alias), never a module the path merely passes through (T-8 --
+    /// `use crate::commands::f;` does not make a bare `commands::` resolve).
+    /// A statement split over lines is read to its `;`; a glob is skipped.
     fn imported(src: &str) -> HashSet<String> {
         let mut names = HashSet::new();
-        for line in src.lines() {
-            let Some(rest) = line.trim().strip_prefix("use ") else {
-                continue;
-            };
-            // `use crate::{a, b};` / `use crate::a;` / `use super::a::…`
-            for token in rest
-                .trim_end_matches(';')
-                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-            {
-                if !token.is_empty() {
-                    names.insert(token.to_string());
-                }
+        let mut rest = src;
+        while let Some(at) = rest.find("use ") {
+            let starts_statement = rest[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| c.is_whitespace() || c == ';' || c == '}');
+            let tail = &rest[at + "use ".len()..];
+            let end = tail.find(';').unwrap_or(tail.len());
+            if starts_statement {
+                use_leaves(&tail[..end], "", &mut names);
             }
+            rest = &tail[end.min(tail.len())..];
         }
         names
+    }
+
+    /// The names a use-tree brings into scope, `parent` being the path's
+    /// last segment so far (what `self` names).
+    fn use_leaves(tree: &str, parent: &str, out: &mut HashSet<String>) {
+        let tree = tree.trim();
+        let last = |path: &str| path.rsplit("::").next().unwrap_or(path).trim().to_string();
+        let Some(open) = tree.find('{') else {
+            if tree.ends_with('*') || tree.is_empty() {
+                return;
+            }
+            let name = match tree.split_once(" as ") {
+                Some((_, alias)) => alias.trim().to_string(),
+                None if tree == "self" => parent.to_string(),
+                None => last(tree),
+            };
+            if !name.is_empty() && name != "_" {
+                out.insert(name);
+            }
+            return;
+        };
+        let prefix = last(tree[..open].trim_end_matches("::"));
+        let inner = &tree[open + 1..tree.rfind('}').unwrap_or(tree.len())];
+        let (mut depth, mut from) = (0, 0);
+        for (i, c) in inner.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                ',' if depth == 0 => {
+                    use_leaves(&inner[from..i], &prefix, out);
+                    from = i + 1;
+                }
+                _ => {}
+            }
+        }
+        use_leaves(&inner[from..], &prefix, out);
     }
 
     /// The identifier in a leading `ident::` path on this line, if any.
@@ -156,5 +195,32 @@ mod tests {
         assert!(imported("use crate::{commands, tray};").contains("commands"));
         assert!(imported("use crate::tray;").contains("tray"));
         assert!(!imported("use crate::tray;").contains("commands"));
+    }
+
+    // T-8: a `use` brings in the LAST item of each path, never the modules
+    // it passes through. `use crate::commands::primary_button_down;` makes
+    // `primary_button_down()` callable bare, but a bare `commands::x` is
+    // still E0433 -- the very defect this guard exists for.
+    #[test]
+    fn a_use_imports_only_the_final_item_of_each_path() {
+        let names = imported("use crate::commands::primary_button_down;");
+        assert!(names.contains("primary_button_down"), "{names:?}");
+        assert!(!names.contains("commands"), "{names:?}");
+        assert!(!names.contains("crate"), "{names:?}");
+        let nested = imported("use crate::{commands::{self, x}, screen::y as z, tray};");
+        for name in ["commands", "x", "z", "tray"] {
+            assert!(nested.contains(name), "{name}: {nested:?}");
+        }
+        for name in ["screen", "y", "crate"] {
+            assert!(!nested.contains(name), "{name}: {nested:?}");
+        }
+        // A statement rustfmt splits over lines is one `use`.
+        let split = imported("use crate::{\n    capture_guard,\n    commands::a,\n};\nfn f() {}");
+        assert!(
+            split.contains("capture_guard") && !split.contains("commands"),
+            "{split:?}"
+        );
+        // A glob names nothing it can be held to.
+        assert!(imported("use crate::commands::*;").is_empty());
     }
 }

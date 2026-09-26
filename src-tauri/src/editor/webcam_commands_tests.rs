@@ -325,7 +325,20 @@ fn begin_hands_begin_in_the_live_capture_guard() {
     assert_ne!(unwired, body, "the mutation must apply to the real body");
     assert!(capture_refusal_wiring(&unwired).is_err());
     let shadowed = body.replace("blocking(move", "let capture = None;\n    blocking(move");
+    assert_ne!(shadowed, body, "the mutation must apply to the real body");
     assert!(capture_refusal_wiring(&shadowed).is_err());
+    // A guard read left inside a `/* */` comment is prose, not a read: the
+    // mutation goes into the RAW file, through the same comment stripping.
+    let raw = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/editor/webcam_commands.rs"
+    ))
+    .unwrap();
+    let read = "app.state::<CaptureGuard>().active();";
+    let commented = raw.replace(read, &format!("/* {} */ None;", read.trim_end_matches(';')));
+    assert_ne!(commented, raw, "the mutation must apply to the real file");
+    let code = crate::structural_scan::production_code(&commented);
+    assert!(capture_refusal_wiring(fn_body(&code, "pub async fn editor_webcam_begin(")).is_err());
     let literal = body.replace("            capture,\n", "            None,\n");
     assert_ne!(literal, body, "the mutation must apply to the real body");
     assert!(capture_refusal_wiring(&literal).is_err());
@@ -782,8 +795,8 @@ fn a_real_webm_streamed_in_chunks_lands_indexed() {
         "1",
         webm.to_str().unwrap(),
     ]) {
-        eprintln!(
-            "SKIP a_real_webm_streamed_in_chunks_lands_indexed: no ffmpeg with libvpx/libopus"
+        crate::editor::test_announce::announce_skip(
+            "a_real_webm_streamed_in_chunks_lands_indexed: no ffmpeg with libvpx/libopus",
         );
         return;
     }

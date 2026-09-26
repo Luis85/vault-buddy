@@ -97,6 +97,31 @@ mod tests {
         assert_eq!(escape_filter_value("plain.ass"), "plain.ass");
     }
 
+    // Hardening Task 21 (carried from Task 11): core's `redact_paths_in`
+    // re-derives these two escaping levels to catch the spellings ffmpeg's
+    // errors echo, from its own copy of the character sets. Pinned here,
+    // against the escaping the render really emits, so a change to either
+    // level on this side cannot silently stop a job path being redacted.
+    #[test]
+    fn core_redaction_recognises_both_escaped_spellings_of_a_path() {
+        use std::path::Path;
+        use vault_buddy_core::editor::redact::{redact_path, redact_paths_in};
+
+        let raw = r"C:\Users\x\it's a,b;c[d]\jobs\job-1\cues.ass";
+        let path = Path::new(raw);
+        let handle = redact_path(path);
+        for spelling in [escape(raw, &OPTION_LEVEL), escape_filter_value(raw)] {
+            assert_ne!(spelling, raw, "the fixture must need escaping");
+            let echoed =
+                format!("Unable to open {spelling}; Error with args 'filename={spelling}'");
+            assert_eq!(
+                redact_paths_in(&echoed, &[path]),
+                format!("Unable to open {handle}; Error with args 'filename={handle}'"),
+                "{spelling}"
+            );
+        }
+    }
+
     #[test]
     fn seconds_are_exact_decimal_seconds() {
         assert_eq!(seconds(4_500), "4.500");

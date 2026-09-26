@@ -20,12 +20,21 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".
  * skipped, so a variant's own doc comment is never mistaken for a variant.
  */
 export function rustVariants(enumName: string, filePath: string): string[] {
-  const source = readFileSync(path.resolve(ROOT, filePath), "utf8");
+  return rustVariantsIn(readFileSync(path.resolve(ROOT, filePath), "utf8"), enumName, filePath);
+}
+
+/** `rustVariants` over source text already read; `where` names it in errors. */
+export function rustVariantsIn(source: string, enumName: string, where: string): string[] {
   const body = new RegExp(`pub enum ${enumName} [{]([^}]*)[}]`).exec(source);
-  if (!body) throw new Error(`enum ${enumName} not found in ${filePath}`);
-  return body[1]
-    .split("\n")
-    .map((line) => line.trim())
+  if (!body) throw new Error(`enum ${enumName} not found in ${where}`);
+  const lines = body[1].split("\n").map((line) => line.trim());
+  // Only `rename_all = "camelCase"` is modelled; a variant renamed on its
+  // own would be read with the wrong wire spelling, so refuse it loudly.
+  const renamed = lines.find((line) => line.startsWith("#") && line.includes("serde(rename"));
+  if (renamed) {
+    throw new Error(`enum ${enumName} in ${where} renames a variant (${renamed}); rustVariants cannot model it`);
+  }
+  return lines
     .filter((line) => line !== "" && !line.startsWith("//") && !line.startsWith("#"))
     .map((line) => line.replace(/,$/, ""))
     .map((variant) => variant[0].toLowerCase() + variant.slice(1))

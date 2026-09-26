@@ -6467,9 +6467,14 @@ tests the member crates only; the shell's clippy and tests live in
   (`src-tauri/src/editor/vault_dir.rs`, moved from the retired `export_worker/`
   by Task 59; bounded `981bf67`).** `symlink_dir` needs `SeCreateSymbolicLinkPrivilege`
   (Developer Mode or elevation); without it Windows returns OS error 1314. The
-  test now prints a `SKIP` line on exactly that error (on stderr, so it shows
-  under `--nocapture`, like the ffmpeg round-trip's skips) and panics on any
-  other. **So the escape refusal this test guards is exercised only on Linux
+  test now prints a `SKIP` line on exactly that error and panics on any
+  other. Since hardening Task 21 (M-V11, T-6) that line goes through
+  `editor::test_announce::announce_skip`, which writes past libtest's output
+  capture the way the screen crate's round-trip skips do, so it shows in EVERY
+  run — the `eprintln!` it replaced was captured for a passing test and shown
+  only under `--nocapture`, as was every other shell skip (ffmpeg,
+  symlink-privilege, read-only-folder); `test_announce`'s own test fails on a
+  new one. **So the escape refusal this test guards is exercised only on Linux
   CI and on privileged Windows hosts** — which is where it ran before, too;
   the change is that a Windows dev run no longer reads as a failure.
 
@@ -7077,9 +7082,13 @@ included), plus — since hardening Task 11 — `src/editor_commands.rs`,
 `the_scan_reaches_every_file_outside_the_editor_that_logs_capture_names`):
 every LOG call (`log::error!`…`trace!`, a bare level macro, `log::log!(Level::…,
 …)`) formatting an argument named `path`/`file`/`name`/`title`/`text`/
-`caption`/`base`/`video`/`note`/`report`/`dest` without `redact` (a word that
-is only the ROOT of a field projection, `report.orphaned`, is judged by the
-field printed); any message construction quoting a
+`caption`/`base`/`video`/`note`/`report`/`dest` without a CALL to a redactor
+(`redact_path(`, `redact_name(`, `redact_paths_in(`, or
+`recovery::redact_publish_journal(`, whose output a test holds to handles —
+until hardening Task 21 any expression containing the letters `redact`
+passed, so a value merely named `unredacted_dir` or `video_redacted` did too)
+(a word that is only the ROOT of a field projection, `report.orphaned`, is
+judged by the field printed); any message construction quoting a
 `title`/`text`/`caption`/`base`/`video`/`note`/`report`/`dest` with `{:?}`
 (Debug only ever quotes for a reader — `format!("{base}.mp4")` builds a name
 and passes); any `.display()` inside a log call OR a
@@ -7563,3 +7572,22 @@ that does not PARSE — now say so in fixed wording
 (`package::refuse_unparsable`, the serde category and position only in the
 log), so what remains here is `validate_envelope`'s own product-id
 messages.)*
+
+### GAP-220 · Low (test hygiene) · Two lock-ordering tests over the editor's `open` lock still prove "it waited" with a sleep
+`src-tauri/src/staged_commands_tests.rs`
+(`a_discard_waits_for_an_open_in_progress_and_then_sees_its_pin`) and
+`src-tauri/src/staging_commands.rs`
+(`clear_waits_for_an_open_in_progress_and_keeps_what_it_pinned`) — found by
+hardening Task 21, which replaced the five `sleep(200)` negatives of review
+T-7 (the session SAVE lock, an `Arc` whose waiter's clone is observable:
+`editor::test_wait::wait_for_holders`) and the 700 ms decode sleep of T-6 (a
+marker file), and left these two, which were outside T-7's list. Both hold
+`EditorState::open` (a plain `Mutex<()>`, nothing a waiter clones), sleep
+200 ms, then pin the capture and release. The assertion itself is sound
+either way — the pin lands before the lock is released, so a discard or
+clear that starts late still sees it — but the MUTATION it exists to catch
+(a discard that reads the pin without taking `open`) is caught only if the
+discard reached its read inside those 200 ms. **Remedy:** a
+`*_observed` seam (the `session_save_lock_observed` shape) that signals
+just before `open.lock()`, or holding `open` in an `Arc` the discard
+clones.

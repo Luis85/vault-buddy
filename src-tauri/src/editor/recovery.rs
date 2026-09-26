@@ -560,8 +560,11 @@ const PUBLISH_JOURNAL_MAX_BYTES: u64 = 64 * 1024;
 
 /// What one interrupted publish's journal says, in words (F36) -- logged on
 /// every start, so its vault-relative names (a folder, the product's
-/// title) are handles (M-V3, hardening Task 11).
-fn publish_report(journal: &PublishJournal) -> String {
+/// title) are handles (M-V3, hardening Task 11). Named as a redactor
+/// because it is one: `redact_guard` accepts a call to it in a log line
+/// the way it accepts `redact_name(`, and `a_publish_report_names_no_vault_file`
+/// is what holds it to that (hardening Task 21).
+pub(crate) fn redact_publish_journal(journal: &PublishJournal) -> String {
     let video = redact_name(&journal.video);
     match (journal.step, journal.note.as_deref().map(redact_name)) {
         (PublishStep::Reserved, _) => format!(
@@ -579,6 +582,19 @@ fn publish_report(journal: &PublishJournal) -> String {
     }
 }
 
+/// One publish a crash interrupted: its journal, or -- when that cannot be
+/// read -- only its job id (an app-minted `job-…`, never content).
+#[derive(Debug)]
+pub(crate) enum Interrupted {
+    Publish(PublishJournal),
+    Unreadable(String),
+}
+
+/// The report for a journal that could not be read.
+pub(crate) fn unreadable_publish(job: &str) -> String {
+    format!("A publish was interrupted, and its record ({job}) could not be read.")
+}
+
 /// Task 48 (F36; ADR R13): every publish a crash interrupted, in words, by
 /// project then job. A journal not at `complete` is REPORTED and left
 /// exactly where it is -- never deleted, never retried (docs/Gaps.md: no
@@ -586,7 +602,7 @@ fn publish_report(journal: &PublishJournal) -> String {
 /// `complete` one (a crash after the last step, before the publish removed
 /// its own job directory) is removed quietly: nothing was lost. A journal
 /// that cannot be read is reported as such, and kept.
-pub(crate) fn interrupted_publishes(root: &Path) -> Vec<String> {
+pub(crate) fn interrupted_publishes(root: &Path) -> Vec<Interrupted> {
     let mut reports = Vec::new();
     for project in valid_dir_names(&store_dir(root)) {
         let Some(jobs) = project_dir(root, &project).map(|d| d.join(JOBS_DIR)) else {
@@ -607,10 +623,8 @@ pub(crate) fn interrupted_publishes(root: &Path) -> Vec<String> {
                         log::warn!("editor-recovery-sweep: could not remove {job}: {e}");
                     }
                 }
-                Some(j) => reports.push(publish_report(&j)),
-                None => reports.push(format!(
-                    "A publish was interrupted, and its record ({job}) could not be read."
-                )),
+                Some(j) => reports.push(Interrupted::Publish(j)),
+                None => reports.push(Interrupted::Unreadable(job)),
             }
         }
     }
@@ -683,9 +697,18 @@ pub fn spawn_startup_repin(app: &AppHandle) {
             };
             let state = app.state::<EditorState>();
             let _open = lock_ignoring_poison(&state.open);
-            // `publish_report` redacts every name it carries (tested).
-            for redacted in interrupted_publishes(&root) {
-                log::warn!("editor-recovery-sweep: {redacted}");
+            // Logged where the names are redacted, so `redact_guard` sees
+            // the redactor's call rather than trusting a variable's name.
+            for found in interrupted_publishes(&root) {
+                match found {
+                    Interrupted::Publish(journal) => log::warn!(
+                        "editor-recovery-sweep: {}",
+                        redact_publish_journal(&journal)
+                    ),
+                    Interrupted::Unreadable(job) => {
+                        log::warn!("editor-recovery-sweep: {}", unreadable_publish(&job))
+                    }
+                }
             }
             let now = std::time::SystemTime::now();
             let swept = sweep_stale_imports(&root, now);

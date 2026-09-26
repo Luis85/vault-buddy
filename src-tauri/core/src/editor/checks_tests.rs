@@ -11,6 +11,8 @@
 
 use std::collections::BTreeSet;
 
+use serde_json::json;
+
 use super::*;
 use crate::editor::model::{AssetKind, Project, TrackKind};
 use crate::editor::model_cues::{CaptionCue, CaptionPosition, CaptionSettings, EffectKind};
@@ -731,19 +733,43 @@ fn everything() -> (Project, BTreeSet<String>) {
     (p, set(&["cap"]))
 }
 
+/// Whether any key, at any depth, names a score by any of its usual
+/// spellings (T-9: `rating`, `grade` and `percent` are scores too).
+fn has_score(v: &serde_json::Value) -> bool {
+    const SCORE_WORDS: [&str; 4] = ["score", "rating", "grade", "percent"];
+    match v {
+        serde_json::Value::Object(map) => map.iter().any(|(k, v)| {
+            let key = k.to_lowercase();
+            SCORE_WORDS.iter().any(|w| key.contains(w)) || has_score(v)
+        }),
+        serde_json::Value::Array(items) => items.iter().any(has_score),
+        _ => false,
+    }
+}
+
+// T-9: the score rule is only as wide as its word list. A crafted reply
+// carrying a rating, a grade or a completion percentage -- at any depth --
+// is a score by another name.
+#[test]
+fn a_score_by_any_name_is_caught() {
+    for crafted in [
+        json!({"score": 1}),
+        json!([{"code": "gap", "extra": {"qualityRating": 4}}]),
+        json!({"grade": "B"}),
+        json!([{"target": {"readinessPercent": 80}}]),
+        json!({"percentComplete": 12}),
+    ] {
+        assert!(has_score(&crafted), "{crafted} was not caught");
+    }
+    let clean = json!([{"id": "chk-gap-x", "severity": "warning", "code": "gap",
+        "message": "A gap", "target": {"kind": "clip", "id": "c1"}, "action": null}]);
+    assert!(!has_score(&clean), "{clean}");
+}
+
 #[test]
 fn no_quality_score_is_ever_emitted() {
     // SCREENS 07: "actionable findings rather than an invented quality
     // score". Nothing in the reply may be a score, at any depth.
-    fn has_score(v: &serde_json::Value) -> bool {
-        match v {
-            serde_json::Value::Object(map) => map
-                .iter()
-                .any(|(k, v)| k.to_lowercase().contains("score") || has_score(v)),
-            serde_json::Value::Array(items) => items.iter().any(has_score),
-            _ => false,
-        }
-    }
     let (p, missing) = everything();
     let findings = run_checks(&p, &missing, 1, &none());
     assert!(
