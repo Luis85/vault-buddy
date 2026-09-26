@@ -2604,7 +2604,7 @@ after a reconnect"). The thumbnail file itself is still not fingerprinted; a
 future path that changes the file behind an asset id must purge `cache\` AND
 call `forgetDerived` the same way.
 
-### GAP-177 · Low (unverified cause) · PARTLY CLOSED 2026-09-26 (hardening Task 24: the expansion) · The registry-fresh PATH carries unexpanded `%SystemRoot%` entries, and a child `cmd.exe` spawned with it did not find `ping`
+### GAP-177 · Low (unverified cause) · PARTLY CLOSED 2026-09-26 (hardening Task 24: the expansion; the `ping` half KEEP-HARDWARE) · The registry-fresh PATH carries unexpanded `%SystemRoot%` entries, and a child `cmd.exe` spawned with it did not find `ping`
 `src-tauri/src/external_tool.rs` (`registry_path_entries`, `augmented_path`).
 Found by Task 28 on the Windows dev host while writing a stand-in slow tool
 for `media_derive`'s cancel test. `registry_path_entries` reads the `Path`
@@ -2633,15 +2633,21 @@ The Task 28 test uses an absolute `%SystemRoot%\System32\PING.EXE` meanwhile.
 > **The expansion half is CLOSED (hardening Task 24).** `registry_path_entries`
 > now reads each registry `Path` value through `registry_path_list`, which
 > splits it and expands every entry's `%NAME%` tokens with the pure
-> `expand_env_tokens_with` (the `ExpandEnvironmentStringsW` rules: a name
-> with no value, or `%%`, stays literal and the scan resumes after it; a lone
-> `%` is kept) over the process environment — no new dependency, and pure, so
-> `env_tokens_expand_and_unknown_ones_stay_literal` and
-> `a_registry_path_value_is_split_and_each_entry_expanded` run on every OS.
+> `expand_env_tokens_with` over the process environment. Its rules are
+> `ExpandEnvironmentStringsW`'s as MEASURED on Windows (a P/Invoke of
+> kernel32, Task 24 fix round 1), not as first assumed: a name with no value,
+> or `%%`, gives back only its OPENING `%` and the scan resumes right after
+> it, so the token's closing `%` may open the next one (`%NOPE%A%` with
+> `A=aa` is `%NOPEaa`, `%A%B%` is `aaB%`); a `%` with no partner is kept.
+> No new dependency; the rules are pure, so
+> `env_tokens_expand_like_expand_environment_strings` (the measured table)
+> and `a_registry_path_value_is_split_and_each_entry_expanded` run on every
+> OS, and on Windows `env_tokens_match_the_real_expansion` re-measures the
+> table against kernel32 itself (a bare `extern "system"` declaration).
 > Probed on the Windows dev host afterwards: the merged PATH carries no
 > literal `%` entry any more.
 >
-> **The `ping` half stays OPEN, and the same probe moved its likely cause.**
+> **The `ping` half stays OPEN (KEEP-HARDWARE), and the same probe moved its likely cause.**
 > A child `cmd /C ping -n 1 127.0.0.1` STILL failed with the expanded,
 > merged PATH — and ALSO failed with plain `Command::new("cmd")` and the
 > test process's own, un-merged PATH (23 508 characters, 178 entries under

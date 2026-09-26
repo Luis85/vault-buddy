@@ -53,11 +53,13 @@ fn expand_env_tokens(entry: &str) -> String {
 }
 
 /// Replace every `%NAME%` whose `lookup` answers with its value, the way
-/// Windows' `ExpandEnvironmentStringsW` does for a PATH entry: a name with
-/// no value (or an empty one, `%%`) is left LITERAL, `%`s and all, and the
-/// scan resumes after its closing `%`; a lone `%` with no partner is kept
-/// as it is. Pure (the lookup is a parameter), so every rule is tested on
-/// any OS.
+/// Windows' `ExpandEnvironmentStringsW` does for a PATH entry (measured, not
+/// assumed — the tests hold a table taken from kernel32 and, on Windows,
+/// re-measure it): a name with no value (or an empty one, `%%`) gives back
+/// only its OPENING `%`, and the scan resumes right after it, so that
+/// token's closing `%` may open the next one (`%NOPE%A%` with `A=aa` is
+/// `%NOPEaa`); a `%` with no partner is kept as it is. Pure (the lookup is a
+/// parameter), so every rule is tested on any OS.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn expand_env_tokens_with(entry: &str, lookup: impl Fn(&str) -> Option<String>) -> String {
     let mut out = String::with_capacity(entry.len());
@@ -72,10 +74,15 @@ fn expand_env_tokens_with(entry: &str, lookup: impl Fn(&str) -> Option<String>) 
         };
         let name = &after[..close];
         match (!name.is_empty()).then(|| lookup(name)).flatten() {
-            Some(value) => out.push_str(&value),
-            None => out.push_str(&rest[open..open + close + 2]),
+            Some(value) => {
+                out.push_str(&value);
+                rest = &after[close + 1..];
+            }
+            None => {
+                out.push('%');
+                rest = after;
+            }
         }
-        rest = &after[close + 1..];
     }
     out.push_str(rest);
     out
@@ -531,24 +538,66 @@ mod tests {
         );
     }
 
+    /// Input → what `ExpandEnvironmentStringsW` returns for it with `VB24A=aa`
+    /// and `NOPE` unset, MEASURED on Windows (task 24 fix round 1, a
+    /// P/Invoke of kernel32) — `env_tokens_match_the_real_expansion` below
+    /// re-measures the same table wherever it runs on Windows.
+    const EXPANSION_CASES: &[(&str, &str)] = &[
+        ("%NOPE%VB24A%", "%NOPEaa"),
+        ("100%%VB24A%", "100%aa"),
+        ("%%VB24A%", "%aa"),
+        ("%NOPE%%VB24A%", "%NOPE%aa"),
+        ("%VB24A%B%", "aaB%"),
+        ("%NOPE%", "%NOPE%"),
+        ("50% off", "50% off"),
+        ("%VB24A%%VB24A%", "aaaa"),
+        ("x%VB24A%y%VB24A%z", "xaayaaz"),
+        ("%", "%"),
+    ];
+
     // GAP-177: `%NAME%` tokens in a registry PATH entry are expanded, the
-    // `ExpandEnvironmentStringsW` way.
+    // `ExpandEnvironmentStringsW` way — an unknown name gives back only its
+    // OPENING `%`, so its closing `%` can open the next token.
     #[test]
-    fn env_tokens_expand_and_unknown_ones_stay_literal() {
+    fn env_tokens_expand_like_expand_environment_strings() {
         let lookup = |name: &str| match name {
-            "A" => Some("aa".to_string()),
+            "VB24A" => Some("aa".to_string()),
             "SystemRoot" => Some(r"C:\WINDOWS".to_string()),
             _ => None,
         };
         let expand = |s: &str| expand_env_tokens_with(s, lookup);
+        for (input, expected) in EXPANSION_CASES {
+            assert_eq!(expand(input), *expected, "expanding {input:?}");
+        }
         assert_eq!(expand(r"%SystemRoot%\system32"), r"C:\WINDOWS\system32");
-        assert_eq!(expand("%A%%A%"), "aaaa");
-        assert_eq!(expand("x%A%y%A%z"), "xaayaaz");
-        assert_eq!(expand("%NOPE%"), "%NOPE%");
-        assert_eq!(expand("%NOPE%%A%"), "%NOPE%aa");
-        assert_eq!(expand("100%%A%"), "100%%A%");
-        assert_eq!(expand("50% off"), "50% off");
         assert_eq!(expand(r"C:\no\tokens"), r"C:\no\tokens");
+    }
+
+    // The table above, re-measured against kernel32 itself. The declaration
+    // is a bare `extern "system"` (kernel32 is linked into every Windows
+    // binary), so no dependency or `windows-sys` feature is added for it.
+    #[cfg(windows)]
+    #[test]
+    fn env_tokens_match_the_real_expansion() {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn ExpandEnvironmentStringsW(src: *const u16, dst: *mut u16, size: u32) -> u32;
+        }
+        std::env::set_var("VB24A", "aa");
+        std::env::remove_var("NOPE");
+        for (input, _) in EXPANSION_CASES {
+            let src: Vec<u16> = input.encode_utf16().chain(Some(0)).collect();
+            let mut dst = vec![0u16; 1024];
+            // SAFETY: `src` is NUL-terminated and `dst` holds `size` u16s.
+            let n = unsafe { ExpandEnvironmentStringsW(src.as_ptr(), dst.as_mut_ptr(), 1024) };
+            assert!(
+                n > 0 && (n as usize) <= dst.len(),
+                "kernel32 failed on {input:?}"
+            );
+            let real = String::from_utf16(&dst[..n as usize - 1]).unwrap();
+            let ours = expand_env_tokens_with(input, |name| std::env::var(name).ok());
+            assert_eq!(ours, real, "expanding {input:?}");
+        }
     }
 
     // The brief's case, through the REAL environment and the registry

@@ -4,7 +4,8 @@
 //! A `symlink_metadata` check followed by `OpenOptions::open` is
 //! check-then-open: between the two, something can swap a symlink (or any
 //! other reparse point) in under the name, and the open then follows it
-//! and appends the user's webcam bytes to whatever it points at. The check stays — it is the whole defence off Windows, where
+//! and appends the user's webcam bytes to whatever it points at. The
+//! check stays — it is the whole defence off Windows, where
 //! this crate has no `O_NOFOLLOW` without a new dependency — but on Windows
 //! the open itself is made no-follow: `FILE_FLAG_OPEN_REPARSE_POINT` opens a
 //! reparse point AS ITSELF instead of its target, and the handle's own
