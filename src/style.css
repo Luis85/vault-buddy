@@ -83,6 +83,17 @@
      `--color-video-bg` (the trim handles' own backdrop, the tightest case)
      and 3.78:1 on `--color-audio-bg`. */
   --color-track: rgb(255 255 255 / 0.1);
+  /* GAP-206's recorded residual: the lighter sibling of `--color-hover`,
+     for the rows that carried `bg-white/5` rather than `/10` (the Save
+     project dialog's format rows — hover AND the selected row — and the
+     learning center's chapter/lesson rows). Its own token because neither
+     sibling fits that weight: `--color-hover` would double the dark tint and
+     `--color-track` is a 3:1 boundary. The dark value is the literal
+     `bg-white/5` it replaces, so the dark theme stays byte-identical
+     (1.16:1 on `--color-panel`, measured before and after by
+     `tests/e2e/editorKeyboard.spec.ts`); `[data-theme="light"]` below
+     overrides it. */
+  --color-hover-subtle: rgb(255 255 255 / 0.05);
 
   /* Editor shell region sizes (brief's exact values — the CONTRACT sidebar/
      inspector widths, 244/276, not `reference/editor.css`'s own 220/282,
@@ -146,6 +157,13 @@
      actually measured by `tests/e2e/editorKeyboard.spec.ts`'s
      `boundaryContrast` against the built app) and 3.78:1 on audio-bg. */
   --color-track: rgb(15 23 42 / 0.55);
+  /* GAP-206's recorded residual: `bg-white/5` is white over white on
+     `--color-panel` (#fff) — 1.00:1, no tint at all. The same slate-900
+     family at the dark literal's own 5% alpha: 1.11:1 on panel, 1.10:1 on
+     raised and stage — a hover tint, so no WCAG floor applies, and still a
+     step lighter than `--color-hover`'s 1.13:1, as the dark pair is
+     (1.16:1 vs 1.36:1 on panel). */
+  --color-hover-subtle: rgb(15 23 42 / 0.05);
 }
 
 /* Tutorial editor dark theme (Task 58 fix round 1, GAP-209). The `@theme`

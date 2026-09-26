@@ -48,7 +48,7 @@ const chapters = computed(() =>
       <button
         type="button"
         :data-testid="`learning-chapter-${chapter.id}`"
-        class="flex cursor-pointer items-baseline justify-between gap-2 rounded px-1 text-left hover:bg-white/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        class="flex cursor-pointer items-baseline justify-between gap-2 rounded px-1 text-left hover:bg-hover-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="emit('jump', chapter.lessons[0].id)"
       >
         <span class="flex flex-col">
@@ -65,7 +65,7 @@ const chapters = computed(() =>
           <button
             type="button"
             :data-testid="`learning-lesson-${lesson.id}`"
-            class="flex w-full cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-left text-xs text-fg-secondary hover:bg-white/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            class="flex w-full cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-left text-xs text-fg-secondary hover:bg-hover-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             @click="emit('jump', lesson.id)"
           >
             <span

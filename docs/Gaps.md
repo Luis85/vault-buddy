@@ -6853,15 +6853,30 @@ first pass's 4.26–4.70:1 figures composited the token's alpha against pure
 black rather than its own slate-900 foreground — corrected here, in
 `src/style.css`'s own comments, in AGENTS.md and in the task report; no
 token value changed, since even the corrected worst case, 3.68:1, clears
-3:1 with margin). **Recorded
-residuals, deferred by reviewer agreement, not fixed by any of the three
-passes above**: `dialogs/SaveProjectDialog.vue`'s own format-radio row
-labels (`hover:bg-white/5` and the selected-state `bg-white/5`, lines
-~99–100/~119–120) and `guide/LearningWalkthrough.vue`'s chapter/lesson row
-buttons (`hover:bg-white/5`, lines ~51/~68) all use `/5`, not `/10` — a
-fourth token calibrated for THAT weight (and its own dark-byte-identical
-constraint) is left for a follow-up rather than folded into any of these
-three token additions.
+3:1 with margin).
+**Fixed a fourth time 2026-09-26 (the recorded residuals of the three
+passes above)**: `dialogs/SaveProjectDialog.vue`'s format-radio row labels
+(`hover:bg-white/5` and the selected-state `bg-white/5`) and
+`guide/LearningWalkthrough.vue`'s chapter/lesson row buttons
+(`hover:bg-white/5`) use a `/5` weight neither existing token fit —
+`--color-hover` would double the dark tint, `--color-track` is a 3:1
+boundary — and were deferred by reviewer agreement. On the light theme's
+`bg-panel` (#fff) that literal is white over white: 1.00:1, no tint at all.
+Fixed with a FOURTH token, `--color-hover-subtle` (`src/style.css`): dark
+is the literal `rgb(255 255 255 / 0.05)` `bg-white/5` compiled to, so the
+dark theme is byte-identical (1.1584:1 on `panel`, measured the same before
+and after); light is `rgb(15 23 42 / 0.05)`, the slate-900 family at the
+dark literal's own alpha — 1.106:1 on `panel` (1.109:1 as measured against
+the built app, canvas byte rounding), 1.104:1 on `raised`, 1.103:1 on
+`stage`. A hover affordance, so no WCAG floor applies, and it stays a step
+lighter than `--color-hover`'s light 1.13:1, as the dark pair is (1.16:1 vs
+1.36:1). Pinned by `tests/e2e/editorKeyboard.spec.ts`'s "subtle row tints
+are discernible" (both themes: the selected portable row, the hovered
+lightweight row and a hovered chapter and lesson row under a real pointer —
+RED at exactly 1:1 in light before the fix, ≥ 1.08:1 after; dark held to
+the pre-fix 1.1584:1) and `tests/editorThemeTokens.test.ts`, which fails
+naming any `white/N` literal left under `src/components/editor/**` (none
+remain).
 
 ### GAP-207 · Low · The learning center's recorded limits
 `src/components/editor/guide/LearningCenter.vue` (+ `LearningPreferences.vue`),

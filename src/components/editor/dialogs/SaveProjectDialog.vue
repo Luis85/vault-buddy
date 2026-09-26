@@ -96,8 +96,8 @@ function close(): void {
           Project file format
         </legend>
         <label
-          class="flex cursor-pointer gap-3 rounded-control border border-line p-3 hover:bg-white/5"
-          :class="format === 'portable' ? 'border-focus bg-white/5' : ''"
+          class="flex cursor-pointer gap-3 rounded-control border border-line p-3 hover:bg-hover-subtle"
+          :class="format === 'portable' ? 'border-focus bg-hover-subtle' : ''"
         >
           <input
             v-model="format"
@@ -116,8 +116,8 @@ function close(): void {
           </span>
         </label>
         <label
-          class="flex cursor-pointer gap-3 rounded-control border border-line p-3 hover:bg-white/5"
-          :class="format === 'lightweight' ? 'border-focus bg-white/5' : ''"
+          class="flex cursor-pointer gap-3 rounded-control border border-line p-3 hover:bg-hover-subtle"
+          :class="format === 'lightweight' ? 'border-focus bg-hover-subtle' : ''"
         >
           <input
             v-model="format"

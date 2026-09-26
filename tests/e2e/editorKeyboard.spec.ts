@@ -313,7 +313,15 @@ async function lowContrast(page: Page): Promise<string[]> {
  * controls — a UI-component boundary is measured whether or not it is
  * "text". */
 async function boundaryContrast(page: Page, testid: string): Promise<number> {
-  return page.evaluate((id) => {
+  return surfaceContrast(page, `[data-testid="${testid}"]`);
+}
+
+/** `boundaryContrast`'s measurement for any CSS `selector`: the element's
+ * own background, composited over what is behind it, against that backdrop
+ * alone. Read while the pointer is really over the element, it measures a
+ * `:hover` tint too. */
+async function surfaceContrast(page: Page, selector: string): Promise<number> {
+  return page.evaluate((sel) => {
     type Rgba = [number, number, number, number];
     const ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!;
     const parse = (c: string): Rgba => {
@@ -344,14 +352,14 @@ async function boundaryContrast(page: Page, testid: string): Promise<number> {
       };
       return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
     };
-    const el = document.querySelector(`[data-testid="${id}"]`);
-    if (!el) throw new Error(`no element with data-testid="${id}"`);
+    const el = document.querySelector(sel);
+    if (!el) throw new Error(`no element matches ${sel}`);
     const behind = backgroundBehind(el);
     const own = parse(getComputedStyle(el).backgroundColor);
     const composited = over(own, behind);
     const [hi, lo] = [lum(composited), lum(behind)].sort((a, b) => b - a);
     return (hi + 0.05) / (lo + 0.05);
-  }, testid);
+  }, selector);
 }
 
 // Fix round 1 (review Important, two sites): the trim handles are a static
@@ -368,6 +376,53 @@ test("light theme trim handles meet 3:1 against the clip (WCAG 1.4.11)", async (
   const ratio = await boundaryContrast(page, "clip-body-trim-start");
   expect(ratio, "the trim handle is not distinguishable from the clip body in light theme").toBeGreaterThanOrEqual(3);
 });
+
+// GAP-206's recorded residual: SaveProjectDialog's format rows (hover AND
+// the selected row) and the learning center's chapter/lesson rows carried
+// `bg-white/5` — white over the light theme's white `bg-panel`, 1.00:1,
+// i.e. no tint at all. `--color-hover-subtle` keeps the dark theme's
+// literal (pinned below at its pre-fix 1.16:1 on `panel`) and gives light
+// a slate tint designed at 1.11:1 — a hover affordance, so no WCAG floor;
+// the bar is "visibly there", lighter than `--color-hover`'s 1.13:1.
+const SUBTLE_ROWS = [
+  'label:has([data-testid="save-project-format-portable"])',
+  'label:has([data-testid="save-project-format-lightweight"])',
+  '[data-testid="learning-chapter-orient"]',
+  '[data-testid^="learning-lesson-"]',
+] as const;
+
+for (const theme of ["light", "dark"] as const) {
+  test(`${theme} theme subtle row tints are discernible`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    await openEditor(page, theme);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    const expectTint = async (selector: string) => {
+      const ratio = await surfaceContrast(page, selector);
+      if (theme === "light") expect(ratio, `${selector} tint in light`).toBeGreaterThanOrEqual(1.08);
+      // The pre-fix `bg-white/5` measurement, to the canvas's byte rounding.
+      else expect(ratio, `${selector} tint in dark (unchanged)`).toBeCloseTo(1.1583538594, 6);
+    };
+
+    // The portable row is selected (the dialog opens on the format the
+    // menu item named); the lightweight row is only tinted under the pointer.
+    await page.getByTestId("editor-header-save-menu-toggle").click();
+    await page.getByTestId("editor-header-menu-portable").click();
+    await expect(page.getByTestId("save-project-originals-warning")).toBeVisible();
+    await page.mouse.move(0, 0);
+    await expectTint(SUBTLE_ROWS[0]);
+    await page.hover(SUBTLE_ROWS[1]);
+    await expectTint(SUBTLE_ROWS[1]);
+    await page.keyboard.press("Escape");
+
+    await page.getByTestId("editor-header-help").click();
+    await page.getByTestId("editor-help-learning-center").click();
+    await expect(page.getByTestId("learning-center")).toBeVisible();
+    for (const selector of SUBTLE_ROWS.slice(2)) {
+      await page.hover(selector);
+      await expectTint(selector);
+    }
+  });
+}
 
 // Both themes (GAP-206 fixed the light one, GAP-209 the dark one): every
 // visible text on the editor's surfaces, and in an open menu, reads at
