@@ -305,6 +305,70 @@ async function lowContrast(page: Page): Promise<string[]> {
   });
 }
 
+/** WCAG 1.4.11 (non-text contrast): the ratio between `testid`'s own
+ * (possibly translucent) background, composited over whatever sits behind
+ * it, and that backdrop alone — i.e., whether the component's own edge is
+ * visible against what it sits on. The threshold is 3:1, not text's 4.5:1
+ * (`lowContrast` above), and there is no text to skip for disabled
+ * controls — a UI-component boundary is measured whether or not it is
+ * "text". */
+async function boundaryContrast(page: Page, testid: string): Promise<number> {
+  return page.evaluate((id) => {
+    type Rgba = [number, number, number, number];
+    const ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!;
+    const parse = (c: string): Rgba => {
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillStyle = "rgba(0, 0, 0, 0)";
+      ctx.fillStyle = c;
+      ctx.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+      return [r, g, b, a / 255];
+    };
+    const over = (top: Rgba, bottom: Rgba): Rgba => {
+      const a = top[3] + bottom[3] * (1 - top[3]);
+      if (a === 0) return [0, 0, 0, 0];
+      const mix = (i: number) => (top[i] * top[3] + bottom[i] * bottom[3] * (1 - top[3])) / a;
+      return [mix(0), mix(1), mix(2), a];
+    };
+    const backgroundBehind = (el: Element): Rgba => {
+      const layers: Rgba[] = [];
+      for (let n: Element | null = el.parentElement; n; n = n.parentElement) {
+        layers.push(parse(getComputedStyle(n).backgroundColor));
+      }
+      return layers.reduceRight<Rgba>((under, layer) => over(layer, under), [255, 255, 255, 1]);
+    };
+    const lum = (c: Rgba) => {
+      const f = (v: number) => {
+        const s = v / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
+    };
+    const el = document.querySelector(`[data-testid="${id}"]`);
+    if (!el) throw new Error(`no element with data-testid="${id}"`);
+    const behind = backgroundBehind(el);
+    const own = parse(getComputedStyle(el).backgroundColor);
+    const composited = over(own, behind);
+    const [hi, lo] = [lum(composited), lum(behind)].sort((a, b) => b - a);
+    return (hi + 0.05) / (lo + 0.05);
+  }, testid);
+}
+
+// Fix round 1 (review Important, two sites): the trim handles are a static
+// overlay, not text — `lowContrast` above never saw them. Only light is
+// asserted here: the dark theme's own `bg-white/10` measures ~1.36:1 too
+// (unchanged, byte-identical, and out of this fix's scope — the review
+// flagged the LIGHT theme as invisible, not dark).
+test("light theme trim handles meet 3:1 against the clip (WCAG 1.4.11)", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await openEditor(page, "light");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await tabTo(page, "clip-body");
+  await page.keyboard.press("Enter");
+  const ratio = await boundaryContrast(page, "clip-body-trim-start");
+  expect(ratio, "the trim handle is not distinguishable from the clip body in light theme").toBeGreaterThanOrEqual(3);
+});
+
 // Both themes (GAP-206 fixed the light one, GAP-209 the dark one): every
 // visible text on the editor's surfaces, and in an open menu, reads at
 // 4.5:1 or more against what is composited behind it.

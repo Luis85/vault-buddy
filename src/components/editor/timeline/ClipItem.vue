@@ -438,14 +438,14 @@ function onKeydown(event: KeyboardEvent) {
 
     <span
       :data-testid="`clip-${clip.id}-trim-start`"
-      class="vb-handle absolute inset-y-0 left-0 w-1 cursor-ew-resize bg-white/10"
+      class="vb-handle absolute inset-y-0 left-0 w-1 cursor-ew-resize bg-track"
       @pointerdown.stop="onTrimPointerDown($event, 'start')"
       @pointermove.stop="onTrimPointerMove"
       @pointerup.stop="onTrimPointerUp"
     />
     <span
       :data-testid="`clip-${clip.id}-trim-end`"
-      class="vb-handle absolute inset-y-0 right-0 w-1 cursor-ew-resize bg-white/10"
+      class="vb-handle absolute inset-y-0 right-0 w-1 cursor-ew-resize bg-track"
       @pointerdown.stop="onTrimPointerDown($event, 'end')"
       @pointermove.stop="onTrimPointerMove"
       @pointerup.stop="onTrimPointerUp"

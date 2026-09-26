@@ -6822,6 +6822,39 @@ cannot slip through the same way again. The same pass added an editor
 `hover:bg-white/10` under `src/components/editor/**` (33 files) plus
 `SaveProjectMenu.vue`'s `border-white/10 bg-white/5` toggle onto it — see
 the design-token paragraph above.
+**Fixed a third time 2026-09-25 (Task 14 fix round 1, review Important,
+two sites)**: `--color-hover` only ever needed to clear a HOVER affordance's
+lighter weight — it did not fix `timeline/ClipItem.vue`'s trim-start/
+trim-end drag handles or `library/ImportStatus.vue`'s and
+`preview/RenderProgress.vue`'s progress-bar tracks, which are STATIC,
+always-visible UI-component boundaries (WCAG 1.4.11 wants ~3:1, not
+text's 4.5:1) that also carried a bare `bg-white/10` — ~1.03:1 measured
+against the trim handles' own backdrop (`--color-video-bg` #e5ddee in
+light) via a new `tests/e2e/editorKeyboard.spec.ts` check
+(`boundaryContrast`, composited-background-vs-backdrop, threshold 3, RED
+at 1.0300641914889606 before the fix; the progress tracks can't easily be
+driven mid-import/mid-render in Playwright, so their fix is pinned by a
+class assertion in `tests/editorMediaLibrary.test.ts` and
+`tests/editorRenderDialog.test.ts` instead). Fixed with a THIRD token,
+`--color-track` (not `--color-hover`, and not `--color-line`, whose solid
+dark value #353640 does not equal `bg-white/10`'s composited result and so
+fails the "dark stays byte-identical" rule): dark is the literal
+`rgb(255 255 255 / 0.1)` `bg-white/10` compiled to (unchanged, 1.36:1
+against the darkest surface it's used against — out of THIS fix's scope,
+since the review flagged the light theme only); light is
+`rgb(15 23 42 / 0.55)`, the same slate-900 family as `--color-hover` at a
+higher alpha, measured at 4.70:1 on `--color-panel`, 4.50:1 on
+`--color-raised`, 4.38:1 on `--color-stage`, 4.26:1 on `--color-video-bg`
+(the trim handles' own, tightest-margin backdrop) and 4.40:1 on
+`--color-audio-bg` — all comfortably above the 3:1 floor. **Recorded
+residuals, deferred by reviewer agreement, not fixed by any of the three
+passes above**: `dialogs/SaveProjectDialog.vue`'s own format-radio row
+labels (`hover:bg-white/5` and the selected-state `bg-white/5`, lines
+~99–100/~119–120) and `guide/LearningWalkthrough.vue`'s chapter/lesson row
+buttons (`hover:bg-white/5`, lines ~51/~68) all use `/5`, not `/10` — a
+fourth token calibrated for THAT weight (and its own dark-byte-identical
+constraint) is left for a follow-up rather than folded into any of these
+three token additions.
 
 ### GAP-207 · Low · The learning center's recorded limits
 `src/components/editor/guide/LearningCenter.vue` (+ `LearningPreferences.vue`),

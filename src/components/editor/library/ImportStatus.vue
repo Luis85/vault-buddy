@@ -48,7 +48,7 @@ const perFile = computed(() => jobs.lastImport?.terminal?.perFile ?? []);
       aria-valuemin="0"
       aria-valuemax="100"
       :aria-valuenow="progressPercent"
-      class="h-1.5 flex-1 overflow-hidden rounded bg-white/10"
+      class="h-1.5 flex-1 overflow-hidden rounded bg-track"
     >
       <div
         class="h-full bg-accent"

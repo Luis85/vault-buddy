@@ -173,7 +173,16 @@ describe("MediaLibrary — import", () => {
     const base = { sessionId: "ses-a", jobId: "job-1", kind: "import" as const, terminal: null };
     deliver({ ...base, sequence: 2, phase: "preparing", fraction: 0.5 });
     await flushPromises();
-    expect(w.get('[data-testid="library-import-progress"]').attributes("aria-valuenow")).toBe("50");
+    const bar = w.get('[data-testid="library-import-progress"]');
+    // Fix round 1 (review Important): the track was `bg-white/10`, ~1.1:1 on
+    // the light theme's white/near-white panels — WCAG 1.4.11 wants ~3:1 for
+    // a UI component boundary. e2e can't easily drive an import mid-flight
+    // (per the fix-round instruction), so the token is pinned here instead:
+    // `bg-track` gives 4.70:1 light / (byte-identical) 1.36:1 dark against
+    // `bg-panel`, measured in the token's own style.css comment.
+    expect(bar.classes()).toContain("bg-track");
+    expect(bar.classes()).not.toContain("bg-white/10");
+    expect(bar.attributes("aria-valuenow")).toBe("50");
     expect(w.get('[data-testid="library-import"]').attributes("aria-disabled")).toBe("true");
 
     await w.get('[data-testid="library-import-cancel"]').trigger("click");

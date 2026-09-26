@@ -28,7 +28,7 @@ const percent = computed(() => renderPercent(props.job));
       aria-valuemax="100"
       :aria-valuenow="percent"
       data-testid="render-progress-bar"
-      class="h-2 overflow-hidden rounded-full bg-white/10"
+      class="h-2 overflow-hidden rounded-full bg-track"
     >
       <div
         class="h-full bg-accent transition-[width]"

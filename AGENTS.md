@@ -3592,7 +3592,7 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
 - **The tutorial editor (`src/components/editor/shell/`, Task 16, F-48)
   adds its own token set to the same `@theme` block** rather than reusing
   the panel's palette wholesale — it reuses `fg`/`accent`/`focus`/`danger`/
-  `rounded-control`/`text-micro` but needs eleven more the panel never did:
+  `rounded-control`/`text-micro` but needs twelve more the panel never did:
   `--color-stage`/`-panel`/`-raised`/`-line` (workspace surfaces),
   `-video`/`-video-bg`/`-audio`/`-audio-bg`/`-gold`/`-gold-bg` (media-type
   and fade-handle accents), mapped verbatim from
@@ -3608,15 +3608,23 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
   EDITOR-only token: the panel window's own white-opacity glass
   (`bg-white/5`, `bg-white/10`, `border-white/10`, the bullet above) stays
   literal — it is already consistent there and carries no light-theme
-  surface to fail against). Dark
-  values are the `@theme` defaults (`--color-hover`'s dark value is the
-  literal `rgb(255 255 255 / 0.1)` it replaces, so the dark theme stays
-  byte-identical); `[data-theme="light"]` (set on
+  surface to fail against), and `--color-track` (Task 14 fix round 1, the
+  same review — a SEPARATE token from `--color-hover`: the trim handles'
+  and progress-bar tracks' `bg-white/10` is a static UI-COMPONENT boundary
+  (WCAG 1.4.11's ~3:1 floor, not a hover tint's lighter weight), so
+  `--color-hover`'s light value alone wasn't enough — measured 4.26:1 to
+  4.70:1 in light across every surface it's used against, worst case
+  `--color-video-bg`, the trim handles' own backdrop; `--color-line`'s
+  solid dark value doesn't equal `bg-white/10`'s composited result, so it
+  couldn't stand in either). Dark
+  values are the `@theme` defaults (`--color-hover`'s and `--color-track`'s
+  dark values are both the literal `rgb(255 255 255 / 0.1)` they replace,
+  so the dark theme stays byte-identical); `[data-theme="light"]` (set on
   `document.documentElement` by `EditorShell`, watching the
   `editorWorkspace` store's own `theme` field — Task 18 moved the STATE
   there, persisted through `editor_save_workspace`; `EditorShell` keeps only
   the one thing that stays view-local, applying the `data-theme` attribute)
-  overrides all eleven — and, since Task 58 (GAP-206), the TEXT tokens too:
+  overrides all twelve — and, since Task 58 (GAP-206), the TEXT tokens too:
   `fg`/`fg-secondary`/`fg-muted`/`fg-subtle`, `accent`/`accent-fg`,
   `danger`/`danger-fg`, `focus`, `color-scheme: light` and `--color-app`
   (the window backdrop, `bg-app` on `EditorRoot`'s `main`), so every text

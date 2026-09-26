@@ -108,6 +108,14 @@ describe("RenderDialog — progress", () => {
     deliver(0, progress("job-0", { sequence: 2, phase: "publishing", fraction: 1 }));
     await flushPromises();
     const bar = w.get('[data-testid="render-progress-bar"]');
+    // Fix round 1 (review Important): the track was `bg-white/10`, ~1.1:1 on
+    // the light theme's white/near-white panels — WCAG 1.4.11 wants ~3:1 for
+    // a UI component boundary. e2e can't easily drive a render mid-flight
+    // (per the fix-round instruction), so the token is pinned here instead:
+    // `bg-track` gives 4.70:1 light / (byte-identical) 1.36:1 dark against
+    // `bg-panel`, measured in the token's own style.css comment.
+    expect(bar.classes()).toContain("bg-track");
+    expect(bar.classes()).not.toContain("bg-white/10");
     expect(bar.attributes("aria-valuenow")).not.toBe("100");
     expect(w.find('[data-testid="render-dialog-watch"]').exists()).toBe(false);
     expect(w.get('[data-testid="render-progress-phase"]').text()).toMatch(/saving/i);
