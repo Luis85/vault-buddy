@@ -2720,30 +2720,49 @@ beside Resume and Discard).
 session can journal, and have `list_projects` keep reporting it so the
 user can export or discard it later.
 
-> **2026-09-25 — CLOSED by hardening Task 10.** `editor_open_project`'s
-> `useRecovery: false` path (the dialog's "Open saved project", and
-> Discard's own fallback `reopen(false)` before it has a session to discard
-> through) now moves an unreadable journal aside INSIDE the open lock,
-> before any session is even minted:
-> `recovery::quarantine_unreadable_journal` tries `load_journal` first — a
-> journal that reads fine is left exactly where it is, so Resume and
-> Discard still see it — and only one that fails to load is moved, via
-> `rename_noreplace`, to `recovery.unreadable-<unix seconds>.json` beside
-> it (owned-file-only, no-follow, the `remove_journal` discipline).
-> `recovery.json` is then gone, so the session's own first acknowledged
-> edit has nothing left to overwrite. The quarantined file is never
-> deleted by this fix — it stays in the project folder for a user to find
-> or export by hand, byte-identical to what was there. **Narrower than
-> this entry's original fix text in one respect**: `list_projects`'
-> `hasRecovery` (which checks for `recovery.json` by exact name) does NOT
-> keep reporting a quarantined journal — offering Resume/Discard again over
-> a file already proven unreadable would just repeat the same refusal, so
-> it is simply gone from the dialog once quarantined. The dialog's copy for
-> an unreadable journal now says so: "The unsaved changes could not be
-> read. They were kept in a separate file in the project folder." Pinned
-> by `recovery_tests::opening_without_recovery_sets_an_unreadable_journal_aside`
-> and `...leaves_a_readable_journal_untouched`. The review that closed this
-> found the sibling case in the product ledger — see GAP-217.
+> **2026-09-25 — CLOSED by hardening Task 10, RULING R7 in fix round 1
+> (superseding this task's own first attempt, which the round's review
+> caught as WRONG — Important 2: it quarantined at OPEN time, which is what
+> the ORDINARY panel open does too (`useRecovery: false`), so it silently
+> erased `hasRecovery` — and this whole dialog — before the user ever saw
+> it).** Opening a project — `useRecovery` either way — now never touches
+> `recovery.json` at all; `open_project_locked` does nothing to it. Instead
+> a journal that fails to load with a CONTENT VERDICT
+> (`recovery::is_content_verdict` — `EditorErrorCode::InvalidProject`: a bad
+> parse, an unknown schema, the wrong project id, a `validate_project`
+> failure, or the size bound; never a transient I/O error such as a sharing
+> violation or a delete-pending permission error, which says nothing about
+> the file itself — review Important 1, which caught the first attempt's
+> `load_journal` `Err` catching those too) is set aside, via
+> `rename_noreplace` to `recovery.unreadable-<unix seconds>.json` beside it
+> (a same-second collision retries with a numeric suffix, never left in
+> place to be overwritten), at exactly two points: (a)
+> `recovery::quarantine_before_overwrite`, run by the journal WRITER
+> immediately before its first write would otherwise silently replace it —
+> so the session's own first acknowledged edit is what moves a stale
+> foreign journal aside, not the open that preceded it; and (b)
+> `recovery::discard_or_quarantine_journal`, run by an explicit
+> `discardRecovery`, which keeps the bytes instead of deleting them only
+> when they were never readable to begin with (readable journals are still
+> deleted, exactly as before). Task 9's take recovery
+> (`webcam_recover::recover_after_open`) is unaffected in principle —
+> `journal_present` still reports the name present, readable or not — and is
+> released once either of those two points has actually moved the file
+> aside. The quarantined file is never deleted by any of this — it stays in
+> the project folder for a user to find or export by hand, byte-identical to
+> what was there. The dialog's copy for an unreadable journal is exactly:
+> "The unsaved changes could not be read. Their file is kept in the project
+> folder." Pinned by `recovery_tests::opening_never_touches_an_existing_
+> journal_either_way`, `...opening_never_touches_a_readable_journal_either`,
+> `...the_first_journal_write_quarantines_a_content_unreadable_predecessor`,
+> `...a_transient_read_error_never_quarantines_a_journal_that_might_be_fine`
+> (a real Windows file lock, `share_mode(0)`), `...is_content_verdict_is_
+> true_only_for_invalid_project`, and
+> `...discard_recovery_quarantines_rather_than_deletes_a_content_unreadable_
+> journal`; the interplay with Task 9 by
+> `webcam_recover::tests::an_unreadable_journal_holds_the_take_back_until_
+> discard_moves_it_aside`. The review that caught this also found the
+> sibling case in the product ledger — see GAP-217.
 
 ### GAP-181 · Low · A caption or chapter trimmed out of its clip is kept but listed nowhere
 `src/editor/captionRules.ts` (`captionRows`, `chapterRows`),

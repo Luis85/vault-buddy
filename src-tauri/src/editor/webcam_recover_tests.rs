@@ -545,6 +545,67 @@ fn a_clean_open_over_unsaved_changes_recovers_nothing() {
     );
 }
 
+// Hardening Task 10 fix round 1 (review minor 9): `journal_present` checks
+// only whether something wears `recovery.json`'s name, never whether it can
+// be PARSED, so an UNREADABLE journal holds the take back exactly like a
+// readable one — and stays held back after an ordinary open, since R7 means
+// open time never touches it. It is only released once `discardRecovery`
+// has genuinely moved it out of the way (not a test deleting it by hand),
+// on the NEXT minted session.
+#[test]
+fn an_unreadable_journal_holds_the_take_back_until_discard_moves_it_aside() {
+    let f = Fixture::new();
+    let takes = f.takes();
+    write_aged(&takes.join(part_name(TAKE_A)), b"EBML", STALE);
+    let garbage = b"{ \"schema\": \"vault-buddy-recovery/1\", not json".to_vec();
+    std::fs::write(f.journal(), &garbage).unwrap();
+
+    let held = f.open(&FakeIo::default());
+    assert!(held.project.assets.is_empty(), "the take waits");
+    assert_eq!(
+        std::fs::read(f.journal()).unwrap(),
+        garbage,
+        "R7: an ordinary open never touches the journal, readable or not"
+    );
+    assert!(takes.join(part_name(TAKE_A)).is_file());
+
+    let staging = staging::staging_dir(f.root.path());
+    close_in(
+        &f.state,
+        f.root.path(),
+        &staging,
+        &held.snapshot.session_id,
+        CloseDisposition::DiscardRecovery,
+    )
+    .unwrap();
+    assert!(
+        !f.journal().exists(),
+        "R7b: discard moves an unreadable journal aside, off its exact name"
+    );
+    let quarantined: Vec<PathBuf> = std::fs::read_dir(f.journal().parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("recovery.unreadable-"))
+        })
+        .collect();
+    assert_eq!(quarantined.len(), 1, "{quarantined:?}");
+    assert_eq!(std::fs::read(&quarantined[0]).unwrap(), garbage);
+
+    let reopened = f.open(&FakeIo::default());
+    let take = reopened
+        .project
+        .assets
+        .iter()
+        .find(|a| a.id == TAKE_A)
+        .expect("recovered now that the journal is genuinely gone from that name");
+    assert_eq!(take.name, "Webcam take 1 (recovered)");
+    assert!(!takes.join(part_name(TAKE_A)).exists());
+}
+
 // …and Resume (the journal's working copy, a MINTED session) is where it
 // comes back: the recovered take lands beside the pre-crash edits, and the
 // next journal write carries both.

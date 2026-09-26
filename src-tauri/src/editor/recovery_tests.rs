@@ -1,7 +1,10 @@
 //! Tests for `recovery` (Task 37 Part A) plus the save/close lock fixes
 //! carried into this task from Task 12's review (they live here because
 //! `save_commands_tests.rs` is at its LOC cap). Every one runs the
-//! `AppHandle`-free halves against a tempdir laid out like production.
+//! `AppHandle`-free halves against a tempdir laid out like production. The
+//! startup sweeps' own tests (`run_startup_repin`, `sweep_stale_imports`,
+//! `interrupted_publishes`) split out to `recovery_sweep_tests.rs` at this
+//! file's LOC cap (hardening Task 10 fix round 1).
 
 use std::io;
 use std::time::{Duration, Instant};
@@ -19,7 +22,6 @@ use vault_buddy_core::editor::{EditorCommand, ExecuteRequest};
 use vault_buddy_screen::staging::StagedSidecar;
 
 const BASE: &str = "2026-09-20 1432 Demo";
-const BASE2: &str = "2026-09-21 0915 Other";
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -287,11 +289,14 @@ fn malformed_journal_is_reported_and_kept() {
     );
 }
 
-// GAP-180 (hardening Task 10): "Open saved project" (useRecovery: false)
-// must not leave an unreadable journal sitting at recovery.json for this
-// session's own first edit to silently overwrite -- it is set aside.
+// GAP-180 / R7 (hardening Task 10 fix round 1, review Important 2): opening
+// a project -- `useRecovery` either way -- must NEVER touch an existing
+// `recovery.json`. The ordinary panel open passes `useRecovery: false` too;
+// quarantining there erased `hasRecovery` (and this whole dialog) silently,
+// before the user ever saw it. So an unreadable journal, readable or not,
+// sits exactly where it is after any open.
 #[test]
-fn opening_without_recovery_sets_an_unreadable_journal_aside() {
+fn opening_never_touches_an_existing_journal_either_way() {
     let f = Fixture::new();
     f.stage(BASE);
     let state = EditorState::default();
@@ -305,36 +310,31 @@ fn opening_without_recovery_sets_an_unreadable_journal_aside() {
         CloseDisposition::Keep,
     )
     .unwrap();
-    let before = b"{ \"schema\": \"vault-buddy-recovery/1\", not json".to_vec();
-    std::fs::write(f.journal(&pid), &before).unwrap();
+    let garbage = b"{ \"schema\": \"vault-buddy-recovery/1\", not json".to_vec();
+    std::fs::write(f.journal(&pid), &garbage).unwrap();
 
     let opened = open_project_session(&state, f.root(), &pid, false).unwrap();
 
     assert!(!opened.recovered, "a clean session, not the journal's");
-    assert!(!f.journal(&pid).exists(), "recovery.json must be gone");
-    let dir = project_dir(f.root(), &pid).unwrap();
-    let quarantined: Vec<String> = std::fs::read_dir(&dir)
-        .unwrap()
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.starts_with("recovery.unreadable-") && n.ends_with(".json"))
-        .collect();
-    assert_eq!(
-        quarantined.len(),
-        1,
-        "exactly one quarantined file: {quarantined:?}"
+    assert!(
+        f.journal(&pid).is_file(),
+        "R7: open time never moves an unreadable journal"
     );
-    assert_eq!(
-        std::fs::read(dir.join(&quarantined[0])).unwrap(),
-        before,
-        "byte-identical to the unreadable journal"
+    assert_eq!(std::fs::read(f.journal(&pid)).unwrap(), garbage);
+    let dir = project_dir(f.root(), &pid).unwrap();
+    assert!(
+        std::fs::read_dir(&dir).unwrap().flatten().all(|e| !e
+            .file_name()
+            .to_string_lossy()
+            .starts_with("recovery.unreadable-")),
+        "nothing may be quarantined at open time"
     );
 }
 
-// A journal that reads fine must be left exactly where it is when the
-// caller simply chooses not to resume it -- only an unreadable one moves.
+// A journal that reads fine is unaffected either way -- this pins the
+// control case for the test above.
 #[test]
-fn opening_without_recovery_leaves_a_readable_journal_untouched() {
+fn opening_never_touches_a_readable_journal_either() {
     let f = Fixture::new();
     let state = EditorState::default();
     let (sid, pid) = dirty_session_with_journal(&f, &state);
@@ -349,6 +349,185 @@ fn opening_without_recovery_leaves_a_readable_journal_untouched() {
         "a readable journal must stay at recovery.json"
     );
     assert_eq!(std::fs::read(f.journal(&pid)).unwrap(), before);
+}
+
+// R7(a): the WRITER, not the open, is where an unreadable predecessor is
+// set aside -- and only once this session's own first acknowledged edit is
+// actually about to replace it.
+#[test]
+fn the_first_journal_write_quarantines_a_content_unreadable_predecessor() {
+    let f = Fixture::new();
+    f.stage(BASE);
+    let state = EditorState::default();
+    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let pid = open.project.id.clone();
+    close_in(
+        &state,
+        f.root(),
+        &f.staging(),
+        &open.snapshot.session_id,
+        CloseDisposition::Keep,
+    )
+    .unwrap();
+    let garbage = b"{ \"schema\": \"vault-buddy-recovery/1\", not json".to_vec();
+    std::fs::write(f.journal(&pid), &garbage).unwrap();
+
+    let reopened = open_project_session(&state, f.root(), &pid, false).unwrap();
+    assert_eq!(
+        std::fs::read(f.journal(&pid)).unwrap(),
+        garbage,
+        "precondition: the open left it exactly where it was (R7)"
+    );
+
+    rename(
+        &state,
+        f.root(),
+        &reopened.snapshot.session_id,
+        reopened.snapshot.revision,
+        "cmd-1",
+        "Tutorial",
+    );
+    flush_due(
+        &state,
+        Instant::now() + JOURNAL_DEBOUNCE + Duration::from_millis(50),
+    );
+
+    let dir = project_dir(f.root(), &pid).unwrap();
+    let quarantined: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("recovery.unreadable-") && n.ends_with(".json"))
+        .collect();
+    assert_eq!(
+        quarantined.len(),
+        1,
+        "exactly one quarantined file: {quarantined:?}"
+    );
+    assert_eq!(std::fs::read(dir.join(&quarantined[0])).unwrap(), garbage);
+    let landed = read_journal(&f, &pid);
+    assert_eq!(
+        landed.project.title, "Tutorial",
+        "the NEW journal landed at the exact recovery.json name"
+    );
+}
+
+// Review Important 1: a TRANSIENT I/O failure reading the existing journal
+// -- a sharing violation, exactly the "a read racing the writer's own
+// replace" scenario the review named -- must never be mistaken for a
+// content verdict. The file, whatever it is, is left exactly where it is.
+#[cfg(windows)]
+#[test]
+fn a_transient_read_error_never_quarantines_a_journal_that_might_be_fine() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let f = Fixture::new();
+    std::fs::create_dir_all(project_dir(f.root(), "proj-locked").unwrap()).unwrap();
+    let path = journal_path(f.root(), "proj-locked").unwrap();
+    std::fs::write(&path, b"could be anything, we never get to look").unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&path)
+        .unwrap();
+
+    quarantine_before_overwrite(f.root(), "proj-locked", &path);
+
+    drop(held);
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "a file that could not even be READ must never be moved"
+    );
+    let siblings: Vec<String> = std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !siblings
+            .iter()
+            .any(|n| n.starts_with("recovery.unreadable-")),
+        "{siblings:?}"
+    );
+}
+
+// `is_content_verdict` is the ONE place that distinguishes a content
+// verdict (quarantine-worthy) from a transient I/O failure (never
+// quarantine-worthy) -- pinned directly against `load_journal`'s own
+// documented failure shapes rather than only through the integration tests
+// above, so a future new failure kind cannot silently land on the wrong
+// side without a test noticing here first.
+#[test]
+fn is_content_verdict_is_true_only_for_invalid_project() {
+    // Parse, schema, id mismatch, validate_project, size bound: every
+    // content verdict `load_journal` reports.
+    assert!(is_content_verdict(&EditorError::new(
+        EditorErrorCode::InvalidProject,
+        "x"
+    )));
+    for code in [
+        EditorErrorCode::Internal,       // read_bounded's I/O failures
+        EditorErrorCode::InvalidRequest, // "no journal to resume", a bad id
+    ] {
+        assert!(!is_content_verdict(&EditorError::new(code, "x")));
+    }
+}
+
+// R7(b): discardRecovery does not DESTROY a journal nobody could ever
+// read -- it keeps the bytes, moved aside exactly like the writer does,
+// and still ends the session and removes nothing else.
+#[test]
+fn discard_recovery_quarantines_rather_than_deletes_a_content_unreadable_journal() {
+    let f = Fixture::new();
+    f.stage(BASE);
+    let state = EditorState::default();
+    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let pid = open.project.id.clone();
+    close_in(
+        &state,
+        f.root(),
+        &f.staging(),
+        &open.snapshot.session_id,
+        CloseDisposition::Keep,
+    )
+    .unwrap();
+    let garbage = b"{ \"schema\": \"vault-buddy-recovery/1\", not json".to_vec();
+    std::fs::write(f.journal(&pid), &garbage).unwrap();
+    let reopened = open_project_session(&state, f.root(), &pid, false).unwrap();
+
+    close_in(
+        &state,
+        f.root(),
+        &f.staging(),
+        &reopened.snapshot.session_id,
+        CloseDisposition::DiscardRecovery,
+    )
+    .unwrap();
+
+    assert!(
+        !f.journal(&pid).exists(),
+        "recovery.json must be gone from that exact name"
+    );
+    let dir = project_dir(f.root(), &pid).unwrap();
+    let quarantined: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("recovery.unreadable-") && n.ends_with(".json"))
+        .collect();
+    assert_eq!(
+        quarantined.len(),
+        1,
+        "exactly one quarantined file: {quarantined:?}"
+    );
+    assert_eq!(std::fs::read(dir.join(&quarantined[0])).unwrap(), garbage);
+    assert_eq!(
+        snapshot_in(&state, &reopened.snapshot.session_id)
+            .unwrap_err()
+            .code,
+        EditorErrorCode::SessionGone
+    );
 }
 
 // A journal naming another project is not this project's working copy.
@@ -470,141 +649,6 @@ fn recovery_journal_wire_literal() {
     assert_eq!(v["project"]["id"], serde_json::json!("proj1"));
     let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
     assert_eq!(keys.len(), 4, "exactly the four journal keys: {keys:?}");
-}
-
-// F34.
-#[test]
-fn startup_sweep_repins_an_unpinned_project_whose_staged_base_still_exists() {
-    let f = Fixture::new();
-    f.stage(BASE);
-    f.stage(BASE2);
-    let a = open_staged_session(&EditorState::default(), f.root(), &f.staging(), BASE).unwrap();
-    let b = open_staged_session(&EditorState::default(), f.root(), &f.staging(), BASE2).unwrap();
-    let (pa, pb) = (a.project.id.clone(), b.project.id.clone());
-    // A: the crash between create_project and pin_staged.
-    unpin_for_test(&f, BASE);
-    // B: a pin naming a project that no longer exists (a hand edit, or a
-    // sidecar rewritten from an older copy).
-    pin_staged(&f.staging(), BASE2, "ghost-project").unwrap();
-
-    let report = run_startup_repin(f.root(), &f.staging());
-
-    let mut want = vec![
-        (pa.clone(), BASE.to_string()),
-        (pb.clone(), BASE2.to_string()),
-    ];
-    want.sort();
-    let mut got = report.repinned.clone();
-    got.sort();
-    assert_eq!(got, want);
-    assert!(report.orphaned.is_empty(), "{:?}", report.orphaned);
-    assert_eq!(f.pin_of(BASE).as_deref(), Some(pa.as_str()));
-    assert_eq!(f.pin_of(BASE2).as_deref(), Some(pb.as_str()));
-    // A second sweep finds nothing left to do.
-    assert_eq!(
-        run_startup_repin(f.root(), &f.staging()),
-        RepinReport::default()
-    );
-}
-
-fn unpin_for_test(f: &Fixture, base: &str) {
-    let path = f.sidecar_path(base);
-    let mut s = staging::read_sidecar(&path).unwrap();
-    s.extra.remove("editorProjectId");
-    staging::write_sidecar(&f.staging(), base, &s).unwrap();
-}
-
-// F34. MUTATION CHECK target: re-pinning without checking the staged base
-// still exists turns this red through B, whose sidecar survived its video.
-#[test]
-fn startup_sweep_reports_without_repinning_when_the_staged_base_is_gone() {
-    let f = Fixture::new();
-    f.stage(BASE);
-    f.stage(BASE2);
-    let a = open_staged_session(&EditorState::default(), f.root(), &f.staging(), BASE).unwrap();
-    let b = open_staged_session(&EditorState::default(), f.root(), &f.staging(), BASE2).unwrap();
-    let (pa, pb) = (a.project.id.clone(), b.project.id.clone());
-    // A: the whole staged capture is gone.
-    std::fs::remove_file(f.mp4(BASE)).unwrap();
-    std::fs::remove_file(f.sidecar_path(BASE)).unwrap();
-    // B: its video is gone, a stale unpinned sidecar is left behind.
-    unpin_for_test(&f, BASE2);
-    std::fs::remove_file(f.mp4(BASE2)).unwrap();
-    let b_sidecar_before = std::fs::read(f.sidecar_path(BASE2)).unwrap();
-
-    let report = run_startup_repin(f.root(), &f.staging());
-
-    assert!(report.repinned.is_empty(), "{:?}", report.repinned);
-    let mut want = vec![pa.clone(), pb.clone()];
-    want.sort();
-    assert_eq!(report.orphaned, want);
-    assert!(!f.sidecar_path(BASE).exists(), "no pin may be invented");
-    assert_eq!(
-        std::fs::read(f.sidecar_path(BASE2)).unwrap(),
-        b_sidecar_before
-    );
-    assert!(
-        project_dir(f.root(), &pa).unwrap().is_dir(),
-        "never deleted"
-    );
-    assert!(
-        project_dir(f.root(), &pb).unwrap().is_dir(),
-        "never deleted"
-    );
-}
-
-// Two projects claiming one capture: the one the sidecar already names
-// keeps it; the other is reported, never allowed to steal the pin.
-#[test]
-fn startup_sweep_never_steals_a_pin_another_project_holds() {
-    let f = Fixture::new();
-    f.stage(BASE);
-    let a = open_staged_session(&EditorState::default(), f.root(), &f.staging(), BASE).unwrap();
-    let pa = a.project.id.clone();
-    let (_, sources) = super::super::store_io::load_project(f.root(), &pa).unwrap();
-    create_project(
-        f.root(),
-        &super::super::project_store::minimal_project("zz-second"),
-        &sources,
-    )
-    .unwrap();
-
-    let report = run_startup_repin(f.root(), &f.staging());
-
-    assert!(report.repinned.is_empty());
-    assert_eq!(report.orphaned, vec!["zz-second".to_string()]);
-    assert_eq!(f.pin_of(BASE).as_deref(), Some(pa.as_str()));
-}
-
-// Fix round 1 (review, pin integrity): the pin names an EXISTING project
-// whose sources.json cannot be read right now. It may well claim this
-// capture, so the pin is left alone and the unpinned claimant is reported --
-// an unreadable file is never proof the pin is free to take.
-#[test]
-fn startup_sweep_never_steals_a_pin_from_a_project_it_cannot_read() {
-    let f = Fixture::new();
-    f.stage(BASE);
-    let a = open_staged_session(&EditorState::default(), f.root(), &f.staging(), BASE).unwrap();
-    let pa = a.project.id.clone();
-    let (_, sources) = super::super::store_io::load_project(f.root(), &pa).unwrap();
-    create_project(
-        f.root(),
-        &super::super::project_store::minimal_project("zz-second"),
-        &sources,
-    )
-    .unwrap();
-    // The pin names A, whose sources.json is now unreadable.
-    std::fs::write(
-        project_dir(f.root(), &pa).unwrap().join("sources.json"),
-        b"{ not json",
-    )
-    .unwrap();
-
-    let report = run_startup_repin(f.root(), &f.staging());
-
-    assert!(report.repinned.is_empty(), "{:?}", report.repinned);
-    assert_eq!(report.orphaned, vec!["zz-second".to_string()]);
-    assert_eq!(f.pin_of(BASE).as_deref(), Some(pa.as_str()));
 }
 
 // Carried from Task 12 (a): a project.json whose presence cannot even be
@@ -735,91 +779,6 @@ fn keep_and_discard_recovery_wait_for_the_save_lock() {
         result.unwrap_or_else(|e| panic!("{disposition:?}: {}", e.message));
         assert!(snapshot_in(&state, &sid).is_err());
     }
-}
-
-// Task 39: an import builds its project in `.<id>.importing` and renames it
-// into place last, so a crash mid-import leaves that directory behind. The
-// sweep removes only such directories, only once they are an hour old
-// (an import running right now is younger), and nothing else in the store.
-#[test]
-fn stale_import_directories_are_swept_and_nothing_else() {
-    let f = Fixture::new();
-    let store = store_dir(f.root());
-    let stale = store.join(".abc123.importing");
-    std::fs::create_dir_all(stale.join("media")).unwrap();
-    std::fs::write(stale.join("media").join("src.mp4"), b"half an import").unwrap();
-    std::fs::write(stale.join("project.json"), b"{}").unwrap();
-    let keep_dirs = [".abc123.importing.bak", "abc123", ".bad!id.importing"];
-    for name in keep_dirs {
-        std::fs::create_dir_all(store.join(name)).unwrap();
-    }
-    std::fs::write(store.join(".def456.importing"), b"a file, not ours").unwrap();
-
-    let now = std::time::SystemTime::now();
-    assert!(
-        sweep_stale_imports(f.root(), now).is_empty(),
-        "a fresh import is left alone"
-    );
-    assert!(stale.is_dir());
-
-    let later = now + Duration::from_secs(2 * 60 * 60);
-    assert_eq!(sweep_stale_imports(f.root(), later), [".abc123.importing"]);
-    assert!(!stale.exists());
-    for name in keep_dirs {
-        assert!(store.join(name).is_dir(), "{name} is not an import's");
-    }
-    assert!(store.join(".def456.importing").is_file());
-}
-
-// Task 48 (F36; ADR R13): a publish journal a crash left behind, not at
-// `complete`, is REPORTED -- naming where the video landed and that its
-// note did not -- and left exactly where it was: never deleted, never
-// retried, so the next start reports it again. A finished publish's
-// leftover journal directory is removed quietly: nothing was lost.
-#[test]
-fn interrupted_publish_is_reported_not_deleted() {
-    let f = Fixture::new();
-    let jobs = project_dir(f.root(), "proj-a").unwrap().join("jobs");
-    let write = |job: &str, json: &str| {
-        let dir = jobs.join(job);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("publish.json"), json).unwrap();
-        dir.join("publish.json")
-    };
-    let video = write(
-        "job-video",
-        r#"{"step":"video","video":"Tutorials/Demo (2).mp4","note":"Tutorials/Demo (2).md"}"#,
-    );
-    let reserved = write(
-        "job-reserved",
-        r#"{"step":"reserved","video":"Tutorials/Other.mp4","note":null}"#,
-    );
-    let complete = write(
-        "job-done",
-        r#"{"step":"complete","video":"Tutorials/Done.mp4","note":null}"#,
-    );
-    let before = std::fs::read(&video).unwrap();
-
-    let reports = interrupted_publishes(f.root());
-
-    assert_eq!(
-        reports,
-        vec![
-            "A publish was interrupted before its video was saved as Tutorials/Other.mp4. \
-             A hidden partial copy may be left in that folder; publish it again."
-                .to_string(),
-            "A publish was interrupted: the video was saved as Tutorials/Demo (2).mp4 but \
-             its note was not."
-                .to_string(),
-        ]
-    );
-    assert_eq!(std::fs::read(&video).unwrap(), before, "never rewritten");
-    assert!(reserved.is_file(), "never deleted");
-    assert!(
-        !complete.parent().unwrap().exists(),
-        "a finished one is swept"
-    );
-    assert_eq!(interrupted_publishes(f.root()).len(), 2, "reported again");
 }
 
 // Final review M5: `load_journal` refuses a journal over the 8 MiB project

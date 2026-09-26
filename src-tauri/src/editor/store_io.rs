@@ -120,9 +120,17 @@ impl CreatingDir {
     /// or `project.json` open for a moment right after `write_json_with`
     /// returns — GAP-169's own "Access denied" history — and Windows refuses
     /// to rename a directory while a file inside it is open. This rides that
-    /// out the way `delete_transcription_model` rides out a live mmap; any
-    /// OTHER rename failure (a genuine id collision, an invalid target) is
-    /// not retried and is returned on the first attempt.
+    /// out the way `delete_transcription_model` rides out a live mmap.
+    /// **Not a precise signal** (fix round 1, minor 4): on Windows, renaming
+    /// a directory onto one that already exists ALSO fails with
+    /// `PermissionDenied` (not `AlreadyExists`) rather than the OS's own
+    /// `ERROR_ACCESS_DENIED` reliably distinguishing "something else has
+    /// this open" from "the target is already there" — so a genuine id
+    /// collision is retried five times before it is returned, not returned
+    /// on the first attempt. That costs at most ~400 ms on the already-rare
+    /// collision path (`create_project` refuses the id loudly either way);
+    /// it does not cost correctness. An error of any OTHER kind (an invalid
+    /// target, a vanished source) is still returned immediately.
     fn install(mut self, target: &Path) -> io::Result<()> {
         retry_permission_denied(|| std::fs::rename(&self.dir, target))?;
         self.installed = true;

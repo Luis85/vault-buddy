@@ -29,6 +29,32 @@
 //! there is nothing to recover, and a fresh session opened over a project
 //! must never overwrite a journal an earlier process left behind before the
 //! user has chosen Resume or Discard for it.
+//!
+//! **An unreadable journal is quarantined, never at open time (GAP-180 /
+//! R7, hardening Task 10 fix round 1).** Opening a project — whether or not
+//! `useRecovery` is set — never touches an existing `recovery.json`: doing
+//! so at open time ran on the ORDINARY panel open too (`editor_open_project`
+//! reopening a saved project from the panel's Tutorial-projects list passes
+//! `useRecovery: false`, `EditorRoot.vue`'s `kind === "project"` branch —
+//! opening a STAGED capture's Edit is a different path, `editor_open_staged`,
+//! which never reads or writes this file at all), silently erasing the very
+//! report (`hasRecovery`) the recovery dialog exists to show, before the
+//! user ever saw it. Instead, a journal that fails to load with a CONTENT
+//! verdict
+//! (`is_content_verdict` — a bad parse, an unknown schema, the wrong
+//! project id, a `validate_project` failure, or the size bound; never a
+//! transient I/O error, which says nothing about the file) is set aside —
+//! `rename_noreplace` to `recovery.unreadable-<unix seconds>.json`, never
+//! deleted — at exactly two points: (a) `quarantine_before_overwrite`, run
+//! by the journal WRITER immediately before its first write would replace
+//! it, so the session's own first acknowledged edit can never silently
+//! destroy it; and (b) `discard_or_quarantine_journal`, run by an explicit
+//! `discardRecovery` close, which keeps the bytes instead of deleting them
+//! when — and only when — they were never readable to begin with. Either
+//! way, `journal_present` (below) still reports the ORIGINAL file present
+//! and unreadable in the meantime, which is what holds Task 9's take
+//! recovery back (`webcam_recover::recover_after_open`) until one of those
+//! two points has actually moved it out of the way.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -197,6 +223,14 @@ fn write_locked(state: &EditorState, root: &Path, session_id: &str) -> std::io::
     let path = journal_path(root, &journal.project.id).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid project id")
     })?;
+    // R7(a), fix round 1: this write is about to REPLACE whatever already
+    // sits at `path`. Set aside first anything that is there and fails to
+    // load with a CONTENT verdict -- an earlier process's journal this
+    // session never resumed. A journal that loads fine is left alone (this
+    // session's own previous write, since only one session can hold a
+    // project open at a time); the check itself failing (a transient I/O
+    // error) is logged and left alone too, never guessed at.
+    quarantine_before_overwrite(root, &journal.project.id, &path);
     let json = serde_json::to_string_pretty(&journal)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     // Final review M5: `load_journal` refuses anything over this bound, so
@@ -302,56 +336,116 @@ pub(crate) fn load_journal(root: &Path, project_id: &str) -> Result<RecoveryJour
     Ok(journal)
 }
 
-/// GAP-180: when the caller has decided NOT to resume the journal (the
-/// recovery dialog's "Open saved project", reached after Resume itself
-/// reported the journal unreadable — or Discard's own fallback open before
-/// it has a session to discard through), a journal that genuinely cannot be
-/// loaded must not sit at `recovery.json` waiting for this session's own
-/// first acknowledged edit to silently overwrite it (`write_locked` always
-/// writes to that exact name). So it is moved aside instead, to
-/// `recovery.unreadable-<unix seconds>.json` beside it, via
-/// `rename_noreplace` — never deleted, so a user can still recover or export
-/// the bytes by hand.
-///
-/// A journal that DOES load is left exactly where it is: only a journal
-/// that fails to load is ever moved, never one the caller simply chose not
-/// to resume — Discard's second `reopen(false)` (after `discardRecovery`
-/// has already removed the journal) and every ordinary open with no journal
-/// at all both find nothing here and do nothing.
-///
-/// Owned-file-only, no-follow (the `remove_journal` discipline): a symlink
-/// or a directory wearing the journal's name is not ours to move, and a
-/// metadata check that fails for a reason other than "not found" is logged
-/// and left alone rather than guessed at.
-pub(crate) fn quarantine_unreadable_journal(root: &Path, project_id: &str) {
-    let Some(path) = journal_path(root, project_id) else {
-        return;
-    };
-    let meta = match std::fs::symlink_metadata(&path) {
-        Ok(meta) => meta,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-        Err(e) => {
-            log::warn!(
-                "editor recovery: could not check the recovery journal before opening without \
-                 it: {e}"
-            );
-            return;
-        }
-    };
-    if !meta.file_type().is_file() {
-        return;
-    }
-    if load_journal(root, project_id).is_ok() {
-        return;
-    }
+/// GAP-180 / R7 (hardening Task 10, fix round 1): does `e` say something
+/// about the JOURNAL'S CONTENT -- a bad parse, an unknown schema, the wrong
+/// project id, `validate_project`'s own checks, or the file being over the
+/// size bound -- rather than a TRANSIENT I/O failure (a sharing violation, a
+/// delete-pending permission error, a read racing this very writer's own
+/// replace) that says nothing about the file itself? `load_journal` reports
+/// every content verdict as `InvalidProject` (`read_bounded`'s own "too big"
+/// case included) and every I/O failure as `Internal`
+/// (`read_bounded`'s own mapping); the file simply being absent is
+/// `InvalidRequest`, also not a verdict. Only the first kind may ever
+/// justify moving a journal aside -- review Important 1's fix.
+fn is_content_verdict(e: &EditorError) -> bool {
+    e.code == EditorErrorCode::InvalidProject
+}
+
+/// Move `path` (an already-confirmed content-unreadable journal, an owned
+/// plain file) aside, via `rename_noreplace`, to
+/// `recovery.unreadable-<unix seconds>.json` beside it -- never deleted, so
+/// a user can still recover or export the bytes by hand. A same-second
+/// collision (two quarantines in one second, or a clock that ran backwards)
+/// retries with a numeric suffix rather than silently leaving the original
+/// in place to be overwritten (review minor 7); giving up after 20 tries is
+/// logged, matching every other "could not set this aside" failure here.
+fn quarantine_journal_file(path: &Path) {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let dest = path.with_file_name(format!("recovery.unreadable-{secs}.json"));
-    if let Err(e) = rename_noreplace(&path, &dest) {
-        log::warn!("editor recovery: could not set aside an unreadable recovery journal: {e}");
+    for attempt in 0..20u32 {
+        let name = if attempt == 0 {
+            format!("recovery.unreadable-{secs}.json")
+        } else {
+            format!("recovery.unreadable-{secs}-{attempt}.json")
+        };
+        match rename_noreplace(path, &path.with_file_name(name)) {
+            Ok(()) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                log::warn!(
+                    "editor recovery: could not set aside an unreadable recovery journal: {e}"
+                );
+                return;
+            }
+        }
     }
+    log::warn!(
+        "editor recovery: could not set aside an unreadable recovery journal: too many \
+         same-second collisions"
+    );
+}
+
+/// R7(a): before `write_locked`'s write REPLACES whatever already sits at
+/// `path`, decide whether that needs to be set aside first. Only a journal
+/// that fails to load with a CONTENT verdict (`is_content_verdict`) is ever
+/// moved -- an earlier process's journal this session never resumed, about
+/// to be silently destroyed by this session's own first acknowledged edit.
+/// A journal that loads fine is virtually certain to be THIS session's own
+/// previous write (only one session can hold a project open at a time) and
+/// is simply replaced, as always. A file that is not there yet (the
+/// ordinary case: no journal existed before this session's first write) is
+/// a silent no-op; one that is there but is not a plain file (a symlink, a
+/// directory) is left alone, the `remove_journal` owned-file discipline; a
+/// TRANSIENT read failure is logged and the file is left exactly where it
+/// is for the replacing write below to handle normally.
+fn quarantine_before_overwrite(root: &Path, project_id: &str, path: &Path) {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_file() => {}
+        Ok(_) => return,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            log::warn!(
+                "editor recovery: could not check for an existing recovery journal before \
+                 writing a new one: {e}"
+            );
+            return;
+        }
+    }
+    match load_journal(root, project_id) {
+        Ok(_) => {}
+        Err(e) if is_content_verdict(&e) => quarantine_journal_file(path),
+        Err(e) => log::warn!(
+            "editor recovery: a transient error reading the existing recovery journal before \
+             writing a new one; leaving it in place: {}",
+            e.message
+        ),
+    }
+}
+
+/// `discardRecovery`'s own action (R7b): DELETE the journal, as always --
+/// UNLESS it is unreadable by CONTENT VERDICT, in which case its bytes are
+/// kept, moved aside the same way `quarantine_before_overwrite` does,
+/// because Discard destroying a journal nobody has ever been able to read
+/// is not the decision the user actually made (they discarded the RECOVERY
+/// OFFER, not evidence of what it was). An absent journal or a transient I/O
+/// error both fall through to the ordinary delete, `remove_journal`'s own
+/// no-op-on-absent and propagated-error behaviour unchanged.
+pub(crate) fn discard_or_quarantine_journal(root: &Path, project_id: &str) -> std::io::Result<()> {
+    if let Err(e) = load_journal(root, project_id) {
+        if is_content_verdict(&e) {
+            if let Some(path) = journal_path(root, project_id) {
+                quarantine_journal_file(&path);
+                log::info!(
+                    "editor recovery: discardRecovery kept an unreadable journal's bytes aside \
+                     for {project_id} instead of deleting them"
+                );
+            }
+            return Ok(());
+        }
+    }
+    remove_journal(root, project_id)
 }
 
 /// The `editor-journal` thread's body: wait for the next deadline, flush
@@ -679,3 +773,7 @@ pub fn spawn_startup_repin(app: &AppHandle) {
 #[cfg(test)]
 #[path = "recovery_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "recovery_sweep_tests.rs"]
+mod sweep_tests;

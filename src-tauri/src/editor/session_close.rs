@@ -165,11 +165,14 @@ pub(crate) fn close_locked(
     match disposition {
         // Task 37: the pending journal write lands before the session goes.
         CloseDisposition::Keep => recovery::flush_locked(state, session_id),
-        // Task 37: only `recovery.json` goes (owned-file check); the saved
-        // project, its sources and the pin are untouched.
+        // Task 37: `recovery.json` goes (owned-file check); the saved
+        // project, its sources and the pin are untouched. R7b (hardening
+        // Task 10 fix round 1): a journal that was never readable to begin
+        // with is kept aside instead of deleted -- `discard_or_quarantine_
+        // journal`'s own call, never a bare `remove_journal` here.
         CloseDisposition::DiscardRecovery => {
             state.journal.forget(session_id);
-            recovery::remove_journal(root, project_id)
+            recovery::discard_or_quarantine_journal(root, project_id)
                 .map_err(|e| internal(format!("Could not discard the unsaved changes: {e}")))?;
         }
         CloseDisposition::DiscardProject => {

@@ -12,12 +12,20 @@
  * - **Resume** closes the clean session (`keep`, which flushes nothing: a
  *   clean session has no pending journal) and reopens the project with the
  *   journal as its working copy — dirty, persisted at the saved revision.
- * - **Discard** deletes only the journal (`discardRecovery`) and reopens
- *   the saved project.
+ * - **Discard** removes the journal (`discardRecovery`) and reopens the
+ *   saved project — UNLESS the journal cannot be read at all, in which case
+ *   its bytes are kept, moved aside rather than deleted (GAP-180 / R7,
+ *   hardening Task 10 fix round 1).
  * - A journal that cannot be read is reported as TEXT (A27: the saved
- *   project was not changed, and nothing is interpolated as markup), with
- *   Discard or "Open saved project" (the journal stays on disk) as the way
- *   forward.
+ *   project was not changed, and nothing is interpolated as markup).
+ *   Neither this reopen ("Open saved project") NOR the failed Resume
+ *   attempt that got here moves the file — opening a project never touches
+ *   `recovery.json` either way (R7: the ORDINARY panel open also passes
+ *   `useRecovery: false`, and quarantining at open time silently erased
+ *   this whole dialog's own report before the user ever saw it). The file
+ *   is set aside only by the reopened session's own first acknowledged
+ *   edit (its journal write, right before it would otherwise silently
+ *   replace it) or by Discard above.
  */
 import { ref } from "vue";
 

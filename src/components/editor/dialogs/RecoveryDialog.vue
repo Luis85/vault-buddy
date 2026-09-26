@@ -55,7 +55,7 @@ defineExpose({ check: recovery.check });
         class="flex flex-col gap-1 text-xs text-danger-fg"
       >
         <p>The unsaved changes could not be opened. Your saved project was not changed.</p>
-        <p>The unsaved changes could not be read. They were kept in a separate file in the project folder.</p>
+        <p>The unsaved changes could not be read. Their file is kept in the project folder.</p>
         <p class="break-words text-fg-muted">
           {{ failure }}
         </p>

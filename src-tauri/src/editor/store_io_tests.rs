@@ -653,3 +653,26 @@ fn retry_permission_denied_succeeds_once_the_lock_clears() {
     assert_eq!(result.unwrap(), 42);
     assert_eq!(calls.get(), 3);
 }
+
+// Hardening Task 10 review, minor 3: the three tests above pin
+// `retry_permission_denied` in isolation -- nothing pinned that `install`
+// actually CALLS it rather than a bare `std::fs::rename`. Reverting
+// `install` to the bare rename left every other test in this file green.
+// A source scan is the established remedy here for exactly that reason
+// (`authz_guard.rs`, `capability_guard.rs`, `redact_guard.rs`).
+#[test]
+fn install_renames_through_the_retry_helper_not_a_bare_rename() {
+    let src = include_str!("store_io.rs");
+    let sig = "fn install(mut self, target: &Path) -> io::Result<()> {";
+    let start = src.find(sig).expect("install's signature") + sig.len();
+    let end = src[start..]
+        .find("\n    }\n")
+        .expect("install's closing brace")
+        + start;
+    let body = &src[start..end];
+    assert!(
+        body.contains("retry_permission_denied("),
+        "install must rename THROUGH retry_permission_denied, not a bare std::fs::rename: \
+         {body:?}"
+    );
+}
