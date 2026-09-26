@@ -196,11 +196,13 @@ const menuContext = computed(() =>
   ),
 );
 
+/** Whole milliseconds: every time Rust takes is a `u64`, and at a fitted
+ * zoom a pixel is a fraction of a millisecond (Task 5 fix round 1). */
 function msFromClientX(clientX: number): number {
   if (!scrollRef.value) return workspace.playheadMs;
   const rect = scrollRef.value.getBoundingClientRect();
   const contentX = clientX - rect.left + scrollRef.value.scrollLeft - TRACK_LABEL_WIDTH_PX;
-  return xToMs(Math.max(0, contentX), workspace.timelineZoom);
+  return Math.round(xToMs(Math.max(0, contentX), workspace.timelineZoom));
 }
 
 function openMenu(target: PointerTarget | null, x: number, y: number, fromToolbar = false) {

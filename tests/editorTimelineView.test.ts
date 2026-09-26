@@ -630,6 +630,35 @@ describe("TimelineView — the concept's context menus", () => {
   });
 });
 
+// Task 5 fix round 1: Rust decodes every time as a u64, so a time read off
+// the pointer at a fitted (fractional) zoom must reach it as an integer.
+describe("TimelineView — pointer times sent to Rust are whole milliseconds", () => {
+  it("at zoom 3, a right-click at a fractional ms sends integer split, trim and title times", async () => {
+    executed = [];
+    await openProject();
+    const workspace = useEditorWorkspaceStore();
+    workspace.setZoom(3); // 0.15 px/ms: 100 px past the label is 666.67 ms
+    const w = mount(TimelineView, { attachTo: document.body, props: { viewportWidth: 1_000 } });
+    await flushPromises();
+
+    await w.get('[data-testid="clip-c1"]').trigger("contextmenu", { clientX: 196 + 100, clientY: 5 });
+    expect(w.get('[data-testid="editor-context-menu-item-split"]').text()).toContain("Split at 00:00.6");
+    await w.get('[data-testid="editor-context-menu-item-split"]').trigger("click");
+    await w.get('[data-testid="clip-c1"]').trigger("contextmenu", { clientX: 196 + 100, clientY: 5 });
+    await w.get('[data-testid="editor-context-menu-item-trim"]').trigger("click");
+    await w.get('[data-testid="editor-context-menu-item-trim-start"]').trigger("click");
+    await w.get('[data-testid="track-lane-body-v1"]').trigger("contextmenu", { clientX: 196 + 250, clientY: 5 });
+    await w.get('[data-testid="editor-context-menu-item-lane-title"]').trigger("click");
+    await flushPromises();
+
+    expect(executed).toEqual([
+      { kind: "splitClip", clipId: "c1", atMs: 667 },
+      { kind: "trimClip", clipId: "c1", startMs: 667, inMs: 167, outMs: 2_500 },
+      { kind: "addCard", preset: "chapter", trackId: "v1", startMs: 1_667, durationMs: 3_000, title: "Chapter", subtitle: "" },
+    ]);
+  });
+});
+
 describe("ClipItem — keyboard gate", () => {
   it("a key other than Shift+F10/Menu does nothing", async () => {
     executed = [];
@@ -981,6 +1010,19 @@ describe("TimelineRuler — degenerate zoom", () => {
     await ticks.trigger("pointerdown", { clientX: 300 });
 
     expect(workspace.playheadMs).toBe(0);
+  });
+});
+
+describe("TimelineRuler — whole milliseconds (Task 5 fix round 1)", () => {
+  it("a click at a fractional zoom puts the playhead on an integer ms", async () => {
+    await openProject({}, { durationMs: 1_000_000 });
+    const workspace = useEditorWorkspaceStore();
+    const w = mount(TimelineRuler, { props: { zoom: 3, widthPx: 2000 } });
+    const ticks = w.get('[data-testid="timeline-ruler-ticks"]');
+    (ticks.element as HTMLElement).getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 2000, height: 24, right: 2000, bottom: 24, x: 0, y: 0 }) as DOMRect;
+    await ticks.trigger("pointerdown", { clientX: 100, pointerId: 1 });
+    expect(workspace.playheadMs).toBe(667);
   });
 });
 

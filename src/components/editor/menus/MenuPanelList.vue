@@ -37,6 +37,7 @@ const emit = defineEmits<{
   (e: "hover", index: number, el: HTMLElement): void;
   (e: "back"): void;
   (e: "escape"): void;
+  (e: "tab"): void;
 }>();
 
 const panel = ref<HTMLElement | null>(null);
@@ -136,6 +137,11 @@ function leave() {
 const STEPS: Record<string, number> = { ArrowDown: 1, ArrowUp: -1, Home: -Infinity, End: Infinity };
 
 function onKeydown(event: KeyboardEvent) {
+  // Tab leaves the menu: it closes, and focus moves on as Tab would.
+  if (event.key === "Tab") {
+    emit("tab");
+    return;
+  }
   const step = STEPS[event.key];
   if (step !== undefined) focusIndex(stepFrom(step));
   else if (event.key === "Enter" || event.key === " ") activate(active.value);

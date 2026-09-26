@@ -1,6 +1,6 @@
 /**
  * What a context-menu item set can see and do (visual-parity Task 5; design
- * D13/D14). The item sets (`menuSetsClip.ts`, `menuSetsOther.ts`) are pure
+ * D13/D14). The item sets (`menuSetsClip.ts`, `menuSets.ts`) are pure
  * functions of this context: every effect they cause goes through one of the
  * functions below, so a test hands them a context of spies and asserts which
  * command or view change each item makes. `useEditorMenuContext` builds the

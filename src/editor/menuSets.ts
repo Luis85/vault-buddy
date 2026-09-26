@@ -69,7 +69,9 @@ export function contextMenuFor(ctx: MenuContext): BuiltMenu {
 
 type TrackFlag = "visible" | "muted" | "solo" | "locked";
 
-/** A checkbox item that flips one of the track's flags. */
+/** A checkbox item that flips one of the track's flags. A locked track
+ * refuses every flag change but unlocking (core's `setTrackFlags`), so
+ * every flag but Lock track carries the lock reason there. */
 function flagItem(ctx: MenuContext, track: Track, flag: TrackFlag, label: string, icon: MenuAction["icon"]): MenuAction {
   const change: Partial<Record<TrackFlag, boolean>> = { [flag]: !track[flag] };
   return {
@@ -77,6 +79,7 @@ function flagItem(ctx: MenuContext, track: Track, flag: TrackFlag, label: string
     label,
     icon,
     checked: track[flag],
+    disabledReason: flag === "locked" ? null : trackLockReason(track),
     run: sendCommand(ctx, { kind: "setTrackFlags", trackId: track.id, ...change }),
   };
 }

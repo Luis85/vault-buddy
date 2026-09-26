@@ -53,13 +53,15 @@ const ticks = computed(() => {
   return out;
 });
 
-/** The one `localX -> ms` path both a click and every drag step share. */
+/** The one `localX -> ms` path both a click and every drag step share,
+ * in whole milliseconds: the playhead becomes a command's time (Split at
+ * the playhead), and Rust takes every time as a `u64`. */
 function msFromClientX(el: HTMLElement, clientX: number): number {
   const rect = el.getBoundingClientRect();
   const localX = clientX - rect.left;
   const ppm = pxPerMs(props.zoom);
   const ms = ppm > 0 ? localX / ppm : 0;
-  return Math.max(0, ms);
+  return Math.max(0, Math.round(ms));
 }
 
 /** Not a `ref` -- nothing in the template reads it, so making it reactive

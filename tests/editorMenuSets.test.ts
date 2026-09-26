@@ -461,6 +461,20 @@ describe("trackMenu", () => {
     expect(labels(trackMenu(menuCtx(), "a1"))).not.toContain("Visible video");
   });
 
+  // Fix round 1: core refuses every flag change on a locked track except
+  // unlocking it.
+  it("on a locked track every flag but Lock track says why, and Lock track still unlocks", () => {
+    const ctx = menuCtx();
+    const items = trackMenu(ctx, "v0");
+    for (const label of ["Visible video", "Mute audio", "Solo audio"]) {
+      expect(find(items, label).disabledReason).toBe("Track V0 is locked");
+    }
+    const lock = find(items, "Lock track");
+    expect(lock.checked).toBe(true);
+    run(lock);
+    expect(executed(ctx)).toEqual([{ kind: "setTrackFlags", trackId: "v0", locked: false }]);
+  });
+
   it("an audio track at the bottom cannot move down", () => {
     const ctx = menuCtx({ project: { ...project(), tracks: project().tracks.slice(0, 3) } });
     expect(find(trackMenu(ctx, "a1"), "Move track down").disabledReason).toBe("Already the bottom track");

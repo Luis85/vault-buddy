@@ -196,6 +196,15 @@ describe("MenuPanel — keyboard", () => {
     expect(w.emitted("close")).toHaveLength(1);
   });
 
+  it("Tab closes the menu and lets focus move on", async () => {
+    const w = open();
+    await flushPromises();
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    w.get('[data-testid="m"]').element.dispatchEvent(tab);
+    expect(w.emitted("close")).toHaveLength(1);
+    expect(tab.defaultPrevented).toBe(false);
+  });
+
   it("Escape on the root emits close and returns focus to the invoker", async () => {
     const trigger = document.createElement("button");
     document.body.appendChild(trigger);

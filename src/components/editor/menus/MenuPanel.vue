@@ -74,7 +74,8 @@ function onHover(index: number, el: HTMLElement) {
 /**
  * `always` for Escape (the person backed out: go back to where they were),
  * `ifLost` after choosing an item (only if the item did not move focus
- * somewhere on purpose), `never` for a click outside (they aimed there).
+ * somewhere on purpose), `never` for a click outside or Tab (the person is
+ * going somewhere else).
  */
 function close(returnFocus: "always" | "ifLost" | "never") {
   clearTimeout(hoverTimer);
@@ -129,6 +130,7 @@ onBeforeUnmount(() => {
       @open="openSub"
       @hover="onHover"
       @escape="close('always')"
+      @tab="close('never')"
     />
     <MenuPanelList
       v-if="sub"
@@ -142,6 +144,7 @@ onBeforeUnmount(() => {
       :expanded-index="null"
       @choose="(i) => sub && choose(sub.items, i)"
       @back="closeSub"
+      @tab="close('never')"
     />
   </div>
 </template>
