@@ -94,7 +94,19 @@ describe("the shortcut table", () => {
     const byId = Object.fromEntries(SHORTCUT_TABLE.map((r) => [r.actionId, r]));
     expect(byId.split).toEqual({ actionId: "split", label: ACTION_LABELS.split, keys: ["S"] });
     expect(byId.help).toEqual({ actionId: "help", label: "Start or resume the guided walkthrough", keys: ["F1", "?"] });
-    expect(OTHER_KEYS.map((k) => k.keys)).toEqual([["Shift+F10", "Menu"], ["Esc"]]);
+    expect(OTHER_KEYS.map((k) => k.keys)).toEqual([["Shift+F10", "Menu"], ["Esc"], ["Space"], ["←", "→"]]);
+  });
+
+  // Review finding F-M7: Space (play/pause, `TransportBar`'s own `window`
+  // listener) and the clip nudge keys (`ClipItem`'s own keydown, focus-
+  // dependent) are real editor shortcuts a user can press, but neither has
+  // an `ActionId` to route through `SHORTCUTS`/`matchShortcut` -- so they
+  // were simply missing from the table a user reads. `OTHER_KEYS` already
+  // models exactly this ("a key with no ActionId to bind to"), so the two
+  // rows extend that existing list rather than growing a new shape.
+  it("lists the two focus-dependent keys that never went through SHORTCUTS", () => {
+    expect(OTHER_KEYS).toContainEqual({ label: "Play or pause", keys: ["Space"] });
+    expect(OTHER_KEYS).toContainEqual({ label: "Nudge the selected clip (Shift: 1 s)", keys: ["←", "→"] });
   });
 });
 

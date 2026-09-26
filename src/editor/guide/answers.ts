@@ -19,9 +19,18 @@
  * `SHORTCUTS` itself — one row per action, every combo bound to it — so a
  * binding added, changed or removed there is the table the user reads.
  * Only the row's wording is chosen here (`ACTION_LABELS`, with the three
- * guide/app keys worded for what they do). `OTHER_KEYS` are the two keys
- * `shortcuts.ts` answers with a predicate rather than a table entry
- * (`isContextMenuShortcut`, `isGuideDismissKey`).
+ * guide/app keys worded for what they do). `OTHER_KEYS` are the keys with no
+ * `ActionId` to bind to: two answered by a predicate in `shortcuts.ts`
+ * rather than a table entry (`isContextMenuShortcut`, `isGuideDismissKey`),
+ * and two more that are real, pressable shortcuts but are dispatched
+ * entirely outside `SHORTCUTS`/`matchShortcut` (review finding F-M7) —
+ * Space (`TransportBar.vue`'s own `window` listener, since the preview has
+ * no single element that would reliably hold focus) and the clip nudge keys
+ * (`ClipItem.vue`'s own keydown, which only ever fires on a focused clip).
+ * Both are genuinely focus- or scope-dependent in a way `ShortcutRow`'s
+ * `ActionId` shape cannot express, so they extend `OTHER_KEYS`'s existing
+ * `{label, keys}` shape — already the "no ActionId" escape hatch — rather
+ * than growing a second model.
  */
 import type { ActionId } from "../actionMeta";
 import { ACTION_LABELS } from "../actionMeta";
@@ -92,4 +101,6 @@ export const SHORTCUT_TABLE: readonly ShortcutRow[] = buildTable();
 export const OTHER_KEYS: readonly { label: string; keys: string[] }[] = [
   { label: "Open the focused clip's menu", keys: ["Shift+F10", "Menu"] },
   { label: "Pause the guide (an open menu closes first)", keys: ["Esc"] },
+  { label: "Play or pause", keys: ["Space"] },
+  { label: "Nudge the selected clip (Shift: 1 s)", keys: ["←", "→"] },
 ];

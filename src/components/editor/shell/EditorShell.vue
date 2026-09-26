@@ -228,14 +228,22 @@ function onAppKey(actionId: ActionId, ctx: ActionContext): boolean {
   return true;
 }
 
-/** F6 types nothing, so it may leave a text field: the guide's highlighted
- * control can BE one (the fades and layout lessons land in an input), and
- * without this F6 could never return to the card from there. Only an open
- * menu or dialog still owns it; every other key keeps `shouldHandle`'s
- * text-field rule. */
+/** F6 and F1 type nothing, so they may leave a text field: the guide's
+ * highlighted control can BE one (the fades and layout lessons land in an
+ * input), and without this neither key could ever reach the guide from
+ * there (F1, review finding F-M3: a keyboard user resting in the rename
+ * field must still be able to open help). This is keyed on the actual KEY,
+ * not the resolved action id — `help` is also bound to `?`, which DOES type
+ * a character and must keep respecting the text-field rule, or typing "?"
+ * while renaming a clip would open the guide instead of typing "?". Only an
+ * open menu or dialog still owns either key; every other key keeps
+ * `shouldHandle`'s text-field rule. */
+function bypassesTextFieldGate(event: KeyboardEvent, actionId: ActionId | null): boolean {
+  return actionId === "guideFocus" || (actionId === "help" && event.key === "F1");
+}
 function gateAllows(event: KeyboardEvent, actionId: ActionId | null): boolean {
   const ownsKeys = menuOwnsKeys(event);
-  if (actionId === "guideFocus") return !ownsKeys;
+  if (bypassesTextFieldGate(event, actionId)) return !ownsKeys;
   return shouldHandle(event, { menuOwnsKeys: ownsKeys });
 }
 

@@ -10,6 +10,15 @@
  *
  * Ctrl+S and Ctrl+E were listed and unhandled until this round: they now
  * run the header's Save and the preview toolbar's Review.
+ *
+ * **Space and the clip nudge keys (review finding F-M7)** are listed in
+ * `OTHER_KEYS`, not `SHORTCUTS` — neither has an `ActionId`, so they cannot
+ * join the loop above — but the table lists them as real shortcuts too, and
+ * the same rule applies: a key the learning center lists must do something.
+ * The dedicated block below presses each on its OWN dispatch target (Space
+ * on `window`, via `TransportBar`'s own listener; the nudge keys on a
+ * focused clip element, via `ClipItem`'s own keydown) and asserts its
+ * effect, the same way the loop above does for every `SHORTCUTS` entry.
  */
 import { mockConvertFileSrc } from "@tauri-apps/api/mocks";
 import { enableAutoUnmount, flushPromises, mount, type VueWrapper } from "@vue/test-utils";
@@ -21,7 +30,7 @@ vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }
 
 import type { ActionId } from "../src/editor/actionMeta";
 import { clearClipboardForTest, clipboardFor } from "../src/editor/clipboard";
-import { SHORTCUT_TABLE } from "../src/editor/guide/answers";
+import { OTHER_KEYS, SHORTCUT_TABLE } from "../src/editor/guide/answers";
 import type { EditorPort } from "../src/editor/port";
 import { shortcutKey,SHORTCUTS } from "../src/editor/shortcuts";
 import type { EditorOpenResult, SaveReceipt } from "../src/editorTypes";
@@ -228,5 +237,41 @@ describe("every listed shortcut", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(w.find('[data-testid="review-dialog"]').exists()).toBe(false);
+  });
+});
+
+// Review finding F-M7: `OTHER_KEYS` lists Space and the clip nudge keys as
+// real shortcuts (`answers.ts`), but neither has an `ActionId`, so neither
+// can join the `SHORTCUTS` loop above. Press each on its own dispatch
+// target and assert its effect, the same rule applied to a different wire.
+describe("the two OTHER_KEYS rows with no ActionId", () => {
+  it("lists exactly Space and the nudge keys beside the two predicate-only rows", () => {
+    expect(OTHER_KEYS.map((r) => r.keys)).toEqual([["Shift+F10", "Menu"], ["Esc"], ["Space"], ["←", "→"]]);
+  });
+
+  it("Space toggles playback (TransportBar's own window listener)", async () => {
+    const w = await mountEditor();
+    const button = w.get('[data-testid="transport-play"]');
+    expect(button.attributes("aria-label")).toBe("Play");
+
+    const event = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+    window.dispatchEvent(event);
+    await flushPromises();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(w.get('[data-testid="transport-play"]').attributes("aria-label")).toBe("Pause");
+  });
+
+  it("ArrowLeft/ArrowRight nudge the focused clip (ClipItem's own keydown)", async () => {
+    const w = await mountEditor();
+    const clip = w.get('[data-testid="clip-intro"]').element;
+
+    const event = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+    sent = [];
+    clip.dispatchEvent(event);
+    await flushPromises();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(sent).toContain("moveClips");
   });
 });

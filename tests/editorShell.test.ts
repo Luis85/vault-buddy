@@ -280,6 +280,43 @@ describe("EditorShell — keyboard shortcut dispatcher (Task 21)", () => {
 
     expect(executed).toEqual([]);
   });
+
+  // Review finding F-M3: F1 types nothing (it is a function key, exactly
+  // like F6, which already skips this rule), so a keyboard user resting in
+  // the rename field must still be able to reach help. Bound `?`, which DOES
+  // type a character, is unaffected and keeps respecting the text-field
+  // gate.
+  it("F1 in a text field still starts the guide (it types nothing, unlike '?')", async () => {
+    const store = useEditorProjectStore();
+    store.setPort(fakePort({ openStaged: () => Promise.resolve(openResult({ snapshot: snapshot({ title: "Old" }) })) }));
+    await store.openStaged("cap one");
+    const w = mount(EditorShell, { attachTo: document.body });
+
+    await w.get('[data-testid="editor-shell-title"]').trigger("click");
+    const input = w.get('[data-testid="editor-header-title-input"]');
+    await input.trigger("keydown", { key: "F1" });
+    await flushPromises();
+
+    expect(w.find('[data-testid="guide-coach"]').exists()).toBe(true);
+  });
+
+  // The other half: "?" is bound to the same `help` action id as F1 but DOES
+  // type a character, so it must keep respecting the text-field rule -- a
+  // bypass keyed on the action id alone (rather than the actual key) would
+  // open the guide every time someone typed "?" while renaming a clip.
+  it("'?' in a text field types '?' and does not start the guide", async () => {
+    const store = useEditorProjectStore();
+    store.setPort(fakePort({ openStaged: () => Promise.resolve(openResult({ snapshot: snapshot({ title: "Old" }) })) }));
+    await store.openStaged("cap one");
+    const w = mount(EditorShell, { attachTo: document.body });
+
+    await w.get('[data-testid="editor-shell-title"]').trigger("click");
+    const input = w.get('[data-testid="editor-header-title-input"]');
+    await input.trigger("keydown", { key: "?" });
+    await flushPromises();
+
+    expect(w.find('[data-testid="guide-coach"]').exists()).toBe(false);
+  });
 });
 
 describe("EditorShell — dispatcher ownership (Task 21)", () => {

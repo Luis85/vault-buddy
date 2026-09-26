@@ -102,16 +102,31 @@ export function shortcutKey(event: KeyboardEvent): string {
   return parts.join("+");
 }
 
-/** The action id `event` is bound to, or `null` when it matches nothing. */
+/** The action id `event` is bound to, or `null` when it matches nothing.
+ *
+ * Bails on Alt or Meta before ever normalizing the combo (review finding
+ * M-V5): `shortcutKey` never looked at `altKey`, and on a non-US layout
+ * AltGr arrives as `ctrlKey && altKey` together. When AltGr+key produces a
+ * character `event.key` is that character (already no match), but on an
+ * UNMAPPED key Chromium falls back to reporting the base letter — so
+ * AltGr+Z on a German layout reported `key: "z", ctrlKey: true, altKey:
+ * true` and matched plain Ctrl+Z, running Undo. A bare Alt chord (Alt+S)
+ * and any Meta/Windows-key chord are excluded the same way: neither is a
+ * combo `SHORTCUTS` defines, and `event.key` alone cannot tell an
+ * accidental Alt/Meta chord apart from the plain key. */
 export function matchShortcut(event: KeyboardEvent): ActionId | null {
+  if (event.altKey || event.metaKey) return null;
   return SHORTCUTS.get(shortcutKey(event)) ?? null;
 }
 
 /**
  * Whether a global shortcut dispatcher should act on `event` at all — the
  * gate every caller of `matchShortcut` must apply FIRST. False inside any
- * text-entry surface (a plain `<input>`/`<textarea>` or a `contenteditable`
- * region — typing "s" into a rename field must not split a clip), and false
+ * text-entry surface (a plain `<input>`/`<textarea>`/`<select>` or a
+ * `contenteditable` region — typing "s" into a rename field must not split
+ * a clip, and Delete on a focused `<select>` — the fade-curve control, the
+ * canvas ratio control, the playback-rate control — must not delete the
+ * clip being edited, review finding M-V6), and false
  * whenever a menu/dialog has already claimed the keyboard
  * (`opts.menuOwnsKeys` — e.g. `ContextMenu.vue`'s own open popover) so two
  * owners can never both react to the same keypress. (The retired phase-4
@@ -122,7 +137,7 @@ export function shouldHandle(event: KeyboardEvent, opts?: { menuOwnsKeys?: boole
   if (opts?.menuOwnsKeys) return false;
   const target = event.target as HTMLElement | null;
   if (!target) return true;
-  if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return false;
+  if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") return false;
   if (target.isContentEditable) return false;
   return true;
 }

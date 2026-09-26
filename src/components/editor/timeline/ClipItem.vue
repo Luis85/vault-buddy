@@ -343,6 +343,12 @@ function onKeydown(event: KeyboardEvent) {
     return;
   }
   if (event.key === "Escape" && cancelActiveDrag()) {
+    // Claimed: without this, the Escape kept bubbling with
+    // `defaultPrevented: false` all the way to `EditorShell`'s dispatcher,
+    // whose `isGuideDismissKey` reads exactly that flag -- so cancelling a
+    // drag preview also dismissed an open guide coach in the same keypress
+    // (review finding F-M2).
+    event.preventDefault();
     return;
   }
   if (event.key === "ArrowLeft" || event.key === "ArrowRight") {

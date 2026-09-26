@@ -923,6 +923,28 @@ describe("ClipItem — drag (Task 21)", () => {
     expect(w.get('[data-testid="clip-c2"]').attributes("style")).toBe(before);
     expect(executed).toEqual([]);
   });
+
+  // Review finding F-M2: without `preventDefault()` here, the Escape kept
+  // bubbling with `defaultPrevented: false` all the way to `EditorShell`'s
+  // dispatcher, whose `isGuideDismissKey` reads exactly that flag to decide
+  // whether Escape is free to pause the guide -- so cancelling a drag ALSO
+  // dismissed an open guide coach in the same keypress.
+  it("Escape during a drag calls preventDefault, so it never also dismisses the guide", async () => {
+    executed = [];
+    await openProject();
+    const w = mount(TimelineView, { attachTo: document.body });
+    await flushPromises();
+
+    const c2 = w.get('[data-testid="clip-c2"]').element as HTMLElement;
+    await w.get('[data-testid="clip-c2"]').trigger("pointerdown", { clientX: 0, clientY: 0, pointerId: 1 });
+    await w.get('[data-testid="clip-c2"]').trigger("pointermove", { clientX: 200, clientY: 0, pointerId: 1 });
+
+    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    c2.dispatchEvent(escape);
+    await flushPromises();
+
+    expect(escape.defaultPrevented).toBe(true);
+  });
 });
 
 describe("TimelineRuler — degenerate zoom", () => {

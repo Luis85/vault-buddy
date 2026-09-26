@@ -727,6 +727,17 @@ describe("shouldHandle — shortcuts are ignored inside text inputs", () => {
     div.remove();
   });
 
+  // Review finding M-V6: a `<select>` (the fade-curve select, the ratio
+  // control, the playback-rate control) was not in the exclusion, so Delete
+  // pressed with one of those focused deleted the clip being edited instead
+  // of doing nothing.
+  it("returns false for a <select>", () => {
+    const select = document.createElement("select");
+    document.body.appendChild(select);
+    expect(dispatchAndCapture(select, new KeyboardEvent("keydown", { key: "Delete", bubbles: true }))).toBe(false);
+    select.remove();
+  });
+
   it("treats a null target as handleable (a synthetic/global event)", () => {
     const event = new KeyboardEvent("keydown", { key: "s" });
     expect(shouldHandle(event)).toBe(true);
@@ -768,6 +779,19 @@ describe("matchShortcut / shortcutKey", () => {
 
   it("returns null for an unbound combo", () => {
     expect(matchShortcut(new KeyboardEvent("keydown", { key: "q" }))).toBeNull();
+  });
+
+  // Review finding M-V5: `shortcutKey` never looked at `altKey`, so on a
+  // non-US layout an AltGr chord that Chromium falls back to reporting as
+  // the base letter (AltGr+Z arrives as ctrlKey+altKey with key: "z" when
+  // the layout maps nothing to that combination) matched plain Ctrl+Z and
+  // ran Undo. Bail on Alt or Meta before ever normalizing the combo.
+  it("does not match an Alt, AltGr or Meta chord", () => {
+    expect(matchShortcut(new KeyboardEvent("keydown", { key: "s", altKey: true }))).toBeNull();
+    expect(matchShortcut(new KeyboardEvent("keydown", { key: "Delete", altKey: true }))).toBeNull();
+    // AltGr on Windows arrives as ctrlKey+altKey together.
+    expect(matchShortcut(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, altKey: true }))).toBeNull();
+    expect(matchShortcut(new KeyboardEvent("keydown", { key: "s", metaKey: true }))).toBeNull();
   });
 
   it("SHORTCUTS and SHORTCUT_DISPLAY only ever name a real ActionId", () => {
