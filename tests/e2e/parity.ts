@@ -29,7 +29,12 @@ const CONCEPT_SCREENS_DIR = resolve(process.cwd(), "docs/concepts/vault-buddy-ed
 const PARITY_OUT_DIR = resolve(process.cwd(), "test-results/parity");
 
 export interface OpenParityOptions {
-  theme?: "dark" | "light";
+  /** The theme the project's saved workspace carries (default `"dark"`);
+   * `null` saves none, so the editor shows its own default. */
+  theme?: "dark" | "light" | null;
+  /** The OS colour scheme to emulate (default: the saved theme, else
+   * dark). */
+  osScheme?: "dark" | "light";
   /** `false` dismisses the guide invitation (its "Not now" button) once the
    * shell has settled — the geometry/parity checks that follow want a clean
    * workspace, not the invitation card sitting on top of it. Omitted (or
@@ -46,14 +51,23 @@ export async function openParity(
   size: { width: number; height: number },
   opts: OpenParityOptions = {},
 ): Promise<void> {
-  await installTauriStub(page, { openResult: PARITY_OPEN_RESULT, replies: PARITY_REPLIES });
+  // The editor opens dark whatever the OS prefers (design D1) and takes its
+  // theme from the SAVED workspace, so the theme travels through the stub's
+  // workspace replies; `emulateMedia` below only keeps native controls in
+  // step with it.
+  const theme = opts.theme === undefined ? "dark" : opts.theme;
+  const workspace = theme === null ? { ...PARITY_OPEN_RESULT.workspace } : { ...PARITY_OPEN_RESULT.workspace, theme };
+  await installTauriStub(page, {
+    openResult: { ...PARITY_OPEN_RESULT, workspace },
+    replies: { ...PARITY_REPLIES, editor_get_workspace: workspace },
+  });
   await page.route(`**${FIXTURE_VIDEO_URL}`, (route) =>
     route.fulfill({ contentType: "video/webm", body: readFileSync(VIDEO_FIXTURE_PATH) }),
   );
   await page.route(`**${FIXTURE_IMAGE_URL}`, (route) =>
     route.fulfill({ contentType: "image/jpeg", body: readFileSync(IMAGE_FIXTURE_PATH) }),
   );
-  await page.emulateMedia({ colorScheme: opts.theme ?? "dark" });
+  await page.emulateMedia({ colorScheme: opts.osScheme ?? theme ?? "dark" });
   await page.setViewportSize(size);
   await page.goto("/");
   await page.getByTestId("editor-shell").waitFor();

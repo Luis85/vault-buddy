@@ -58,14 +58,6 @@ function clamp(n: number, [lo, hi]: readonly [number, number]): number {
   return Math.min(hi, Math.max(lo, n));
 }
 
-function prefersLightTheme(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-color-scheme: light)").matches
-  );
-}
-
 /** The 18 R16 fields plus `theme` (F16), each its own ref — a plain object
  * bundle so the module-level functions below can take "this store's
  * fields" as one parameter instead of eighteen. */
@@ -111,7 +103,10 @@ function createFields(): WorkspaceFields {
     propertiesOpen: ref(false),
     focusPreview: ref(false),
     captionSettingsOpen: ref(false),
-    theme: ref<Theme>(prefersLightTheme() ? "light" : "dark"),
+    // Dark whatever the OS prefers (visual-parity design D1: the concept
+    // opens dark and light is a View-menu choice); a saved theme still wins
+    // on hydrate.
+    theme: ref<Theme>("dark"),
   };
 }
 

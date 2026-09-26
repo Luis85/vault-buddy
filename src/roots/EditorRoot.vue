@@ -312,7 +312,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main
-    class="flex h-screen w-screen flex-col gap-3 overflow-y-auto bg-app p-4 text-fg"
+    class="vb-editor flex h-screen w-screen flex-col gap-3 overflow-y-auto bg-app p-4 text-fg"
   >
     <!-- The responsive shell/header (Task 16, F-48), gated on the store's
          own reply matching the request this root drained (the module

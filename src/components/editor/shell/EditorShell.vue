@@ -152,13 +152,14 @@ onReveal("inspector", () => {
 /**
  * Theme: Task 16 kept this as a local ref seeded from
  * `prefers-color-scheme`, with its own module doc promising "Task 18
- * persists it [in `editorWorkspace`]". This task keeps that seed but moves
- * the STATE itself into `editorWorkspace` (persisted through
+ * persists it [in `editorWorkspace`]". Task 18 moved the STATE itself
+ * into `editorWorkspace` (persisted through
  * `editor_save_workspace` — F16 — so the toggle survives a reopen); this
  * component's own job shrinks to the one thing that stays view-local:
  * applying `document.documentElement`'s `data-theme`, which
- * `src/style.css`'s `[data-theme="light"]` block reads. The editor window
- * is its own webview, so this touches no other window.
+ * `src/style.css`'s `[data-theme]` blocks read. The seed is no longer the
+ * OS preference: the editor opens dark (visual-parity design D1). The
+ * editor window is its own webview, so this touches no other window.
  */
 const workspace = useEditorWorkspaceStore();
 watch(

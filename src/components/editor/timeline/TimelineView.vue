@@ -356,7 +356,7 @@ async function onBelowLanesDrop(event: DragEvent) {
     <div
       ref="scrollRef"
       data-testid="timeline-scroll"
-      class="relative min-h-0 flex-1 overflow-auto"
+      class="vb-thin-scroll relative min-h-0 flex-1 overflow-auto"
       @scroll="onScroll"
     >
       <TimelineRuler

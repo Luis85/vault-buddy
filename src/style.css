@@ -30,97 +30,86 @@
   /* The one caption size that folds the ad-hoc text-[10px] usages
      (fixed-geometry count badges keep their literal text-[9px]). */
   --text-micro: 0.625rem;
+}
 
-  /* Tutorial editor (Task 16, F-48) — semantic surface/media tokens, mapped
-     verbatim from docs/concepts/vault-buddy-editor/contracts/design-tokens.json
-     (dark values here; `[data-theme="light"]` below overrides them from the
-     same contract's reference implementation, `reference/editor.css`'s
-     `[data-theme=light]` block). Everything that already has a token in this
-     file (fg/accent/focus/danger) is reused as-is — these are only the names
-     the editor introduces: workspace surfaces (stage/panel/raised/line) and
-     the media-type accents (video/audio) plus the fade-handle gold. */
+/* Tutorial editor tokens (Task 16, F-48; visual-parity Task 3). The
+   concept's palette, verbatim from
+   docs/superpowers/specs/2026-09-26-tutorial-editor-visual-parity-concept-spec.md
+   §1.1 (`reference/editor.css`' `:root` and `[data-theme=light]`), in the
+   concept's own dark-by-default shape.
+
+   **Two scopes, because some names are shared.** The names below are the
+   editor's alone (no other window uses them), so their DARK values are the
+   defaults here and `[data-theme="light"]` overrides them. `static` emits
+   every one as a root variable whether or not a utility reads it yet, so
+   the new roles (primary, ring, guide edge…) exist for the tasks that
+   restyle onto them. The names the panel window shares with the editor
+   (the `fg` ladder, `accent`, `focus`, `danger`) keep the panel's values in
+   the `@theme` block above; the editor's own values for them live in the
+   `[data-theme]` blocks below, which only the editor window ever sets
+   (`EditorShell`, from `editorWorkspace.theme`).
+
+   Concept name → token: --bg → app, --panel → panel, --raised → raised,
+   --stage → stage, --line → line, --hover → hover, --ink → fg,
+   --sub → fg-secondary, --muted → fg-muted, --accent → accent,
+   --accent-ink → accent-ink (and accent-fg, its older name),
+   --accent-bg → accent-bg, --primary → primary, --ring → ring (and focus),
+   --danger → danger-fg (the destructive-TEXT token; `danger` itself stays
+   the fill white button labels sit on), video/audio/gold(-bg) as named. */
+@theme static {
+  --color-app: #18191e;
   --color-stage: #131419;
   --color-panel: #202127;
   --color-raised: #292a33;
   --color-line: #353640;
+  --color-hover: #30303c;
   --color-video: #aa92ed;
   --color-video-bg: #40364f;
   --color-audio: #8cccc0;
   --color-audio-bg: #263e3d;
   --color-gold: #ebc582;
   --color-gold-bg: #493d2c;
-  /* The editor window's own backdrop behind the shell (Task 58): the
-     slate-900 it always had, a light grey in the light theme. */
-  --color-app: var(--color-slate-900);
-  /* Task 14 (I-2/F-M4): the editor's own hover/pressed-surface tint. Every
-     `hover:bg-white/10` under src/components/editor/** read as designed on
-     the dark stage but was invisible on the light theme's white/near-white
-     panels (10% white over #fff is ~1.1:1). The dark value here is the
-     literal it replaces (`rgb(255 255 255 / 0.1)`), so the dark theme's
-     look stays byte-identical; `[data-theme="light"]` below overrides it
-     with a dark tint of comparable weight. This is an EDITOR-only token —
-     the panel window's own white glass (`bg-white/5`, `bg-white/10`,
-     `border-white/10`) stays literal, per the design-token migration note
-     above. */
-  --color-hover: rgb(255 255 255 / 0.1);
+  --color-accent-bg: #393049;
+  --color-accent-ink: #dacdff;
+  --color-primary: #8b6ad4;
+  /* `.primary:hover{background:#9475d8}` — unconditional in the concept,
+     so light keeps it too. */
+  --color-primary-hover: #9475d8;
+  --color-ring: #d4c1ff;
+  --color-guide-edge: #ac8feb;
+  --color-guide-dim: rgba(10, 11, 18, 0.52);
+  /* A non-token literal in the concept (dialog backdrop), both themes. */
+  --color-backdrop: #080711aa;
   /* Task 14 fix round 1 (review Important): the trim handles' and progress
-     tracks' `bg-white/10` is a static, always-visible UI-COMPONENT boundary
-     (WCAG 1.4.11 wants ~3:1), not a hover affordance (`--color-hover` above,
-     tuned for a lighter, only-on-hover tint) — reusing `--color-hover` here
-     would still read at ~1.1:1 in light (the same 10%-alpha problem this
-     token exists to fix). The dark value is the literal `bg-white/10` it
-     replaces, so the dark theme stays byte-identical: `rgb(255 255 255 /
-     0.1)` over the darkest surface it's used against (`--color-video-bg`
-     #40364f) measures 1.36:1, unchanged from before this fix and out of
-     this fix's scope (the review flagged the LIGHT theme as invisible, not
-     dark). `[data-theme="light"]` below overrides it with a darker,
-     higher-alpha tint of the SAME slate-900 family as `--color-hover`,
-     picked to clear 3:1 against every surface it composites over: measured
-     (see that file's own light-theme comment; fix round 2 corrected these
-     — the first pass composited against pure black, not this token's own
-     slate-900) at 3.99:1 on `--color-panel` (#fff), 3.85:1 on
-     `--color-raised`, 3.76:1 on `--color-stage`, 3.68:1 on
-     `--color-video-bg` (the trim handles' own backdrop, the tightest case)
-     and 3.78:1 on `--color-audio-bg`. */
+     tracks' boundary tint — a static UI-component edge (WCAG 1.4.11 wants
+     ~3:1), not a hover. No concept counterpart; the dark value is the
+     `bg-white/10` it replaced, and `[data-theme="light"]` overrides it with
+     slate-900 at 55% (3.65:1 on `video-bg`, the tightest backdrop, as
+     `tests/e2e/editorKeyboard.spec.ts` measures it). */
   --color-track: rgb(255 255 255 / 0.1);
-  /* GAP-206's recorded residual: the lighter sibling of `--color-hover`,
-     for the rows that carried `bg-white/5` rather than `/10` (the Save
-     project dialog's format rows — hover AND the selected row — and the
-     learning center's chapter/lesson rows). Its own token because neither
-     sibling fits that weight: `--color-hover` would double the dark tint and
-     `--color-track` is a 3:1 boundary. The dark value is the literal
-     `bg-white/5` it replaces, so the dark theme stays byte-identical
-     (1.16:1 on `--color-panel`, measured before and after by
-     `tests/e2e/editorKeyboard.spec.ts`); `[data-theme="light"]` below
-     overrides it. */
+  /* GAP-206's recorded residual: the lighter hover for rows that carried
+     `bg-white/5` (the Save project dialog's format rows, the learning
+     center's rows). No concept counterpart; dark is the `bg-white/5` it
+     replaced (1.16:1 on `panel`, pinned by `editorKeyboard.spec.ts`),
+     light below is slate-900 at 5%. */
   --color-hover-subtle: rgb(255 255 255 / 0.05);
 
-  /* Editor shell region sizes (brief's exact values — the CONTRACT sidebar/
-     inspector widths, 244/276, not `reference/editor.css`'s own 220/282,
-     which is the executable reference's later drift, not the contract). Not
-     a recognized Tailwind namespace, so no utility class is generated — the
-     shell's own scoped CSS reads them with `var(--editor-sidebar)` etc. for
-     its grid-template-columns/rows. */
+  /* Editor shell region sizes (the CONTRACT's 244/276, the concept's
+     runtime values). Not a Tailwind namespace, so no utility class is
+     generated — the shell's own scoped CSS reads them with `var(...)`. */
   --editor-sidebar: 244px;
   --editor-inspector: 276px;
   --editor-timeline: 400px;
   --editor-label: 196px;
 }
 
-/* Tutorial editor light theme (`EditorShell` sets `data-theme` on the
-   editor window's `document.documentElement` from `editorWorkspace.theme`;
-   no other window sets it). The ten surface/media tokens come from
-   `reference/editor.css`'s `[data-theme=light]` block, the same contract's
-   executable reference.
-
-   Task 58 (GAP-206): the TEXT tokens vary too. They used to be shared "by
-   design", which left slate-100 text on a white panel (1.1:1). The ladder
-   below is the reference's ink/sub/muted, with `fg-subtle` the one value
-   the reference lacks, chosen to clear 4.5:1 on the darkest light surface
-   (`stage`, 4.75:1); accent-fg/danger-fg/accent are the reference's
-   accent-ink/danger/accent, so a violet label, a red line and white text
-   on a primary button all read at 4.5:1 or more. Measured on every
-   surface by `tests/e2e/editorKeyboard.spec.ts`. */
+/* Tutorial editor light theme. The concept's `[data-theme=light]` values,
+   with three deltas measured by `tests/e2e/editorKeyboard.spec.ts` (4.5:1
+   for every text on every light surface — Task 58, GAP-206):
+   - `fg-muted` #5f5969 (concept --muted #696274 read under 4.5:1 on
+     `stage`); `fg-subtle`, a step the concept lacks, keeps #696274;
+   - `danger-fg` #a4304b (concept --danger #b63854, kept as `danger`);
+   - `hover-subtle`/`track`: no concept counterpart (above). */
 [data-theme="light"] {
   color-scheme: light;
   --color-fg: #292632;
@@ -129,53 +118,120 @@
   --color-fg-subtle: #696274;
   --color-accent: #7250ad;
   --color-accent-fg: #603696;
+  --color-accent-ink: #603696;
+  --color-accent-bg: #ece5f8;
+  --color-primary: #7853b8;
   --color-danger: #b63854;
   --color-danger-fg: #a4304b;
   --color-focus: #7853b8;
+  --color-ring: #7853b8;
+  --color-guide-edge: #7952ba;
+  --color-guide-dim: rgba(20, 16, 35, 0.28);
   --color-app: #f3f3f7;
   --color-stage: #e8e7ef;
   --color-panel: #fff;
   --color-raised: #f1f0f5;
   --color-line: #dcdce5;
+  --color-hover: #eeebf5;
   --color-video: #724f9e;
   --color-video-bg: #e5ddee;
   --color-audio: #246e62;
   --color-audio-bg: #d9eeea;
   --color-gold: #8b5c16;
   --color-gold-bg: #f7ecd8;
-  /* Task 14: 10% white over `--color-panel` (#fff) reads at ~1.1:1 — a dark
-     tint of comparable visual weight instead, over the light surfaces this
-     token now covers (panel/raised/stage all read #e8e7ef or lighter). */
-  --color-hover: rgb(15 23 42 / 0.06);
-  /* Task 14 fix round 1: rgb(15 23 42 / 0.55), the same slate-900 family as
-     `--color-hover` at a higher alpha for a 3:1+ UI-component boundary
-     (WCAG 1.4.11) rather than a hover tint's lighter weight — measured
-     (fix round 2 corrected these: the first pass composited against pure
-     black instead of this token's own slate-900) 3.99:1 on panel (#fff),
-     3.85:1 on raised, 3.76:1 on stage, 3.68:1 on video-bg (the trim
-     handles' own, tightest-margin backdrop, cross-checked at 3.65:1 as
-     actually measured by `tests/e2e/editorKeyboard.spec.ts`'s
-     `boundaryContrast` against the built app) and 3.78:1 on audio-bg. */
   --color-track: rgb(15 23 42 / 0.55);
-  /* GAP-206's recorded residual: `bg-white/5` is white over white on
-     `--color-panel` (#fff) — 1.00:1, no tint at all. The same slate-900
-     family at the dark literal's own 5% alpha: 1.11:1 on panel, 1.10:1 on
-     raised and stage — a hover tint, so no WCAG floor applies, and still a
-     step lighter than `--color-hover`'s 1.13:1, as the dark pair is
-     (1.16:1 vs 1.36:1 on panel). */
   --color-hover-subtle: rgb(15 23 42 / 0.05);
 }
 
-/* Tutorial editor dark theme (Task 58 fix round 1, GAP-209). The `@theme`
-   defaults above ARE the dark theme and stay the concept bundle's values;
-   this block overrides two of them in the editor window only (no other
-   window sets `data-theme`): `fg-subtle` (slate-500 read 2.99:1 on
-   `raised`, now 4.90:1) and `video` (the clip names, 4.33:1 on `video-bg`,
-   now 4.88:1). Measured by `tests/e2e/editorKeyboard.spec.ts` in both
-   themes. */
+/* Tutorial editor dark theme: the concept's text/accent/ring values for the
+   names the panel window shares (see the scoping note above), plus two
+   deltas measured by `tests/e2e/editorKeyboard.spec.ts` (Task 58 fix round
+   1, GAP-209): `fg-subtle` #8e98aa (a step the concept lacks; slate-500
+   read 2.99:1 on `raised`) and `video` #b39ef0 (concept #aa92ed: clip names
+   read 4.33:1 on `video-bg`, now 4.88:1). `danger` keeps red-400 — it is
+   the fill behind white button labels, and the concept's pink would read
+   1.9:1 there. */
 [data-theme="dark"] {
+  --color-fg: #f0eef6;
+  --color-fg-secondary: #c5c2d0;
+  --color-fg-muted: #a39fac;
   --color-fg-subtle: #8e98aa;
+  --color-accent: #b6a2f5;
+  --color-accent-fg: #dacdff;
+  --color-danger-fg: #ffa3b4;
+  --color-focus: #d4c1ff;
   --color-video: #b39ef0;
+}
+
+/* The editor's type and base controls (visual-parity Task 3; concept spec
+   §1.2, §1.5, §1.6), scoped to `.vb-editor` — EditorRoot's root — so the
+   panel window's own look is untouched. In the `base` layer, below every
+   utility, and each control selector sits inside `:where()`: `.vb-editor`
+   alone (0,1,0) is enough to win over preflight's bare `button`/`input`,
+   and any Tailwind class a component already carries still wins over
+   these, property by property. */
+@layer base {
+  .vb-editor {
+    font: 12px/1.5 "Segoe UI", system-ui, sans-serif;
+    background-color: var(--color-app);
+    color: var(--color-fg);
+  }
+  .vb-editor :where(button) {
+    min-height: 32px;
+    border-radius: 7px;
+    cursor: pointer;
+  }
+  .vb-editor :where(button:hover:not(:disabled)) {
+    background-color: var(--color-hover);
+  }
+  .vb-editor :where(button:disabled) {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  /* A pressed toggle (`button.active` in the concept). */
+  .vb-editor :where(button.active) {
+    color: var(--color-accent-ink);
+    background-color: var(--color-accent-bg);
+    border-color: color-mix(in srgb, var(--color-accent) 28%, transparent);
+  }
+  .vb-editor
+    :where(
+      input:not([type="range"], [type="checkbox"], [type="radio"], [type="color"], [type="file"]),
+      select,
+      textarea
+    ) {
+    min-height: 34px;
+    padding: 7px 9px;
+    border: 1px solid var(--color-line);
+    border-radius: 6px;
+    background-color: var(--color-app);
+    color: inherit;
+  }
+  .vb-editor :where(input[type="range"]) {
+    height: 24px;
+    accent-color: var(--color-accent);
+  }
+  .vb-editor :where(input[type="checkbox"], input[type="radio"]) {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--color-accent);
+  }
+  .vb-editor :where(button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
+  /* Only the timeline's scroller is styled thin in the concept; the rest
+     stay native (dark through `color-scheme`). */
+  .vb-editor :where(.vb-thin-scroll) {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
+  }
+}
+
+/* Timecodes, the ratio button, ruler ticks, track badges (concept §1.2). */
+@utility vb-mono {
+  font-family: ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
 }
 
 html,

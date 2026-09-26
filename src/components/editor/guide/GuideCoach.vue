@@ -241,7 +241,7 @@ defineExpose({ toggleFocus, dismiss });
     :style="ringStyle"
   >
     <span
-      class="absolute left-0 whitespace-nowrap rounded-control bg-accent px-1.5 py-0.5 text-micro text-white"
+      class="absolute left-0 whitespace-nowrap rounded-control border border-guide-edge bg-accent-bg px-1.5 py-0.5 text-micro text-accent-ink"
       :class="labelClass"
     >{{ copy?.label }}</span>
   </div>
