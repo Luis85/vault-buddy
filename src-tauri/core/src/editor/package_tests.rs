@@ -764,10 +764,16 @@ fn an_unparsable_workspace_is_refused_without_echoing_it() {
 /// the fixed function from the unfixed one on this machine — no test in
 /// this codebase can, for the same reason. It still pins the observable
 /// contract this fix is FOR: a full-disk write, however it is reported,
-/// yields `DiskFull`, never `Internal`.
+/// yields `DiskFull`, never `Internal`. Raw 112 is a full disk on Windows
+/// ONLY (off Windows it is another errno, `io_errors`' own
+/// `raw_os_112_is_not_disk_full_off_windows`), so elsewhere the platform's
+/// own full-disk kind stands in — the shell's `disk_full_error` split.
 #[test]
 fn write_failed_maps_a_full_disk_to_disk_full() {
+    #[cfg(windows)]
     let e = std::io::Error::from_raw_os_error(112);
+    #[cfg(not(windows))]
+    let e = std::io::Error::from(std::io::ErrorKind::StorageFull);
     let out = write_failed(&e);
     assert_eq!(out.code, EditorErrorCode::DiskFull);
 }
