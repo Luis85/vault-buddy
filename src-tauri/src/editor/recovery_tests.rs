@@ -10,7 +10,7 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::editor::journal_quarantine::{is_content_verdict, quarantine_before_overwrite};
+use crate::editor::journal_quarantine::is_content_verdict;
 use crate::editor::save_commands::{open_project_session, save_project_in, save_project_with};
 use crate::editor::session_close::{close_in, close_locked};
 use crate::editor::session_commands::{
@@ -432,7 +432,12 @@ fn a_transient_read_error_never_quarantines_a_journal_that_might_be_fine() {
         .open(&path)
         .unwrap();
 
-    let cleared = quarantine_before_overwrite(f.root(), "proj-locked", &path, false);
+    let cleared = crate::editor::journal_quarantine::quarantine_before_overwrite(
+        f.root(),
+        "proj-locked",
+        &path,
+        false,
+    );
 
     drop(held);
     // Hardening Task 18: nor may the write that follows replace it.

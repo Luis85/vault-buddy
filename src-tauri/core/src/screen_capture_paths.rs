@@ -782,7 +782,12 @@ mod tests {
     fn the_retries_exhausted_message_speaks_of_publishing_not_exporting() {
         let path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/screen_capture_paths.rs");
-        let src = std::fs::read_to_string(&path).expect("readable");
+        // A Windows checkout can have CRLF line endings (autocrlf) and the
+        // body's end is found by a LF-only `}` line: normalise first, or the
+        // split never matches and the "body" runs to the end of the file.
+        let src = std::fs::read_to_string(&path)
+            .expect("readable")
+            .replace("\r\n", "\n");
         let body = src
             .split("pub fn commit_screen_capture(")
             .nth(1)
