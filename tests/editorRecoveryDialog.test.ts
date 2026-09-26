@@ -97,7 +97,11 @@ async function setup(opts: {
   store.setPort(fakeEditorPort({ closeSession, listProjects, openProject, ...opts.overrides }));
   store.sessionId = (opts.snap ?? snapshot()).sessionId;
   store.snapshot = opts.snap ?? snapshot();
-  const w = mount(RecoveryDialog, { attachTo: document.body });
+  const reattach = vi.fn(async (id: string) => {
+    await store.openProject(id, false);
+    return !store.lastError;
+  });
+  const w = mount(RecoveryDialog, { attachTo: document.body, props: { reattach } });
   await (w.vm as unknown as { check(): Promise<void> }).check();
   await flushPromises();
   return { w, store, closeSession, listProjects, openProject };

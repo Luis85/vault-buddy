@@ -231,7 +231,10 @@ async function openProjectFile() {
 /** Task 59 fix round 1: a REFUSED discard left the Rust session live while
  * the store forgot it, so the project is reopened (Rust reuses the live
  * session) and the shell's gate pointed at it. `true` when a session is
- * back. */
+ * back. The same for a refused `discardRecovery`, from the close guard or
+ * the recovery dialog (final review I-1). A reused session is not "new" to
+ * `hydrateNewSession`, but `close()` forgot its jobs, so the registry is
+ * read again either way (final review M-1). */
 async function reattach(projectId: string): Promise<boolean> {
   requested.value = { kind: "project", value: projectId };
   await editorProject.openProject(projectId, false);
@@ -242,6 +245,7 @@ async function reattach(projectId: string): Promise<boolean> {
   }
   openError.value = null;
   if (hydrateNewSession()) await recovery.value?.check();
+  else void useEditorJobsStore().reconcile();
   return true;
 }
 
@@ -422,7 +426,10 @@ onBeforeUnmount(() => {
     <!-- Task 37 (and Task 59's discard): each renders nothing until it
          opens, and `DialogHost` is fixed-position when it does, so none
          adds a flex child the layout contract measures. -->
-    <CloseGuardDialog ref="closeGuard" />
+    <CloseGuardDialog
+      ref="closeGuard"
+      :reattach="reattach"
+    />
     <DiscardProjectDialog
       :open="discardOpen"
       :reattach="reattach"
@@ -431,6 +438,7 @@ onBeforeUnmount(() => {
     />
     <RecoveryDialog
       ref="recovery"
+      :reattach="reattach"
       @session-changed="hydrateNewSession"
     />
   </main>

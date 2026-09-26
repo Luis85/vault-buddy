@@ -23,9 +23,15 @@
  *   `recovery.json` either way (R7: the ORDINARY panel open also passes
  *   `useRecovery: false`, and quarantining at open time silently erased
  *   this whole dialog's own report before the user ever saw it). The file
- *   is set aside only by the reopened session's own first acknowledged
- *   edit (its journal write, right before it would otherwise silently
- *   replace it) or by Discard above.
+ *   is set aside — readable or not, since the reopened session did not
+ *   resume it (R12, final review I-2) — only by that session's own first
+ *   journal write, by a save of it, or by Discard above; so "Their file is
+ *   kept in the project folder." holds for every failed Resume.
+ * - A REFUSED Discard (Rust could not read or set the journal aside right
+ *   now) leaves the Rust session live while the store has already
+ *   forgotten it, so the project is reattached (`reattach`, `EditorRoot`'s
+ *   own): the editor stays usable behind the dialog and a retry reaches
+ *   Rust (final review I-1).
  */
 import { ref } from "vue";
 
@@ -33,10 +39,17 @@ import type { ProjectSummaryDto } from "../editorTypes";
 import { logWarning } from "../logging";
 import { toEditorError, useEditorProjectStore } from "../stores/editorProject";
 
-export function useEditorRecovery(onSessionChanged: () => void) {
+export function useEditorRecovery(
+  onSessionChanged: () => void,
+  reattach: (projectId: string) => Promise<boolean>,
+) {
   const project = useEditorProjectStore();
   const offer = ref<ProjectSummaryDto | null>(null);
   const failure = ref<string | null>(null);
+  /** Whether a Resume failed: the dialog then says the journal's file is
+   * kept and offers "Open saved project" instead of Resume. A refused
+   * Discard alone is not a failed Resume. */
+  const resumeFailed = ref(false);
   const busy = ref(false);
 
   async function check(): Promise<void> {
@@ -49,8 +62,8 @@ export function useEditorRecovery(onSessionChanged: () => void) {
       // S-15 (hardening Task 12 fix round 1): by code and operationId,
       // never by message — which can carry a capture's own name in plain
       // text.
-      const failure = toEditorError(e);
-      logWarning(`editor recovery: could not list projects: ${failure.code} (${failure.operationId})`);
+      const error = toEditorError(e);
+      logWarning(`editor recovery: could not list projects: ${error.code} (${error.operationId})`);
       return;
     }
     // The session may have changed while the listing was in flight — or
@@ -60,6 +73,7 @@ export function useEditorRecovery(onSessionChanged: () => void) {
     const row = rows.find((r) => r.projectFileId === snapshot.projectId && r.hasRecovery);
     if (!row) return;
     failure.value = null;
+    resumeFailed.value = false;
     offer.value = row;
   }
 
@@ -82,6 +96,7 @@ export function useEditorRecovery(onSessionChanged: () => void) {
       if (await step()) {
         offer.value = null;
         failure.value = null;
+        resumeFailed.value = false;
         onSessionChanged();
       }
     } finally {
@@ -92,7 +107,9 @@ export function useEditorRecovery(onSessionChanged: () => void) {
   const resume = () =>
     run(async () => {
       await project.close("keep");
-      return reopen(true);
+      if (await reopen(true)) return true;
+      resumeFailed.value = true;
+      return false;
     });
 
   /** Needs a session to discard the journal through: after a failed
@@ -100,9 +117,11 @@ export function useEditorRecovery(onSessionChanged: () => void) {
   const discard = () =>
     run(async () => {
       if (!project.sessionId && !(await reopen(false))) return false;
+      const projectId = project.snapshot?.projectId ?? null;
       await project.close("discardRecovery");
       if (project.lastError) {
         failure.value = project.lastError.message;
+        if (projectId !== null) await reattach(projectId);
         return false;
       }
       return reopen(false);
@@ -110,5 +129,5 @@ export function useEditorRecovery(onSessionChanged: () => void) {
 
   const openSaved = () => run(() => reopen(false));
 
-  return { offer, failure, busy, check, resume, discard, openSaved };
+  return { offer, failure, resumeFailed, busy, check, resume, discard, openSaved };
 }

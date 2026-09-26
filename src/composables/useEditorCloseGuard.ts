@@ -13,7 +13,11 @@
  *   natively, then the dirty/clean rule below);
  * - unsaved edits → Save project / Keep for later (the session and its
  *   recovery journal stay, the window hides) / Discard changes (the journal
- *   goes, then the window hides) / Cancel;
+ *   goes, then the window hides) / Cancel. A REFUSED Discard changes leaves
+ *   the Rust session live while the store has already forgotten it, so the
+ *   project is reattached (`reattach`, `EditorRoot`'s own) before the
+ *   refusal is said: the editor stays usable and a retry reaches Rust
+ *   (final review I-1);
  * - otherwise → hide at once.
  *
  * Which jobs are live is read from Rust's job REGISTRY (`getJobs`), by
@@ -41,7 +45,7 @@ function liveRenderJobIds(records: JobRecordDto[]): string[] {
     .map((r) => r.jobId);
 }
 
-export function useEditorCloseGuard() {
+export function useEditorCloseGuard(reattach: (projectId: string) => Promise<boolean>) {
   const project = useEditorProjectStore();
   const mode = ref<CloseGuardMode | null>(null);
   const busy = ref(false);
@@ -135,8 +139,15 @@ export function useEditorCloseGuard() {
 
   const discard = () =>
     run(async () => {
+      const projectId = project.snapshot?.projectId ?? null;
       await project.close("discardRecovery");
-      return !failed();
+      if (!project.lastError) return true;
+      const refusal = project.lastError.message;
+      const back = projectId !== null && (await reattach(projectId));
+      error.value = back
+        ? refusal
+        : `${refusal} The project could not be reopened here. Open it again from the panel.`;
+      return false;
     });
 
   const keep = () => run(async () => true);

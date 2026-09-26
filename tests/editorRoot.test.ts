@@ -38,7 +38,7 @@ vi.mock("../src/logging", () => ({
 }));
 
 import { EditorPortError } from "../src/editor/port";
-import type { EditorCommand, EditorOpenResult, EditorSnapshot, Project } from "../src/editorTypes";
+import type { EditorCommand, EditorOpenResult, EditorSnapshot, JobRecordDto, Project } from "../src/editorTypes";
 import { logWarning } from "../src/logging";
 import EditorRoot from "../src/roots/EditorRoot.vue";
 import { useEditorJobsStore } from "../src/stores/editorJobs";
@@ -558,6 +558,40 @@ describe("EditorRoot", () => {
     await flushPromises();
 
     expect(jobsStore.jobs["job-1"]).toBeUndefined();
+  });
+
+  // Final review M-1: `close()` forgets the session's jobs, and a refused
+  // discard reattaches the SAME session -- so `hydrateNewSession` does not
+  // count it as new and never re-read the registry. A job the refusal did
+  // not cancel was lost to the store until its next Channel message.
+  it("a refused discard's reattach reads the job registry again", async () => {
+    const running: JobRecordDto = { jobId: "job-i", kind: "import", phase: "preparing", fraction: 0.5, terminal: null };
+    const getJobs = vi.fn(async () => [running]);
+    useEditorProjectStore().setPort(
+      fakeEditorPort({
+        openStaged: (base) => Promise.resolve(openResultFixture({ sourceBase: base })),
+        openProject: (id) =>
+          Promise.resolve(openResultFixture({ sourceBase: "cap one", snapshot: snapshotFixture({ projectId: id }) })),
+        closeSession: async () => {
+          throw new EditorPortError({ code: "invalidRequest", message: "busy", retryable: true, operationId: "op-5" });
+        },
+        hideWindow: async () => {},
+        getJobs,
+      }),
+    );
+    const w = await askToDiscard();
+    const jobsStore = useEditorJobsStore();
+    expect(jobsStore.jobs["job-i"]).toBeDefined();
+    // Not the Media tab: `MediaLibrary`'s own mount-time read would
+    // otherwise hide the missing one whenever the shell remounts.
+    useEditorWorkspaceStore().libraryTab = "titles";
+    await flushPromises();
+
+    await w.get('[data-testid="discard-project-confirm"]').trigger("click");
+    await flushPromises();
+
+    expect(useEditorProjectStore().sessionId).toBe("ses-a");
+    expect(jobsStore.jobs["job-i"]?.phase).toBe("preparing");
   });
 
   // ---- Fix round 1: a failed session open must not leave the shell

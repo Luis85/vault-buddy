@@ -15,10 +15,18 @@ import { useEditorRecovery } from "../../../composables/useEditorRecovery";
 import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
 
+const props = defineProps<{
+  /** Reopen `projectId` after a refused Discard (`EditorRoot`'s own);
+   * `true` when the editor has a session again. */
+  reattach: (projectId: string) => Promise<boolean>;
+}>();
 const emit = defineEmits<{ (e: "session-changed"): void }>();
 
-const recovery = useEditorRecovery(() => emit("session-changed"));
-const { offer, failure, busy } = recovery;
+const recovery = useEditorRecovery(
+  () => emit("session-changed"),
+  (projectId) => props.reattach(projectId),
+);
+const { offer, failure, resumeFailed, busy } = recovery;
 
 /** `updatedAt` comes from a hand-editable file: an unparseable value is
  * shown as written rather than as "Invalid Date". */
@@ -54,8 +62,10 @@ defineExpose({ check: recovery.check });
         role="alert"
         class="flex flex-col gap-1 text-xs text-danger-fg"
       >
-        <p>The unsaved changes could not be opened. Your saved project was not changed.</p>
-        <p>The unsaved changes could not be read. Their file is kept in the project folder.</p>
+        <template v-if="resumeFailed">
+          <p>The unsaved changes could not be opened. Your saved project was not changed.</p>
+          <p>The unsaved changes could not be read. Their file is kept in the project folder.</p>
+        </template>
         <p class="break-words text-fg-muted">
           {{ failure }}
         </p>
@@ -69,7 +79,7 @@ defineExpose({ check: recovery.check });
           Discard
         </AppButton>
         <AppButton
-          v-if="failure"
+          v-if="resumeFailed"
           :disabled="busy"
           @click="recovery.openSaved"
         >

@@ -87,7 +87,11 @@ async function setup(opts: {
     store.sessionId = "ses-7";
     store.snapshot = snapshot(opts.revision ?? 3, opts.persisted ?? 2);
   }
-  const w = mount(CloseGuardDialog, { attachTo: document.body });
+  const reattach = vi.fn(async (id: string) => {
+    await store.openProject(id, false);
+    return !store.lastError;
+  });
+  const w = mount(CloseGuardDialog, { attachTo: document.body, props: { reattach } });
   await (w.vm as unknown as { request(): Promise<void> }).request();
   await flushPromises();
   return { w, store, hideWindow, cancelJob, closeSession, getJobs };
@@ -499,5 +503,110 @@ describe("EditorRoot close and recovery wiring", () => {
     await flushPromises();
     expect(project.sessionId).toBe("ses-9");
     expect(hydrated).toEqual(["ses-7", "ses-9"]);
+  });
+
+  // Final review I-1: the store forgets its session BEFORE Rust answers,
+  // and a refused `discardRecovery` (a journal that could not be read or set
+  // aside right now) leaves the Rust session live. The shell used to unmount
+  // behind the dialog, and a second Discard returned early without ever
+  // reaching Rust -- the dialog could only repeat its error. A refusal now
+  // reattaches the live session, so the editor stays usable and the retry
+  // reaches Rust.
+  const refusedDiscard = () =>
+    new EditorPortError({
+      code: "internal",
+      message: "The unsaved changes could not be discarded right now. Try again.",
+      retryable: true,
+      operationId: "op-d",
+    });
+
+  it("a refused Discard changes keeps the editor, and Discard reaches Rust again", async () => {
+    mockEditor();
+    let refuse = true;
+    const closeSession = vi.fn(async () => {
+      if (refuse) throw refusedDiscard();
+    });
+    const hideWindow = vi.fn(async () => {});
+    const project = useEditorProjectStore();
+    project.setPort(
+      fakeEditorPort({
+        openStaged: async () => opened(snapshot(3, 2)),
+        // Rust reuses the live, still dirty session.
+        openProject: async () => opened(snapshot(3, 2)),
+        listProjects: async () => [],
+        closeSession,
+        getJobs: async () => [],
+        hideWindow,
+      }),
+    );
+    const w = mount(EditorRoot, { attachTo: document.body });
+    await flushPromises();
+    listeners["editor:closeRequested"]({ payload: {} });
+    await flushPromises();
+
+    await button(w, "Discard changes").trigger("click");
+    await flushPromises();
+    expect(project.sessionId).toBe("ses-7");
+    expect(w.find('[data-testid="editor-shell"]').exists()).toBe(true);
+    expect(w.get('[data-testid="close-guard"] [role="alert"]').text()).toBe(
+      "The unsaved changes could not be discarded right now. Try again.",
+    );
+    expect(hideWindow).not.toHaveBeenCalled();
+
+    refuse = false;
+    await button(w, "Discard changes").trigger("click");
+    await flushPromises();
+    expect(closeSession.mock.calls).toEqual([
+      ["ses-7", "discardRecovery"],
+      ["ses-7", "discardRecovery"],
+    ]);
+    expect(hideWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refused recovery Discard keeps the editor, and Discard reaches Rust again", async () => {
+    mockEditor();
+    let refuse = true;
+    const closeSession = vi.fn(async () => {
+      if (refuse) throw refusedDiscard();
+    });
+    const project = useEditorProjectStore();
+    project.setPort(
+      fakeEditorPort({
+        openStaged: async () => opened(snapshot(2, 2)),
+        openProject: async () => opened(snapshot(2, 2)),
+        listProjects: async () => [
+          {
+            projectFileId: "proj-3",
+            title: "My tutorial",
+            updatedAt: "2026-09-21T10:00:00+02:00",
+            persistedRevision: 2,
+            hasRecovery: true,
+            sourceBase: "cap one",
+          },
+        ],
+        closeSession,
+        getJobs: async () => [],
+      }),
+    );
+    const w = mount(EditorRoot, { attachTo: document.body });
+    await flushPromises();
+
+    await button(w, "Discard").trigger("click");
+    await flushPromises();
+    expect(project.sessionId).toBe("ses-7");
+    expect(w.find('[data-testid="editor-shell"]').exists()).toBe(true);
+    const alert = w.get('[data-testid="recovery-dialog"] [role="alert"]').text();
+    expect(alert).toBe("The unsaved changes could not be discarded right now. Try again.");
+    // A refused Discard is not a failed Resume: Resume is still offered.
+    expect(w.findAll("button").map((b) => b.text())).toContain("Resume");
+
+    refuse = false;
+    await button(w, "Discard").trigger("click");
+    await flushPromises();
+    expect(closeSession.mock.calls).toEqual([
+      ["ses-7", "discardRecovery"],
+      ["ses-7", "discardRecovery"],
+    ]);
+    expect(w.find('[data-testid="recovery-dialog"]').exists()).toBe(false);
   });
 });

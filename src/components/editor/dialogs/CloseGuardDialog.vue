@@ -11,7 +11,13 @@ import { useEditorCloseGuard } from "../../../composables/useEditorCloseGuard";
 import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
 
-const guard = useEditorCloseGuard();
+const props = defineProps<{
+  /** Reopen `projectId` after a refused Discard changes (`EditorRoot`'s
+   * own); `true` when the editor has a session again. */
+  reattach: (projectId: string) => Promise<boolean>;
+}>();
+
+const guard = useEditorCloseGuard((projectId) => props.reattach(projectId));
 const { mode, busy, error } = guard;
 
 defineExpose({ request: guard.request });
