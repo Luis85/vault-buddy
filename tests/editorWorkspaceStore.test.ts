@@ -9,6 +9,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { EditorPortError } from "../src/editor/port";
 import type {
   EditorOpenResult,
   EditorProjection,
@@ -397,6 +398,36 @@ describe("editorWorkspace — hydrate", () => {
     expect(workspace.timelineZoom).toBe(1);
   });
 
+  // S-15 (hardening Task 12, frontend half): by code and operationId,
+  // never by message — which can carry a capture's own name in plain text.
+  it("logs a failed hydrate by code and operationId, never by message", async () => {
+    const warnSpy = vi.spyOn(logging, "logWarning").mockImplementation(() => {});
+    try {
+      const workspace = useEditorWorkspaceStore();
+      workspace.setPort(
+        fakePort({
+          getWorkspace: () =>
+            Promise.reject(
+              new EditorPortError({
+                code: "internal",
+                message: "no staged capture named Secret Window",
+                retryable: false,
+                operationId: "op-hydrate",
+              }),
+            ),
+        }),
+      );
+      await workspace.hydrate("ses-a");
+      const line = warnSpy.mock.calls.map((c) => c[0] as string).find((l) => l.includes("failed to hydrate"));
+      expect(line).toBeDefined();
+      expect(line).not.toContain("Secret");
+      expect(line).toContain("internal");
+      expect(line).toContain("op-hydrate");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("applies every one of the 19 fields a saved workspace can carry", async () => {
     const workspace = useEditorWorkspaceStore();
     const full: Workspace = {
@@ -600,6 +631,48 @@ describe("editorWorkspace — persist without a session", () => {
       await Promise.resolve();
 
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("failed to persist workspace"));
+    } finally {
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("logs a failed persist by code and operationId, never by message", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(logging, "logWarning").mockImplementation(() => {});
+    try {
+      const project = useEditorProjectStore();
+      project.setPort(
+        fakePort({ openStaged: () => Promise.resolve(openResult({ snapshot: snapshot() })) }),
+      );
+      await project.openStaged("cap one");
+
+      const workspace = useEditorWorkspaceStore();
+      workspace.setPort(
+        fakePort({
+          saveWorkspace: () =>
+            Promise.reject(
+              new EditorPortError({
+                code: "internal",
+                message: "no staged capture named Secret Window",
+                retryable: false,
+                operationId: "op-persist",
+              }),
+            ),
+        }),
+      );
+      await workspace.hydrate("ses-a");
+
+      workspace.toggleSnap();
+      vi.advanceTimersByTime(750);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const line = warnSpy.mock.calls.map((c) => c[0] as string).find((l) => l.includes("failed to persist workspace"));
+      expect(line).toBeDefined();
+      expect(line).not.toContain("Secret");
+      expect(line).toContain("internal");
+      expect(line).toContain("op-persist");
     } finally {
       warnSpy.mockRestore();
       vi.useRealTimers();

@@ -43,7 +43,7 @@ import type { EditorPort } from "../editor/port";
 import { createTauriEditorPort } from "../editor/port";
 import type { DeleteMode, Selected, Theme, Workspace } from "../editorTypes";
 import { logWarning } from "../logging";
-import { useEditorProjectStore } from "./editorProject";
+import { toEditorError, useEditorProjectStore } from "./editorProject";
 
 const PERSIST_DEBOUNCE_MS = 750;
 
@@ -213,10 +213,11 @@ function createPersister(
       const sid = sessionId.value;
       if (!sid) return;
       port.value.saveWorkspace(sid, snapshotWorkspace(fields)).catch((e: unknown) => {
+        // S-15 (hardening Task 12): by code and operationId, never by
+        // message — which can carry a capture's own name in plain text.
+        const failure = toEditorError(e);
         logWarning(
-          `editorWorkspace: failed to persist workspace for session ${sid}: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
+          `editorWorkspace: failed to persist workspace for session ${sid}: ${failure.code} (${failure.operationId})`,
         );
       });
     }, PERSIST_DEBOUNCE_MS);
@@ -282,10 +283,9 @@ function createHydrator(
       applyWorkspace(fields, ws);
     } catch (e) {
       if (myToken !== token) return;
+      const failure = toEditorError(e);
       logWarning(
-        `editorWorkspace: failed to hydrate workspace for session ${id}: ${
-          e instanceof Error ? e.message : String(e)
-        }`,
+        `editorWorkspace: failed to hydrate workspace for session ${id}: ${failure.code} (${failure.operationId})`,
       );
     }
   };

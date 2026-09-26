@@ -131,7 +131,8 @@ fn a_vtt_export_escapes_markup_and_keeps_output_time() {
 }
 
 // A first write never replaces: an existing file at the chosen name is
-// refused and left byte-identical (the package export's rule).
+// refused and left byte-identical (the package export's rule). Role
+// wording, never the name the user typed (hardening Task 12, R8).
 #[test]
 fn an_existing_file_is_never_replaced() {
     let dir = tempfile::tempdir().unwrap();
@@ -146,8 +147,28 @@ fn an_existing_file_is_never_replaced() {
     )
     .unwrap_err();
     assert_eq!(e.code, EditorErrorCode::WriteDenied);
+    assert_eq!(
+        e.message,
+        "A file with that name already exists. Choose another name."
+    );
     assert_eq!(std::fs::read(&target).unwrap(), b"theirs");
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+// S-8, cosmetic (hardening Task 12): a write failure that is not a name
+// collision used to say "Could not save the project" -- `map_write_error`'s
+// own words for `editor_save_project`'s write, which this is not. The
+// parent directory does not exist, so the owned temp's `create_new` fails
+// with `NotFound`, never `AlreadyExists`.
+#[test]
+fn a_write_failure_other_than_a_collision_says_so_plainly() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("missing").join("captions.srt");
+    let state = state_with(project());
+    let e = export_subtitles_in(&state, &chooser(Some(target)), SESSION, SubtitleFormat::Srt)
+        .unwrap_err();
+    assert_eq!(e.code, EditorErrorCode::Internal);
+    assert_eq!(e.message, "Could not write the file.");
 }
 
 // Nothing to export is said BEFORE the dialog opens; a dismissed dialog is

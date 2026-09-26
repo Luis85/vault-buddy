@@ -155,9 +155,12 @@ async function openRequested() {
   // store's own `openWith` doc is explicit that a failure is a normal,
   // expected outcome for some callers (a picker probing a project that no
   // longer exists) — this IS the one caller for which it always is news.
+  // S-15 (hardening Task 12): by CODE and `operationId`, never by message —
+  // which, unlike a redacted `<path:#hash8>` handle, can carry a capture's
+  // own name in plain text.
   if (editorProject.lastError) {
     const cmd = request.kind === "staged" ? "editor_open_staged" : "editor_open_project";
-    logWarning(`${cmd} failed: ${editorProject.lastError.message}`);
+    logWarning(`${cmd} failed: ${editorProject.lastError.code} (${editorProject.lastError.operationId})`);
     return;
   }
   // Task 18 fix rounds 1–2: hydrate ONLY for a genuinely NEW session. A
@@ -196,7 +199,8 @@ async function reattach(projectId: string): Promise<boolean> {
   requested.value = { kind: "project", value: projectId };
   await editorProject.openProject(projectId, false);
   if (editorProject.lastError) {
-    logWarning(`editor_open_project failed after a refused discard: ${editorProject.lastError.message}`);
+    const failure = editorProject.lastError;
+    logWarning(`editor_open_project failed after a refused discard: ${failure.code} (${failure.operationId})`);
     return false;
   }
   openError.value = null;
@@ -213,7 +217,8 @@ async function onDiscarded() {
   try {
     await editorProject.port.hideWindow();
   } catch (e) {
-    logWarning(`editor: could not hide the window after a discard: ${toEditorError(e).message}`);
+    const failure = toEditorError(e);
+    logWarning(`editor: could not hide the window after a discard: ${failure.code} (${failure.operationId})`);
   }
 }
 

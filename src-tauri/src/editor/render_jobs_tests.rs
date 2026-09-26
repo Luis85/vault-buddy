@@ -374,6 +374,27 @@ fn render_of_a_stale_revision_is_refused() {
     assert!(!dir.join(JOBS_DIR).exists());
 }
 
+// S-8 (hardening Task 12): a control character in a render name survives
+// into the product's own `render_tutorial_note` frontmatter, where
+// `yaml_quote` escapes only `\`/`"`/newlines -- a bare C0 control breaks the
+// note's YAML. Refusing it here, before anything is planned, means no
+// render (and so no note) can ever carry one.
+#[test]
+fn a_control_character_in_the_name_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let state = EditorState::default();
+    opened(root.path(), &state);
+    let rev = snapshot_revision(&state);
+    let mut bad = request(rev);
+    bad.name = "a\u{1}b".to_string();
+    let e = refused(begin_render(&state, root.path(), &bad, || {
+        Ok(FakeRunner::new(Behaviour::Writes(b"x".to_vec())))
+    }));
+    assert_eq!(e.code, EditorErrorCode::InvalidRequest);
+    assert_eq!(e.message, "A video name cannot contain control characters.");
+    assert!(jobs_in(&state, SESSION).unwrap().is_empty());
+}
+
 // ffmpeg's absence, a capability refusal and a full disk are each refused
 // up front, with the code the frontend acts on -- and none registers a job.
 #[test]

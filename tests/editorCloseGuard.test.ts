@@ -33,6 +33,7 @@ import type { EditorPort } from "../src/editor/port";
 import { EditorPortError } from "../src/editor/port";
 import { noteTakeOpen, noteTakeSettled, openWebcamTakes } from "../src/editor/webcamTakes";
 import type { EditorOpenResult, EditorSnapshot, JobRecordDto } from "../src/editorTypes";
+import { logWarning } from "../src/logging";
 import EditorRoot from "../src/roots/EditorRoot.vue";
 import { useEditorOnboardingStore } from "../src/stores/editorOnboarding";
 import { useEditorProjectStore } from "../src/stores/editorProject";
@@ -323,6 +324,86 @@ describe("CloseGuardDialog", () => {
     });
     const { hideWindow } = await setup({ revision: 4, persisted: 4, overrides: { getJobs } });
     expect(hideWindow).toHaveBeenCalledTimes(1);
+  });
+
+  // S-15 (hardening Task 12, frontend half): every LOG line here carries the
+  // error's stable code and operationId, never its message — which, unlike
+  // a redacted `<path:#hash8>` handle, can carry a capture's own name in
+  // plain text.
+  it("logs a failed hide by code and operationId, never by message", async () => {
+    const hideWindow = vi.fn(() =>
+      Promise.reject(
+        new EditorPortError({
+          code: "internal",
+          message: "no staged capture named Secret Window",
+          retryable: false,
+          operationId: "op-hide",
+        }),
+      ),
+    );
+    await setup({ revision: 4, persisted: 4, overrides: { hideWindow } });
+    const line = vi
+      .mocked(logWarning)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((l) => l.includes("could not hide the editor"))
+      .pop();
+    expect(line).toBeDefined();
+    expect(line).not.toContain("Secret");
+    expect(line).toContain("internal");
+    expect(line).toContain("op-hide");
+  });
+
+  it("logs an unreadable job registry by code and operationId, never by message", async () => {
+    const getJobs = vi.fn(() =>
+      Promise.reject(
+        new EditorPortError({
+          code: "internal",
+          message: "no staged capture named Secret Window",
+          retryable: false,
+          operationId: "op-jobs",
+        }),
+      ),
+    );
+    await setup({ revision: 4, persisted: 4, overrides: { getJobs } });
+    const line = vi
+      .mocked(logWarning)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((l) => l.includes("could not read the job registry"))
+      .pop();
+    expect(line).toBeDefined();
+    expect(line).not.toContain("Secret");
+    expect(line).toContain("internal");
+    expect(line).toContain("op-jobs");
+  });
+
+  it("logs a failed render cancel by code and operationId, never by message", async () => {
+    const cancelJob = vi.fn(() =>
+      Promise.reject(
+        new EditorPortError({
+          code: "internal",
+          message: "no staged capture named Secret Window",
+          retryable: false,
+          operationId: "op-cancel",
+        }),
+      ),
+    );
+    const { w } = await setup({
+      revision: 3,
+      persisted: 2,
+      jobs: [job("render", "rendering", "job-r1")],
+      overrides: { cancelJob },
+    });
+    await button(w, "Cancel the render").trigger("click");
+    await flushPromises();
+    const line = vi
+      .mocked(logWarning)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((l) => l.includes("could not cancel job-r1"))
+      .pop();
+    expect(line).toBeDefined();
+    expect(line).not.toContain("Secret");
+    expect(line).toContain("internal");
+    expect(line).toContain("op-cancel");
   });
 });
 

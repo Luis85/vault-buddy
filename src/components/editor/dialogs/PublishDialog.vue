@@ -88,7 +88,10 @@ async function loadDefaults(id: string): Promise<void> {
       createNote: touched.createNote ? undefined : defaults.createNote,
     });
   } catch (e) {
-    logWarning(`editor publish: the vault's Screen settings could not be read: ${toEditorError(e).message}`);
+    // S-15 (hardening Task 12): by code and operationId, never by
+    // message — which can carry a capture's own name in plain text.
+    const failure = toEditorError(e);
+    logWarning(`editor publish: the vault's Screen settings could not be read: ${failure.code} (${failure.operationId})`);
   }
 }
 
@@ -162,9 +165,11 @@ async function openInObsidian(): Promise<void> {
   try {
     await editorProject.port.openScreenCapture(landed.vaultId, landed.notePath ?? landed.videoPath);
   } catch (e) {
-    const message = toEditorError(e).message;
-    logWarning(`editor publish: could not open the published file: ${message}`);
-    error.value = `Obsidian could not open it. ${message}`;
+    // S-15 (hardening Task 12): the LOG line by code and operationId,
+    // never by message — the on-screen role wording still shows in full.
+    const failure = toEditorError(e);
+    logWarning(`editor publish: could not open the published file: ${failure.code} (${failure.operationId})`);
+    error.value = `Obsidian could not open it. ${failure.message}`;
   }
 }
 

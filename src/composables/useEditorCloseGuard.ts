@@ -56,7 +56,10 @@ export function useEditorCloseGuard() {
     try {
       await project.port.hideWindow();
     } catch (e) {
-      logWarning(`editor close guard: could not hide the editor: ${toEditorError(e).message}`);
+      // S-15 (hardening Task 12): by code and operationId, never by
+      // message — which can carry a capture's own name in plain text.
+      const failure = toEditorError(e);
+      logWarning(`editor close guard: could not hide the editor: ${failure.code} (${failure.operationId})`);
     }
   }
 
@@ -66,7 +69,8 @@ export function useEditorCloseGuard() {
     try {
       return liveRenderJobIds(await project.port.getJobs(sessionId));
     } catch (e) {
-      logWarning(`editor close guard: could not read the job registry: ${toEditorError(e).message}`);
+      const failure = toEditorError(e);
+      logWarning(`editor close guard: could not read the job registry: ${failure.code} (${failure.operationId})`);
       return [];
     }
   }
@@ -146,7 +150,8 @@ export function useEditorCloseGuard() {
         try {
           await project.port.cancelJob(sessionId, jobId);
         } catch (e) {
-          logWarning(`editor close guard: could not cancel ${jobId}: ${toEditorError(e).message}`);
+          const failure = toEditorError(e);
+          logWarning(`editor close guard: could not cancel ${jobId}: ${failure.code} (${failure.operationId})`);
         }
       }
       renderJobs = [];

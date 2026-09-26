@@ -159,6 +159,36 @@ describe("EditorRoot", () => {
     expect(w.find('[data-testid="editor-empty"]').exists()).toBe(false);
   });
 
+  // S-15 (hardening Task 12, frontend half): the LOG line for a failed open
+  // carries the error's stable code and operationId, never its message —
+  // which can carry a capture's own name in plain text, not only a
+  // `<path:#hash8>` handle the redaction scan can catch.
+  it("logs a failed open by code and operationId, never by message", async () => {
+    useEditorProjectStore().setPort(
+      fakeEditorPort({
+        openStaged: () =>
+          Promise.reject(
+            new EditorPortError({
+              code: "sourceMissing",
+              message: "no staged capture named Secret Window",
+              retryable: false,
+              operationId: "op-42",
+            }),
+          ),
+      }),
+    );
+    await open();
+    const line = vi
+      .mocked(logWarning)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((l) => l.includes("editor_open_staged failed"))
+      .pop();
+    expect(line).toBeDefined();
+    expect(line).not.toContain("Secret");
+    expect(line).toContain("sourceMissing");
+    expect(line).toContain("op-42");
+  });
+
   // The stash alone is not enough: this webview mounts once per process, so
   // a second `open_capture_editor` would leave the FIRST capture on screen
   // forever without the event (`editor_commands.rs`'s module doc).
@@ -756,6 +786,88 @@ describe("EditorRoot", () => {
     await flushPromises();
     expect(closes).toEqual(["ses-a:discardProject", "ses-a:discardProject"]);
     expect(hideWindow).toHaveBeenCalledTimes(1);
+  });
+
+  // S-15 (hardening Task 12): when the reattach itself fails (the project
+  // cannot be reopened after a refused discard either), the log line says
+  // so by code, never by the message a capture's own name can ride in on.
+  it("logs a failed reattach by code and operationId, never by message", async () => {
+    const hideWindow = vi.fn(async () => {});
+    useEditorProjectStore().setPort(
+      fakeEditorPort({
+        openStaged: (base) => Promise.resolve(openResultFixture({ sourceBase: base })),
+        openProject: () =>
+          Promise.reject(
+            new EditorPortError({
+              code: "sourceMissing",
+              message: "no staged capture named Secret Window",
+              retryable: false,
+              operationId: "op-99",
+            }),
+          ),
+        closeSession: async () => {
+          throw new EditorPortError({
+            code: "internal",
+            message: "Could not remove the project folder <path:#1a2b3c4d>: Access is denied.",
+            retryable: true,
+            operationId: "op-3",
+          });
+        },
+        hideWindow,
+        getJobs: async () => [],
+      }),
+    );
+    const w = await askToDiscard();
+    await w.get('[data-testid="discard-project-confirm"]').trigger("click");
+    await flushPromises();
+
+    expect(hideWindow).not.toHaveBeenCalled();
+    const line = vi
+      .mocked(logWarning)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((l) => l.includes("editor_open_project failed after a refused discard"))
+      .pop();
+    expect(line).toBeDefined();
+    expect(line).not.toContain("Secret");
+    expect(line).toContain("sourceMissing");
+    expect(line).toContain("op-99");
+  });
+
+  // S-15: a discard that SUCCEEDS but whose window hide then fails also
+  // logs by code, never by message.
+  it("logs a failed hide-after-discard by code and operationId, never by message", async () => {
+    const hideWindow = vi.fn(() =>
+      Promise.reject(
+        new EditorPortError({
+          code: "internal",
+          message: "no staged capture named Secret Window",
+          retryable: false,
+          operationId: "op-hide",
+        }),
+      ),
+    );
+    useEditorProjectStore().setPort(
+      fakeEditorPort({
+        openStaged: (base) => Promise.resolve(openResultFixture({ sourceBase: base })),
+        closeSession: async () => {},
+        hideWindow,
+        getJobs: async () => [],
+      }),
+    );
+    const w = await askToDiscard();
+    await w.get('[data-testid="discard-project-confirm"]').trigger("click");
+    await flushPromises();
+
+    expect(hideWindow).toHaveBeenCalledTimes(1);
+    const line = vi
+      .mocked(logWarning)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((l) => l.includes("could not hide the window after a discard"))
+      .pop();
+    expect(line).toBeDefined();
+    expect(line).not.toContain("Secret");
+    expect(line).toContain("internal");
+    expect(line).toContain("op-hide");
   });
 
   // ...and Cancel after a refusal returns to a working editor, not to an

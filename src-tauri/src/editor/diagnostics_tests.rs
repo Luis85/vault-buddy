@@ -233,17 +233,36 @@ fn the_export_writes_a_new_json_file_and_never_replaces_one() {
         serde_json::from_slice(&std::fs::read(out.path().join("support.json")).unwrap()).unwrap();
     assert_eq!(written, serde_json::to_value(&diagnostics).unwrap());
 
-    // The same name again: refused, and the file is left as it was.
+    // The same name again: refused, and the file is left as it was --
+    // role wording, never the name (hardening Task 12, R8).
     std::fs::write(out.path().join("support.json"), b"mine").unwrap();
     let refused = export_in(&Fixed(Some(out.path().join("support.json"))), &diagnostics)
         .expect_err("an existing file is never replaced");
     assert_eq!(refused.code, EditorErrorCode::WriteDenied);
+    assert_eq!(
+        refused.message,
+        "A file with that name already exists. Choose another name."
+    );
     assert_eq!(
         std::fs::read(out.path().join("support.json")).unwrap(),
         b"mine"
     );
     let left: Vec<_> = std::fs::read_dir(out.path()).unwrap().flatten().collect();
     assert_eq!(left.len(), 1, "no temporary file outlives the refusal");
+}
+
+// S-8, cosmetic (hardening Task 12): the diagnostics export shares
+// `write_new_file` with the subtitle export, so its own non-collision write
+// failures used to say "Could not save the project" too.
+#[test]
+fn a_write_failure_other_than_a_collision_says_so_plainly() {
+    let (root, state) = seeded();
+    let diagnostics = collect_in(&state, root.path(), env());
+    let out = tempfile::tempdir().unwrap();
+    let target = out.path().join("missing").join("support.json");
+    let e = export_in(&Fixed(Some(target)), &diagnostics).unwrap_err();
+    assert_eq!(e.code, EditorErrorCode::Internal);
+    assert_eq!(e.message, "Could not write the file.");
 }
 
 #[test]

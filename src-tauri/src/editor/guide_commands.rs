@@ -289,12 +289,10 @@ fn may_replace(target: &Path, chosen: &Path) -> Result<bool, EditorError> {
     if ours {
         return Ok(true);
     }
+    // R8: role wording, never the name the user typed in the dialog.
     Err(err(
         EditorErrorCode::WriteDenied,
-        format!(
-            "“{}” already exists. Choose a new name; only a guide progress file you pick in the dialog is replaced.",
-            file_name_of(target)
-        ),
+        "A file with that name already exists. Choose a new name; only a guide progress file you pick in the dialog is replaced.",
     ))
 }
 
@@ -331,12 +329,10 @@ fn write_progress_file(target: &Path, json: &str, replace: bool) -> Result<(), E
         }
     }
     if e.kind() == std::io::ErrorKind::AlreadyExists {
+        // R8: role wording, never the name the user typed in the dialog.
         return Err(err(
             EditorErrorCode::WriteDenied,
-            format!(
-                "“{}” already exists. Choose a new name.",
-                file_name_of(target)
-            ),
+            "A file with that name already exists. Choose another name.",
         ));
     }
     Err(map_prefs_write_error(e))

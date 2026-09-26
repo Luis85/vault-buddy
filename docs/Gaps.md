@@ -6935,11 +6935,24 @@ listed (`write!` into a `String`, `concat!`) or by hand (`String` +
 `push_str`); (3) a third-party error whose `Display` names a path; (4) a
 NAME inside a message formatted with `{}`: the full name rule applies to log
 calls only (a message builds `format!("{name}.json")` legitimately), and
-rule 4's `{:?}` check leaves `name`/`file`/`path` out on purpose — the export
-dialogs' refusals quote the file name the user just typed in that dialog
-(`package_commands.rs`, `subtitle_commands.rs`, `guide_commands.rs`
-"“notes.json” already exists…"), a deliberate UX choice; the webview no longer
-re-logs such messages once hardening Task 12 lands (S-15's frontend half).
+rule 4's `{:?}` check still leaves `name`/`file`/`path` out on purpose for
+that reason — but its one prior application to an EXISTING file's name is
+gone. The export dialogs' refusals used to quote the file name the user just
+typed in that dialog (`package_commands.rs`, `subtitle_commands.rs`,
+`guide_commands.rs`'s own two sites, "“notes.json” already exists…"), read as
+a deliberate UX choice when this entry was last revised (hardening Task 11).
+**Hardening Task 12 (controller ruling R8) reworded all four**: role wording
+alone — "A file with that name already exists. Choose another name." for the
+plain collision (subtitle export's `write_new_file`, `guide_commands.rs`'s
+own `write_progress_file`) — or the same sentence with the name simply
+dropped where the refusal's MEANING is otherwise distinct (package export's
+"choose it in the dialog to replace it" case; `guide_commands.rs`'s
+`may_replace`, "not itself guide progress") — because the global rule against
+a name in any error message was found to bind these dialogs too. Nothing in
+this codebase still puts an EXISTING file's name in a message. The webview no
+longer re-logs an editor error's message at all — every logging site now
+prints the error's stable `code` and `operationId` instead (S-15's frontend
+half, the same task).
 The two capture-base messages this item used to name are gone:
 `session_commands.rs` "Could not unlink the capture …" went with hardening
 Task 2's discard rework, and `project_store.rs` now says "no staged capture

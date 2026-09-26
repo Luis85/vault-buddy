@@ -371,6 +371,15 @@ fn validated_quality(request: &RenderRequest) -> Result<ScreenQuality, EditorErr
             ),
         ));
     }
+    // S-8: a bare C0/C1 control survives `yaml_quote` (it escapes only
+    // `\`/`"`/newlines) into the product's own note frontmatter and breaks
+    // its YAML. Refused here, before a job -- let alone a note -- exists.
+    if name.chars().any(char::is_control) {
+        return Err(err(
+            EditorErrorCode::InvalidRequest,
+            "A video name cannot contain control characters.",
+        ));
+    }
     ScreenQuality::from_key(&request.quality).ok_or_else(|| {
         err(
             EditorErrorCode::InvalidRequest,

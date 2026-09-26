@@ -261,9 +261,10 @@ fn an_export_replaces_only_a_confirmed_progress_file() {
     let err =
         export_guide_progress_in(&Chooser::saving(notes.clone()), progress(json!({}))).unwrap_err();
     assert_eq!(err.code, EditorErrorCode::WriteDenied);
+    // Role wording, never the name the user typed (hardening Task 12, R8).
     assert_eq!(
         err.message,
-        "“notes.json” already exists. Choose a new name; only a guide progress file you pick in the dialog is replaced."
+        "A file with that name already exists. Choose a new name; only a guide progress file you pick in the dialog is replaced."
     );
     assert_eq!(
         std::fs::read_to_string(&notes).unwrap(),
@@ -281,7 +282,7 @@ fn an_export_replaces_only_a_confirmed_progress_file() {
     .unwrap_err();
     assert_eq!(
         err.message,
-        "“backup.json” already exists. Choose a new name; only a guide progress file you pick in the dialog is replaced."
+        "A file with that name already exists. Choose a new name; only a guide progress file you pick in the dialog is replaced."
     );
     assert_eq!(err.code, EditorErrorCode::WriteDenied);
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), older);

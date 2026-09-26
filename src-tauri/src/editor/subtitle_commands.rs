@@ -103,6 +103,17 @@ fn with_extension(chosen: &Path, format: SubtitleFormat) -> Result<PathBuf, Edit
     })
 }
 
+/// `map_write_error`'s CODE classification (diskFull / writeDenied /
+/// invalidProject / internal) is still worth keeping -- a full disk should
+/// still answer `diskFull` here too -- but its MESSAGE says "the project",
+/// which is wrong for a file the user named directly: neither the subtitle
+/// export nor the diagnostics export (Task 58, sharing `write_new_file`)
+/// ever touches `project.json` (S-8, cosmetic; the post-merge review found
+/// both saying "Could not save the project").
+fn map_export_write_error(e: std::io::Error) -> EditorError {
+    EditorError::new(map_write_error(e).code, "Could not write the file.")
+}
+
 /// Write `text` to an owned `.<name>.<id>.part` beside `target`, fsync it,
 /// and land it with `rename_noreplace`; the temp never outlives a failure.
 /// Shared with the diagnostics export (Task 58), the other new file a user
@@ -131,14 +142,13 @@ pub(crate) fn write_new_file(target: &Path, text: &str) -> Result<(), EditorErro
         }
     }
     if e.kind() == std::io::ErrorKind::AlreadyExists {
+        // R8: role wording, never the name the user typed in the dialog.
         return Err(err(
             EditorErrorCode::WriteDenied,
-            format!(
-                "{name:?} already exists. Choose a new name; an existing file is never replaced."
-            ),
+            "A file with that name already exists. Choose another name.",
         ));
     }
-    Err(map_write_error(e))
+    Err(map_export_write_error(e))
 }
 
 /// The `AppHandle`-free half: the file name written, or `None` for a

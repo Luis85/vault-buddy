@@ -356,10 +356,10 @@ fn a_normalized_name_never_replaces_a_file_the_dialog_did_not_confirm() {
     )
     .expect_err("the normalized name exists and was not the one chosen");
     assert_eq!(err.code, EditorErrorCode::WriteDenied);
-    assert!(
-        err.message.contains("Ours.vbproject.zip"),
-        "{}",
-        err.message
+    // Role wording, never the name the user typed (hardening Task 12, R8).
+    assert_eq!(
+        err.message,
+        "A file with that name already exists. Choose it in the save dialog to replace it, or pick another name."
     );
     assert_eq!(std::fs::read(&saved).unwrap(), before);
     export(

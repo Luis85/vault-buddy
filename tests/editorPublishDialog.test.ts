@@ -12,6 +12,14 @@ import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// `mockIPC` installs `__TAURI_INTERNALS__`, which stops `logging.ts` being a
+// no-op (the `editorRoot.test.ts` precedent) — mocked so a `plugin:log|log`
+// call never lands in the recorded array these assertions read.
+vi.mock("../src/logging", () => ({
+  logBreadcrumb: vi.fn(),
+  logWarning: vi.fn(),
+}));
+
 import PublishDialog from "../src/components/editor/dialogs/PublishDialog.vue";
 import RenderDialog from "../src/components/editor/dialogs/RenderDialog.vue";
 import ReviewDialog from "../src/components/editor/dialogs/ReviewDialog.vue";
@@ -21,6 +29,7 @@ import { decodeNullableFileName, decodePublishDefaults, decodePublishReceipt } f
 import type { EditorPort } from "../src/editor/port";
 import { createTauriEditorPort, EditorPortError } from "../src/editor/port";
 import type { PublishReceipt, RenderStarted } from "../src/editorTypes";
+import { logWarning } from "../src/logging";
 import { useVaultsStore } from "../src/stores/vaults";
 import { openResult, openWithRenders, product, SESSION } from "./helpers/renderFixtures";
 
@@ -278,6 +287,32 @@ describe("PublishDialog — the vault's Screen settings are its defaults", () =>
     expect(checked(w, "publish-create-note")).toBe(true);
     expect(w.find('[data-testid="publish-error"]').exists()).toBe(false);
   });
+
+  // S-15 (hardening Task 12, frontend half): the LOG line carries the
+  // error's stable code and operationId, never its message — which can
+  // carry a capture's own name in plain text.
+  it("logs unreadable settings by code and operationId, never by message", async () => {
+    await openPublish({
+      publishDefaults: () =>
+        Promise.reject(
+          new EditorPortError({
+            code: "internal",
+            message: "no staged capture named Secret Window",
+            retryable: false,
+            operationId: "op-defaults",
+          }),
+        ),
+    });
+    const line = vi
+      .mocked(logWarning)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((l) => l.includes("Screen settings could not be read"))
+      .pop();
+    expect(line).toBeDefined();
+    expect(line).not.toContain("Secret");
+    expect(line).toContain("internal");
+    expect(line).toContain("op-defaults");
+  });
 });
 
 describe("PublishDialog — the form and its failures", () => {
@@ -321,6 +356,37 @@ describe("PublishDialog — the form and its failures", () => {
     await w.get('[data-testid="publish-open"]').trigger("click");
     await flushPromises();
     expect(w.get('[data-testid="publish-error"]').text()).toContain("outside its vault");
+  });
+
+  // S-15 (hardening Task 12, frontend half): the LOG line carries the
+  // error's stable code and operationId, never its message — the UI's own
+  // `publish-error` text still shows the role wording in full.
+  it("logs a failed Open by code and operationId, never by message", async () => {
+    const { w } = await openPublish({
+      openScreenCapture: () =>
+        Promise.reject(
+          new EditorPortError({
+            code: "internal",
+            message: "no staged capture named Secret Window",
+            retryable: false,
+            operationId: "op-open",
+          }),
+        ),
+    });
+    await w.get('[data-testid="publish-start"]').trigger("click");
+    await flushPromises();
+    await w.get('[data-testid="publish-open"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="publish-error"]').text()).toContain("Secret Window");
+    const line = vi
+      .mocked(logWarning)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((l) => l.includes("could not open the published file"))
+      .pop();
+    expect(line).toBeDefined();
+    expect(line).not.toContain("Secret");
+    expect(line).toContain("internal");
+    expect(line).toContain("op-open");
   });
 
   it("without a product there is nothing to publish, and it says so", async () => {

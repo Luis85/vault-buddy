@@ -139,6 +139,58 @@ describe("editorOnboarding — storage", () => {
     expect(logWarning).toHaveBeenCalled();
   });
 
+  // S-15 (hardening Task 12, frontend half): every log line here carries
+  // the error's stable code and operationId, never its message — which can
+  // carry a capture's own name in plain text, not only a `<path:#hash8>`
+  // handle the redaction scan can catch.
+  it("logs a failed read by code and operationId, never by message", async () => {
+    const guide = install({
+      getGuideProgress: () =>
+        Promise.reject(
+          new EditorPortError({
+            code: "internal",
+            message: "no staged capture named Secret Window",
+            retryable: false,
+            operationId: "op-read",
+          }),
+        ),
+    });
+    await guide.load();
+    const line = vi
+      .mocked(logWarning)
+      .mock.calls.map((c) => c[0] as string)
+      .find((l) => l.includes("could not read saved progress"));
+    expect(line).toBeDefined();
+    expect(line).not.toContain("Secret");
+    expect(line).toContain("internal");
+    expect(line).toContain("op-read");
+  });
+
+  it("logs a failed save by code and operationId, never by message", async () => {
+    const guide = install({
+      saveGuideProgress: () =>
+        Promise.reject(
+          new EditorPortError({
+            code: "internal",
+            message: "no staged capture named Secret Window",
+            retryable: false,
+            operationId: "op-save",
+          }),
+        ),
+    });
+    await guide.load();
+    guide.start();
+    await settle();
+    const line = vi
+      .mocked(logWarning)
+      .mock.calls.map((c) => c[0] as string)
+      .find((l) => l.includes("could not save progress"));
+    expect(line).toBeDefined();
+    expect(line).not.toContain("Secret");
+    expect(line).toContain("internal");
+    expect(line).toContain("op-save");
+  });
+
   it("a later save that lands clears the session-only flag", async () => {
     let fail = true;
     const guide = install({

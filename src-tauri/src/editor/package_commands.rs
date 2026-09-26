@@ -454,16 +454,11 @@ pub(crate) fn export_package_in(
     // (fix round 1): a normalized name that lands on an existing file, even
     // this project's own, is never replaced without that confirmation.
     if matches!(placement, Placement::Replace) && target != chosen {
-        let name = target
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        // R8: role wording, never the name the user typed in the dialog.
         return Err(err(
             EditorErrorCode::WriteDenied,
-            format!(
-                "{name:?} already exists. Choose it in the save dialog to replace it, \
-                 or pick another name."
-            ),
+            "A file with that name already exists. Choose it in the save dialog to replace it, \
+             or pick another name.",
         ));
     }
     let (mut temp, file) = create_temp(&target)?;

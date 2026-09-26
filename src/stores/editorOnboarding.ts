@@ -38,7 +38,7 @@ import { CONTENT_REVISION, GUIDE_STEPS, isGuideStepId, resolveStepId } from "../
 import type { EditorPort } from "../editor/port";
 import type { GuidePreferences, GuideProgress } from "../editorTypes";
 import { logWarning } from "../logging";
-import { useEditorProjectStore } from "./editorProject";
+import { toEditorError, useEditorProjectStore } from "./editorProject";
 
 const PERSIST_DEBOUNCE_MS = 400;
 
@@ -100,7 +100,10 @@ async function writeProgress(
     guide.sessionOnly = false;
   } catch (e) {
     guide.sessionOnly = true;
-    logWarning(`editor guide: could not save progress, this session only: ${String(e)}`);
+    // S-15 (hardening Task 12): by code and operationId, never by
+    // message — which can carry a capture's own name in plain text.
+    const failure = toEditorError(e);
+    logWarning(`editor guide: could not save progress, this session only: ${failure.code} (${failure.operationId})`);
   }
 }
 
@@ -146,7 +149,8 @@ export const useEditorOnboardingStore = defineStore("editorOnboarding", {
       } catch (e) {
         this.sessionOnly = true;
         this.readFailed = true;
-        logWarning(`editor guide: could not read saved progress, this session only: ${String(e)}`);
+        const failure = toEditorError(e);
+        logWarning(`editor guide: could not read saved progress, this session only: ${failure.code} (${failure.operationId})`);
       } finally {
         this.loaded = true;
       }
