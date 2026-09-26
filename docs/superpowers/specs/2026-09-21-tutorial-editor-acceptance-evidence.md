@@ -24,7 +24,10 @@ Reading a row:
   Chromium against the built `dist/`). The ffmpeg round trips
   (`src-tauri/screen/tests/render_roundtrip.rs`, `render_graph_roundtrip.rs`,
   `media_derive_tests.rs`' `*_round_trip_through_real_ffmpeg`) SKIP visibly
-  without ffmpeg; CI installs it.
+  without ffmpeg. CI installs it in `rust-core` only, so the screen crate's
+  round trips run there, while the shell's (`media_derive_tests.rs`, run by
+  `linux-app`) skip in CI and have run only on a development host
+  (docs/Gaps.md GAP-222, re-read by hardening Task 26).
 - **Native result** — the manual Windows checklist
   (`2026-09-21-tutorial-editor-windows-verification.md`) rows that cover what
   no automated gate can observe. **No row has a result yet**: every native
@@ -146,6 +149,15 @@ The concept bundle's **final representative journey**
 (`docs/concepts/vault-buddy-editor/docs/IMPLEMENTATION-PLAN.md` § Final
 acceptance tasks for representative users) needs a human driving the real
 app. It has NOT been walked; it is checklist row **T64**, unrun.
+
+*(Hardening pass, 2026-09-25/26.)* The post-merge hardening pass added five
+checklist rows — T69 (Task 9, a recovered webcam take), T70 (Task 10, the
+first Edit under real-time AV scanning), T71 (Task 13, AltGr and focused
+form controls), T72 (Task 15, F5/Ctrl+R suppression and the reload
+reattach) and T73 (Task 24, the narrowed staging asset scope) — so the
+checklist carries **73 rows**, none with a result (re-measured by Task 26
+with the checklist's own one-liner). None of them changes a residual gate
+above.
 
 ## Release checks run by Task 60
 

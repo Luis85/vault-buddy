@@ -300,8 +300,11 @@ vault-buddy/
 │   │                           #     include_str!'d from src/editor/guide/steps.json, Task 55;
 │   │                           #     io_errors.rs = is_disk_full, the ONE "is this a full
 │   │                           #     disk" test (StorageFull or Windows' raw 112, hardening
-│   │                           #     Task 22, GAP-216) `package::write_failed` and the shell's
-│   │                           #     `errors::write_error`-shaped helpers both call)
+│   │                           #     Task 22, GAP-216) `package::write_failed`, the shell's
+│   │                           #     `errors::write_error` and four richer mappers call
+│   │                           #     directly: guide_commands::map_prefs_write_error,
+│   │                           #     media_import::copy_error, publish::copy_error,
+│   │                           #     save_commands::map_write_error)
 │   ├── capture/src/            # AUDIO engine: devices, mixer, encoder, session,
 │   │                           #   recovery, rename
 │   ├── mcp/src/                # MCP server: service (7 tools), http (guards+runner),
@@ -423,9 +426,9 @@ cd src-tauri/core && cargo clippy --all-targets -- -D warnings
 cd src-tauri/core && cargo test
 # capture, transcribe, mcp and screen test the same way (capture needs
 # libasound2-dev on Linux; mcp's roundtrip tests bind real localhost
-# sockets; screen's export round-trip tests need ffmpeg on PATH and SKIP
-# VISIBLY without it — check the skip lines, a green run proves nothing
-# about the export if ffmpeg was missing);
+# sockets; screen's render round-trip tests — and the shell's real-ffmpeg
+# tests — need ffmpeg on PATH and SKIP VISIBLY without it: check the skip
+# lines, a green run proves nothing about the render if ffmpeg was missing);
 # transcribe's whisper tests: cargo test --features whisper
 
 # Rust quality gates (CI: machete/coverage/deny in rust-core; workspace
@@ -797,12 +800,13 @@ and the rules below say so where they differ:
     T72.
   - Since tutorial-editor Task 15 it is no longer the store-free root the
     "Frontend state" section used to describe — `EditorRoot.vue` itself uses
-    FOUR stores (`editorProject`, `editorWorkspace`, `editorOnboarding` and
-    the shared `notifications`; measured on the tree at Task 60, not the
-    plan's guess) and drives `editorProject` through `editor_open_staged` /
-    `editor_open_project` on every drained request; the shell it renders
-    adds `editorJobs`, `editorProducts` and `editorChecks` (six editor
-    stores in all) and, in the webcam dialog, `ffmpeg`. See "Frontend state"
+    FIVE stores (`editorProject`, `editorWorkspace`, `editorOnboarding`,
+    `editorJobs` — the reload reattach's `reconcile`/`forgetSession`,
+    hardening Task 15 — and the shared `notifications`; re-measured on the
+    tree at hardening Task 26, not incremented) and drives `editorProject`
+    through `editor_open_staged` / `editor_open_project` on every drained
+    request; the shell it renders adds `editorProducts` and `editorChecks`
+    (six editor stores in all) and, in the webcam dialog, `ffmpeg`. See "Frontend state"
     below for what they own and why `RegionRoot`/`RegionIndicatorRoot`
     remain the store-free pair.
 
@@ -1997,7 +2001,8 @@ the ADR's residual gates (R-H1–R-H5, R-A1, R-A2, R-M1, R-P1, R-P2), all
 OPEN; the concept bundle's final representative journey is checklist row
 T64, unwalked. Known limits: docs/Gaps.md GAP-170 (the ACL never run in a
 live app), GAP-173 (the preview approximates the render) and GAP-172
-through GAP-213 in general, each naming its task.
+through GAP-223 in general (GAP-219 is filed beside GAP-197), each naming
+its task.
 
 ## The document-import domain (`core/src/document_import.rs` + `src-tauri/src/document_commands.rs` + `DocumentImportSettings.vue` / `ImportVaultPicker.vue`)
 
@@ -3420,8 +3425,8 @@ card ↔ control focus, Task 56) are answered by the same dispatcher — F6
 alone skips the text-field rule (it types nothing, and a lesson's control
 can be an input), still yielding to an open menu or dialog.
 Its clipboard (`src/editor/clipboard.ts`) is window-local, in-memory state,
-never sent to Rust and never persisted — only a Paste sends its fragment,
-inside `pasteFragment`. A fragment carries each transition whose two clips
+never persisted; its fragment reaches Rust only inside a Paste's
+`pasteFragment` command. A fragment carries each transition whose two clips
 are both copied (`fragment.transitions`, additive; GAP-178), and
 `pasteFragment`/`duplicateClips` land it re-pointed at the new clips.
 **`RegionRoot` and `RegionIndicatorRoot` install no store** — the two roots

@@ -17,6 +17,10 @@ How to use this file:
   failure mode, per the repo's TDD convention.
 - **When you find a new gap** you aren't fixing right now, add it here with
   the same shape: severity, location, failure scenario, remediation sketch.
+- **Find an entry by searching for its number** (`GAP-219`), not by
+  scrolling: entries sit in their section, and a number is not always in
+  file order — GAP-219 is filed directly after GAP-197, the entry it was
+  split out of, and GAP-203 onward follow GAP-171 in section 10.
 
 Severity: **High** = plausible user-visible data loss, hang, security hole,
 or a broken safety gate. **Medium** = real defect or design weakness with a
@@ -2776,7 +2780,8 @@ user can export or discard it later.
 > it).** Opening a project — `useRecovery` either way — now never touches
 > `recovery.json` at all; `open_project_locked` does nothing to it. Instead
 > a journal that fails to load with a CONTENT VERDICT
-> (`recovery::is_content_verdict` — `EditorErrorCode::InvalidProject`: a bad
+> (`journal_quarantine::is_content_verdict`, moved there from `recovery.rs` by
+> hardening Task 18 — `EditorErrorCode::InvalidProject`: a bad
 > parse, an unknown schema, the wrong project id, a `validate_project`
 > failure, or the size bound; never a transient I/O error such as a sharing
 > violation or a delete-pending permission error, which says nothing about
@@ -2832,7 +2837,9 @@ user can export or discard it later.
 > **The SAVE path too (Task 18 fix round 1).** A save of the current
 > revision removed `recovery.json` unconditionally — so "Open saved
 > project" over an unreadable journal, then Save, deleted exactly these
-> bytes (and released Task 9's take recovery). The save now runs the
+> bytes — and, because that left no file at the `recovery.json` name, it
+> also let Task 9's take recovery (held back while the name is present) run
+> as though no journal had ever been there. The save now runs the
 > writer's own check first (`journal_quarantine::remove_after_save`): an
 > unreadable journal is set aside, a blocked one is KEPT (the save still
 > succeeds, logged once, no path), and only what is left at the name — the
@@ -2856,6 +2863,18 @@ user can export or discard it later.
 > Windows handle that allows delete but not read),
 > `…a_save_sets_an_unreadable_journal_aside_instead_of_deleting_it` and
 > `…a_save_keeps_an_unreadable_journal_it_cannot_set_aside`.
+>
+> **Left as recorded (hardening Tasks 10 and 18 reviews):** (i) a Discard
+> chosen WITHOUT first trying Resume sets an unreadable journal aside
+> silently — the bytes are kept, but only the log says so, because the
+> "Their file is kept in the project folder." copy appears only once a
+> Resume attempt has found the journal unreadable; (ii) a READABLE journal from an earlier
+> process that the user declines with "Open saved project" is still
+> removed by the session's next save of the current revision, or replaced
+> by its first journal write — by design under ruling R7 (only an
+> unreadable journal is kept aside; a readable one was offered and
+> declined); (iii) the set-aside's same-second collision retry (the
+> numeric suffix) has no test of its own.
 
 ### GAP-181 · Low · A caption or chapter trimmed out of its clip is kept but listed nowhere
 `src/editor/captionRules.ts` (`captionRows`, `chapterRows`),
@@ -2872,7 +2891,7 @@ and it still counts toward `MAX_CAPTIONS`/`MAX_MARKERS`.
 **Fix:** list trimmed-away cues and markers under a "Not in the edit" group
 in each library (delete-only).
 
-### GAP-182 · Low · A project file from an older build or another editor carries no source facts, and a portable file leaves unplaced library media behind
+### GAP-182 · Low (first item CLOSED 2026-09-25 for media the file carries, hardening Task 6) · A project file from an older build or another editor carries no source facts, and a portable file leaves unplaced library media behind
 `src-tauri/src/editor/package_import.rs` (`facts_from_asset`),
 `src-tauri/core/src/editor/package_plan.rs` (`assets_needing_media`,
 `SOURCE_FACTS_KEY`), `src-tauri/src/editor/package_commands.rs`.
@@ -3331,8 +3350,19 @@ recovery sees the landed `.webm` and leaves the part alone, forever.
 (4) **A journal that cannot be read holds the take back.** Recovery waits
 while `recovery.json` exists and the open did not resume it; an unreadable
 journal cannot be resumed, so "Open saved project" (which leaves it on disk)
-recovers nothing until the journal is discarded (or, once hardening Task 10
-lands, set aside). The part is kept meanwhile.
+recovers nothing until the journal is discarded — since hardening Task 10
+the Discard sets an unreadable journal aside rather than deleting it, which
+frees the name (GAP-180). The part is kept meanwhile.
+(5) **A quit during a recovery** (recorded by Task 26 from Task 9's review):
+nothing in the shutdown gate counts a take being recovered, so a quit that
+lands between the recovered bytes' landing rename (`land_raw` or the remux's)
+and its register leaves case (3)'s shape — a `.webm` with no part and no
+record. A kill in the same window does the same; both are rare, and nothing
+is deleted.
+(6) **A second open of the same project during a recovery** reuses the live
+session and can answer the revision from BEFORE the recovery's `AddAssets`;
+the webview's first edit then meets `revisionConflict`, re-reads and offers
+Retry — nothing is lost (`webcam_recover.rs`' module doc).
 Considered and NOT done here: re-registering a `takes` record whose
 `.webm` exists but that no graph asset reaches. It would also resurrect a
 take the user removed by Undo (AddAssets is an undo step), and a missing
@@ -3422,6 +3452,23 @@ deleting footage.
 > `promote_into_free_name` checks only the `.mp4` and the sidecar, so the
 > capture lands there and its companion's `rename_noreplace` refuses, leaving
 > the part in place (kept, never clobbered). Paths (2) and (3) stand.
+>
+> **Also left (hardening Task 8 review, recorded by Task 26):** (a) a
+> companion whose original base is claimed by TWO recovered captures'
+> `recoveredFrom` (possible only after a crash duplicated a capture through
+> a hard link) is left in place for good — logged, never guessed at;
+> (b) a stem part whose index is not canonical is itself left alone (item
+> (2b) of GAP-201), but it still counts as a COMPANION, so an empty main
+> part beside another capture's files is `Held` behind it forever — two
+> hidden files in staging, counted nowhere; (c) `screen_recovery::scan_dir`
+> drops an entry silently when `read_dir`'s item, its `file_type()` or its
+> `symlink_metadata()` fails — a file of ours dropped that way is not
+> counted pending, so the sweep can stop retrying while it is still there
+> (the likely cause of the `a_companion_waits_for_its_captures_part_to_be_decided`
+> flake, 2 of 10 full-suite runs). Fix: count a metadata failure on one of
+> our names as pending — `screen_recovery/mod.rs` is at 783/800 nonblank
+> lines, so split it first; (d) `landed_earlier`'s staged-snapshot check has
+> no order-independent test — only NTFS's listing order exercises it.
 
 ### GAP-199 · ~~Medium~~ FIXED in code 2026-09-24 (Task 52), hardware-unverified · A synchronized webcam track's length is derived, not measured
 `src-tauri/src/editor/session_commands.rs` (`staged_webcam`), Task 51
@@ -3500,7 +3547,7 @@ for exactly this; a fix subtracts a measured or device-reported latency from
 the anchor. The Windows producer executes in no automated test on any
 platform (GAP-117's class); rows T37–T41 are its gate.
 
-### GAP-201 · Medium (hardware-unverified) · Per-input audio stems: an untested writer and five recorded residuals
+### GAP-201 · Medium (hardware-unverified; item 2's ` (N)` and later-pass halves and item 2b CLOSED 2026-09-25, hardening Task 8) · Per-input audio stems: an untested writer and five recorded residuals
 `src-tauri/screen/src/session/stems_windows.rs` + `sink.rs`
 (`FragmentedSink::create_audio_only`), Task 53 (F-05). The stem PLUMBING is
 pure and tested (`session/stems.rs`: each stem is the very post-resample slice
@@ -6602,16 +6649,30 @@ measuring CPU time, whenever that file is next touched.
 > passes on a rerun (1283/1283). The second flake above is gone with its
 > file: `screen/tests/export_roundtrip.rs` was deleted by Task 59 (commit
 > `1f3428f`) along with the phase-5 export it tested.
+>
+> **2026-09-25 — the same sharing-rule family on the editor's first open
+> (hardening Task 7, recorded by Task 10's review carry).** Task 7 made
+> `create_project` build a new project in `.<id>.creating\` and rename the
+> whole directory into place last (`store_io::CreatingDir::install`). On
+> Windows that rename is refused with `PermissionDenied` while any handle
+> inside the directory is open — exactly what a real-time scanner or the
+> indexer does to the just-written `sources.json`/`project.json`. It is now
+> retried (`retry_permission_denied`: five attempts, 100 ms apart, only on
+> `PermissionDenied`; `install_renames_through_the_retry_helper_not_a_bare_rename`
+> pins the wiring), so a scanner holding the files for up to about 0.4 s is
+> ridden out silently. One that holds them longer still fails that first
+> **Edit** with an error; the failed mint removes its own `.creating`
+> build (and if that removal is refused too, the startup sweep removes it
+> an hour later). Checklist row T70 is the real-AV check, unrun.
 
-### GAP-170 · High (unverified) · The app-wide ACL that now gates ALL the app's commands (131, measured at the final review) has never run inside a live app — if it resolves differently than the generated-artifact replica models, every IPC command from every window is refused, not just the editor ones
+### GAP-170 · High (unverified) · The app-wide ACL that now gates ALL the app's commands (131, measured at the final review and re-measured at hardening Task 26) has never run inside a live app — if it resolves differently than the generated-artifact replica models, every IPC command from every window is refused, not just the editor ones
 Task 11 (tutorial editor, R8's app-manifest half) made `build.rs`'s
 `AppManifest::commands(ALL_COMMANDS)` list EVERY command in
-`generate_handler!`, not just the thirty-six `editor_*` commands (eight at
-Task 12; measured in `editor.json`)
-(`editor_open_staged`, `editor_get_snapshot`, `editor_execute`,
-`editor_close_session`, `editor_hide_window`, `editor_save_project`,
-`editor_list_projects`, `editor_open_project` — the last three added by
-Task 12) — because (see the near-miss below) doing anything less silently
+`generate_handler!`, not just the `editor_*` commands (thirty-six today,
+measured in `editor.json`; at Task 12 they were eight — `editor_open_staged`,
+`editor_get_snapshot`, `editor_execute`, `editor_close_session`,
+`editor_hide_window`, `editor_save_project`, `editor_list_projects` and
+`editor_open_project`, the last three added by Task 12) — because (see the near-miss below) doing anything less silently
 turns off ACL enforcement's grant for every command NOT in the list, not
 just the ones a narrower list would have scoped. That makes this gap's
 blast radius the whole app, not one feature: **this is not "the editor
@@ -6965,7 +7026,8 @@ black rather than its own slate-900 foreground — corrected here, in
 token value changed, since even the corrected worst case, 3.68:1, clears
 3:1 with margin).
 **Fixed a fourth time 2026-09-26 (the recorded residuals of the three
-passes above)**: `dialogs/SaveProjectDialog.vue`'s format-radio row labels
+passes above; commit `184914a`, from the follow-up Task 14 recorded,
+reviewed inside the hardening pass after Task 17)**: `dialogs/SaveProjectDialog.vue`'s format-radio row labels
 (`hover:bg-white/5` and the selected-state `bg-white/5`) and
 `guide/LearningWalkthrough.vue`'s chapter/lesson row buttons
 (`hover:bg-white/5`) use a `/5` weight neither existing token fit —
@@ -7099,6 +7161,19 @@ wrote) is empty after a reload, so the close guard's "You have an unsaved
 webcam take" warning never fires for a take that was recording across the
 reload, even though Rust's own `open_takes` still lists it open.
 (Hardening Task 16 review carry.)
+Also recorded (hardening Tasks 15–16 reviews, by Task 26): (f) the project
+"on screen" is recorded by `note_editor_opened` AFTER the open released
+`open`, so two overlapping opens can record the other one's project — a
+reload then reopens the project the user was not looking at (a
+milliseconds-wide window; nothing is lost); (g) `editorJobs`'
+`staleRegistryRow` judges a registry row stale by `fraction` alone, not by
+phase order — safe while every later phase reports a fraction at least as
+high, latent if a phase with a lower one is ever added; (h)
+`isBrowserAcceleratorKey` matches the deprecated `KeyboardEvent.keyCode`
+(82/70/80, 116) beside `key` to catch non-Latin layouts; `event.code`
+(`KeyR`/`KeyF`/`KeyP`/`F5`) is the non-deprecated, layout-independent
+equivalent to move to; (i) no test pins that `follow` stops on a session
+change, or on an adopted render that finished before the dialog opened.
 
 ### GAP-209 · ~~Medium~~ FIXED 2026-09-25 (Task 58 fix round 1) · The editor's DARK theme misses 4.5:1 for subtle text, clip labels and the primary button
 `src/style.css` (`@theme` defaults), `src/components/ui/AppButton.vue`
@@ -7396,8 +7471,9 @@ editor's "could not be opened" line for an `invalidProject` project) and
    and derived media that outlives its 5 s wait now REFUSES the discard
    (`invalidRequest`, "Media is still being prepared. Try discarding again
    in a moment."), project untouched, instead of being logged and removed
-   underneath. That last refusal is the one that follows a cancel (nothing
-   else stops a render), and a cancelled render is repeatable. Pinned by
+   underneath. That last refusal is the one PLANNED refusal that follows a
+   cancel (items 10–11 record two late ones the pin scan can still raise),
+   and a cancelled render is repeatable. Pinned by
    `discard::tests::a_discard_refused_for_a_take_leaves_a_running_render_running`,
    `…::a_discard_refuses_when_derived_media_does_not_stop_in_time`,
    `…::a_discard_refuses_while_an_import_is_running_and_cancels_nothing` and
@@ -7479,7 +7555,11 @@ editor's "could not be opened" line for an `invalidProject` project) and
    (the discard waits for the open, then removes the project): the webview's
    next call gets `sessionGone`. No pin is left dangling — the discard's
    sidecar scan runs after the open's pin landed — and the editor reads the
-   refusal as a closed session.
+   refusal as a closed session. *Also (Task 4 review, recorded by Task 26):*
+   `store_io::pin_liveness` logs one "could not be checked … treating it
+   as live" warning per pinned row on EVERY staged-list read
+   (`staged_commands::live_summaries`) while that pin's liveness is
+   `Unknown` — log noise only, the row is still kept safe.
 9. **A project written by a NEWER build reads as damaged after a
    downgrade**: `invalidProject`, so a capture's Edit re-migrates it into a
    fresh project and the newer one is left an orphan (item 2's shape).
@@ -7543,7 +7623,11 @@ carried ones (a video or audio file through the media import's own
 `settle_av_import`, so a "video" holding only sound is recorded as audio; an
 image keeps its assigned length). A lying package can therefore no longer
 get Detach audio accepted for a silent file, nor choose the R1 fast path,
-for EXTRACTED media. What stays as it was, deliberately: a PLACEHOLDER (its
+for EXTRACTED media **that ffprobe can read and measure** — not for every
+extracted file: where the probe cannot say (the cases below — a file
+ffprobe cannot read, or a probe whose length `settle_av_import` refuses),
+the CARRIED claim, `hasAudio` included, still stands for that file, and a
+lie there reaches Detach audio exactly as before. What stays as it was, deliberately: a PLACEHOLDER (its
 media is not in the file) keeps its carried facts until a reconnect re-probes
 it (Task 40), and so does every file when the probe cannot say — no ffmpeg
 (an image is still re-sniffed), a file ffprobe cannot read, or a probe
@@ -7556,13 +7640,22 @@ Tests: `package_import_tests.rs`
 `a_probe_is_settled_by_the_media_import_rule` (fakes) and
 `the_production_prober_measures_a_real_silent_video` (a real ffprobe; skips
 visibly without ffmpeg). The probes run under the editor's `open` lock, like
-the extraction before them, so a portable import with many files holds other
-opens a little longer (one ffprobe per carried file, each bounded by
-`PROBE_TIMEOUT`).
+the extraction before them, so a portable import with many files holds every
+other open, discard and sweep longer: one ffprobe per carried file, each
+bounded by `PROBE_TIMEOUT` (5 s) — worst case about 200 carried files
+(`MAX_ASSETS`) × 5 s ≈ 17 minutes for a crafted file that makes every probe
+time out, plus resolving ffmpeg (its own bounded version and encoder
+probes) on the first probe of the process. An ordinary portable file's
+probes take a fraction of a second each. **One shape a re-probe can leave:**
+a carried `video` whose probe finds only sound becomes an AUDIO
+`sources.json` record under an asset the project graph still calls video
+(the graph is never rewritten by an import); the render tolerates the
+mismatch (Task 6 review).
 
-### GAP-216 · CLOSED (hardening Task 22) · The editor shell repeats its small helpers
-`src-tauri/src/editor/*.rs`, `src/composables/useTimelineDrag.ts`
-(final whole-branch review, "stay recorded"). The same few helpers were
+### GAP-216 · ~~Low~~ CLOSED 2026-09-26 (hardening Task 22; its `MIN_CLIP_MS` half by hardening Task 20) · The editor shell repeats its small helpers
+`src-tauri/src/editor/*.rs` (final whole-branch review, "stay recorded"; the
+entry once also named `src/composables/useTimelineDrag.ts`, whose part
+hardening Task 20 closed — see the narrowing note below). The same few helpers were
 defined per file rather than once: `fn err(code, message)` and
 `fn internal(message)` in most `editor/*` modules (twenty-seven private
 `err`/`internal`/`local_data` definitions at the review), `local_data`
@@ -7595,7 +7688,10 @@ silently forgetting the raw Windows code every shell copy carried).
   disk-full test (`StorageFull` on every platform, Windows' raw 112 gated
   `cfg(windows)` since 112 names `EHOSTDOWN` on Linux) — used by
   `package::write_failed` (now correctly `DiskFull` for the raw code too)
-  and by every shell site below.
+  and by every shell site below: `errors::write_error` calls it, and so do
+  the four richer mappers directly — `guide_commands::map_prefs_write_error`,
+  `media_import::copy_error`, `publish::copy_error` and
+  `save_commands::map_write_error`.
 - `src-tauri/src/editor/errors.rs` — `err`, `internal`, `invalid`
   (`InvalidRequest`) and `write_error` (`webcam_commands`'s exact
   "not enough disk space to `{what}`" / "could not `{what}`" shape,
@@ -7701,3 +7797,121 @@ discard reached its read inside those 200 ms. **Remedy:** a
 `*_observed` seam (the `session_save_lock_observed` shape) that signals
 just before `open.lock()`, or holding `open` in an `Arc` the discard
 clones.
+
+### GAP-221 · Low (test hygiene) · The test-only structural scans still have blind spots
+`src-tauri/src/structural_scan.rs`, `src-tauri/src/cfg_windows_guard.rs`,
+`src-tauri/src/editor/redact_guard.rs`, `tests/helpers/rustSource.ts`,
+`tests/editorEvidence.test.ts` — recorded by hardening Task 26 from the
+review Minors of Tasks 20 and 21, which hardened these scans and left these
+edges. Each scan reads SOURCE TEXT instead of compiling it, so each can be
+fooled by text it does not model. None is exploited today — every scan is
+green on the tree for the right reason — but each is a way a later change
+could pass a scan it should fail:
+(1) `structural_scan::code_only` works a line at a time and still treats a
+`'"'` char literal as a string opener (the block-comment pass,
+`without_block_comments`, models char literals correctly);
+(2) `without_block_comments` does not model a raw string that contains a
+quote (`r#"…"…"#`), so a `/*` or `"` inside one can shift what it blanks;
+(3) `cfg_windows_guard`'s `imported()` scans the raw source, comments
+included, so a `use some_module` in prose would count as an import and mark
+that module's paths reachable (zero such comments today; the fix is to scan
+the comment-stripped text and advance only past the match);
+(4) `redact_guard` judges a log argument by its NAME (`path`, `file`,
+`name`, …) and accepts one allow-listed helper call,
+`recovery::redact_publish_journal(` — GAP-210 lists what it cannot see;
+(5) `rustSource.ts`' guard against a renamed enum variant looks for the
+substring `serde(rename`, so `#[serde(default, rename = "x")]` slips past it
+(a `\bserde\([^)]*\brename\s*=` match would not);
+(6) the evidence matcher (`tests/editorEvidence.test.ts`) does not strip
+comments, so a call-shaped `it("title")` inside a comment would count as the
+test the evidence file names. **Fix direction:** one shared, tested Rust
+lexer for the three Rust scans (strings, raw strings, char literals and both
+comment forms), and comment stripping before either TypeScript matcher.
+
+### GAP-222 · Low (test hygiene) · Tests that are racy, slow, never run in CI, or sit at their file's size cap
+Recorded by hardening Task 26 from the pass's review Minors (Tasks 3, 5, 6,
+12, 19, 21, 23, 24, 25); GAP-220 is the lock-ordering half of the same
+class, and GAP-169 the `tasks::disk` flake.
+(1) **Racy as a mutation guard:**
+`discard::tests::a_discard_waits_for_an_import_that_finishes_then_removes_the_project`
+passes whether or not the discard really waited, if the import happens to
+finish first — its sibling
+`a_discard_refuses_while_an_import_is_running_and_cancels_nothing` is the
+deterministic guard; the first needs a handshake or a comment saying so.
+(2) **Cannot tell before from after:**
+`package_import_tests::a_compact_file_whose_stored_form_is_too_large_installs_nothing`
+cannot distinguish "measured before the import directory is created" (M-V2's
+claim) from "measured after, then cleaned up", because `ImportDir`'s drop
+removes the directory either way.
+(3) **Panics while holding a lock:**
+`recovery_tests::session_save_lock_never_leaks_an_entry_for_a_session_dropped_mid_call`
+panics on `recv_timeout` while holding the sessions-map guard, so a thread
+that is merely slow turns into a hung scope instead of a clean failure.
+(4) **Slow by construction:**
+`discard::tests::a_discard_refuses_when_derived_media_does_not_stop_in_time`
+waits the full production `STOP_WAIT` (5 s); shortening it under
+`cfg(test)` would squeeze the real-ffmpeg kill tests.
+(5) **Wall-clock flakes:** `external_stream::tests::run_streaming_kills_the_child_when_cancelled`
+and `…::run_streaming_stops_a_child_at_the_timeout` failed once each under a
+loaded full run (hardening Task 23's review) and passed alone.
+(6) **Never run in CI:** the shell's real-ffmpeg tests —
+`package_import_tests::the_production_prober_measures_a_real_silent_video`
+and `media_derive_tests.rs`' `*_round_trip_through_real_ffmpeg` — run only in
+`linux-app`, which installs no ffmpeg (only `rust-core` does), and
+`windows-app` does not run the shell's tests; since hardening Task 21 they
+say SKIP visibly, but no CI job runs them. And `core::no_follow`'s
+real-symlink test has never run anywhere yet: the development host lacks
+the symlink privilege, so its first run is `windows-app`'s — inspect that
+job's log once to see it ran rather than skipped.
+(7) **Untested branches:** `guide_commands::write_progress_file`'s
+`AlreadyExists` race branch (a file created between the dialog and the
+exclusive create).
+(8) **Files at their size cap** (measured by Task 26, nonblank lines): the
+next test added to any of these needs a split first —
+`src-tauri/src/editor/webcam_commands_tests.rs` 795/800,
+`src-tauri/src/editor/media_jobs.rs` 789/800,
+`src-tauri/src/screen_recovery/mod.rs` 783/800,
+`src-tauri/src/editor/render_jobs_tests.rs` 772/800 and
+`src/editorTypes.ts` 499/500; `src-tauri/core/src/document_import.rs` sits
+exactly at its grandfathered 914-line baseline.
+
+### GAP-223 · Low · Editor robustness residuals the hardening pass recorded without a home
+Recorded by hardening Task 26 from review Minors of Tasks 5, 7, 17, 24 and
+25 — each small, none losing data, grouped here because no other entry fits.
+(1) **An import measures a crafted ledger in memory.** M-V2's pre-install
+measurement (`package_import::stored_json`) pretty-prints the ledger into a
+capped sink bounded by `LEDGER_MAX_BYTES` — the project-file bound per
+product, 8 MiB × 41 = 328 MiB — so a crafted project file can make the
+import buffer up to that much before it refuses; and the ledger half of the
+measurement has no test of its own (the project half does).
+(2) **A portable export hashes before it counts.** `write_portable`
+(`package_commands.rs`) checks the running 200 MiB total only after it has
+hashed each original whole, so an oversized original is read in full before
+the refusal; a size check from metadata first would refuse at once.
+(3) **A crafted paste costs cubic time.** `check_no_overlap`
+(`core::editor::commands::groups`) scans the carried transitions for every
+pair of new clips before the cheap same-track test, and a fragment's clip
+count is not bounded until `validate_project` runs after it — a fragment
+from the editor window's own devtools with thousands of clips can stall the
+session's queue. Fix: test the track first, index the carried pairs, and
+bound a fragment's size up front.
+(4) **Refusals that print Rust's enum spelling.** A carried transition of
+the wrong kind is refused as "transition …: a Video clip needs a Dissolve
+transition, not EqualPower", and a paste onto the wrong kind of track names
+the asset and track kinds the same way — the `{:?}` spelling, not the
+wire's (`dissolve`, `equal-power`); `validate_media`'s `invalidProject`
+text has the same shape. A user can meet these only through a crafted
+fragment or project file.
+(5) **Any reparse point reads as "replaced".** `core::no_follow` refuses
+every reparse point, so a webcam take's `.part` that Windows turned into
+one for another reason (a WOF-compressed file, a cloud-sync placeholder)
+fails its next chunk with "The take's file has been replaced; discard the
+take." — safe, and in the local app-data folder unlikely, but the wording
+is then wrong.
+(6) **The startup store sweep trusts the store root.** `store_sweep`, like
+`list_projects` and `sweep_stale_imports`, walks `editor-projects\` without
+checking that the folder itself is not a link; every entry it removes is
+still checked no-follow and by owned name.
+(7) **Two Escapes for two popovers.** With a track menu and the mixer open
+together, the mixer's Escape handler stops the event's other listeners, so
+Escape closes one per press (a click outside closes both).
