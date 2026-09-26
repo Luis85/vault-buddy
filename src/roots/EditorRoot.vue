@@ -173,8 +173,20 @@ async function openRequested() {
   // the capture already showing safe rather than a duplicate
   // `editor_open_staged` round trip.
   requested.value = request;
+  // `generation` bumps on every REAL open attempt (`beginOpen`, inside
+  // `openWith`) but not on `openStaged`'s own same-base short-circuit — so
+  // comparing it before and after tells the two apart (hardening Task 16,
+  // F-M1). A short-circuited re-drain never touched Rust or `lastError` at
+  // all, so it must not be blamed for whatever an EARLIER, unrelated action
+  // (a refused edit) left sitting in that shared field.
+  const generationBefore = editorProject.generation;
   if (request.kind === "staged") await editorProject.openStaged(request.value);
   else await editorProject.openProject(request.value, false);
+  if (editorProject.generation === generationBefore) {
+    openError.value = null;
+    openErrorCode.value = null;
+    return;
+  }
   recordOpenOutcome();
   // A failed open is logged here, not inside the store, because the
   // store's own `openWith` doc is explicit that a failure is a normal,
@@ -258,9 +270,29 @@ function suppressBrowserKeys(event: KeyboardEvent): void {
   if (isBrowserAcceleratorKey(event)) event.preventDefault();
 }
 
+/** Forgets a session's background jobs (`editorJobs.forgetSession`) the
+ * instant it ends — a `close()` — or is superseded by a new `beginOpen()`
+ * (hardening Task 16, C-4): a session that opens a render and is closed or
+ * superseded before that render's Channel ever resolves would otherwise
+ * leave the row in `editorJobs` forever (nothing ever reads a stale
+ * session's rows again). Wired here via `$onAction` rather than as a static
+ * import inside `editorProject.ts` itself: `editorJobs.ts` already imports
+ * `editorProject.ts` (it reads the live session throughout), and a
+ * back-edge there would be exactly the cycle `circularDependencies 0`
+ * exists to catch. `$onAction`'s callback runs BEFORE the action body, so
+ * `editorProject.sessionId` here is still the ENDING session's. */
+function wireJobHygiene(): () => void {
+  return editorProject.$onAction(({ name }) => {
+    if (name !== "beginOpen" && name !== "close") return;
+    const endingSessionId = editorProject.sessionId;
+    if (endingSessionId) useEditorJobsStore().forgetSession(endingSessionId);
+  });
+}
+
 onMounted(async () => {
   window.addEventListener("keydown", suppressBrowserKeys, true);
   unlisteners.push(() => window.removeEventListener("keydown", suppressBrowserKeys, true));
+  unlisteners.push(wireJobHygiene());
   // Subscribed BEFORE the first drain, so a request arriving while that
   // drain is in flight is not lost — the `region:begin` rule applied here.
   unlisteners.push(await listen("editor:open", () => void openRequested()));

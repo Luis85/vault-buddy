@@ -67,6 +67,19 @@ function openResult(sessionId = "ses-a"): EditorOpenResult {
   };
 }
 
+/** A promise plus its own `resolve`, never reassigned after construction —
+ * `editorProjectStore.test.ts`'s own precedent, used here instead of a
+ * nullable `let` resolver captured by a closure (the latter trips a
+ * TypeScript control-flow narrowing quirk when read back in the SAME
+ * function body — verified in isolation, not this repo's bug to fix). */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 function msg(overrides: Partial<JobProgressDto> = {}): JobProgressDto {
   return {
     sessionId: "ses-a",
@@ -348,5 +361,152 @@ describe("editorJobs — renders nobody follows", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // Carried from Task 15's review: `track` only installs a job once `start()`
+  // replies with its id, but Rust can already list the row in its registry
+  // before that reply lands (`editor_start_render` "answers at once", per
+  // AGENTS.md) — a `reconcile()` racing that window used to adopt this
+  // webview's OWN render, which for a Review started from `ReviewDialog`
+  // would stack `RenderDialog` on top of it.
+  it("does not adopt a render this webview is currently starting", async () => {
+    const start = deferred<{ jobId: string; revision: number }>();
+    const { jobs } = await setup({
+      startRender: () => start.promise,
+      getJobs: () => Promise.resolve([running("job-mine")]),
+    });
+    const starting = jobs.startRender({ name: "v1", range: null, quality: "balanced" });
+    // Rust's registry already lists the job; this webview's own Channel
+    // just has not been wired to it yet.
+    await jobs.reconcile();
+    expect(jobs.adoptedRender).toBeNull();
+
+    start.resolve({ jobId: "job-mine", revision: 3 });
+    await starting;
+
+    expect(jobs.jobs["job-mine"]).toBeDefined();
+    expect(jobs.adoptedRender).toBeNull();
+  });
+
+  // Carried from Task 15's review: `follow`'s own polling reads called
+  // `reconcile()` directly, which sets `this.lastError` on a failed read —
+  // the MEDIA LIBRARY's import line, overwritten once a second for as long
+  // as a stalled registry stayed unreachable, over a render nobody's
+  // library card is even about (F-M... the render's errors belong in
+  // `renderError`, never `lastError`, and `follow` files neither).
+  it("a failed poll while following a render never touches lastError", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const reads: (JobRecordDto[] | Error)[] = [
+        [running("job-7")],
+        new Error("transport down"),
+        [{ ...running("job-7"), phase: "complete", fraction: 1, terminal: { productId: "p" } }],
+      ];
+      const getJobs = vi.fn(() => {
+        const next = reads.length > 1 ? reads.shift() : reads[0];
+        return next instanceof Error ? Promise.reject(next) : Promise.resolve(next ?? []);
+      });
+      const { jobs } = await setup({ getJobs, getProducts: () => Promise.resolve([]) });
+      await jobs.reconcile();
+      const followed = jobs.follow("job-7");
+      await vi.advanceTimersByTimeAsync(1000); // the failing read
+      expect(jobs.lastError).toBeNull();
+      await vi.advanceTimersByTimeAsync(1000); // the terminal read
+      await followed;
+      expect(jobs.jobs["job-7"].terminal).toEqual({ productId: "p" });
+      expect(jobs.lastError).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// Hardening Task 16 (F-M6): a registry read can race a Channel message
+// already applied at a higher sequence — the module doc's "the registry is
+// updated before every message is sent" holds at Rust's SEND, not at this
+// reply's ARRIVAL — so a reconcile must never regress a job's own progress
+// backwards under a stale row.
+describe("editorJobs — reconcile never regresses a held job's progress", () => {
+  it("a registry row behind a Channel-tracked job's own progress is never installed over it", async () => {
+    const rows: JobRecordDto[] = [
+      { jobId: "job-1", kind: "render", phase: "preparing", fraction: 0, terminal: null },
+    ];
+    const { jobs, send, start } = await setup({ getJobs: () => Promise.resolve(rows) });
+    await start();
+    send(msg({ kind: "render", sequence: 2, phase: "rendering", fraction: 0.4 }));
+    expect(jobs.jobs["job-1"].fraction).toBe(0.4);
+
+    await jobs.reconcile();
+
+    expect(jobs.jobs["job-1"].phase).toBe("rendering");
+    expect(jobs.jobs["job-1"].fraction).toBe(0.4);
+  });
+
+  // The mutation check's other half: a registry row AHEAD of (or equal to)
+  // the held progress still installs — this is a regression guard, not a
+  // blanket "never trust the registry".
+  it("a registry row at or ahead of the held progress still installs", async () => {
+    const rows: JobRecordDto[] = [
+      { jobId: "job-1", kind: "render", phase: "rendering", fraction: 0.6, terminal: null },
+    ];
+    const { jobs, send, start } = await setup({ getJobs: () => Promise.resolve(rows) });
+    await start();
+    send(msg({ kind: "render", sequence: 2, phase: "rendering", fraction: 0.4 }));
+
+    await jobs.reconcile();
+
+    expect(jobs.jobs["job-1"].fraction).toBe(0.6);
+  });
+});
+
+// Hardening Task 16 (C-4): a job's session must still be the CURRENT one
+// when its install actually happens — `track()`'s `{jobId}` reply can land
+// after the session that started it has since closed or been superseded by
+// a new open — and closing (or opening a new) session must not leave the
+// old one's rows sitting in this store forever: they can never be adopted,
+// shown or reconciled again (nothing ever reads a stale session's rows),
+// so left alone they are a pure, permanent leak.
+describe("editorJobs — session hygiene", () => {
+  it("a start reply that arrives after its session closed installs nothing", async () => {
+    const { jobs, start } = await setup({ closeSession: () => Promise.resolve() });
+    await useEditorProjectStore().close("keep");
+    await start();
+    expect(jobs.jobs["job-1"]).toBeUndefined();
+  });
+
+  // The wiring that actually CALLS `forgetSession` from a session's end
+  // lives in `EditorRoot`'s `wireJobHygiene` (an `editorProject.$onAction`
+  // subscription, deliberately not a static import here — see this file's
+  // own module doc and `editorRoot.test.ts`'s "job hygiene on session end"
+  // tests for that integration).
+  it("forgetSession drops only that session's jobs and its adoption record", () => {
+    const jobs = useEditorJobsStore();
+    jobs.jobs = {
+      "job-old": {
+        jobId: "job-old",
+        sessionId: "ses-old",
+        kind: "render",
+        phase: "rendering",
+        fraction: 0.4,
+        terminal: null,
+        sequence: 3,
+      },
+      "job-current": {
+        jobId: "job-current",
+        sessionId: "ses-new",
+        kind: "import",
+        phase: "preparing",
+        fraction: 0.1,
+        terminal: null,
+        sequence: 1,
+      },
+    };
+    jobs.adopted = ["job-old"];
+
+    jobs.forgetSession("ses-old");
+
+    expect(jobs.jobs["job-old"]).toBeUndefined();
+    expect(jobs.jobs["job-current"]).toBeDefined();
+    expect(jobs.adopted).toEqual([]);
   });
 });

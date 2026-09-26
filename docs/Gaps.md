@@ -6955,7 +6955,17 @@ dialog (its completion line is inferred — a complete terminal with no
 button reads "Try again"); (c) `follow` retries a failed registry read on
 every tick and stops only on a terminal, the job leaving the registry or a
 session change, so a registry that fails for good keeps the dialog busy
-(Cancel stays, as before).
+(Cancel stays, as before); (d) a running PUBLISH job is not reattached at
+all — `editor_get_jobs` lists it by kind like a render, but nothing here
+adopts or follows a `publish` row, so a reload during a Publish loses the
+webview's own `PublishReceipt` (the video and note still land in the vault;
+only the confirmation is gone, and the next open shows nothing for it); (e)
+an in-progress webcam TAKE is orphaned from the close guard the same way —
+`webcamTakes.ts` (the guard's own mirror of what `port.ts`'s webcam calls
+wrote) is empty after a reload, so the close guard's "You have an unsaved
+webcam take" warning never fires for a take that was recording across the
+reload, even though Rust's own `open_takes` still lists it open.
+(Hardening Task 16 review carry.)
 
 ### GAP-209 · ~~Medium~~ FIXED 2026-09-25 (Task 58 fix round 1) · The editor's DARK theme misses 4.5:1 for subtle text, clip labels and the primary button
 `src/style.css` (`@theme` defaults), `src/components/ui/AppButton.vue`

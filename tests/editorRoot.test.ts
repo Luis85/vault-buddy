@@ -41,6 +41,7 @@ import { EditorPortError } from "../src/editor/port";
 import type { EditorCommand, EditorOpenResult, EditorSnapshot, Project } from "../src/editorTypes";
 import { logWarning } from "../src/logging";
 import EditorRoot from "../src/roots/EditorRoot.vue";
+import { useEditorJobsStore } from "../src/stores/editorJobs";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
 import { open } from "./helpers/editorMount";
@@ -450,6 +451,113 @@ describe("EditorRoot", () => {
     // own isolated pin.
     expect(calls).toEqual(["cap one"]);
     expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("Tutorial");
+  });
+
+  // ---- Hardening Task 16 (F-M1): a re-drain of the capture already
+  // showing short-circuits inside `editorProject.openStaged` (Task 15's
+  // own-base guard) without ever touching Rust or `lastError` — so it must
+  // never be blamed for whatever an EARLIER, unrelated action (a refused
+  // edit) left sitting in the store's shared `lastError`. ----
+
+  it("a refused edit then a re-drain of the same capture reports no open failure", async () => {
+    const store = useEditorProjectStore();
+    let openCalls = 0;
+    store.setPort(
+      fakeEditorPort({
+        openStaged: (base) => {
+          openCalls += 1;
+          return Promise.resolve(openResultFixture({ sourceBase: base }));
+        },
+        execute: () =>
+          Promise.reject(
+            new EditorPortError({
+              code: "internal",
+              message: "Could not write the project file.",
+              retryable: false,
+              operationId: "op-edit",
+            }),
+          ),
+      }),
+    );
+    // `open()`'s helper queues one more "cap one" drain for the later
+    // `editor:open` — modelling Rust re-stashing the capture already open.
+    const w = await open(["cap one", "cap one"]);
+    expect(openCalls).toBe(1);
+
+    // An edit refusal — nothing to do with opening — leaves `lastError` set
+    // on the shared store.
+    await store.execute({ kind: "undo" });
+    expect(store.lastError?.message).toBe("Could not write the project file.");
+
+    // The re-drain never reaches `editor_open_staged` (the same-base
+    // short-circuit) and must not report the earlier edit's failure as its
+    // own. Only calls made by THIS re-drain matter — `logWarning`'s call
+    // history is not reset between the tests in this file.
+    const callsBefore = vi.mocked(logWarning).mock.calls.length;
+    listeners["editor:open"]();
+    await flushPromises();
+    const newCalls = vi.mocked(logWarning).mock.calls.slice(callsBefore).map((c) => c[0] as string);
+
+    expect(openCalls).toBe(1);
+    expect(newCalls).not.toEqual(expect.arrayContaining([expect.stringContaining("editor_open_staged failed")]));
+    expect(w.find('[data-testid="editor-shell"]').exists()).toBe(true);
+    expect(w.find('[data-testid="editor-open-failed"]').exists()).toBe(false);
+  });
+
+  // ---- Hardening Task 16 (C-4): a session's background jobs must not
+  // outlive it — `EditorRoot`'s `wireJobHygiene` forgets them via
+  // `editorJobs.forgetSession` the instant `editorProject.beginOpen`/
+  // `close` run (an `$onAction` subscription, not a static import between
+  // the two stores — see `src/stores/editorJobs.ts`'s own module doc for
+  // why). ----
+
+  function jobFixture(sessionId: string) {
+    return {
+      jobId: "job-1",
+      sessionId,
+      kind: "render" as const,
+      phase: "rendering" as const,
+      fraction: 0.4,
+      terminal: null,
+      sequence: 2,
+    };
+  }
+
+  it("opening a different capture forgets the previous session's jobs", async () => {
+    const store = useEditorProjectStore();
+    store.setPort(
+      fakeEditorPort({
+        openStaged: (base) =>
+          Promise.resolve(
+            openResultFixture({
+              sourceBase: base,
+              snapshot: snapshotFixture({ sessionId: base === "cap one" ? "ses-a" : "ses-b" }),
+            }),
+          ),
+        getJobs: async () => [],
+      }),
+    );
+    const w = await open(["cap one", "cap two"]);
+    const jobsStore = useEditorJobsStore();
+    jobsStore.jobs = { "job-1": jobFixture("ses-a") };
+
+    listeners["editor:open"]();
+    await flushPromises();
+
+    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("Tutorial");
+    expect(jobsStore.jobs["job-1"]).toBeUndefined();
+  });
+
+  it("discarding a project forgets its session's jobs", async () => {
+    discardPort(async () => {});
+    const w = await askToDiscard();
+    const jobsStore = useEditorJobsStore();
+    jobsStore.jobs = { "job-1": jobFixture("ses-a") };
+
+    await w.get('[data-testid="discard-project-confirm"]').trigger("click");
+    await flushPromises();
+
+    expect(jobsStore.jobs["job-1"]).toBeUndefined();
   });
 
   // ---- Fix round 1: a failed session open must not leave the shell

@@ -162,6 +162,16 @@ export function isGuideDismissKey(event: KeyboardEvent): boolean {
  * reload (R, and Ctrl+Shift+R), find (F) and print (P). */
 const BROWSER_CTRL_KEYS = new Set(["r", "f", "p"]);
 
+/** The same three letters' virtual-key codes (carried from Task 15's review):
+ * Chromium matches a browser accelerator by CODE, not by the character
+ * `event.key` reports. On a non-US layout (e.g. Russian/Cyrillic) the R key
+ * still reports `keyCode: 82` — the US "R" code — while `event.key` is
+ * whatever character that layout prints ("к"), so a `key`-only match misses
+ * it and the accelerator still fires. 116 is F5's own code, checked the same
+ * way. */
+const BROWSER_CTRL_KEY_CODES = new Set([82, 70, 80]); // R, F, P
+const F5_KEY_CODE = 116;
+
 /**
  * A key WebView2's browser accelerators would act on in the editor window
  * (hardening Task 15, GAP-208, decision D1-a): F5 with any modifier and
@@ -175,7 +185,7 @@ const BROWSER_CTRL_KEYS = new Set(["r", "f", "p"]);
  * arrives as Ctrl+Alt and types a character on some layouts.
  */
 export function isBrowserAcceleratorKey(event: KeyboardEvent): boolean {
-  if (event.key === "F5") return true;
+  if (event.key === "F5" || event.keyCode === F5_KEY_CODE) return true;
   if (!event.ctrlKey || event.altKey || event.metaKey) return false;
-  return BROWSER_CTRL_KEYS.has(event.key.toLowerCase());
+  return BROWSER_CTRL_KEYS.has(event.key.toLowerCase()) || BROWSER_CTRL_KEY_CODES.has(event.keyCode);
 }

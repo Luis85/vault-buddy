@@ -220,6 +220,12 @@ describe("the browser's own keys in the editor window", () => {
     ["Ctrl+Shift+R", { key: "R", ctrlKey: true, shiftKey: true }],
     ["Ctrl+F", { key: "f", ctrlKey: true }],
     ["Ctrl+P", { key: "p", ctrlKey: true }],
+    // Carried from Task 15's review: Chromium matches an accelerator by
+    // virtual-key CODE, not by the character `event.key` reports. On a
+    // Cyrillic (Russian) layout the R key still reports `keyCode: 82`
+    // (the US "R" code) but `event.key` is the printed character "к" — a
+    // key-only match misses it and WebView2 still reloads.
+    ["Ctrl+R (Cyrillic к)", { key: "к", ctrlKey: true, keyCode: 82 }],
   ];
 
   it.each(SUPPRESSED)("%s does nothing (its default is prevented)", async (_name, init) => {

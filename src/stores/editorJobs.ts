@@ -46,7 +46,33 @@
  * to see it. A RUNNING render the store did not hold before that read is
  * `adopted` — `RenderVideoButton` opens the Render dialog on it, and
  * `follow` polls `editor_get_jobs` every `FOLLOW_INTERVAL_MS` until its
- * terminal, the only progress source left.
+ * terminal, the only progress source left. `follow`'s own polling reads
+ * never touch `lastError` — the media library's import line — even on a
+ * failed read (`reconcile`'s `silent` option, hardening Task 16 review
+ * carry): a render nobody's library card is even about must not spend that
+ * field once a second for as long as the registry stays unreachable.
+ *
+ * `track`'s own start is a WINDOW a reconcile can race, too (hardening Task
+ * 16 review carry): Rust can already list a render job's row before this
+ * webview's `start()` call gets its `{jobId}` reply (`editor_start_render`
+ * "answers at once"), and adopting it then would be this webview's OWN
+ * render stacking the Render dialog under whatever started it. `startingRenders`
+ * counts render starts in flight and blanks `unfollowedRenders` while any is
+ * — safe because only one render job runs per session, so any render row
+ * seen during that window can only be the one being started.
+ *
+ * **Session hygiene (hardening Task 16, C-4).** `install` never writes a job
+ * whose `sessionId` is not the CURRENTLY open session — `track`'s `{jobId}`
+ * reply can land after the session that started it has since closed or been
+ * superseded, and installing it anyway would leave a row `sessionJobs` can
+ * never surface again (nothing ever reads a stale session's rows) sitting in
+ * this store forever. `forgetSession(sessionId)` removes what a session
+ * already accumulated before that guard existed to stop it — a session that
+ * opens a render, say, and is discarded before it finishes. It is called
+ * from `EditorRoot`'s `wireJobHygiene` (an `editorProject.$onAction`
+ * subscription over `beginOpen`/`close`, not a static import of this module
+ * into `editorProject.ts`: that would be a back-edge into the cycle this
+ * module's own import of `editorProject` already runs the other way).
  */
 import { defineStore } from "pinia";
 
@@ -101,9 +127,30 @@ function sleep(ms: number): Promise<void> {
 /** The registry's running renders the store does not hold — renders this
  * webview has no Channel for (module doc). Read against what the store holds
  * when the reply lands, so a render whose Channel opened while the read was
- * in flight is not mistaken for one. */
-function unfollowedRenders(rows: JobRecordDto[], held: Record<string, JobView>): string[] {
+ * in flight is not mistaken for one. `startingRenders` blanks the whole
+ * result while a render start from THIS webview is still in flight (module
+ * doc's "track's own start is a window a reconcile can race, too") — only
+ * one render job runs per session, so any render row seen during that window
+ * can only be the one being started, never a genuine orphan. */
+function unfollowedRenders(rows: JobRecordDto[], held: Record<string, JobView>, startingRenders: number): string[] {
+  if (startingRenders > 0) return [];
   return rows.filter((r) => r.kind === "render" && r.terminal === null && !held[r.jobId]).map((r) => r.jobId);
+}
+
+/** Whether a registry ROW should be skipped rather than installed over what
+ * the store already holds for that job — split out of `reconcile`'s own
+ * loop to keep its branch count down (hardening Task 16, F-M6). Two cases:
+ * the store already holds the job's outcome (a terminal is never replaced —
+ * the reply and the Channel travel separately, so a registry read taken
+ * BEFORE the terminal can land after it, fix round 1), or the row is a
+ * STALE read behind a Channel-tracked job's own progress — a registry read
+ * can race a Channel message already applied at a HIGHER sequence, since
+ * the module doc's "never older than the stream AT READ TIME" holds at
+ * Rust's SEND, not at this reply's ARRIVAL. */
+function staleRegistryRow(held: JobView | undefined, row: JobRecordDto): boolean {
+  if (!held) return false;
+  if (held.terminal !== null) return true;
+  return held.sequence > 0 && row.fraction < held.fraction;
 }
 
 /** `jobs` without the session's RUNNING rows that the store already held
@@ -134,6 +181,10 @@ export const useEditorJobsStore = defineStore("editorJobs", {
     /** Running renders a reconcile found with no Channel in this webview
      * (module doc) and nothing follows yet. */
     adopted: [] as string[],
+    /** Render starts from THIS webview currently awaiting their `{jobId}`
+     * reply — see `unfollowedRenders`' own doc. Incremented/decremented by
+     * `track`, never read outside this module. */
+    startingRenders: 0,
   }),
   getters: {
     /** The current session's jobs, in the order they were first seen. */
@@ -169,8 +220,13 @@ export const useEditorJobsStore = defineStore("editorJobs", {
       return true;
     },
     /** Replace one job's record; a terminal that imported assets refreshes
-     * the committed projection (module doc). */
+     * the committed projection (module doc). Never writes for a session that
+     * is not the one CURRENTLY open (module doc's "session hygiene") — a
+     * late `track` reply for a session already closed or superseded must
+     * install nothing, or it leaves a row `sessionJobs` can never surface
+     * again sitting in this store forever. */
     install(next: Omit<JobView, "sequence">, sequence: number): void {
+      if (next.sessionId !== useEditorProjectStore().sessionId) return;
       const previous = this.jobs[next.jobId];
       const wasTerminal = previous !== undefined && previous.terminal !== null;
       this.jobs = {
@@ -202,7 +258,16 @@ export const useEditorJobsStore = defineStore("editorJobs", {
         if (jobId === null) early.push(m);
         else this.applyProgress(sessionId, jobId, m);
       };
-      jobId = (await start(onProgress)).jobId;
+      // Counted for the whole round trip, render starts only — a reconcile
+      // racing THIS window must not adopt the row Rust already lists for a
+      // job this webview is itself about to claim (`unfollowedRenders`' own
+      // doc). Decremented in `finally` so a refused start never leaks it.
+      if (kind === "render") this.startingRenders += 1;
+      try {
+        jobId = (await start(onProgress)).jobId;
+      } finally {
+        if (kind === "render") this.startingRenders -= 1;
+      }
       if (!this.jobs[jobId]) {
         this.install({ jobId, sessionId, kind, phase: "queued", fraction: 0, terminal: null }, 0);
       }
@@ -262,8 +327,12 @@ export const useEditorJobsStore = defineStore("editorJobs", {
         else this.lastError = toEditorError(e);
       }
     },
-    /** Install Rust's registry over the Channel's story (module doc). */
-    async reconcile(): Promise<void> {
+    /** Install Rust's registry over the Channel's story (module doc).
+     * `silent` (module doc's "follow's own polling reads") skips a failed
+     * read's usual `lastError` write — `follow`'s own use, so a render
+     * nobody's library card is about does not spend that field once a
+     * second for as long as a stalled registry stays unreachable. */
+    async reconcile(opts: { silent?: boolean } = {}): Promise<void> {
       const project = useEditorProjectStore();
       const sessionId = project.sessionId;
       if (!sessionId) return;
@@ -272,33 +341,39 @@ export const useEditorJobsStore = defineStore("editorJobs", {
       try {
         rows = await project.port.getJobs(sessionId);
       } catch (e) {
-        this.lastError = toEditorError(e);
+        if (!opts.silent) this.lastError = toEditorError(e);
         return;
       }
       if (project.sessionId !== sessionId) return;
       this.jobs = withoutForgotten(this.jobs, sessionId, heldBefore, new Set(rows.map((r) => r.jobId)));
-      this.adopted = [...this.adopted, ...unfollowedRenders(rows, this.jobs)];
+      this.adopted = [...this.adopted, ...unfollowedRenders(rows, this.jobs, this.startingRenders)];
       for (const row of rows) {
         const held = this.jobs[row.jobId];
-        // A job the store already holds as terminal keeps its outcome: the
-        // reply and the Channel travel separately, so a registry read taken
-        // BEFORE the terminal can land after it (fix round 1).
-        if (held && held.terminal !== null) continue;
+        if (staleRegistryRow(held, row)) continue;
         this.install({ ...row, sessionId }, held?.sequence ?? 0);
       }
     },
     /** Follow an adopted render (module doc): re-read the registry every
      * `FOLLOW_INTERVAL_MS` until the job has its terminal, leaves the
      * registry or the session changes. A failed read is retried on the next
-     * tick — only a terminal ends a render. */
+     * tick — only a terminal ends a render — and never touches `lastError`
+     * (`reconcile`'s `silent` option; hardening Task 16 review carry). */
     async follow(jobId: string): Promise<void> {
       this.adopted = this.adopted.filter((id) => id !== jobId);
       const sessionId = useEditorProjectStore().sessionId;
       const following = () => this.jobs[jobId]?.terminal === null && useEditorProjectStore().sessionId === sessionId;
       while (following()) {
         await sleep(FOLLOW_INTERVAL_MS);
-        await this.reconcile();
+        await this.reconcile({ silent: true });
       }
+    },
+    /** Forget a closed or superseded session's jobs and any adoption record
+     * of them (module doc's "session hygiene", hardening Task 16, C-4) — for
+     * the session being left behind, nothing ever reads a stale session's
+     * rows again, so leaving them in `jobs` is a pure, permanent leak. */
+    forgetSession(sessionId: string): void {
+      this.jobs = Object.fromEntries(Object.entries(this.jobs).filter(([, j]) => j.sessionId !== sessionId));
+      this.adopted = this.adopted.filter((id) => id in this.jobs);
     },
   },
 });

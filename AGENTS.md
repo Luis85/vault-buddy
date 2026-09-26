@@ -3533,7 +3533,19 @@ a terminal naming a `productId` asks `editorProducts` to re-read the
 ledger; since hardening Task 15 (GAP-208) a RUNNING render a reconcile finds
 that this webview did not start — one a reload cut off from its Channel —
 is `adopted`, and `follow(jobId)` polls `editor_get_jobs` once a second
-until its terminal), `editorProducts` (editor window only, Task 47 — the open session's
+until its terminal, never touching `lastError` on a failed poll (hardening
+Task 16: `reconcile`'s own `silent` option); a render this webview is itself
+STARTING is never adopted out from under its own dialog either — Rust can
+already list the row before `start()`'s `{jobId}` reply lands, and
+`startingRenders` blanks adoption for the round trip (only one render job
+runs per session, so any render row seen then can only be that one); a
+registry row BEHIND a Channel-tracked job's own progress is never installed
+over it (a stale read racing a newer Channel message); and `install` writes
+nothing for a session that is not the one CURRENTLY open — a late `track`
+reply for a session already closed or superseded installs nothing, and
+`forgetSession(sessionId)` (called from `editorProject.beginOpen`/`close`)
+drops whatever a superseded or closed session already accumulated, since
+nothing ever reads a stale session's rows again), `editorProducts` (editor window only, Task 47 — the open session's
 product ledger from `editor_get_products`, scoped to the session it was
 read for; its one verb, Restore, goes through `editorProject.restoreProduct`,
 an acknowledged edit like `execute`), `editorChecks` (editor window only,
