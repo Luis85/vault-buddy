@@ -29,7 +29,7 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use super::authz::{require_editor_window, require_session};
 use super::prefs_commands::read_workspace;
 use super::project_store::SourceRecord;
-use super::recovery::load_journal;
+use super::recovery::{load_journal, quarantine_unreadable_journal};
 use super::session_commands::{missing_media, register_session_with};
 use super::store_io::{
     self, commit_project, load_project, project_file_exists, source_base_of, ProjectSummaryDto,
@@ -443,6 +443,14 @@ fn open_project_locked(
 ) -> Result<LockedOpen, EditorError> {
     let _open = lock_ignoring_poison(&state.open);
     super::discard::refuse_if_project_closing(state, project_file_id)?;
+    if !use_recovery {
+        // GAP-180: the caller has decided not to resume the journal (the
+        // dialog's "Open saved project", or Discard's own fallback open) --
+        // set an unreadable one aside now, INSIDE the open lock and before
+        // any session exists, so this open's own first edit can never
+        // silently overwrite it. A readable journal is untouched.
+        quarantine_unreadable_journal(root, project_file_id);
+    }
     let (envelope, sources) = load_project(root, project_file_id)?;
     let workspace = sanitize(&envelope.workspace);
     let committed = envelope.record.revision;

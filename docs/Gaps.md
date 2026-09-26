@@ -2701,7 +2701,7 @@ fixture carries none and three short chapter titles, and
 UI half -- trimmed-away cues and chapters listed nowhere -- is unchanged
 and moved to GAP-181 so this entry can close.
 
-### GAP-180 · Low · After an unreadable `recovery.json`, "Open saved project" keeps it only until the next edit journals over it
+### GAP-180 · ~~Low~~ CLOSED 2026-09-25 (hardening Task 10) · After an unreadable `recovery.json`, "Open saved project" keeps it only until the next edit journals over it
 `src/composables/useEditorRecovery.ts` (`openSaved`),
 `src-tauri/src/editor/recovery.rs` (`write_locked`).
 Found by Task 37. A malformed journal is reported and left byte-identical
@@ -2719,6 +2719,31 @@ beside Resume and Discard).
 (`recovery.unreadable-<timestamp>.json`, owned-file rails) before the new
 session can journal, and have `list_projects` keep reporting it so the
 user can export or discard it later.
+
+> **2026-09-25 — CLOSED by hardening Task 10.** `editor_open_project`'s
+> `useRecovery: false` path (the dialog's "Open saved project", and
+> Discard's own fallback `reopen(false)` before it has a session to discard
+> through) now moves an unreadable journal aside INSIDE the open lock,
+> before any session is even minted:
+> `recovery::quarantine_unreadable_journal` tries `load_journal` first — a
+> journal that reads fine is left exactly where it is, so Resume and
+> Discard still see it — and only one that fails to load is moved, via
+> `rename_noreplace`, to `recovery.unreadable-<unix seconds>.json` beside
+> it (owned-file-only, no-follow, the `remove_journal` discipline).
+> `recovery.json` is then gone, so the session's own first acknowledged
+> edit has nothing left to overwrite. The quarantined file is never
+> deleted by this fix — it stays in the project folder for a user to find
+> or export by hand, byte-identical to what was there. **Narrower than
+> this entry's original fix text in one respect**: `list_projects`'
+> `hasRecovery` (which checks for `recovery.json` by exact name) does NOT
+> keep reporting a quarantined journal — offering Resume/Discard again over
+> a file already proven unreadable would just repeat the same refusal, so
+> it is simply gone from the dialog once quarantined. The dialog's copy for
+> an unreadable journal now says so: "The unsaved changes could not be
+> read. They were kept in a separate file in the project folder." Pinned
+> by `recovery_tests::opening_without_recovery_sets_an_unreadable_journal_aside`
+> and `...leaves_a_readable_journal_untouched`. The review that closed this
+> found the sibling case in the product ledger — see GAP-217.
 
 ### GAP-181 · Low · A caption or chapter trimmed out of its clip is kept but listed nowhere
 `src/editor/captionRules.ts` (`captionRows`, `chapterRows`),
@@ -2930,7 +2955,13 @@ ledger does not name, owned names only, no-follow
 > record, ONLY when the ledger reads cleanly: an unreadable ledger leaves
 > `products\` untouched. A linked job folder, a fresh one, a recorded
 > product and a product under an unreadable ledger are each pinned as kept
-> (`store_sweep_tests.rs`).
+> (`store_sweep_tests.rs`). **Addendum (2026-09-25, hardening Task 10
+> review):** an ABSENT `products.json` — the crash case this entry
+> describes, where the ledger commit itself never happened — reads
+> cleanly too (`read_ledger`'s own `NotFound` arm), so the leftover is
+> removed the same way; that specific case (no ledger file at all, not a
+> damaged one) is now pinned by
+> `store_sweep::tests::an_unrecorded_product_is_removed_when_the_ledger_file_never_existed`.
 
 ### GAP-190 · ~~Low~~ CLOSED 2026-09-25 (Task 59) · Alt+F4 re-opens its own close every 5 s while a cancelled export will not unwind
 `src-tauri/src/window_close.rs` (`handle_main_close`), found by Task 46
@@ -2978,6 +3009,16 @@ owned names only, no-follow — the `sweep_stale_imports` posture.
 > invalid id, a link wearing a review's name, a `cache` folder that is a
 > link). Pinned by
 > `store_sweep::tests::every_review_render_is_removed_and_nothing_else_in_the_cache`.
+> **Correction (2026-09-25, hardening Task 10 review):** at close, the
+> `cache` folder itself being a link was NOT actually pinned by that test —
+> only a plain file wearing a review's name inside a REAL `cache` folder
+> was — so the claim above was true in production (`real_dir`'s
+> `symlink_metadata` check already refuses a linked `cache`) but not yet
+> proven by a test. `store_sweep::tests::a_linked_cache_folder_is_kept_with_everything_in_it`
+> closes that gap between the claim and what was tested; the same review
+> added the missing `products\`-folder and whole-project-folder link
+> pins (`a_linked_products_folder_is_kept_with_everything_in_it`,
+> `a_project_folder_that_is_itself_a_link_is_left_entirely_alone`).
 
 ### GAP-192 · Low · Publish has no resume-from-journal: an interrupted publish is reported, never continued
 `src-tauri/src/editor/publish.rs`, `src-tauri/src/editor/recovery.rs`
@@ -7203,6 +7244,39 @@ the trim preview does not follow. **Fix:** one `editor::errors` module
 module imports, `prefs_commands::local_data` as the only resolver, and
 `MIN_CLIP_MS` read by a Vitest from `core::editor::mod.rs` the way
 `editorCaptions.test.ts`' `rustLimit` reads `MAX_CAPTIONS`.
+
+### GAP-217 · Low · An unreadable `products.json` blocks every save, render, export and publish of its project
+`src-tauri/src/editor/render_jobs.rs` (`read_ledger`), read (and its
+refusal propagated with a bare `?`) by `save_commands::save_project_with`
+(assembling `record.products`), `render_jobs`'s own 40-product cap check
+inside `editor_start_render`, `publish.rs` (`editor_publish_product`'s
+product lookup) and `package_commands.rs` (`editor_export_package`'s
+carried-products list) — found reviewing hardening Task 10 (D-6); recorded,
+not fixed. A `products.json` that exists but cannot be PARSED (a hand
+edit, a crash that truncated it mid-write, a sync client's conflicted
+copy) makes `read_ledger` return `invalidProject`, and every one of those
+four call sites simply propagates it — not scoped to the one broken
+record: it refuses the NEXT save, every render start, every publish and
+every portable-package export of the WHOLE project, even though the
+graph, `sources.json` and every product FILE under `products\` are
+untouched. Unlike `sources.json` (whose own unreadable case at least still
+lets the project open, degrading to `missing_media`), there is no path
+forward here short of editing the file by hand outside the app —
+`editor_media_url`'s product lookup (`media_commands.rs`) refuses too, so
+an already-rendered product cannot even be watched.
+**Failure scenario:** a crash or a sync conflict corrupts `products.json`
+after at least one render has landed; the project still opens fine
+(products are not read on open), but the very next save is refused, and
+the user has no way to tell from the app that the cause is the ledger
+rather than something they just did. **Recorded remedy** (not implemented
+by this task): give the ledger the same "Open saved project" quarantine
+GAP-180 now gives the recovery journal — on the refusal, offer to rename
+`products.json` aside (`products.unreadable-<timestamp>.json`,
+`rename_noreplace`) behind an EXPLICIT confirm (unlike the journal, this
+one destroys the record of which files under `products\` are the
+project's real products, so it must never be automatic); after confirming,
+the project reads as having no products, and every `products\*.mp4` file
+stays on disk exactly where it was for manual recovery.
 
 ### GAP-218 · Low · An imported envelope's product ids are never checked as ids, and envelope refusals can echo them
 `src-tauri/core/src/editor/validate.rs` (`validate_envelope`'s product

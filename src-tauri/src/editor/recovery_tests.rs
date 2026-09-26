@@ -287,6 +287,70 @@ fn malformed_journal_is_reported_and_kept() {
     );
 }
 
+// GAP-180 (hardening Task 10): "Open saved project" (useRecovery: false)
+// must not leave an unreadable journal sitting at recovery.json for this
+// session's own first edit to silently overwrite -- it is set aside.
+#[test]
+fn opening_without_recovery_sets_an_unreadable_journal_aside() {
+    let f = Fixture::new();
+    f.stage(BASE);
+    let state = EditorState::default();
+    let open = open_staged_session(&state, f.root(), &f.staging(), BASE).unwrap();
+    let pid = open.project.id.clone();
+    close_in(
+        &state,
+        f.root(),
+        &f.staging(),
+        &open.snapshot.session_id,
+        CloseDisposition::Keep,
+    )
+    .unwrap();
+    let before = b"{ \"schema\": \"vault-buddy-recovery/1\", not json".to_vec();
+    std::fs::write(f.journal(&pid), &before).unwrap();
+
+    let opened = open_project_session(&state, f.root(), &pid, false).unwrap();
+
+    assert!(!opened.recovered, "a clean session, not the journal's");
+    assert!(!f.journal(&pid).exists(), "recovery.json must be gone");
+    let dir = project_dir(f.root(), &pid).unwrap();
+    let quarantined: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("recovery.unreadable-") && n.ends_with(".json"))
+        .collect();
+    assert_eq!(
+        quarantined.len(),
+        1,
+        "exactly one quarantined file: {quarantined:?}"
+    );
+    assert_eq!(
+        std::fs::read(dir.join(&quarantined[0])).unwrap(),
+        before,
+        "byte-identical to the unreadable journal"
+    );
+}
+
+// A journal that reads fine must be left exactly where it is when the
+// caller simply chooses not to resume it -- only an unreadable one moves.
+#[test]
+fn opening_without_recovery_leaves_a_readable_journal_untouched() {
+    let f = Fixture::new();
+    let state = EditorState::default();
+    let (sid, pid) = dirty_session_with_journal(&f, &state);
+    close_in(&state, f.root(), &f.staging(), &sid, CloseDisposition::Keep).unwrap();
+    let before = std::fs::read(f.journal(&pid)).unwrap();
+
+    let opened = open_project_session(&EditorState::default(), f.root(), &pid, false).unwrap();
+
+    assert!(!opened.recovered);
+    assert!(
+        f.journal(&pid).is_file(),
+        "a readable journal must stay at recovery.json"
+    );
+    assert_eq!(std::fs::read(f.journal(&pid)).unwrap(), before);
+}
+
 // A journal naming another project is not this project's working copy.
 #[test]
 fn a_journal_for_another_project_is_refused() {

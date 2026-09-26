@@ -190,6 +190,12 @@ describe("RecoveryDialog", () => {
     const dialog = w.get('[data-testid="recovery-dialog"]');
     expect(dialog.text()).toContain("<b>expected value</b>");
     expect(dialog.find("b").exists()).toBe(false);
+    // GAP-180 (hardening Task 10): "Open saved project" now sets the
+    // unreadable journal aside rather than leaving it for the next edit to
+    // overwrite -- the copy says so.
+    expect(dialog.text()).toContain(
+      "The unsaved changes could not be read. They were kept in a separate file in the project folder.",
+    );
     expect(dialog.text()).toContain("Your saved project was not changed.");
     await button(w, "Open saved project").trigger("click");
     await flushPromises();

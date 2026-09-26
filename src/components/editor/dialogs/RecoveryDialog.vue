@@ -55,10 +55,7 @@ defineExpose({ check: recovery.check });
         class="flex flex-col gap-1 text-xs text-danger-fg"
       >
         <p>The unsaved changes could not be opened. Your saved project was not changed.</p>
-        <p>
-          Opening the saved project leaves the unreadable changes on disk until your
-          next edit replaces them; Discard removes them now.
-        </p>
+        <p>The unsaved changes could not be read. They were kept in a separate file in the project folder.</p>
         <p class="break-words text-fg-muted">
           {{ failure }}
         </p>

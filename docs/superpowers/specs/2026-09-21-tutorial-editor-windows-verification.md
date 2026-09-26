@@ -44,11 +44,11 @@ twice from incrementing):
 grep -cE '^\| T[0-9]+ \|' docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md
 ```
 
-This file carries **69 rows** today (T1–T69), of which **0** carry a result
+This file carries **70 rows** today (T1–T70), of which **0** carry a result
 (T7 is obsolete since Task 59, which retired the legacy strip it guarded).
 Task 60 added T64–T66 and the residual-gate map; the final whole-branch
 review added T67–T68 at the end of the file, and the hardening pass's
-Task 9 T69 after them. An
+Task 9 T69 and Task 10 T70 after them. An
 empty *Result* column means unrun, which is not the same as failed — never
 convert one to the other, and never claim a manual run that was not actually
 performed on this host.
@@ -558,3 +558,4 @@ and WebView2 playing and seeking the result.
 | # | Check | Steps | Result |
 | --- | --- | --- | --- |
 | T69 | **A webcam take a crash interrupted comes back as recovered (GAP-197, hardening Task 9)** | Open a capture in the editor, **Enable camera** and start a webcam take; after about 20 s, while it is still recording, end the Vault Buddy process in Task Manager (**End task**). (a) Wait at least a minute, start the app and open the same capture's **Edit** (or the project from the list). **Record**: the media library shows "Webcam take N (recovered)" (N one past the project's other takes); it plays in the preview AND seeks; its length is roughly the 20 s recorded; the project reads unsaved; under `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects\<id>\takes\` the `.<takeId>.webm.part` is gone and `<takeId>.webm` is there. Close the editor with **Keep for later** and reopen: no second copy appears. (b) Repeat, but reopen WITHIN a minute of the kill: **Record** that nothing is recovered yet and the `.part` is still there; reopen once more after a minute (after **Keep for later**) and record that it is recovered then. (c) With ffmpeg removed (Buddy settings → Integrations), repeat (a): **Record** that the take appears as "(recovered)" with length 0:00, plays from its start, and cannot be placed. (d) **Unsaved edits before the take**: make an edit and do NOT save, then start a take and kill the process as in (a). After a minute reopen: **Record** that the Resume/Discard offer appears and the library does NOT yet show the take; choose **Resume** and record that the edit is back AND the "(recovered)" take is in the library. Repeat, choosing **Discard** instead: the edit is gone, and after the reopen the take is in the library. | |
+| T70 | **First Edit of a capture with real-time AV scanning on succeeds (GAP-169's history, hardening Task 10)** | Confirm Windows Defender (or another real-time scanner) is ON and the `%LOCALAPPDATA%\com.vaultbuddy.desktop\editor-projects` folder is NOT excluded from it. Record a fresh screen capture (or use one never before opened in the editor) and click **Edit** on it — this is the FIRST time `create_project` mints that project's folder, the moment a scanner is most likely to be holding the just-written `sources.json`/`project.json` open when the build directory is renamed into place. Repeat several times with fresh captures (the race is timing-dependent and may not reproduce every attempt). **Record**: whether the editor opens normally every time (the bounded retry riding out a transient lock silently), or whether any attempt surfaces an error — and if so, its exact wording and whether a `.creating` directory was left behind under `editor-projects\` (it should not be; the sweep sourced under the next start would remove it after an hour regardless). | |

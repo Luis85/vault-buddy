@@ -612,3 +612,44 @@ fn a_create_leaves_no_build_folder_behind() {
     assert_eq!(creating_project_id(".bad!.creating"), None);
     assert_eq!(creating_project_id("proj1.creating"), None);
 }
+
+// Hardening Task 10 review, carried finding 3: `CreatingDir::install`'s
+// rename is retried on `PermissionDenied` (an AV scanner or indexer holding
+// a just-written file, GAP-169's history) but must still GIVE UP rather
+// than loop forever, and must never retry an error that isn't that one.
+#[test]
+fn retry_permission_denied_gives_up_after_five_attempts() {
+    let calls = std::cell::Cell::new(0);
+    let result: io::Result<()> = retry_permission_denied(|| {
+        calls.set(calls.get() + 1);
+        Err(io::Error::new(io::ErrorKind::PermissionDenied, "locked"))
+    });
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(calls.get(), 5, "must try exactly five times, not forever");
+}
+
+#[test]
+fn retry_permission_denied_never_retries_a_different_error() {
+    let calls = std::cell::Cell::new(0);
+    let result: io::Result<()> = retry_permission_denied(|| {
+        calls.set(calls.get() + 1);
+        Err(io::Error::new(io::ErrorKind::AlreadyExists, "collision"))
+    });
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(calls.get(), 1, "a non-retryable error must not be retried");
+}
+
+#[test]
+fn retry_permission_denied_succeeds_once_the_lock_clears() {
+    let calls = std::cell::Cell::new(0);
+    let result = retry_permission_denied(|| {
+        calls.set(calls.get() + 1);
+        if calls.get() < 3 {
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "locked"))
+        } else {
+            Ok(42)
+        }
+    });
+    assert_eq!(result.unwrap(), 42);
+    assert_eq!(calls.get(), 3);
+}

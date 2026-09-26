@@ -16,6 +16,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Serialize;
 use vault_buddy_core::capture_note::write_atomic_replacing;
@@ -113,11 +114,39 @@ impl CreatingDir {
     }
 
     /// The one rename that makes the project exist.
+    ///
+    /// **Retried on `PermissionDenied`** (hardening Task 10 review, carried
+    /// finding 3): a real-time AV scanner or indexer can hold `sources.json`
+    /// or `project.json` open for a moment right after `write_json_with`
+    /// returns — GAP-169's own "Access denied" history — and Windows refuses
+    /// to rename a directory while a file inside it is open. This rides that
+    /// out the way `delete_transcription_model` rides out a live mmap; any
+    /// OTHER rename failure (a genuine id collision, an invalid target) is
+    /// not retried and is returned on the first attempt.
     fn install(mut self, target: &Path) -> io::Result<()> {
-        std::fs::rename(&self.dir, target)?;
+        retry_permission_denied(|| std::fs::rename(&self.dir, target))?;
         self.installed = true;
         Ok(())
     }
+}
+
+/// Retry `op` while it fails with `PermissionDenied`, up to five attempts
+/// 100 ms apart; any other error, or the fifth attempt's, is returned at
+/// once. Pulled out of `CreatingDir::install` so the backoff itself is
+/// unit-testable without a real file lock to race.
+fn retry_permission_denied<T>(mut op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    let mut last_err = None;
+    for attempt in 0..5 {
+        match op() {
+            Ok(v) => return Ok(v),
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied && attempt < 4 => {
+                last_err = Some(e);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_err.expect("the loop above ran at least once"))
 }
 
 impl Drop for CreatingDir {

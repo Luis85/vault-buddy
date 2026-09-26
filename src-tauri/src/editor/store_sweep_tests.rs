@@ -180,6 +180,82 @@ fn a_linked_job_directory_is_kept_with_everything_behind_it() {
     assert!(std::fs::symlink_metadata(jobs.join("job-1")).is_ok());
 }
 
+// Hardening Task 10 review, finding 1: `every_review_render_is_removed_and_
+// nothing_else_in_the_cache` proves the FILE-shape rule (a review's own
+// name) but never proved a LINKED `cache\` folder is skipped -- the GAP-191
+// closure claimed it was pinned when it was not. This is that pin.
+#[test]
+fn a_linked_cache_folder_is_kept_with_everything_in_it() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    write(&outside.path().join("review-job-1.mp4"));
+    let project = project_sub(root.path(), "media")
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    if !dir_link(outside.path(), &project.join("cache")) {
+        eprintln!("SKIP: this host cannot create a directory link");
+        return;
+    }
+    let report = sweep_project_leftovers(root.path(), later(SystemTime::now()));
+    assert_eq!(report.removed, 0);
+    assert!(
+        outside.path().join("review-job-1.mp4").is_file(),
+        "the sweep walked through a linked cache folder"
+    );
+    assert!(std::fs::symlink_metadata(project.join("cache")).is_ok());
+}
+
+// Same finding, for `products\` -- the sibling folder `sweep_products`
+// walks, never proved link-safe either.
+#[test]
+fn a_linked_products_folder_is_kept_with_everything_in_it() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    write(&outside.path().join("keep.mp4"));
+    let project = project_sub(root.path(), "media")
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    if !dir_link(outside.path(), &project.join("products")) {
+        eprintln!("SKIP: this host cannot create a directory link");
+        return;
+    }
+    let report = sweep_project_leftovers(root.path(), later(SystemTime::now()));
+    assert_eq!(report.removed, 0);
+    assert!(
+        outside.path().join("keep.mp4").is_file(),
+        "the sweep walked through a linked products folder"
+    );
+    assert!(std::fs::symlink_metadata(project.join("products")).is_ok());
+}
+
+// Same finding: the whole PROJECT folder can itself be a link (a sync
+// client's reparse point, a hand-made junction) -- proving the sweep never
+// walks INTO one at all, not only into a linked subfolder of a real one.
+#[test]
+fn a_project_folder_that_is_itself_a_link_is_left_entirely_alone() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("project.json"), b"precious").unwrap();
+    let media = outside.path().join("media");
+    std::fs::create_dir_all(&media).unwrap();
+    write(&media.join(".asset-a1.mp4.part"));
+    let store = store_dir(root.path());
+    std::fs::create_dir_all(&store).unwrap();
+    if !dir_link(outside.path(), &store.join(PROJECT)) {
+        eprintln!("SKIP: this host cannot create a directory link");
+        return;
+    }
+    let report = sweep_project_leftovers(root.path(), later(SystemTime::now()));
+    assert_eq!(report.removed, 0);
+    assert!(
+        media.join(".asset-a1.mp4.part").is_file(),
+        "the sweep walked into a project folder that is itself a link"
+    );
+    assert!(std::fs::symlink_metadata(store.join(PROJECT)).is_ok());
+}
+
 fn ledger_with(root: &Path, product_id: &str) {
     let product = new_product(
         &minimal_project(PROJECT),
@@ -216,6 +292,32 @@ fn an_unrecorded_product_is_removed_and_a_recorded_one_kept() {
     assert!(!products.join("prod-b.mp4").exists());
     assert!(products.join("prod-a.mp4").is_file(), "a recorded product");
     assert!(products.join("not a product.mp4").is_file());
+}
+
+// GAP-189, hardening Task 10 review finding 2: an ABSENT ledger is not the
+// same as an unreadable one -- `read_ledger`'s own NotFound arm reads it as
+// "nothing recorded" (by design: a save always writes `products.json`
+// before a product could exist, so its total absence beside a real product
+// file is exactly the crash this rule exists for), and this leftover must
+// still go. The sibling test above covers a DAMAGED file; this covers no
+// file at all.
+#[test]
+fn an_unrecorded_product_is_removed_when_the_ledger_file_never_existed() {
+    let root = tempfile::tempdir().unwrap();
+    let products = project_sub(root.path(), "products");
+    write(&products.join("prod-c.mp4"));
+    assert!(
+        !project_dir(root.path(), PROJECT)
+            .unwrap()
+            .join("products.json")
+            .exists(),
+        "precondition: no ledger file at all"
+    );
+
+    let report = sweep_project_leftovers(root.path(), later(SystemTime::now()));
+
+    assert_eq!(report.removed, 1);
+    assert!(!products.join("prod-c.mp4").exists());
 }
 
 #[test]

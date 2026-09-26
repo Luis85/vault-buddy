@@ -34,11 +34,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use vault_buddy_core::capture_note::write_atomic_replacing;
+use vault_buddy_core::capture_paths::rename_noreplace;
 use vault_buddy_core::editor::{
     is_valid_id, limits, validate_project, EditorError, EditorErrorCode, Project,
 };
@@ -299,6 +300,58 @@ pub(crate) fn load_journal(root: &Path, project_id: &str) -> Result<RecoveryJour
     }
     validate_project(&journal.project)?;
     Ok(journal)
+}
+
+/// GAP-180: when the caller has decided NOT to resume the journal (the
+/// recovery dialog's "Open saved project", reached after Resume itself
+/// reported the journal unreadable — or Discard's own fallback open before
+/// it has a session to discard through), a journal that genuinely cannot be
+/// loaded must not sit at `recovery.json` waiting for this session's own
+/// first acknowledged edit to silently overwrite it (`write_locked` always
+/// writes to that exact name). So it is moved aside instead, to
+/// `recovery.unreadable-<unix seconds>.json` beside it, via
+/// `rename_noreplace` — never deleted, so a user can still recover or export
+/// the bytes by hand.
+///
+/// A journal that DOES load is left exactly where it is: only a journal
+/// that fails to load is ever moved, never one the caller simply chose not
+/// to resume — Discard's second `reopen(false)` (after `discardRecovery`
+/// has already removed the journal) and every ordinary open with no journal
+/// at all both find nothing here and do nothing.
+///
+/// Owned-file-only, no-follow (the `remove_journal` discipline): a symlink
+/// or a directory wearing the journal's name is not ours to move, and a
+/// metadata check that fails for a reason other than "not found" is logged
+/// and left alone rather than guessed at.
+pub(crate) fn quarantine_unreadable_journal(root: &Path, project_id: &str) {
+    let Some(path) = journal_path(root, project_id) else {
+        return;
+    };
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            log::warn!(
+                "editor recovery: could not check the recovery journal before opening without \
+                 it: {e}"
+            );
+            return;
+        }
+    };
+    if !meta.file_type().is_file() {
+        return;
+    }
+    if load_journal(root, project_id).is_ok() {
+        return;
+    }
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let dest = path.with_file_name(format!("recovery.unreadable-{secs}.json"));
+    if let Err(e) = rename_noreplace(&path, &dest) {
+        log::warn!("editor recovery: could not set aside an unreadable recovery journal: {e}");
+    }
 }
 
 /// The `editor-journal` thread's body: wait for the next deadline, flush
