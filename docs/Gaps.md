@@ -6893,12 +6893,20 @@ corrected words, so a question no lesson teaches (the reference's "Why can't
 I hear my audio?") has no answer of its own; the search still finds the
 audio lesson. Hand-written answers would be a second copy of the app's
 truth to keep correct.
-(5) **The Help menu and the learning center's tabs are Tab-navigated.**
-Like the Save project menu, the Help menu has no arrow-key roving focus;
-Escape closes it and returns focus to Help. The learning center's
-Walkthrough / Quick answers / Shortcuts buttons carry `role="tab"` and
-`aria-selected` but no `aria-controls`, no `role="tabpanel"` region and
-no arrow-key roving (deferred from Task 57's review).
+(5) ~~The Help menu and the learning center's tabs are Tab-navigated.~~
+**FIXED 2026-09-25 (hardening Task 17) for the learning center's tabs.**
+The Help menu is unaffected and stays Tab-navigated by design, like the Save
+project menu: Escape closes it and returns focus to Help, and a roving menu
+is its own small task if ever wanted. The learning center's Walkthrough /
+Quick answers / Shortcuts buttons — which DID carry `role="tab"` and
+`aria-selected` but no `aria-controls`, no `role="tabpanel"` region and no
+arrow-key roving (deferred from Task 57's review) — are now a real tablist:
+each tab names the `id`-carrying `role="tabpanel"` it controls via
+`aria-controls`, the one rendered panel names the active tab back via
+`aria-labelledby`, and ArrowLeft/Right/Home/End move focus and selection
+through the shared `useRovingTablist` composable (the
+`InspectorPanel.vue`/`LibraryPanel.vue` precedent — reused rather than a
+third hand-rolled copy, keeping `cloneGroups` at 0).
 (6) **A progress file naming a retired lesson is mapped, not refused**
 (Task 57 fix round 1): `parse_progress_file` resolves a retired
 `currentStepId` to its chapter's first lesson and drops retired ids from

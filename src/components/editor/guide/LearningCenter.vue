@@ -20,9 +20,18 @@ export type LearningTab = "walkthrough" | "answers" | "shortcuts";
  * Progress is "lessons read" out of 22, and "finished" means every lesson
  * was read (`hasFinished`, from `reviewed`) — never the `completed` flag a
  * revisit clears (docs/Gaps.md GAP-205 (6)).
+ *
+ * **The tabs are a real tablist** (GAP-207 (5), deferred from Task 57's
+ * review): each `role="tab"` names the `role="tabpanel"` it controls via
+ * `aria-controls`, the panel names the active tab back via
+ * `aria-labelledby` (the `InspectorPanel.vue`/`LibraryPanel.vue`
+ * precedent), and ArrowLeft/Right/Home/End move focus AND selection
+ * through the shared `useRovingTablist` composable — the same one those
+ * two panels use, rather than a third hand-rolled copy (`cloneGroups 0`).
  */
 import { computed, ref, watch } from "vue";
 
+import { useRovingTablist } from "../../../composables/useRovingTablist";
 import type { GuideStepId } from "../../../editor/guide/content";
 import { GUIDE_STEPS } from "../../../editor/guide/content";
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
@@ -48,6 +57,24 @@ watch(
   () => props.open,
   (open) => {
     if (open) active.value = props.tab;
+  },
+);
+
+// ---- roving tabindex over the tablist (the InspectorPanel/LibraryPanel
+// precedent, via the shared composable) ------------------------------------
+
+function tabId(id: LearningTab): string {
+  return `learning-tab-${id}`;
+}
+function panelId(id: LearningTab): string {
+  return `learning-panel-${id}`;
+}
+
+const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
+  () => TABS.length,
+  () => TABS.findIndex((t) => t.id === active.value),
+  (i) => {
+    active.value = TABS[i].id;
   },
 );
 
@@ -121,14 +148,20 @@ function restart(): void {
       <div
         role="tablist"
         aria-label="Help sections"
+        data-testid="learning-tablist"
         class="flex gap-1 border-b border-line"
+        @keydown="onTablistKeydown"
       >
         <button
-          v-for="t in TABS"
+          v-for="(t, i) in TABS"
+          :id="tabId(t.id)"
           :key="t.id"
+          :ref="(el) => setTabRef(i, el as Element | null)"
           type="button"
           role="tab"
           :aria-selected="active === t.id"
+          :aria-controls="panelId(t.id)"
+          :tabindex="active === t.id ? 0 : -1"
           :data-testid="`learning-tab-${t.id}`"
           class="cursor-pointer border-b-2 px-2 py-1 text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           :class="active === t.id ? 'border-violet-400 text-fg' : 'border-transparent text-fg-muted hover:text-fg'"
@@ -138,16 +171,23 @@ function restart(): void {
         </button>
       </div>
 
-      <LearningWalkthrough
-        v-if="active === 'walkthrough'"
-        @jump="jump"
-        @restart="restart"
-      />
-      <LearningAnswers
-        v-else-if="active === 'answers'"
-        @jump="jump"
-      />
-      <LearningShortcuts v-else />
+      <div
+        :id="panelId(active)"
+        role="tabpanel"
+        :aria-labelledby="tabId(active)"
+        data-testid="learning-panel"
+      >
+        <LearningWalkthrough
+          v-if="active === 'walkthrough'"
+          @jump="jump"
+          @restart="restart"
+        />
+        <LearningAnswers
+          v-else-if="active === 'answers'"
+          @jump="jump"
+        />
+        <LearningShortcuts v-else />
+      </div>
 
       <LearningPreferences />
     </div>

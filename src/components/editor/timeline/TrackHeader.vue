@@ -34,9 +34,10 @@
  * computed here is one or two conditions, individually far under any
  * complexity threshold.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
+import { useWindowDismiss } from "../../../composables/useWindowDismiss";
 import { lockedReason } from "../../../editor/actionMeta";
 import type { Track } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
@@ -184,14 +185,7 @@ function onWindowKeydown(event: KeyboardEvent) {
     menuRoot.value.querySelector<HTMLElement>("[aria-haspopup]")?.focus();
   }
 }
-onMounted(() => {
-  window.addEventListener("pointerdown", onWindowPointerDown);
-  window.addEventListener("keydown", onWindowKeydown);
-});
-onBeforeUnmount(() => {
-  window.removeEventListener("pointerdown", onWindowPointerDown);
-  window.removeEventListener("keydown", onWindowKeydown);
-});
+useWindowDismiss(onWindowPointerDown, onWindowKeydown);
 
 const canMoveUp = computed(() => !locked.value && props.trackIndex > 0);
 const canMoveDown = computed(() => !locked.value && props.trackIndex < props.trackCount - 1);

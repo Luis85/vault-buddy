@@ -30,6 +30,7 @@ import type { ComponentPublicInstance } from "vue";
 import { computed, ref } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
+import { useWindowDismiss } from "../../../composables/useWindowDismiss";
 import { onReveal } from "../../../editor/revealBus";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -50,6 +51,7 @@ const editorProject = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
 
 const open = ref(false);
+const root = ref<HTMLElement | null>(null);
 const triggerRef = ref<HTMLButtonElement | null>(null);
 /** The guide's `mixer` (Task 55) — the same button. */
 const mixerTarget = useGuideTarget("mixer");
@@ -73,15 +75,37 @@ function close(): void {
 onReveal("mixer", () => {
   open.value = true;
 });
-function onKeydown(event: KeyboardEvent): void {
-  if (event.key !== "Escape") return;
-  event.stopPropagation();
+
+/** F-M8: closing while open is not scoped to focus being inside the
+ * popover — a click anywhere else on the editor (`root` wraps the trigger
+ * AND the popover, so re-clicking the trigger itself is never "outside")
+ * or an Escape pressed with focus on the timeline must both close it, the
+ * `TrackHeader.vue` track-menu precedent. `stopImmediatePropagation` (not
+ * only `preventDefault`) is what actually keeps a keystroke the mixer
+ * already spent from ALSO reaching a `window`-level listener registered
+ * after this one — the same reason `ContextMenu.vue`'s own Escape handler
+ * stops the event outright rather than trusting `defaultPrevented` alone;
+ * `isGuideDismissKey` (`shortcuts.ts`) already refuses to pause the guide
+ * while this popover's `role="dialog"` is still in the DOM, but the guard
+ * here means the guide never even has to make that call for this key. */
+function onWindowPointerDown(event: PointerEvent): void {
+  if (!open.value) return;
+  if (root.value && !root.value.contains(event.target as Node)) close();
+}
+function onWindowKeydown(event: KeyboardEvent): void {
+  if (!open.value || event.key !== "Escape") return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
   close();
 }
+useWindowDismiss(onWindowPointerDown, onWindowKeydown);
 </script>
 
 <template>
-  <span class="relative">
+  <span
+    ref="root"
+    class="relative"
+  >
     <button
       :ref="bindTrigger"
       type="button"
@@ -101,7 +125,6 @@ function onKeydown(event: KeyboardEvent): void {
       aria-label="Audio mixer"
       data-testid="mixer-popover"
       class="absolute bottom-full right-0 z-30 mb-1 flex w-72 flex-col gap-2 rounded-control border border-line bg-panel p-2 text-micro text-fg-muted shadow-lg"
-      @keydown="onKeydown"
     >
       <p class="text-fg-subtle">
         Track and master levels change the rendered video.

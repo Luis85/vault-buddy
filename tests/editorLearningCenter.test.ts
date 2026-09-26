@@ -341,6 +341,39 @@ describe("the learning center", () => {
     expect(coach(w).attributes("data-step-id")).toBe("fades");
   });
 
+  // GAP-207 (5): the tabs carried role="tab"/aria-selected but no
+  // aria-controls, no role="tabpanel" region and no arrow-key roving --
+  // deferred from Task 57's review.
+  it("the tabs are a real tablist: aria-controls, a labelled tabpanel and ArrowLeft/Right/Home/End roving (GAP-207 (5))", async () => {
+    const w = await mountEditor();
+    await openCenter(w);
+
+    const walkTab = w.get('[data-testid="learning-tab-walkthrough"]');
+    const answersTab = w.get('[data-testid="learning-tab-answers"]');
+    const shortcutsTab = w.get('[data-testid="learning-tab-shortcuts"]');
+    const panel = w.get('[data-testid="learning-panel"]');
+
+    expect(panel.attributes("role")).toBe("tabpanel");
+    expect(walkTab.attributes("aria-controls")).toBe(panel.attributes("id"));
+    expect(panel.attributes("aria-labelledby")).toBe(walkTab.attributes("id"));
+
+    const tablist = w.get('[data-testid="learning-tablist"]');
+    await tablist.trigger("keydown", { key: "ArrowRight" });
+    expect(answersTab.attributes("aria-selected")).toBe("true");
+    expect(walkTab.attributes("aria-selected")).toBe("false");
+    expect(w.get('[data-testid="learning-panel"]').attributes("aria-labelledby")).toBe(answersTab.attributes("id"));
+    expect(document.activeElement?.getAttribute("data-testid")).toBe("learning-tab-answers");
+
+    await tablist.trigger("keydown", { key: "End" });
+    expect(shortcutsTab.attributes("aria-selected")).toBe("true");
+    await tablist.trigger("keydown", { key: "Home" });
+    expect(walkTab.attributes("aria-selected")).toBe("true");
+
+    // Wraps backward from the first tab to the last.
+    await tablist.trigger("keydown", { key: "ArrowLeft" });
+    expect(shortcutsTab.attributes("aria-selected")).toBe("true");
+  });
+
   it("the quick-answer search filters the list and says when nothing matches", async () => {
     const w = await mountEditor();
     await openCenter(w);

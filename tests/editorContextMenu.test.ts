@@ -5,7 +5,7 @@
  */
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ContextMenu from "../src/components/editor/menus/ContextMenu.vue";
 import PreviewToolbar from "../src/components/editor/shell/PreviewToolbar.vue";
@@ -226,6 +226,41 @@ describe("ContextMenu — arrow navigation wraps and Escape returns focus", () =
       props: { open: false, items: ["delete"], context: ctx(), x: 0, y: 0 },
     });
     expect(w.find('[data-testid="editor-context-menu"]').exists()).toBe(false);
+  });
+
+  // F-M5/GAP-207-adjacent: a right-click near the viewport edge used to
+  // render off-screen (`:style="{ left: x, top: y }"` took the raw pointer
+  // coordinates verbatim), stranding the menu's own lower/right items
+  // unreachable. Measured after nextTick (the TaskScheduleMenu precedent),
+  // once the menu's real rendered size is known.
+  it("clamps the menu fully inside the viewport when opened near the bottom-right edge", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 180, 220),
+    );
+    Object.defineProperty(window, "innerWidth", { value: 800, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: 600, configurable: true });
+
+    const w = mount(ContextMenu, {
+      attachTo: document.body,
+      props: {
+        open: true,
+        items: ["split", "delete", "copy"],
+        context: ctx(),
+        x: 790, // viewport width (800) - 10
+        y: 590, // viewport height (600) - 10
+      },
+    });
+    await flushPromises();
+
+    const root = w.get('[data-testid="editor-context-menu-root"]').element as HTMLElement;
+    const left = Number.parseFloat(root.style.left);
+    const top = Number.parseFloat(root.style.top);
+    expect(left).toBeGreaterThanOrEqual(0);
+    expect(top).toBeGreaterThanOrEqual(0);
+    expect(left + 180).toBeLessThanOrEqual(800);
+    expect(top + 220).toBeLessThanOrEqual(600);
+
+    vi.restoreAllMocks();
   });
 });
 

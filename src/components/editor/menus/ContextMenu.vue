@@ -54,6 +54,44 @@ function setItemRef(i: number, el: Element | ComponentPublicInstance | null) {
   itemEls.value[i] = el as HTMLElement | null;
 }
 
+/** Clamps a position so a `size`-wide/tall box starting there stays fully
+ * inside `[0, viewport]` — never off the left/top edge, and pulled back
+ * from the right/bottom edge once `pos + size` would exceed it. A `size`
+ * that alone exceeds `viewport` (a menu taller than a very short window)
+ * still lands at 0 rather than a negative coordinate. */
+function clamp(pos: number, size: number, viewport: number): number {
+  return Math.max(0, Math.min(pos, viewport - size));
+}
+
+/** The rendered position — `props.x`/`y` until the menu has actually
+ * painted, then pulled back into the viewport by its own measured size
+ * (the `TaskScheduleMenu` precedent: `getBoundingClientRect` only answers
+ * once the box exists, so clamping has to happen AFTER a render, not
+ * before it — see the `reposition` watcher below). A right-click near the
+ * bottom-right corner used to render the menu partly or fully off-screen,
+ * stranding its own lower/right items unreachable by mouse OR keyboard. */
+const clampedX = ref(props.x);
+const clampedY = ref(props.y);
+
+async function reposition() {
+  clampedX.value = props.x;
+  clampedY.value = props.y;
+  await nextTick();
+  const rect = root.value?.getBoundingClientRect();
+  if (!rect) return;
+  clampedX.value = clamp(props.x, rect.width, window.innerWidth);
+  clampedY.value = clamp(props.y, rect.height, window.innerHeight);
+}
+
+watch(
+  [() => props.open, () => props.x, () => props.y],
+  ([isOpen]) => {
+    if (!isOpen) return;
+    void reposition();
+  },
+  { immediate: true },
+);
+
 const activeIndex = ref(0);
 /** Who to return focus to on close — whatever had focus when the menu
  * opened (the invoking clip/toolbar button), per SCREENS-AND-INTERACTIONS.md
@@ -131,7 +169,7 @@ const menuLabel = computed(() => {
     ref="root"
     data-testid="editor-context-menu-root"
     class="fixed z-50"
-    :style="{ left: `${x}px`, top: `${y}px` }"
+    :style="{ left: `${clampedX}px`, top: `${clampedY}px` }"
   >
     <div
       ref="menu"

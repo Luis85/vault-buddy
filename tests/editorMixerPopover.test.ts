@@ -206,4 +206,46 @@ describe("MixerPopover", () => {
     expect(w.find('[data-testid="mixer-popover"]').exists()).toBe(false);
     expect(outer).not.toHaveBeenCalled();
   });
+
+  // F-M8: the popover used to close on Escape only when focus was already
+  // inside it (a `@keydown` bound on the popover's own div). A window-level
+  // listener is what closes it when focus sits elsewhere -- e.g. the
+  // timeline, which is where a user opening the mixer while editing is
+  // most likely to have focus.
+  it("Escape closes the mixer even when focus is elsewhere on the timeline", async () => {
+    const { w } = await mountMixer([track("t1")]);
+    const timelineStandIn = document.createElement("button");
+    document.body.appendChild(timelineStandIn);
+    timelineStandIn.focus();
+
+    timelineStandIn.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await flushPromises();
+
+    expect(w.find('[data-testid="mixer-popover"]').exists()).toBe(false);
+    timelineStandIn.remove();
+  });
+
+  // F-M8: no outside-pointerdown closer existed at all -- clicking anywhere
+  // else on the editor left the popover open.
+  it("a pointerdown outside the popover closes it", async () => {
+    const { w } = await mountMixer([track("t1")]);
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+
+    outside.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    await flushPromises();
+
+    expect(w.find('[data-testid="mixer-popover"]').exists()).toBe(false);
+    outside.remove();
+  });
+
+  it("a pointerdown on the mixer's own trigger button does not count as outside", async () => {
+    const { w } = await mountMixer([track("t1")]);
+    w.get('[data-testid="mixer-toggle"]').element.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true }),
+    );
+    await flushPromises();
+
+    expect(w.find('[data-testid="mixer-popover"]').exists()).toBe(true);
+  });
 });
