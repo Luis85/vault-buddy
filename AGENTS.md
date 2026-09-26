@@ -3612,9 +3612,12 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
   same review — a SEPARATE token from `--color-hover`: the trim handles'
   and progress-bar tracks' `bg-white/10` is a static UI-COMPONENT boundary
   (WCAG 1.4.11's ~3:1 floor, not a hover tint's lighter weight), so
-  `--color-hover`'s light value alone wasn't enough — measured 4.26:1 to
-  4.70:1 in light across every surface it's used against, worst case
-  `--color-video-bg`, the trim handles' own backdrop; `--color-line`'s
+  `--color-hover`'s light value alone wasn't enough — measured (fix round
+  2 corrected this: the first pass composited against pure black rather
+  than the token's own slate-900) 3.68:1 to 3.99:1 in light across every
+  surface it's used against, worst case `--color-video-bg`, the trim
+  handles' own backdrop (3.65:1 as actually measured against the built
+  app); `--color-line`'s
   solid dark value doesn't equal `bg-white/10`'s composited result, so it
   couldn't stand in either). Dark
   values are the `@theme` defaults (`--color-hover`'s and `--color-track`'s

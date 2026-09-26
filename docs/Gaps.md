@@ -6843,10 +6843,17 @@ fails the "dark stays byte-identical" rule): dark is the literal
 against the darkest surface it's used against — out of THIS fix's scope,
 since the review flagged the light theme only); light is
 `rgb(15 23 42 / 0.55)`, the same slate-900 family as `--color-hover` at a
-higher alpha, measured at 4.70:1 on `--color-panel`, 4.50:1 on
-`--color-raised`, 4.38:1 on `--color-stage`, 4.26:1 on `--color-video-bg`
-(the trim handles' own, tightest-margin backdrop) and 4.40:1 on
-`--color-audio-bg` — all comfortably above the 3:1 floor. **Recorded
+higher alpha, measured at 3.99:1 on `--color-panel`, 3.85:1 on
+`--color-raised`, 3.76:1 on `--color-stage`, 3.68:1 on `--color-video-bg`
+(the trim handles' own, tightest-margin backdrop, cross-checked at 3.65:1
+as actually measured against the built app by `editorKeyboard.spec.ts`'s
+`boundaryContrast`) and 3.78:1 on `--color-audio-bg` — all above the 3:1
+floor, though with less margin than first recorded (**fix round 2**: the
+first pass's 4.26–4.70:1 figures composited the token's alpha against pure
+black rather than its own slate-900 foreground — corrected here, in
+`src/style.css`'s own comments, in AGENTS.md and in the task report; no
+token value changed, since even the corrected worst case, 3.68:1, clears
+3:1 with margin). **Recorded
 residuals, deferred by reviewer agreement, not fixed by any of the three
 passes above**: `dialogs/SaveProjectDialog.vue`'s own format-radio row
 labels (`hover:bg-white/5` and the selected-state `bg-white/5`, lines

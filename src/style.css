@@ -76,10 +76,12 @@
      dark). `[data-theme="light"]` below overrides it with a darker,
      higher-alpha tint of the SAME slate-900 family as `--color-hover`,
      picked to clear 3:1 against every surface it composites over: measured
-     (see that file's own light-theme comment) at 4.70:1 on `--color-panel`
-     (#fff), 4.50:1 on `--color-raised`, 4.38:1 on `--color-stage`, 4.26:1 on
+     (see that file's own light-theme comment; fix round 2 corrected these
+     — the first pass composited against pure black, not this token's own
+     slate-900) at 3.99:1 on `--color-panel` (#fff), 3.85:1 on
+     `--color-raised`, 3.76:1 on `--color-stage`, 3.68:1 on
      `--color-video-bg` (the trim handles' own backdrop, the tightest case)
-     and 4.40:1 on `--color-audio-bg`. */
+     and 3.78:1 on `--color-audio-bg`. */
   --color-track: rgb(255 255 255 / 0.1);
 
   /* Editor shell region sizes (brief's exact values — the CONTRACT sidebar/
@@ -137,9 +139,12 @@
   /* Task 14 fix round 1: rgb(15 23 42 / 0.55), the same slate-900 family as
      `--color-hover` at a higher alpha for a 3:1+ UI-component boundary
      (WCAG 1.4.11) rather than a hover tint's lighter weight — measured
-     4.70:1 on panel (#fff), 4.50:1 on raised, 4.38:1 on stage, 4.26:1 on
-     video-bg (the trim handles' own, tightest-margin backdrop) and 4.40:1
-     on audio-bg. */
+     (fix round 2 corrected these: the first pass composited against pure
+     black instead of this token's own slate-900) 3.99:1 on panel (#fff),
+     3.85:1 on raised, 3.76:1 on stage, 3.68:1 on video-bg (the trim
+     handles' own, tightest-margin backdrop, cross-checked at 3.65:1 as
+     actually measured by `tests/e2e/editorKeyboard.spec.ts`'s
+     `boundaryContrast` against the built app) and 3.78:1 on audio-bg. */
   --color-track: rgb(15 23 42 / 0.55);
 }
 
