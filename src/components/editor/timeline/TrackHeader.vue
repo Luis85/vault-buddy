@@ -245,7 +245,7 @@ function deleteTrack() {
       :aria-pressed="editing"
       :aria-disabled="locked"
       :title="nameTitle"
-      class="min-w-0 flex-1 truncate rounded px-0.5 text-left text-micro text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+      class="min-w-0 flex-1 truncate rounded px-0.5 text-left text-micro text-fg-secondary hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
       :class="nameClass"
       @click="beginRename"
     >
@@ -260,7 +260,7 @@ function deleteTrack() {
       :aria-disabled="locked"
       :aria-label="`Show ${track.name}`"
       :title="eyeTitle"
-      class="shrink-0 rounded px-1 hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+      class="shrink-0 rounded px-1 hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
       :class="eyeClass"
       @click="toggleVisible"
     >
@@ -273,7 +273,7 @@ function deleteTrack() {
       :aria-pressed="track.locked"
       :aria-label="`Lock ${track.name}`"
       :title="lockTitle"
-      class="shrink-0 cursor-pointer rounded px-1 hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+      class="shrink-0 cursor-pointer rounded px-1 hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
       :class="lockClass"
       @click="toggleLocked"
     >
@@ -287,7 +287,7 @@ function deleteTrack() {
       :aria-disabled="locked"
       :aria-label="`Mute ${track.name}`"
       :title="muteTitle"
-      class="shrink-0 rounded px-1 text-micro hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+      class="shrink-0 rounded px-1 text-micro hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
       :class="muteClass"
       @click="toggleMuted"
     >
@@ -300,7 +300,7 @@ function deleteTrack() {
       :aria-disabled="locked"
       :aria-label="`Solo ${track.name}`"
       :title="soloTitle"
-      class="shrink-0 rounded px-1 text-micro hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+      class="shrink-0 rounded px-1 text-micro hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
       :class="soloClass"
       @click="toggleSolo"
     >
@@ -336,7 +336,7 @@ function deleteTrack() {
         :aria-pressed="menuOpen"
         :aria-label="`${track.name} track menu`"
         title="Track menu"
-        class="cursor-pointer rounded px-1 text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+        class="cursor-pointer rounded px-1 text-fg-secondary hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
         @click="menuOpen = !menuOpen"
       >
         &#8942;
@@ -353,7 +353,7 @@ function deleteTrack() {
           :data-testid="`track-header-${track.id}-move-up`"
           :aria-disabled="!canMoveUp"
           :title="menuItemTitle"
-          class="rounded px-1.5 py-0.5 text-left hover:bg-white/10"
+          class="rounded px-1.5 py-0.5 text-left hover:bg-hover"
           :class="moveUpClass"
           @click="moveUp"
         >
@@ -365,7 +365,7 @@ function deleteTrack() {
           :data-testid="`track-header-${track.id}-move-down`"
           :aria-disabled="!canMoveDown"
           :title="menuItemTitle"
-          class="rounded px-1.5 py-0.5 text-left hover:bg-white/10"
+          class="rounded px-1.5 py-0.5 text-left hover:bg-hover"
           :class="moveDownClass"
           @click="moveDown"
         >
@@ -377,7 +377,7 @@ function deleteTrack() {
           :data-testid="`track-header-${track.id}-delete`"
           :aria-disabled="!canDelete"
           :title="menuItemTitle"
-          class="rounded px-1.5 py-0.5 text-left hover:bg-white/10"
+          class="rounded px-1.5 py-0.5 text-left hover:bg-hover"
           :class="deleteClass"
           @click="deleteTrack"
         >

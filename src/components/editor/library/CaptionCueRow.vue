@@ -92,7 +92,7 @@ function onTime(which: "start" | "end", event: Event): void {
         type="button"
         :data-testid="`caption-delete-${row.cue.id}`"
         :aria-label="`Delete caption ${row.index}`"
-        class="ml-auto shrink-0 rounded px-1 text-fg-subtle hover:bg-white/10 hover:text-danger-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+        class="ml-auto shrink-0 rounded px-1 text-fg-subtle hover:bg-hover hover:text-danger-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
         @click="emit('remove')"
       >
         ✕

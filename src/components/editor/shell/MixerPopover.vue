@@ -139,7 +139,7 @@ function onKeydown(event: KeyboardEvent): void {
       <button
         type="button"
         data-testid="mixer-close"
-        class="self-end rounded px-1.5 py-0.5 hover:bg-white/10"
+        class="self-end rounded px-1.5 py-0.5 hover:bg-hover"
         @click="close"
       >
         Close

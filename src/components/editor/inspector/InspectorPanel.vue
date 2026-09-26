@@ -118,7 +118,7 @@ function setTab(i: number, el: Element | null): void {
       <button
         type="button"
         data-testid="inspector-effect-back"
-        class="cursor-pointer self-start rounded px-1.5 py-0.5 text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        class="cursor-pointer self-start rounded px-1.5 py-0.5 text-fg-secondary hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="workspace.setSelected(null)"
       >
         ← Clip settings
@@ -147,7 +147,7 @@ function setTab(i: number, el: Element | null): void {
           :aria-selected="cat.id === activeTab"
           :aria-controls="`inspector-tabpanel-${cat.id}`"
           :tabindex="cat.id === activeTab ? 0 : -1"
-          class="cursor-pointer rounded px-1.5 py-0.5 text-micro transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          class="cursor-pointer rounded px-1.5 py-0.5 text-micro transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           :class="cat.id === activeTab ? 'bg-accent/20 text-accent-fg' : 'text-fg-subtle'"
           @click="selectTab(cat.id)"
         >

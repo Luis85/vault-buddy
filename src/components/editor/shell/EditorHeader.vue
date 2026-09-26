@@ -173,7 +173,7 @@ function onSaveMenu(item: "save" | "portable" | "lightweight" | "open" | "discar
       v-else
       type="button"
       data-testid="editor-shell-title"
-      class="max-w-[24ch] cursor-pointer truncate rounded-control px-1 text-left text-sm font-medium text-fg hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      class="max-w-[24ch] cursor-pointer truncate rounded-control px-1 text-left text-sm font-medium text-fg hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       title="Rename project"
       @click="startRename"
     >

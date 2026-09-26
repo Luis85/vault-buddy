@@ -52,6 +52,17 @@
   /* The editor window's own backdrop behind the shell (Task 58): the
      slate-900 it always had, a light grey in the light theme. */
   --color-app: var(--color-slate-900);
+  /* Task 14 (I-2/F-M4): the editor's own hover/pressed-surface tint. Every
+     `hover:bg-white/10` under src/components/editor/** read as designed on
+     the dark stage but was invisible on the light theme's white/near-white
+     panels (10% white over #fff is ~1.1:1). The dark value here is the
+     literal it replaces (`rgb(255 255 255 / 0.1)`), so the dark theme's
+     look stays byte-identical; `[data-theme="light"]` below overrides it
+     with a dark tint of comparable weight. This is an EDITOR-only token —
+     the panel window's own white glass (`bg-white/5`, `bg-white/10`,
+     `border-white/10`) stays literal, per the design-token migration note
+     above. */
+  --color-hover: rgb(255 255 255 / 0.1);
 
   /* Editor shell region sizes (brief's exact values — the CONTRACT sidebar/
      inspector widths, 244/276, not `reference/editor.css`'s own 220/282,
@@ -101,6 +112,10 @@
   --color-audio-bg: #d9eeea;
   --color-gold: #8b5c16;
   --color-gold-bg: #f7ecd8;
+  /* Task 14: 10% white over `--color-panel` (#fff) reads at ~1.1:1 — a dark
+     tint of comparable visual weight instead, over the light surfaces this
+     token now covers (panel/raised/stage all read #e8e7ef or lighter). */
+  --color-hover: rgb(15 23 42 / 0.06);
 }
 
 /* Tutorial editor dark theme (Task 58 fix round 1, GAP-209). The `@theme`

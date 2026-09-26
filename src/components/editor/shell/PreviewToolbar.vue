@@ -408,7 +408,7 @@ function itemClass(id: ActionId): string {
         :aria-disabled="!resolved[id].enabled"
         :aria-pressed="ariaPressedFor(id)"
         :title="itemTitle(id)"
-        class="shrink-0 cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        class="shrink-0 cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         :class="itemClass(id)"
         @click="onActivate(id)"
       >
@@ -427,7 +427,7 @@ function itemClass(id: ActionId): string {
         aria-haspopup="menu"
         :aria-expanded="moreOpen"
         :tabindex="activeIndex === visibleItems.length ? 0 : -1"
-        class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="moreOpen = !moreOpen"
       >
         More

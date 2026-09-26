@@ -296,6 +296,7 @@ async function lowContrast(page: Page): Promise<string[]> {
     const roots = ["editor-header", "editor-shell-library", "editor-shell-inspector", "editor-shell-timeline", "preview-toolbar"]
       .map((id) => document.querySelector(`[data-testid="${id}"]`))
       .concat(Array.from(document.querySelectorAll('[role="menu"]')))
+      .concat(Array.from(document.querySelectorAll('[role="dialog"]')))
       .filter((el): el is Element => el !== null);
     return roots
       .flatMap((root) => Array.from(root.querySelectorAll("*")).concat(root))
@@ -320,6 +321,20 @@ for (const theme of ["light", "dark"] as const) {
     await tabTo(page, "editor-header-help");
     await page.keyboard.press("Enter");
     await expect(page.getByRole("menu", { name: "Help" })).toBeVisible();
+    expect(await lowContrast(page)).toEqual([]);
+    await page.keyboard.press("Escape");
+
+    // A dialog is a surface too (review I-2/F-M4): the Save menu's
+    // "Save a portable copy…" item opens SaveProjectDialog, whose "includes
+    // your original recordings" warning was the one literal palette text
+    // class left under src/components/editor/** — it measured ~1.05:1 in
+    // the light theme before the fix (11.7:1 in dark, which is why only
+    // light theme caught it).
+    await tabTo(page, "editor-header-save-menu-toggle");
+    await page.keyboard.press("Enter");
+    await tabTo(page, "editor-header-menu-portable");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("save-project-originals-warning")).toBeVisible();
     expect(await lowContrast(page)).toEqual([]);
   });
 }

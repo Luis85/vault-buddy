@@ -62,7 +62,7 @@ function toggle(flag: "muted" | "solo"): void {
         :key="f.flag"
         type="button"
         :data-testid="`mixer-${f.flag}-${track.id}`"
-        class="rounded px-1 hover:bg-white/10"
+        class="rounded px-1 hover:bg-hover"
         :class="track[f.flag] ? 'bg-raised text-fg' : ''"
         :aria-pressed="track[f.flag] ? 'true' : 'false'"
         :aria-disabled="track.locked"

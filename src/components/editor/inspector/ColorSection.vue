@@ -137,7 +137,7 @@ function onPreset(id: ColorPresetId): void {
           :data-testid="`color-preset-${preset.id}`"
           :aria-pressed="preset.id === activePreset"
           :title="preset.label"
-          class="cursor-pointer rounded border border-line px-1.5 py-0.5 hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          class="cursor-pointer rounded border border-line px-1.5 py-0.5 hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           :class="preset.id === activePreset ? 'bg-accent/20 text-accent-fg' : 'text-fg'"
           @click="onPreset(preset.id)"
         >

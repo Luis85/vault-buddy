@@ -124,7 +124,7 @@ const FIELD = "rounded-control border border-line bg-raised px-2 py-1 text-sm te
       <button
         type="button"
         data-testid="render-dialog-open-checks"
-        class="cursor-pointer rounded px-1 text-micro text-fg-secondary underline hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+        class="cursor-pointer rounded px-1 text-micro text-fg-secondary underline hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
         @click="emit('review-checks')"
       >
         Review all checks

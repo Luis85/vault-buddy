@@ -27,7 +27,7 @@ const emit = defineEmits<{ (e: "act"): void }>();
         v-if="finding.action"
         type="button"
         :data-testid="`check-action-${finding.id}`"
-        class="cursor-pointer rounded-control border border-line px-2 py-0.5 text-micro text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        class="cursor-pointer rounded-control border border-line px-2 py-0.5 text-micro text-fg-secondary hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="emit('act')"
       >
         {{ CHECK_ACTION_LABELS[finding.action] }} ›

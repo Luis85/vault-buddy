@@ -1948,7 +1948,7 @@ and diagnostics exports — lands outside every vault.
 
 **Verification status.** The automated evidence for all 50 F-IDs is listed
 in the acceptance-evidence file and checked by `tests/editorEvidence.test.ts`.
-What no gate can observe is the Windows checklist — 70 rows, none run — and
+What no gate can observe is the Windows checklist — 71 rows, none run — and
 the ADR's residual gates (R-H1–R-H5, R-A1, R-A2, R-M1, R-P1, R-P2), all
 OPEN; the concept bundle's final representative journey is checklist row
 T64, unwalked. Known limits: docs/Gaps.md GAP-170 (the ACL never run in a
@@ -3592,17 +3592,31 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
 - **The tutorial editor (`src/components/editor/shell/`, Task 16, F-48)
   adds its own token set to the same `@theme` block** rather than reusing
   the panel's palette wholesale — it reuses `fg`/`accent`/`focus`/`danger`/
-  `rounded-control`/`text-micro` but needs ten more the panel never did:
-  `--color-stage`/`-panel`/`-raised`/`-line` (workspace surfaces) and
+  `rounded-control`/`text-micro` but needs eleven more the panel never did:
+  `--color-stage`/`-panel`/`-raised`/`-line` (workspace surfaces),
   `-video`/`-video-bg`/`-audio`/`-audio-bg`/`-gold`/`-gold-bg` (media-type
   and fade-handle accents), mapped verbatim from
-  `docs/concepts/vault-buddy-editor/contracts/design-tokens.json`. Dark
-  values are the `@theme` defaults; `[data-theme="light"]` (set on
+  `docs/concepts/vault-buddy-editor/contracts/design-tokens.json`, and
+  `--color-hover` (Task 14, review I-2/F-M4 — not from the contract: the
+  editor's own hover/pressed-surface tint, added because every
+  `hover:bg-white/10` under `src/components/editor/**` — 33 files,
+  `grep -rl "hover:bg-white/10" src/components/editor` measured, not the
+  brief's stale 30 — read as designed on the dark stage but at ~1.1:1 on
+  the light theme's white/near-white panels; `SaveProjectMenu.vue`'s
+  literal `border-white/10 bg-white/5` toggle chip converted to
+  `border-line bg-raised` the same pass, for the same reason. This is an
+  EDITOR-only token: the panel window's own white-opacity glass
+  (`bg-white/5`, `bg-white/10`, `border-white/10`, the bullet above) stays
+  literal — it is already consistent there and carries no light-theme
+  surface to fail against). Dark
+  values are the `@theme` defaults (`--color-hover`'s dark value is the
+  literal `rgb(255 255 255 / 0.1)` it replaces, so the dark theme stays
+  byte-identical); `[data-theme="light"]` (set on
   `document.documentElement` by `EditorShell`, watching the
   `editorWorkspace` store's own `theme` field — Task 18 moved the STATE
   there, persisted through `editor_save_workspace`; `EditorShell` keeps only
   the one thing that stays view-local, applying the `data-theme` attribute)
-  overrides all ten — and, since Task 58 (GAP-206), the TEXT tokens too:
+  overrides all eleven — and, since Task 58 (GAP-206), the TEXT tokens too:
   `fg`/`fg-secondary`/`fg-muted`/`fg-subtle`, `accent`/`accent-fg`,
   `danger`/`danger-fg`, `focus`, `color-scheme: light` and `--color-app`
   (the window backdrop, `bg-app` on `EditorRoot`'s `main`), so every text

@@ -71,7 +71,7 @@ function onDragStart(event: DragEvent): void {
       :aria-label="`Insert ${name} at the playhead`"
       :aria-disabled="refused"
       :title="title"
-      class="shrink-0 rounded px-1 text-fg hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+      class="shrink-0 rounded px-1 text-fg hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
       @click="onInsert"
     >
       +

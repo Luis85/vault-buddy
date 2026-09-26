@@ -94,7 +94,7 @@ function onPitch(event: Event): void {
         :aria-label="`${p}× speed`"
         :disabled="lockReason !== null"
         :title="lockReason ?? `Play at ${p}×`"
-        class="cursor-pointer rounded border border-line px-1.5 py-0.5 hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
+        class="cursor-pointer rounded border border-line px-1.5 py-0.5 hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
         :class="p === speed ? 'bg-accent/20 text-accent-fg' : 'text-fg'"
         @click="onPreset(p)"
       >

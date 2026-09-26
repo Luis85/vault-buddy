@@ -43,7 +43,7 @@ function onDetach(): void {
   <button
     type="button"
     data-testid="audio-section-detach"
-    class="cursor-pointer rounded px-1.5 py-0.5 text-left transition-colors hover:bg-white/10"
+    class="cursor-pointer rounded px-1.5 py-0.5 text-left transition-colors hover:bg-hover"
     :class="buttonClass"
     :aria-disabled="!detach.enabled"
     :title="title"

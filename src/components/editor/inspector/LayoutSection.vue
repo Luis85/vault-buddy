@@ -174,7 +174,7 @@ function onFlip(event: Event): void {
           :key="corner.id"
           type="button"
           :data-testid="`layout-corner-${corner.id}`"
-          class="cursor-pointer rounded border border-line px-1.5 py-0.5 text-fg hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          class="cursor-pointer rounded border border-line px-1.5 py-0.5 text-fg hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           @click="onCorner(corner.id)"
         >
           {{ corner.label }}

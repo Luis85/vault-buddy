@@ -153,7 +153,7 @@ const menuLabel = computed(() => {
         :tabindex="i === activeIndex ? 0 : -1"
         :aria-disabled="!resolved[id].enabled"
         :title="resolved[id].reason ?? undefined"
-        class="flex cursor-pointer items-center justify-between gap-3 rounded px-1.5 py-0.5 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        class="flex cursor-pointer items-center justify-between gap-3 rounded px-1.5 py-0.5 text-left transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         :class="resolved[id].enabled ? 'text-fg-secondary' : 'cursor-default text-fg-subtle opacity-50'"
         @click="activate(id)"
       >

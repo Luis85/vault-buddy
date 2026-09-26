@@ -59,7 +59,7 @@ const perFile = computed(() => jobs.lastImport?.terminal?.perFile ?? []);
       type="button"
       data-testid="library-import-cancel"
       title="Stop after the file being imported now; finished files stay"
-      class="shrink-0 rounded px-1 hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+      class="shrink-0 rounded px-1 hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
       @click="cancelImport"
     >
       Cancel

@@ -123,7 +123,7 @@ function itemClass(id: ActionId): string {
       :data-testid="`timeline-toolbar-${id}`"
       :aria-disabled="!resolved[id].enabled"
       :title="itemTitle(id)"
-      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       :class="itemClass(id)"
       @click="onAction(id)"
     >
@@ -135,7 +135,7 @@ function itemClass(id: ActionId): string {
       data-testid="timeline-toolbar-delete"
       :aria-disabled="!resolved[deleteActionId].enabled"
       :title="itemTitle(deleteActionId)"
-      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       :class="itemClass(deleteActionId)"
       @click="onDelete"
     >
@@ -148,7 +148,7 @@ function itemClass(id: ActionId): string {
       aria-haspopup="menu"
       :aria-expanded="moreOpen ? 'true' : 'false'"
       title="Actions for the selected clips (right-click a clip for its own)"
-      class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       @click="onMore"
     >
       Edit actions
@@ -161,7 +161,7 @@ function itemClass(id: ActionId): string {
       data-testid="timeline-toolbar-delete-mode-gap"
       :aria-pressed="workspace.deleteMode === 'gap'"
       title="Leave a gap when deleting"
-      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       :class="workspace.deleteMode === 'gap' ? 'bg-accent/20 text-accent-fg' : 'text-fg-secondary'"
       @click="workspace.setDeleteMode('gap')"
     >
@@ -172,7 +172,7 @@ function itemClass(id: ActionId): string {
       data-testid="timeline-toolbar-delete-mode-close"
       :aria-pressed="workspace.deleteMode === 'close'"
       title="Close the gap on this track when deleting"
-      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       :class="workspace.deleteMode === 'close' ? 'bg-accent/20 text-accent-fg' : 'text-fg-secondary'"
       @click="workspace.setDeleteMode('close')"
     >
@@ -186,7 +186,7 @@ function itemClass(id: ActionId): string {
       data-testid="timeline-toolbar-snap"
       :aria-pressed="workspace.snap"
       title="Snap to clip edges, markers and the playhead"
-      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       :class="workspace.snap ? 'bg-accent/20 text-accent-fg' : 'text-fg-secondary'"
       @click="workspace.toggleSnap()"
     >
@@ -200,7 +200,7 @@ function itemClass(id: ActionId): string {
       data-testid="timeline-toolbar-zoom-out"
       title="Zoom out"
       aria-label="Zoom out"
-      class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       @click="zoomOut"
     >
       &minus;
@@ -210,7 +210,7 @@ function itemClass(id: ActionId): string {
       data-testid="timeline-toolbar-zoom-in"
       title="Zoom in"
       aria-label="Zoom in"
-      class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       @click="zoomIn"
     >
       +
@@ -219,7 +219,7 @@ function itemClass(id: ActionId): string {
       type="button"
       data-testid="timeline-toolbar-fit"
       title="Fit the whole edit"
-      class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       @click="emit('fit')"
     >
       Fit

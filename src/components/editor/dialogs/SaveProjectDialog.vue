@@ -139,7 +139,7 @@ function close(): void {
       <p
         v-if="format === 'portable'"
         data-testid="save-project-originals-warning"
-        class="rounded-control border border-amber-400/30 bg-amber-400/10 p-2 text-xs text-amber-100"
+        class="rounded-control border border-gold/30 bg-gold-bg p-2 text-xs text-gold"
       >
         A portable file includes your original recordings and imported media — also the
         parts you trimmed or covered. Share a rendered video instead when the people you

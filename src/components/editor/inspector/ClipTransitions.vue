@@ -67,7 +67,7 @@ function onAddTransition(): void {
     <button
       type="button"
       data-testid="fades-section-add-transition"
-      class="cursor-pointer self-start rounded px-1.5 py-0.5 text-left transition-colors hover:bg-white/10"
+      class="cursor-pointer self-start rounded px-1.5 py-0.5 text-left transition-colors hover:bg-hover"
       :class="addTransition.enabled ? 'text-fg-secondary' : 'cursor-default opacity-50'"
       :aria-disabled="!addTransition.enabled"
       :title="addTransition.reason ?? 'Blends this clip into the next one; the overlap shortens only this track'"

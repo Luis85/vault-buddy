@@ -228,7 +228,7 @@ async function remove(): Promise<void> {
       data-testid="effect-remove"
       :disabled="locked"
       :title="removeTitle"
-      class="cursor-pointer self-start rounded border border-line px-1.5 py-0.5 text-fg hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
+      class="cursor-pointer self-start rounded border border-line px-1.5 py-0.5 text-fg hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
       @click="remove"
     >
       Remove cue

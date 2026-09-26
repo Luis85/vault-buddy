@@ -223,7 +223,7 @@ function reorderClass(direction: "earlier" | "later"): string {
         :data-testid="`clip-section-${direction}`"
         :aria-disabled="!reorderResolved[direction].enabled"
         :title="reorderTitle(direction)"
-        class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-white/10"
+        class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-hover"
         :class="reorderClass(direction)"
         @click="onReorder(direction)"
       >

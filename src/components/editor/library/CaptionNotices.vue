@@ -27,7 +27,7 @@ const emit = defineEmits<{ (e: "select", row: CaptionRow): void }>();
       <span>{{ notice.message }}</span>
       <button
         type="button"
-        class="shrink-0 rounded px-1 underline hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+        class="shrink-0 rounded px-1 underline hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
         @click="emit('select', notice.row)"
       >
         Select cue

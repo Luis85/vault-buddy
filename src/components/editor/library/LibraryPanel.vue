@@ -104,7 +104,7 @@ function setTab(i: number, el: Element | null): void {
         :aria-selected="tab.id === activeTab"
         :aria-controls="`library-tabpanel-${tab.id}`"
         :tabindex="tab.id === activeTab ? 0 : -1"
-        class="cursor-pointer rounded px-1.5 py-0.5 text-micro transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        class="cursor-pointer rounded px-1.5 py-0.5 text-micro transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         :class="tab.id === activeTab ? 'bg-accent/20 text-accent-fg' : 'text-fg-subtle'"
         @click="choose(tab.id)"
       >

@@ -120,7 +120,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onPointerDown)
         type="button"
         role="menuitem"
         :data-testid="item.testid"
-        class="cursor-pointer rounded px-2 py-1 text-left text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        class="cursor-pointer rounded px-2 py-1 text-left text-xs text-fg-secondary hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="choose(item.id)"
       >
         {{ item.label }}

@@ -56,7 +56,7 @@ function remove(markerId: string): void {
       data-testid="chapter-add"
       :disabled="addReason !== null"
       :title="addReason ?? 'Add a chapter at the playhead'"
-      class="rounded border border-line px-2 py-0.5 text-left text-fg hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
+      class="rounded border border-line px-2 py-0.5 text-left text-fg hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
       @click="add"
     >
       Add chapter at playhead
@@ -83,7 +83,7 @@ function remove(markerId: string): void {
           type="button"
           :data-testid="`chapter-jump-${row.marker.id}`"
           :aria-label="`Jump to ${row.marker.title}`"
-          class="shrink-0 rounded px-1 font-mono text-fg hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+          class="shrink-0 rounded px-1 font-mono text-fg hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
           @click="workspace.setPlayhead(row.outputMs)"
         >
           {{ formatOutputTime(row.outputMs) }}
@@ -101,7 +101,7 @@ function remove(markerId: string): void {
           type="button"
           :data-testid="`chapter-delete-${row.marker.id}`"
           :aria-label="`Delete chapter ${row.marker.title}`"
-          class="shrink-0 rounded px-1 text-fg-subtle hover:bg-white/10 hover:text-danger-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+          class="shrink-0 rounded px-1 text-fg-subtle hover:bg-hover hover:text-danger-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
           @click="remove(row.marker.id)"
         >
           ✕

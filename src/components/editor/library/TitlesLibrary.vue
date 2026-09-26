@@ -93,7 +93,7 @@ function insertCard(preset: CardPreset, label: string): void {
         <button
           type="button"
           :data-testid="`titles-add-${preset.id}`"
-          class="w-full rounded border border-line px-2 py-0.5 text-left text-fg hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+          class="w-full rounded border border-line px-2 py-0.5 text-left text-fg hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
           @click="insertCard(preset.id, preset.label)"
         >
           {{ preset.label }}

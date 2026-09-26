@@ -69,7 +69,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onPointerDown)
       :aria-expanded="open"
       aria-label="More save options"
       :disabled="disabled"
-      class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-1.5 py-1 text-xs text-fg hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
+      class="cursor-pointer rounded-control border border-line bg-raised px-1.5 py-1 text-xs text-fg hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
       @click="open = !open"
     >
       ▾
@@ -88,7 +88,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onPointerDown)
         :data-testid="`editor-header-menu-${item.id}`"
         :disabled="item.id === 'save' && props.saveDisabledReason !== null"
         :title="item.id === 'save' ? (props.saveDisabledReason ?? undefined) : undefined"
-        class="cursor-pointer rounded px-2 py-1 text-left text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
+        class="cursor-pointer rounded px-2 py-1 text-left text-xs text-fg-secondary hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
         @click="choose(item.id)"
       >
         {{ item.label }}

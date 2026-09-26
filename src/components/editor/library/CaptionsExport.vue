@@ -49,7 +49,7 @@ async function exportAs(format: SubtitleFormat): Promise<void> {
       :data-testid="`caption-export-${item.format}`"
       :disabled="reason !== null || exporting"
       :title="reason ?? `Export every caption as ${item.format.toUpperCase()}, in output time`"
-      class="rounded border border-line px-2 py-0.5 text-fg hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
+      class="rounded border border-line px-2 py-0.5 text-fg hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
       @click="exportAs(item.format)"
     >
       {{ item.label }}

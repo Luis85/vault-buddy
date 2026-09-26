@@ -58,7 +58,7 @@ function onChange(event: Event): void {
     aria-label="Canvas ratio"
     :disabled="disabled"
     :title="title"
-    class="shrink-0 cursor-pointer rounded border-0 bg-transparent px-1 py-0.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed"
+    class="shrink-0 cursor-pointer rounded border-0 bg-transparent px-1 py-0.5 transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed"
     :class="disabled ? 'cursor-default opacity-50' : 'text-fg-secondary'"
     :value="value"
     @change="onChange"

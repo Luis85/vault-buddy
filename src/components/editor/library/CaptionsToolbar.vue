@@ -51,7 +51,7 @@ function run(id: "import" | "add" | "split"): void {
       :data-testid="`caption-${action.id}`"
       :disabled="action.reason !== null"
       :title="action.reason ?? action.hint"
-      class="rounded border border-line px-2 py-0.5 text-fg hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
+      class="rounded border border-line px-2 py-0.5 text-fg hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
       @click="run(action.id)"
     >
       {{ action.label }}

@@ -6807,6 +6807,21 @@ timeline, preview toolbar and an open menu against its composited
 background (46 failures at 1.03–4.40:1 before, none after; removing the
 `--color-fg` override alone turns it red again). Checklist T60 is its
 hardware row. The DARK theme's own shortfalls are GAP-209.
+**Fixed a second time 2026-09-25 (Task 14, review I-2/F-M4)**: this sweep
+never opened a dialog, so `SaveProjectDialog.vue`'s "Save a portable
+copy…" warning — the one literal palette text class left under
+`src/components/editor/**` (`border-amber-400/30 bg-amber-400/10
+text-amber-100`) — slipped through at 1.05:1 in light (11.7:1 in dark,
+which is why only light caught it). Fixed to the already-themed gold
+register (`border-gold/30 bg-gold-bg text-gold`, 4.93:1 light / 6.46:1
+dark — the same classes `GuideCoachCard.vue`'s warning task line uses).
+The sweep now also opens `[role="dialog"]` roots and drives the Save
+menu's portable item before measuring, so a future dialog-only literal
+cannot slip through the same way again. The same pass added an editor
+`--color-hover` token (`src/style.css`) and moved every
+`hover:bg-white/10` under `src/components/editor/**` (33 files) plus
+`SaveProjectMenu.vue`'s `border-white/10 bg-white/5` toggle onto it — see
+the design-token paragraph above.
 
 ### GAP-207 · Low · The learning center's recorded limits
 `src/components/editor/guide/LearningCenter.vue` (+ `LearningPreferences.vue`),

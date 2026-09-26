@@ -172,7 +172,7 @@ onReveal("webcam", openWebcam);
         data-testid="library-import"
         :aria-disabled="importRefusal !== null"
         :title="importTitle"
-        class="shrink-0 rounded border border-line px-2 py-0.5 text-fg hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+        class="shrink-0 rounded border border-line px-2 py-0.5 text-fg hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
         @click="startImport"
       >
         Import…
@@ -183,7 +183,7 @@ onReveal("webcam", openWebcam);
         data-testid="library-webcam"
         :aria-disabled="webcamRefusal !== null"
         :title="webcamTitle"
-        class="shrink-0 rounded border border-line px-2 py-0.5 text-fg hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+        class="shrink-0 rounded border border-line px-2 py-0.5 text-fg hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
         @click="openWebcam"
       >
         Webcam…
@@ -198,7 +198,7 @@ onReveal("webcam", openWebcam);
       v-if="project.missing.length > 0"
       type="button"
       data-testid="library-reconnect"
-      class="rounded border border-danger/40 px-2 py-0.5 text-left text-danger-fg hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+      class="rounded border border-danger/40 px-2 py-0.5 text-left text-danger-fg hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
       @click="reconnectOpen = true"
     >
       {{ project.missing.length === 1 ? "1 original is missing" : `${project.missing.length} originals are missing` }} — Reconnect…

@@ -83,7 +83,7 @@ function onRemove(): void {
     <button
       type="button"
       data-testid="transition-row-remove"
-      class="cursor-pointer self-start rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-white/10"
+      class="cursor-pointer self-start rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-hover"
       @click="onRemove"
     >
       Remove transition
