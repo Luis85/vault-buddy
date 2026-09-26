@@ -56,7 +56,11 @@ import { withoutRedactionHandles } from "./errorCopy";
 
 export { decodeProject,ProtocolError };
 
-const ERROR_CODES: readonly EditorErrorCode[] = [
+/** Every `EditorErrorCode` variant, in its serde `camelCase` wire spelling
+ * (`core::editor::error::EditorErrorCode`, 15 variants). Exported so
+ * `tests/editorWireEnums.test.ts` can pin this list against the Rust source
+ * rather than trusting it stays in step by hand (Task 20, review M-V9). */
+export const ERROR_CODES: readonly EditorErrorCode[] = [
   "invalidRequest",
   "invalidProject",
   "revisionConflict",
@@ -74,7 +78,10 @@ const ERROR_CODES: readonly EditorErrorCode[] = [
   "internal",
 ];
 
-const JOB_PHASES: readonly JobPhase[] = [
+/** Every `JobPhase` variant, in its serde `camelCase` wire spelling
+ * (`media_jobs::JobPhase`). Exported for the same reason as `ERROR_CODES`
+ * (Task 20, review M-V9/M-V10). */
+export const JOB_PHASES: readonly JobPhase[] = [
   "queued",
   "preparing",
   "rendering",
@@ -83,6 +90,13 @@ const JOB_PHASES: readonly JobPhase[] = [
   "cancelled",
   "failed",
 ];
+
+/** Every `JobKind` variant, in its serde `camelCase` wire spelling
+ * (`media_jobs::JobKind`). Exported and pinned against Rust the same way
+ * (Task 20) — replaces the inline literal `decodeJobState` used to check
+ * `kind` against, which named the same four strings with nothing tying them
+ * to the Rust enum. */
+export const JOB_KINDS: readonly JobKind[] = ["import", "render", "peaks", "publish"];
 
 function asEditorErrorCode(value: unknown, field: string): EditorErrorCode {
   const s = asString(value, field);
@@ -346,7 +360,7 @@ function decodeJobState(
     fail(`${field}.fraction must be a number in [0, 1]`);
   }
   const kind = asString(v.kind, `${field}.kind`);
-  if (!["import", "render", "peaks", "publish"].includes(kind)) {
+  if (!(JOB_KINDS as readonly string[]).includes(kind)) {
     fail(`${field}.kind is not a recognized kind: ${kind}`);
   }
   return {

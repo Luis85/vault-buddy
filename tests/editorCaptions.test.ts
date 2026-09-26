@@ -9,10 +9,6 @@
  * time (what the wire carries) and its OUTPUT time (what the list shows)
  * are never the same number, and confusing them shows.
  */
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -39,6 +35,7 @@ import type {
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
+import { rustLimit } from "./helpers/rustSource";
 
 enableAutoUnmount(afterEach);
 
@@ -253,13 +250,8 @@ describe("captionRules", () => {
 // Fix round 1: the frontend's MAX_CAPTIONS/MAX_MARKERS are hand copies of
 // `core::editor::limits`; this reads the Rust source so the two can never
 // drift -- the button must disable exactly where Rust starts refusing.
-function rustLimit(name: string): number {
-  const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src-tauri/core/src/editor/mod.rs");
-  const match = new RegExp(`pub const ${name}: usize = ([0-9_]+);`).exec(readFileSync(file, "utf8"));
-  if (!match) throw new Error(`${name} not found in core::editor::limits`);
-  return Number(match[1].replace(/_/g, ""));
-}
-
+// `rustLimit` moved to `tests/helpers/rustSource.ts` at Task 20, which
+// `tests/useTimelineDrag.test.ts` now shares for MIN_CLIP_MS.
 describe("captionRules limits match core::editor::limits", () => {
   it("Add caption disables exactly at MAX_CAPTIONS", () => {
     const max = rustLimit("MAX_CAPTIONS");

@@ -7483,22 +7483,26 @@ the extraction before them, so a portable import with many files holds other
 opens a little longer (one ffprobe per carried file, each bounded by
 `PROBE_TIMEOUT`).
 
-### GAP-216 · Low (tech debt) · The editor shell repeats its small helpers
+### GAP-216 · Low (tech debt, narrowed 2026-09-26 — hardening Task 20) · The editor shell repeats its small helpers
 `src-tauri/src/editor/*.rs`, `src/composables/useTimelineDrag.ts`
 (final whole-branch review, "stay recorded"). The same few helpers are
 defined per file rather than once: `fn err(code, message)` and
 `fn internal(message)` in most `editor/*` modules (twenty-seven private
 `err`/`internal`/`local_data` definitions at the review), `local_data`
-(the app-data-dir resolver) four times, the `io::ErrorKind::StorageFull` /
-raw OS 112 → `diskFull` mapping six times, and `MIN_CLIP_MS` as a literal
-in both `core::editor::limits` and `useTimelineDrag.ts` (a comment, not a
-test, ties the two). Nothing is wrong today; the cost is drift — a seventh
-disk-full mapping that forgets raw error 112, or a Rust `MIN_CLIP_MS` change
-the trim preview does not follow. **Fix:** one `editor::errors` module
-(`err`, `internal`, `write_error` with the one disk-full rule) that every
-module imports, `prefs_commands::local_data` as the only resolver, and
-`MIN_CLIP_MS` read by a Vitest from `core::editor::mod.rs` the way
-`editorCaptions.test.ts`' `rustLimit` reads `MAX_CAPTIONS`.
+(the app-data-dir resolver) four times, and the `io::ErrorKind::StorageFull` /
+raw OS 112 → `diskFull` mapping six times. Nothing is wrong today; the cost
+is drift — a seventh disk-full mapping that forgets raw error 112. **Fix:**
+one `editor::errors` module (`err`, `internal`, `write_error` with the one
+disk-full rule) that every module imports, and `prefs_commands::local_data`
+as the only resolver. *(Narrowed by hardening Task 20: the `MIN_CLIP_MS`
+literal this entry used to name — tied to `core::editor::mod::limits` by a
+comment alone — is now pinned by
+`tests/useTimelineDrag.test.ts#equals the Rust MIN_CLIP_MS constant`, which
+reads the Rust constant through `tests/helpers/rustSource.ts`'s
+`rustLimit` — the same reader `editorCaptions.test.ts` uses for
+`MAX_CAPTIONS`/`MAX_MARKERS`, extracted into that shared helper so a third
+caller costs no new implementation. A Rust `MIN_CLIP_MS` change the trim
+preview does not follow now fails CI instead of drifting silently.)*
 
 ### GAP-217 · Low · An unreadable `products.json` blocks every save, render, export and publish of its project
 `src-tauri/src/editor/render_jobs.rs` (`read_ledger`), read (and its

@@ -17,6 +17,7 @@ import {
 import type { EditorCommand } from "../src/editor/editorCommandTypes";
 import { BASE_PX_PER_MS } from "../src/editor/timelineLayout";
 import type { Clip } from "../src/editorTypes";
+import { rustLimit } from "./helpers/rustSource";
 
 // A clip whose start/in/out are all distinct so a swapped field or a sign
 // error cannot pass by coincidence (the global constraints' "fixture flaw"
@@ -553,5 +554,17 @@ describe("useTimelineDrag — nudge", () => {
 
     expect(execute).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledWith({ kind: "moveClips", clipIds: ["c1"], deltaMs: -33, trackId: null });
+  });
+});
+
+// GAP-216 / Task 20 (review M-V9): MIN_CLIP_MS was a hand-copied literal in
+// both core::editor::limits and this file, tied only by a comment. This
+// reads the Rust source (the editorCaptions.test.ts `rustLimit` precedent,
+// shared via tests/helpers/rustSource.ts) so a Rust change to the trim
+// preview's own minimum can never drift from what the drag/trim preview
+// enforces here undetected.
+describe("MIN_CLIP_MS matches core::editor::limits", () => {
+  it("equals the Rust MIN_CLIP_MS constant", () => {
+    expect(MIN_CLIP_MS).toBe(rustLimit("MIN_CLIP_MS"));
   });
 });
