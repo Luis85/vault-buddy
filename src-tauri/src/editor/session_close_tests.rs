@@ -266,3 +266,55 @@ fn a_discard_refused_for_unlistable_staging_leaves_a_running_render_running() {
     );
     assert!(f.project_dir().join("project.json").is_file());
 }
+
+// C-2 (hardening Task 18): `execute_in` applies an edit under `sessions`,
+// acknowledges it, and only THEN schedules its journal. A Keep close that
+// runs in between used to find nothing pending, write nothing and drop the
+// session -- an acknowledged edit gone. The close now moves the session out
+// and journals whatever it holds. The edit is applied exactly the way
+// `execute_in` applies it, and the close runs before its schedule would.
+#[test]
+fn keep_journals_an_edit_acknowledged_before_its_journal_was_scheduled() {
+    use std::collections::BTreeSet;
+
+    use vault_buddy_core::editor::commands::payloads::RenamePayload;
+    use vault_buddy_core::editor::commands::CommandContext;
+    use vault_buddy_core::editor::{EditorCommand, ExecuteRequest};
+
+    use crate::editor::recovery::RecoveryJournal;
+
+    let f = Fixture::new();
+    {
+        let mut sessions = lock_ignoring_poison(&f.state.sessions);
+        let session = sessions.get_mut(&f.session).unwrap();
+        let request = ExecuteRequest {
+            session_id: f.session.clone(),
+            expected_revision: session.snapshot().revision,
+            command_id: "cmd-1".into(),
+            command: EditorCommand::Rename(RenamePayload {
+                title: "Acknowledged".into(),
+            }),
+        };
+        let no_audio = BTreeSet::new();
+        let ctx = CommandContext {
+            assets_with_audio: &no_audio,
+        };
+        session.execute(&request, &ctx).unwrap();
+    }
+    assert!(!f.state.journal.is_pending(&f.session), "precondition");
+
+    close_in(
+        &f.state,
+        f.root(),
+        &f.staging(),
+        &f.session,
+        CloseDisposition::Keep,
+    )
+    .unwrap();
+
+    let journal = std::fs::read(f.project_dir().join("recovery.json"))
+        .expect("the acknowledged edit was journaled");
+    let journal: RecoveryJournal = serde_json::from_slice(&journal).unwrap();
+    assert_eq!(journal.project.title, "Acknowledged");
+    assert_eq!(journal.session_revision, 2);
+}

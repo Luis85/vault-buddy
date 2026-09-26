@@ -45,33 +45,38 @@
 //! project id, a `validate_project` failure, or the size bound; never a
 //! transient I/O error, which says nothing about the file) is set aside —
 //! `rename_noreplace` to `recovery.unreadable-<unix seconds>.json`, never
-//! deleted — at exactly two points: (a) `quarantine_before_overwrite`, run
-//! by the journal WRITER immediately before its first write would replace
-//! it, so the session's own first acknowledged edit can never silently
-//! destroy it; and (b) `discard_or_quarantine_journal`, run by an explicit
-//! `discardRecovery` close, which keeps the bytes instead of deleting them
-//! when — and only when — they were never readable to begin with. Either
-//! way, `journal_present` (below) still reports the ORIGINAL file present
-//! and unreadable in the meantime, which is what holds Task 9's take
-//! recovery back (`webcam_recover::recover_after_open`) until one of those
-//! two points has actually moved it out of the way.
+//! deleted — at exactly two points (`journal_quarantine.rs`, split out at
+//! this file's cap): (a) `quarantine_before_overwrite`, run by the journal
+//! WRITER immediately before its first write would replace it, so the
+//! session's own first acknowledged edit can never silently destroy it; and
+//! (b) `discard_or_quarantine_journal`, run by an explicit `discardRecovery`
+//! close, which keeps the bytes instead of deleting them when — and only
+//! when — they were never readable to begin with. A set-aside that fails,
+//! or a journal that cannot be read at all, is never replaced or deleted
+//! (hardening Task 18): the writer defers, Discard fails. `journal_present`
+//! (below) reports the name present, readable or not, which holds Task 9's
+//! take recovery back (`webcam_recover::recover_after_open`); only (b)
+//! releases it — after (a) the writer at once puts the session's OWN
+//! journal at that name, which a save of the current revision or a Discard
+//! later removes.
 
 use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use vault_buddy_core::capture_note::write_atomic_replacing;
-use vault_buddy_core::capture_paths::rename_noreplace;
 use vault_buddy_core::editor::{
-    is_valid_id, limits, validate_project, EditorError, EditorErrorCode, Project,
+    is_valid_id, limits, validate_project, EditorError, EditorErrorCode, EditorSession, Project,
 };
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_screen::staging;
 
+use super::journal_quarantine::{predecessor_cleared, PredecessorMemo};
 use super::package_import::importing_project_id;
 use super::project_store::{pin_staged, pinned_project, project_dir, store_dir, SourceLocator};
 use super::publish::{PublishJournal, PublishStep, PUBLISH_JOURNAL};
@@ -115,6 +120,9 @@ struct Pending {
 pub struct JournalQueue {
     pending: Mutex<HashMap<String, Pending>>,
     wake: Condvar,
+    /// Whether each session's `recovery.json` predecessor is settled
+    /// (`journal_quarantine::predecessor_cleared`).
+    pub(super) predecessors: PredecessorMemo,
 }
 
 impl JournalQueue {
@@ -138,9 +146,11 @@ impl JournalQueue {
             .map(|p| p.root)
     }
 
-    /// Drop `session_id`'s pending write without performing it.
+    /// Drop `session_id`'s pending write without performing it, and what
+    /// its predecessor check settled (its session is ending).
     pub(crate) fn forget(&self, session_id: &str) {
         lock_ignoring_poison(&self.pending).remove(session_id);
+        self.predecessors.forget(session_id);
     }
 
     #[cfg(test)]
@@ -177,7 +187,7 @@ impl JournalQueue {
     }
 }
 
-fn journal_path(root: &Path, project_id: &str) -> Option<PathBuf> {
+pub(super) fn journal_path(root: &Path, project_id: &str) -> Option<PathBuf> {
     project_dir(root, project_id).map(|d| d.join(RECOVERY_FILE))
 }
 
@@ -201,44 +211,69 @@ pub(crate) fn note_acknowledged(state: &EditorState, root: &Path, session_id: &s
     state.journal.schedule(session_id, root, Instant::now());
 }
 
+/// What a journal write did.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum JournalWrite {
+    /// Written -- or nothing to write (a gone or clean session).
+    Done,
+    /// Refused for now: an unreadable earlier journal is in the way and
+    /// could not be set aside (`journal_quarantine`). It is kept, never
+    /// replaced; the caller decides whether to try again.
+    Deferred,
+}
+
+/// `session`'s journal, or `None` for a CLEAN session (nothing to recover).
+fn journal_of(session: &EditorSession) -> Option<RecoveryJournal> {
+    let snap = session.snapshot();
+    if snap.persisted_revision == Some(snap.revision) {
+        return None;
+    }
+    Some(RecoveryJournal {
+        schema: RECOVERY_SCHEMA.to_string(),
+        session_revision: snap.revision,
+        saved_revision: snap.persisted_revision,
+        project: session.project().clone(),
+    })
+}
+
 /// Write the journal for `session_id` from its CURRENT state. The caller
 /// holds the session's save lock. A gone or clean session writes nothing.
-fn write_locked(state: &EditorState, root: &Path, session_id: &str) -> std::io::Result<()> {
+fn write_locked(state: &EditorState, root: &Path, session_id: &str) -> io::Result<JournalWrite> {
     let journal = {
         let sessions = lock_ignoring_poison(&state.sessions);
-        let Some(session) = sessions.get(session_id) else {
-            return Ok(());
-        };
-        let snap = session.snapshot();
-        if snap.persisted_revision == Some(snap.revision) {
-            return Ok(());
-        }
-        RecoveryJournal {
-            schema: RECOVERY_SCHEMA.to_string(),
-            session_revision: snap.revision,
-            saved_revision: snap.persisted_revision,
-            project: session.project().clone(),
+        match sessions.get(session_id).and_then(journal_of) {
+            Some(journal) => journal,
+            None => return Ok(JournalWrite::Done),
         }
     };
-    let path = journal_path(root, &journal.project.id).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid project id")
-    })?;
-    // R7(a), fix round 1: this write is about to REPLACE whatever already
-    // sits at `path`. Set aside first anything that is there and fails to
-    // load with a CONTENT verdict -- an earlier process's journal this
-    // session never resumed. A journal that loads fine is left alone (this
-    // session's own previous write, since only one session can hold a
-    // project open at a time); the check itself failing (a transient I/O
-    // error) is logged and left alone too, never guessed at.
-    quarantine_before_overwrite(root, &journal.project.id, &path);
-    let json = serde_json::to_string_pretty(&journal)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    write_journal(state, root, session_id, &journal)
+}
+
+fn write_journal(
+    state: &EditorState,
+    root: &Path,
+    session_id: &str,
+    journal: &RecoveryJournal,
+) -> io::Result<JournalWrite> {
+    let path = journal_path(root, &journal.project.id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid project id"))?;
+    // R7(a): this write is about to REPLACE whatever already sits at
+    // `path`. An earlier process's journal this session never resumed, one
+    // that fails to load with a CONTENT verdict, is set aside first -- and
+    // if it cannot be, or cannot even be read, this write does not happen
+    // (hardening Task 18): replacing it would destroy exactly the bytes R7
+    // keeps. Checked once per session (`journal_quarantine`).
+    if !predecessor_cleared(state, session_id, root, &journal.project.id, &path) {
+        return Ok(JournalWrite::Deferred);
+    }
+    let json = serde_json::to_string_pretty(journal)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     // Final review M5: `load_journal` refuses anything over this bound, so
     // a larger journal could never be resumed — and would replace the last
     // one that could. Refused here, the older journal stays.
     if json.len() as u64 > limits::MAX_PROJECT_JSON_BYTES {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
             format!(
                 "the unsaved changes are {} bytes, over the {} byte bound; not journaled",
                 json.len(),
@@ -246,17 +281,47 @@ fn write_locked(state: &EditorState, root: &Path, session_id: &str) -> std::io::
             ),
         ));
     }
-    write_atomic_replacing(&path, &json)
+    write_atomic_replacing(&path, &json).map(|()| JournalWrite::Done)
 }
 
-/// Perform `session_id`'s pending journal write now, if one is waiting —
-/// `editor_close_session(keep)`'s synchronous flush. The caller holds the
-/// session's save lock.
+/// Perform `session_id`'s pending journal write now, if one is waiting.
+/// The caller holds the session's save lock. A write deferred by an
+/// unreadable earlier journal is scheduled again, never dropped.
 pub(crate) fn flush_locked(state: &EditorState, session_id: &str) {
     if let Some(root) = state.journal.take(session_id) {
-        if let Err(e) = write_locked(state, &root, session_id) {
-            log::warn!("editor recovery: could not write the journal for {session_id}: {e}");
+        match write_locked(state, &root, session_id) {
+            Ok(JournalWrite::Done) => {}
+            Ok(JournalWrite::Deferred) => state.journal.schedule(session_id, &root, Instant::now()),
+            Err(e) => {
+                log::warn!("editor recovery: could not write the journal for {session_id}: {e}")
+            }
         }
+    }
+}
+
+/// `editor_close_session(keep)`'s journal (hardening Task 18, C-2): the
+/// session has just been MOVED OUT of `sessions` (`session_close`), so no
+/// edit can land after this snapshot -- an execute now finds it gone -- and
+/// none acknowledged before it can be missing, whether or not its journal
+/// write had been scheduled yet. Written whenever the session is dirty. The
+/// caller holds the session's save lock.
+pub(crate) fn write_closing_locked(
+    state: &EditorState,
+    root: &Path,
+    session_id: &str,
+    session: &EditorSession,
+) {
+    state.journal.take(session_id);
+    let Some(journal) = journal_of(session) else {
+        return;
+    };
+    match write_journal(state, root, session_id, &journal) {
+        Ok(JournalWrite::Done) => {}
+        Ok(JournalWrite::Deferred) => log::warn!(
+            "editor recovery: session {session_id} closed with unsaved changes that were not \
+             journaled; an unreadable earlier journal was kept in their place"
+        ),
+        Err(e) => log::warn!("editor recovery: could not write the journal for {session_id}: {e}"),
     }
 }
 
@@ -334,118 +399,6 @@ pub(crate) fn load_journal(root: &Path, project_id: &str) -> Result<RecoveryJour
     }
     validate_project(&journal.project)?;
     Ok(journal)
-}
-
-/// GAP-180 / R7 (hardening Task 10, fix round 1): does `e` say something
-/// about the JOURNAL'S CONTENT -- a bad parse, an unknown schema, the wrong
-/// project id, `validate_project`'s own checks, or the file being over the
-/// size bound -- rather than a TRANSIENT I/O failure (a sharing violation, a
-/// delete-pending permission error, a read racing this very writer's own
-/// replace) that says nothing about the file itself? `load_journal` reports
-/// every content verdict as `InvalidProject` (`read_bounded`'s own "too big"
-/// case included) and every I/O failure as `Internal`
-/// (`read_bounded`'s own mapping); the file simply being absent is
-/// `InvalidRequest`, also not a verdict. Only the first kind may ever
-/// justify moving a journal aside -- review Important 1's fix.
-fn is_content_verdict(e: &EditorError) -> bool {
-    e.code == EditorErrorCode::InvalidProject
-}
-
-/// Move `path` (an already-confirmed content-unreadable journal, an owned
-/// plain file) aside, via `rename_noreplace`, to
-/// `recovery.unreadable-<unix seconds>.json` beside it -- never deleted, so
-/// a user can still recover or export the bytes by hand. A same-second
-/// collision (two quarantines in one second, or a clock that ran backwards)
-/// retries with a numeric suffix rather than silently leaving the original
-/// in place to be overwritten (review minor 7); giving up after 20 tries is
-/// logged, matching every other "could not set this aside" failure here.
-fn quarantine_journal_file(path: &Path) {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    for attempt in 0..20u32 {
-        let name = if attempt == 0 {
-            format!("recovery.unreadable-{secs}.json")
-        } else {
-            format!("recovery.unreadable-{secs}-{attempt}.json")
-        };
-        match rename_noreplace(path, &path.with_file_name(name)) {
-            Ok(()) => return,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => {
-                log::warn!(
-                    "editor recovery: could not set aside an unreadable recovery journal: {e}"
-                );
-                return;
-            }
-        }
-    }
-    log::warn!(
-        "editor recovery: could not set aside an unreadable recovery journal: too many \
-         same-second collisions"
-    );
-}
-
-/// R7(a): before `write_locked`'s write REPLACES whatever already sits at
-/// `path`, decide whether that needs to be set aside first. Only a journal
-/// that fails to load with a CONTENT verdict (`is_content_verdict`) is ever
-/// moved -- an earlier process's journal this session never resumed, about
-/// to be silently destroyed by this session's own first acknowledged edit.
-/// A journal that loads fine is virtually certain to be THIS session's own
-/// previous write (only one session can hold a project open at a time) and
-/// is simply replaced, as always. A file that is not there yet (the
-/// ordinary case: no journal existed before this session's first write) is
-/// a silent no-op; one that is there but is not a plain file (a symlink, a
-/// directory) is left alone, the `remove_journal` owned-file discipline; a
-/// TRANSIENT read failure is logged and the file is left exactly where it
-/// is for the replacing write below to handle normally.
-fn quarantine_before_overwrite(root: &Path, project_id: &str, path: &Path) {
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_file() => {}
-        Ok(_) => return,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-        Err(e) => {
-            log::warn!(
-                "editor recovery: could not check for an existing recovery journal before \
-                 writing a new one: {e}"
-            );
-            return;
-        }
-    }
-    match load_journal(root, project_id) {
-        Ok(_) => {}
-        Err(e) if is_content_verdict(&e) => quarantine_journal_file(path),
-        Err(e) => log::warn!(
-            "editor recovery: a transient error reading the existing recovery journal before \
-             writing a new one; leaving it in place: {}",
-            e.message
-        ),
-    }
-}
-
-/// `discardRecovery`'s own action (R7b): DELETE the journal, as always --
-/// UNLESS it is unreadable by CONTENT VERDICT, in which case its bytes are
-/// kept, moved aside the same way `quarantine_before_overwrite` does,
-/// because Discard destroying a journal nobody has ever been able to read
-/// is not the decision the user actually made (they discarded the RECOVERY
-/// OFFER, not evidence of what it was). An absent journal or a transient I/O
-/// error both fall through to the ordinary delete, `remove_journal`'s own
-/// no-op-on-absent and propagated-error behaviour unchanged.
-pub(crate) fn discard_or_quarantine_journal(root: &Path, project_id: &str) -> std::io::Result<()> {
-    if let Err(e) = load_journal(root, project_id) {
-        if is_content_verdict(&e) {
-            if let Some(path) = journal_path(root, project_id) {
-                quarantine_journal_file(&path);
-                log::info!(
-                    "editor recovery: discardRecovery kept an unreadable journal's bytes aside \
-                     for {project_id} instead of deleting them"
-                );
-            }
-            return Ok(());
-        }
-    }
-    remove_journal(root, project_id)
 }
 
 /// The `editor-journal` thread's body: wait for the next deadline, flush

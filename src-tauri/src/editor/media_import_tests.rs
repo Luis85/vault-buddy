@@ -413,10 +413,14 @@ fn an_image_name_on_non_image_bytes_is_refused() {
 }
 
 // The session ended under the import (the second file's probe closes it):
-// nothing to add the batch to, so the job FAILS and the FIRST file's copy
-// and source record are rolled back rather than orphaned.
+// nothing to add the batch to, so the job FAILS. Hardening Task 18 (D-5):
+// the FIRST file's copy and source record are LEFT, as a pair -- with the
+// session gone there is no save lock to revert `sources.json` under, and a
+// session reopened over the project may be writing it right now; a record
+// whose copy is on disk is GAP-174's invisible kind (removing the copy alone
+// would surface the record as missing media named by its asset id).
 #[test]
-fn a_batch_whose_session_ends_mid_import_fails_and_rolls_back() {
+fn a_batch_whose_session_ends_mid_import_fails_and_leaves_its_records_to_gap_174() {
     let fx = Fixture::new();
     let io = FakeIo {
         close_session_on: Some(&fx.state),
@@ -434,8 +438,41 @@ fn a_batch_whose_session_ends_mid_import_fails_and_rolls_back() {
         Some(EditorErrorCode::SessionGone)
     );
     assert_eq!(t.asset_ids.as_deref(), Some(&[][..]));
-    assert!(fx.media_files().is_empty(), "{:?}", fx.media_files());
+    let sources = load_sources(fx.root.path(), "proj1").unwrap();
+    let files: Vec<String> = sources
+        .values()
+        .map(|r| match &r.locator {
+            SourceLocator::Media { file } => file.clone(),
+            other => panic!("an import records media, not {other:?}"),
+        })
+        .collect();
+    assert_eq!(files.len(), 1, "{sources:?}");
+    assert_eq!(fx.media_files(), files, "the record keeps its copy");
+}
+
+// D-5's other half: while the session is LIVE, a refused batch is still
+// reverted -- its records and its copies -- under the session's save lock.
+#[test]
+fn a_rollback_for_a_live_session_reverts_the_records_and_the_copies() {
+    let fx = Fixture::new();
+    let files = [fx.original("a.mp4", b"VIDEO:1000")];
+    fx.import(&FakeIo::default(), &AtomicBool::new(false), &files);
+    let imported = [Imported {
+        asset: fx.assets()[0].clone(),
+        file: fx.media_files()[0].clone(),
+    }];
+    let io = FakeIo::default();
+    let cancel = AtomicBool::new(false);
+    let job = ImportJob {
+        state: &fx.state,
+        root: fx.root.path(),
+        session_id: SESSION,
+        io: &io,
+        cancel: &cancel,
+    };
+    rollback(&job, "proj1", &imported);
     assert!(load_sources(fx.root.path(), "proj1").unwrap().is_empty());
+    assert!(fx.media_files().is_empty(), "{:?}", fx.media_files());
 }
 
 // A session that is already gone when the job starts fails at once,

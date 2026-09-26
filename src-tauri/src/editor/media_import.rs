@@ -467,33 +467,55 @@ fn add_assets(job: &ImportJob, imported: &[Imported]) -> Result<(), EditorError>
 }
 
 /// Undo a batch whose `AddAssets` was refused: its source records and its
-/// copies. Best effort — each failure is logged, and a leftover is only a
-/// file nothing in the graph refers to.
+/// copies, under the session's save lock. Best effort -- each failure is
+/// logged, and a leftover is only a file nothing in the graph refers to.
+///
+/// Hardening Task 18 (D-5): when the session is GONE (the usual reason
+/// `AddAssets` failed) nothing is reverted. There is no save lock left to
+/// take, and a session reopened over the project may be writing
+/// `sources.json` right now, so an unlocked read-modify-write could drop its
+/// record. The batch's records and copies stay as a pair -- GAP-174's
+/// invisible kind (a record without its copy would surface as missing
+/// media named by its asset id).
 fn rollback(job: &ImportJob, project_id: &str, imported: &[Imported]) {
-    let removed = (|| -> Result<(), EditorError> {
-        // The session is usually GONE here (that is why `AddAssets` failed),
-        // and with it its save lock — the revert still runs, unlocked: a
-        // closed session has no save left to race.
-        let lock = session_save_lock(job.state, job.session_id).ok();
-        let _guard = lock.as_deref().map(lock_ignoring_poison);
-        let mut sources = load_sources(job.root, project_id)?;
+    let Ok(lock) = session_save_lock(job.state, job.session_id) else {
+        return leave_to_gap_174(imported);
+    };
+    let _guard = lock_ignoring_poison(&lock);
+    // A close that held this lock dropped the session inside it.
+    if require_session(job.state, job.session_id)
+        .map(drop)
+        .is_err()
+    {
+        return leave_to_gap_174(imported);
+    }
+    let removed = load_sources(job.root, project_id).and_then(|mut sources| {
         for one in imported {
             sources.remove(&one.asset.id);
         }
         write_sources(job.root, project_id, &sources)
             .map_err(|e| err(EditorErrorCode::Internal, e.to_string()))
-    })();
+    });
     if let Err(e) = removed {
         log::warn!(
             "editor import rollback: sources.json not reverted: {}",
             e.message
         );
+        return;
     }
     if let Some(dir) = project_dir(job.root, project_id) {
         for one in imported {
             remove_quietly(&dir.join("media").join(&one.file));
         }
     }
+}
+
+fn leave_to_gap_174(imported: &[Imported]) {
+    log::info!(
+        "editor import rollback: the session ended; {} imported file(s) stay unreferenced \
+         in the project",
+        imported.len()
+    );
 }
 
 pub(crate) fn remove_quietly(path: &Path) {

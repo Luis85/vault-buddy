@@ -2461,7 +2461,12 @@ disk- or memory-only — no edit is lost and nothing wrong is shown:
    references. `editor_media_url` already refuses them (it requires the
    asset in the LIVE graph), so they are invisible — just wasted disk. The
    in-process failure of the same step (a refused `AddAssets`) rolls the
-   batch back; only a crash escapes that.
+   batch back while its session is live; only a crash escapes that — and,
+   since hardening Task 18 (review finding D-5), a session that CLOSED
+   mid-import: its revert used to rewrite `sources.json` with no save lock,
+   racing a session reopened over the project, so it now leaves the copies
+   and records as a pair (a record whose copy is gone would read as missing
+   media). Pinned by `media_import::tests::a_batch_whose_session_ends_mid_import_fails_and_leaves_its_records_to_gap_174`.
 2. ~~**Mid-copy.** A crash while a file is being copied leaves its
    dot-prefixed `media\.<assetId>.<ext>.part`. Nothing sweeps `media\`
    (the staging sweep, `screen_recovery`, covers only the staging
@@ -2735,20 +2740,23 @@ user can export or discard it later.
 > the file itself — review Important 1, which caught the first attempt's
 > `load_journal` `Err` catching those too) is set aside, via
 > `rename_noreplace` to `recovery.unreadable-<unix seconds>.json` beside it
-> (a same-second collision retries with a numeric suffix, never left in
-> place to be overwritten), at exactly two points: (a)
-> `recovery::quarantine_before_overwrite`, run by the journal WRITER
+> (a same-second collision retries with a numeric suffix), at exactly two
+> points: (a)
+> `journal_quarantine::quarantine_before_overwrite`, run by the journal WRITER
 > immediately before its first write would otherwise silently replace it —
 > so the session's own first acknowledged edit is what moves a stale
 > foreign journal aside, not the open that preceded it; and (b)
-> `recovery::discard_or_quarantine_journal`, run by an explicit
+> `journal_quarantine::discard_or_quarantine_journal`, run by an explicit
 > `discardRecovery`, which keeps the bytes instead of deleting them only
 > when they were never readable to begin with (readable journals are still
 > deleted, exactly as before). Task 9's take recovery
-> (`webcam_recover::recover_after_open`) is unaffected in principle —
-> `journal_present` still reports the name present, readable or not — and is
-> released once either of those two points has actually moved the file
-> aside. The quarantined file is never deleted by any of this — it stays in
+> (`webcam_recover::recover_after_open`) is held back while
+> `journal_present` reports the name present, readable or not — and only
+> (b) releases it: after (a) the writer at once writes the session's OWN
+> `recovery.json` at that name, so the name stays present until a save of
+> the current revision or a Discard removes it (corrected by hardening
+> Task 18, which found "either point releases it" in this entry). The
+> quarantined file is never deleted by any of this — it stays in
 > the project folder for a user to find or export by hand, byte-identical to
 > what was there. The dialog's copy for an unreadable journal is exactly:
 > "The unsaved changes could not be read. Their file is kept in the project
@@ -2763,6 +2771,29 @@ user can export or discard it later.
 > `webcam_recover::tests::an_unreadable_journal_holds_the_take_back_until_
 > discard_moves_it_aside`. The review that caught this also found the
 > sibling case in the product ledger — see GAP-217.
+>
+> **2026-09-26 — hardening Task 18 (carried from Task 10's re-review)
+> made "never overwritten" true.** A set-aside that FAILS (a rename error
+> other than a collision, or 20 collisions) used to be logged and the write
+> went on to replace the journal anyway — destroying the bytes this entry
+> exists to keep. Now (`editor/journal_quarantine.rs`): (a) the writer
+> SKIPS that write, keeps it pending for the next debounce round and logs
+> once (no path, no name) — and a journal it could not even READ is
+> treated the same, never replaced; (b) Discard FAILS, with the journal
+> left in place, when the set-aside fails and when the journal could not
+> be read at all (it used to fall through to the delete), so the user can
+> retry; its "kept aside" line is logged only when the file really moved.
+> The writer's check — which parsed the whole previous journal under the
+> save lock on EVERY debounced write — now runs once per session
+> (`PredecessorMemo`: once it clears, only this session writes that name).
+> One consequence, by design: while the set-aside keeps failing this
+> session's edits are not journaled, and a Keep close in that state closes
+> without a journal (logged). Pinned by `journal_quarantine::tests::
+> the_predecessor_is_checked_once_per_session`,
+> `…a_journal_that_cannot_be_set_aside_is_never_overwritten`,
+> `…discard_recovery_that_cannot_set_an_unreadable_journal_aside_fails_and_keeps_it`
+> and `…discard_recovery_never_deletes_a_journal_it_could_not_read` (a real
+> Windows handle that allows delete but not read).
 
 ### GAP-181 · Low · A caption or chapter trimmed out of its clip is kept but listed nowhere
 `src/editor/captionRules.ts` (`captionRows`, `chapterRows`),

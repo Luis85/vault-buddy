@@ -20,6 +20,7 @@ pub mod checks_commands;
 pub mod diagnostics;
 pub(crate) mod discard;
 pub mod guide_commands;
+pub(crate) mod journal_quarantine;
 pub mod media_commands;
 pub mod media_derive;
 pub mod media_import;
@@ -187,4 +188,7 @@ pub struct TestHooks {
     /// Set by a session's `discardProject` immediately BEFORE it locks
     /// `open` (`session_close::close_in`).
     pub discard_waiting_for_open: std::sync::atomic::AtomicBool,
+    /// How many times a journal write has checked what sits at
+    /// `recovery.json` before replacing it (`journal_quarantine`).
+    pub predecessor_checks: std::sync::atomic::AtomicUsize,
 }

@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use vault_buddy_core::editor::{EditorError, EditorErrorCode};
+use vault_buddy_core::editor::{EditorError, EditorErrorCode, EditorSession};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::prefs_commands::project_id_for;
@@ -23,16 +23,18 @@ fn internal(message: impl Into<String>) -> EditorError {
 
 /// Take the session out of the two maps — and do nothing else under them
 /// (final review M1: the maps are never held across disk I/O, and the
-/// cleanups `drop_session` runs next unlink files).
-fn unregister_session(state: &EditorState, session_id: &str) {
+/// cleanups `drop_session` runs next unlink files). The session is MOVED
+/// out: from here on every command finds it gone, and the caller owns its
+/// last state.
+fn unregister_session(state: &EditorState, session_id: &str) -> Option<EditorSession> {
     let mut by_project = lock_ignoring_poison(&state.by_project);
     let mut sessions = lock_ignoring_poison(&state.sessions);
-    if let Some(session) = sessions.remove(session_id) {
-        let project_id = &session.project().id;
-        if by_project.get(project_id).map(String::as_str) == Some(session_id) {
-            by_project.remove(project_id);
-        }
+    let session = sessions.remove(session_id)?;
+    let project_id = &session.project().id;
+    if by_project.get(project_id).map(String::as_str) == Some(session_id) {
+        by_project.remove(project_id);
     }
+    Some(session)
 }
 
 fn drop_session(state: &EditorState, session_id: &str) {
@@ -163,8 +165,16 @@ pub(crate) fn close_locked(
     disposition: CloseDisposition,
 ) -> Result<(), EditorError> {
     match disposition {
-        // Task 37: the pending journal write lands before the session goes.
-        CloseDisposition::Keep => recovery::flush_locked(state, session_id),
+        // Task 37: the journal lands before the session goes. Hardening Task
+        // 18 (C-2): the session is moved out of `sessions` FIRST and its
+        // journal written from that moved value, so an edit acknowledged
+        // during the close is either in it or refused `sessionGone` —
+        // never acknowledged and then lost with the session.
+        CloseDisposition::Keep => {
+            if let Some(session) = unregister_session(state, session_id) {
+                recovery::write_closing_locked(state, root, session_id, &session);
+            }
+        }
         // Task 37: `recovery.json` goes (owned-file check); the saved
         // project, its sources and the pin are untouched. R7b (hardening
         // Task 10 fix round 1): a journal that was never readable to begin
@@ -172,7 +182,7 @@ pub(crate) fn close_locked(
         // journal`'s own call, never a bare `remove_journal` here.
         CloseDisposition::DiscardRecovery => {
             state.journal.forget(session_id);
-            recovery::discard_or_quarantine_journal(root, project_id)
+            super::journal_quarantine::discard_or_quarantine_journal(root, project_id)
                 .map_err(|e| internal(format!("Could not discard the unsaved changes: {e}")))?;
         }
         CloseDisposition::DiscardProject => {

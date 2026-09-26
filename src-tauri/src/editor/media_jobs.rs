@@ -388,13 +388,17 @@ pub(crate) fn start_job_in(
     Ok(jobs.register(session_id, kind))
 }
 
-/// `editor_cancel_job`'s body: the session must be live, and the job its own.
+/// `editor_cancel_job`'s body: the job must be `session_id`'s own. It reads
+/// ONLY the `jobs` leaf (hardening Task 18, C-3): the command is sync, so
+/// it runs on the main thread, and a `require_session` pre-check there
+/// waited on `sessions`, which an execute holds across `validate_project`.
+/// The registry already scopes a job to its session, so a session this
+/// process no longer holds names no job it can cancel (`invalidRequest`).
 pub(crate) fn cancel_job_in(
     state: &EditorState,
     session_id: &str,
     job_id: &str,
 ) -> Result<(), EditorError> {
-    drop(require_session(state, session_id)?);
     lock_ignoring_poison(&state.jobs).cancel(session_id, job_id)
 }
 
@@ -687,14 +691,54 @@ pub(crate) mod tests {
         assert!(!flag.load(Ordering::SeqCst));
         cancel_job_in(&state, "ses-a", &job).unwrap();
         assert!(flag.load(Ordering::SeqCst));
+        // Hardening Task 18 (C-3): cancel reads only the `jobs` leaf, so a
+        // session this process does not hold owns no job it can name.
         assert_eq!(
             cancel_job_in(&state, "ses-gone", &job).unwrap_err().code,
-            EditorErrorCode::SessionGone
+            EditorErrorCode::InvalidRequest
         );
         assert_eq!(
             jobs_in(&state, "ses-gone").unwrap_err().code,
             EditorErrorCode::SessionGone
         );
+    }
+
+    // Hardening Task 18 (C-3): `editor_cancel_job` is SYNC -- it runs on the
+    // main thread -- so its body must never wait on `sessions`, which an
+    // execute holds across `validate_project`. Another thread holds
+    // `sessions` for the whole test; the cancel must still answer.
+    #[test]
+    fn cancel_never_waits_on_the_sessions_lock() {
+        use std::sync::mpsc;
+
+        let state = EditorState::default();
+        let (job, flag) = lock_ignoring_poison(&state.jobs).register("ses-a", JobKind::Render);
+        let (held_tx, held_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel();
+        let (state_ref, job_ref) = (&state, &job);
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let _sessions = lock_ignoring_poison(&state_ref.sessions);
+                held_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+            });
+            held_rx.recv().unwrap();
+            scope.spawn(move || {
+                done_tx
+                    .send(cancel_job_in(state_ref, "ses-a", job_ref))
+                    .unwrap()
+            });
+            // A bound, never a sleep: the fixed body answers at once; the
+            // broken one waits for `sessions` until the holder is released.
+            let answered = done_rx.recv_timeout(std::time::Duration::from_secs(1));
+            release_tx.send(()).unwrap();
+            assert!(
+                matches!(answered, Ok(Ok(()))),
+                "cancel waited on `sessions`: {answered:?}"
+            );
+        });
+        assert!(flag.load(Ordering::SeqCst));
     }
 
     // Fix round 1: Rust, not only the UI, refuses a second import in a
