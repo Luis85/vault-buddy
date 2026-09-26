@@ -753,3 +753,28 @@ fn an_unparsable_workspace_is_refused_without_echoing_it() {
         "the project package's workspace.json is not valid"
     );
 }
+
+/// GAP-216: `write_failed` used to check only `ErrorKind::StorageFull`,
+/// forgetting the raw Windows `ERROR_DISK_FULL` (112) the shell's five
+/// `write_error`-shaped helpers all also check. It now delegates to the
+/// shared `io_errors::is_disk_full`, so a raw-112 error is DiskFull here
+/// too. On the toolchain this was written against `from_raw_os_error(112)`
+/// already decodes to `StorageFull` before `is_disk_full` ever runs (see
+/// that function's own doc), so this assertion cannot by itself distinguish
+/// the fixed function from the unfixed one on this machine — no test in
+/// this codebase can, for the same reason. It still pins the observable
+/// contract this fix is FOR: a full-disk write, however it is reported,
+/// yields `DiskFull`, never `Internal`.
+#[test]
+fn write_failed_maps_a_full_disk_to_disk_full() {
+    let e = std::io::Error::from_raw_os_error(112);
+    let out = write_failed(&e);
+    assert_eq!(out.code, EditorErrorCode::DiskFull);
+}
+
+#[test]
+fn write_failed_maps_an_unrelated_error_to_internal() {
+    let e = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+    let out = write_failed(&e);
+    assert_eq!(out.code, EditorErrorCode::Internal);
+}

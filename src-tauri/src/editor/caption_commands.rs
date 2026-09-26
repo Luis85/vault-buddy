@@ -38,12 +38,9 @@ use vault_buddy_core::editor::{
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::{require_editor_window, require_session};
+use super::errors::err;
 use super::prefs_commands::blocking;
 use super::EditorState;
-
-fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
-    EditorError::new(code, message)
-}
 
 /// The picked file's text: at most `MAX_CAPTION_FILE_BYTES` read (one byte
 /// more is read only to tell "exactly at the limit" from "over it"), and

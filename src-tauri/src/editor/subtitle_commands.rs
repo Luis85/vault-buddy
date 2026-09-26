@@ -33,6 +33,7 @@ use vault_buddy_core::editor::{new_entity_id, EditorError, EditorErrorCode, Proj
 use vault_buddy_screen::staging_title::sanitize_title;
 
 use super::authz::{require_editor_window, require_session};
+use super::errors::err;
 use super::prefs_commands::blocking;
 use super::save_commands::map_write_error;
 use super::EditorState;
@@ -58,10 +59,6 @@ impl SubtitleFormat {
 /// answer in the tests. `None` is a dismissed dialog.
 pub(crate) trait SubtitleTarget {
     fn save_target(&self, format: SubtitleFormat, suggested: &str) -> Option<PathBuf>;
-}
-
-fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
-    EditorError::new(code, message)
 }
 
 /// The session's project right now, cloned (the export reads what is on

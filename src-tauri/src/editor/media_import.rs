@@ -43,6 +43,7 @@ use vault_buddy_core::editor::{
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::require_session;
+use super::errors::err;
 use super::media_jobs::{JobPhase, JobReporter, JobTerminal, PerFileError};
 use super::media_probe::probe_media;
 use super::prefs_commands::project_id_for;
@@ -57,10 +58,6 @@ use crate::ffmpeg::{resolve_working_ffmpeg, FfmpegTools};
 /// scan cap, so a JPEG whose SOF marker sits right at that cap is still
 /// fully in the buffer.
 const IMAGE_SNIFF_BYTES: u64 = 512 * 1024;
-
-fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
-    EditorError::new(code, message)
-}
 
 fn unsupported(message: impl Into<String>) -> EditorError {
     err(EditorErrorCode::UnsupportedMedia, message)
@@ -336,11 +333,7 @@ pub(crate) fn copy_owned(
 }
 
 fn copy_error(e: io::Error) -> EditorError {
-    #[cfg(windows)]
-    let full = e.kind() == io::ErrorKind::StorageFull || e.raw_os_error() == Some(112);
-    #[cfg(not(windows))]
-    let full = e.kind() == io::ErrorKind::StorageFull;
-    if full {
+    if vault_buddy_core::editor::io_errors::is_disk_full(&e) {
         err(
             EditorErrorCode::DiskFull,
             format!("Not enough disk space to import the file: {e}"),

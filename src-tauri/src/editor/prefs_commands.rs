@@ -29,6 +29,7 @@ use vault_buddy_core::editor::{sanitize, EditorError, EditorErrorCode};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::{require_editor_window, require_session};
+use super::errors::{err, internal};
 use super::project_store::project_dir;
 use super::redact::redact_path;
 use super::store_io::read_bounded;
@@ -46,14 +47,6 @@ pub(crate) const WORKSPACE_FILE: &str = "workspace.json";
 /// each), so this check exists for the INPUT, not to protect the file on
 /// disk from `sanitize`'s own output.
 const MAX_WORKSPACE_JSON_BYTES: usize = 64 * 1024;
-
-fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
-    EditorError::new(code, message)
-}
-
-fn internal(message: impl Into<String>) -> EditorError {
-    err(EditorErrorCode::Internal, message)
-}
 
 /// The project id a live session names — `sessionGone` for anything else.
 /// Deliberately does NOT touch `EditorSession::execute`/`mark_saved` or any

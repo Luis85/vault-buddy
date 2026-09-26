@@ -21,6 +21,7 @@ pub mod guide;
 pub mod history;
 pub mod ids;
 pub mod import_io;
+pub mod io_errors;
 pub mod migrate;
 pub mod model;
 pub mod model_cues;

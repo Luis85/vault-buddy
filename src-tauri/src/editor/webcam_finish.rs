@@ -26,12 +26,12 @@ use vault_buddy_core::editor::{Asset, EditorError, EditorErrorCode, InternalComm
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::require_session;
+use super::errors::{err, internal, write_error};
 use super::media_probe::probe_media;
 use super::project_store::{SourceLocator, SourceMediaKind, SourceRecord};
 use super::redact::redact_path;
 use super::save_commands::session_save_lock;
 use super::store_io::{load_sources, write_sources};
-use super::webcam_commands::{err, internal, write_error};
 use super::webcam_registry::{remove_owned, TakeSlot};
 use super::EditorState;
 use crate::ffmpeg::{resolve_working_ffmpeg, FfmpegTools};

@@ -173,9 +173,13 @@ fn unreadable(e: impl std::fmt::Display) -> EditorError {
 }
 
 /// A write-side I/O failure: a full disk keeps its own retryable code;
-/// anything else is ours to report, not the package's fault.
+/// anything else is ours to report, not the package's fault. GAP-216: this
+/// used to check only `ErrorKind::StorageFull`, forgetting the raw Windows
+/// `ERROR_DISK_FULL` (112) the shell's own disk-full checks all covered —
+/// `io_errors::is_disk_full` is the one place that answers "is this a full
+/// disk" for both sides now.
 fn write_failed(e: &io::Error) -> EditorError {
-    let code = if e.kind() == io::ErrorKind::StorageFull {
+    let code = if super::io_errors::is_disk_full(e) {
         EditorErrorCode::DiskFull
     } else {
         EditorErrorCode::Internal

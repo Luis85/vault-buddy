@@ -27,7 +27,8 @@ use vault_buddy_core::editor::{
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::{require_editor_window, require_session};
-use super::prefs_commands::read_workspace;
+use super::errors::internal;
+use super::prefs_commands::{local_data, read_workspace};
 use super::project_store::SourceRecord;
 use super::recovery::load_journal;
 use super::session_commands::{missing_media, register_session_with};
@@ -38,20 +39,6 @@ use super::store_io::{
 use super::webcam_finish::{FfmpegTakeIo, TakeIo};
 use super::webcam_recover::recover_after_open;
 use super::EditorState;
-
-fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
-    EditorError::new(code, message)
-}
-
-fn internal(message: impl Into<String>) -> EditorError {
-    err(EditorErrorCode::Internal, message)
-}
-
-fn local_data(app: &AppHandle) -> Result<std::path::PathBuf, EditorError> {
-    app.path()
-        .app_local_data_dir()
-        .map_err(|e| internal(format!("Could not resolve the app data directory: {e}")))
-}
 
 async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, EditorError> + Send + 'static,
@@ -73,22 +60,15 @@ pub struct SaveReceipt {
 /// Maps a `project.json` write's `io::Error` to a wire code the frontend
 /// can act on distinctly from every other failure: **disk full** and
 /// **permission denied** are the two ordinary states a save can hit on a
-/// real machine. `ErrorKind::StorageFull` is the portable case (Linux's
-/// ENOSPC maps to it too) and is checked on every platform; the raw OS 112
-/// check is Windows' own `ERROR_DISK_FULL` code, gated `#[cfg(windows)]`
-/// (fix round 1) because 112 names a DIFFERENT condition on other
-/// platforms — `EHOSTDOWN` on Linux — so checking it unconditionally would
-/// misclassify an unrelated Linux error as `diskFull`. Anything else (a
-/// vanished volume, a path that became invalid mid-write, …) degrades to
-/// `internal` — this task has no test evidence to classify it more
-/// precisely.
+/// real machine. The disk-full test is `io_errors::is_disk_full` (GAP-216:
+/// one home for the "`StorageFull` or Windows' raw 112" question, shared
+/// with `publish::copy_error`, `media_import::copy_error`,
+/// `guide_commands::map_prefs_write_error` and `errors::write_error`).
+/// Anything else (a vanished volume, a path that became invalid mid-write,
+/// …) degrades to `internal` — this task has no test evidence to classify
+/// it more precisely.
 pub(crate) fn map_write_error(e: io::Error) -> EditorError {
-    #[cfg(windows)]
-    let is_disk_full = e.kind() == io::ErrorKind::StorageFull || e.raw_os_error() == Some(112);
-    #[cfg(not(windows))]
-    let is_disk_full = e.kind() == io::ErrorKind::StorageFull;
-
-    if is_disk_full {
+    if vault_buddy_core::editor::io_errors::is_disk_full(&e) {
         EditorError::new(
             EditorErrorCode::DiskFull,
             format!("Not enough disk space to save the project: {e}"),

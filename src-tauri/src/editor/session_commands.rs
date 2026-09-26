@@ -29,7 +29,8 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_screen::{staging, staging_files};
 
 use super::authz::{require_editor_window, require_session};
-use super::prefs_commands::project_id_for;
+use super::errors::{err, internal};
+use super::prefs_commands::{local_data, project_id_for};
 use super::project_store::{
     pin_staged, pinned_project, project_dir, resolve_source, SourceLocator, SourceMediaKind,
     SourceRecord,
@@ -49,14 +50,6 @@ const STAGED_ASSET_ID: &str = "src";
 /// F7's refusal, verbatim from the brief.
 const UNKNOWN_LENGTH: &str = "This recording's original data is gone — its length is unknown, \
      so it cannot be edited. You can still discard it.";
-
-fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
-    EditorError::new(code, message)
-}
-
-fn internal(message: impl Into<String>) -> EditorError {
-    err(EditorErrorCode::Internal, message)
-}
 
 /// A project on disk, as `open_staged_in` found or made it.
 pub(crate) struct OpenedProject {
@@ -584,12 +577,6 @@ pub enum CloseDisposition {
     Keep,
     DiscardRecovery,
     DiscardProject,
-}
-
-fn local_data(app: &AppHandle) -> Result<std::path::PathBuf, EditorError> {
-    app.path()
-        .app_local_data_dir()
-        .map_err(|e| internal(format!("Could not resolve the app data directory: {e}")))
 }
 
 async fn blocking<T: Send + 'static>(

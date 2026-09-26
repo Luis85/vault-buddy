@@ -69,6 +69,7 @@ use vault_buddy_screen::render::video_graph::file_input_count;
 use vault_buddy_screen::ScreenError;
 
 use super::authz::require_session;
+use super::errors::{err, internal};
 use super::media_jobs::{start_job_in, JobKind, JobPhase, JobReporter, JobTerminal, ProgressSink};
 use super::prefs_commands::project_id_for;
 use super::project_store::{project_dir, resolve_source, SourceMediaKind, SourceRecord};
@@ -85,14 +86,6 @@ pub(crate) const PART_FILE: &str = "out.mp4.part";
 /// project snapshot, so the bound is the project-file bound per product.
 pub(crate) const LEDGER_MAX_BYTES: u64 =
     limits::MAX_PROJECT_JSON_BYTES * (limits::MAX_PRODUCTS as u64 + 1);
-
-fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
-    EditorError::new(code, message)
-}
-
-fn internal(message: impl Into<String>) -> EditorError {
-    err(EditorErrorCode::Internal, message)
-}
 
 fn cancelled() -> EditorError {
     err(EditorErrorCode::Cancelled, "The render was cancelled.")

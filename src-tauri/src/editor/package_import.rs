@@ -79,6 +79,7 @@ use vault_buddy_core::editor::{
 };
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
+use super::errors::internal;
 use super::media_import::{sniff_copy, FfprobeImportIo, ImportIo};
 use super::package_commands::PathChooser;
 use super::prefs_commands::WORKSPACE_FILE;
@@ -144,12 +145,11 @@ const IMPORTING_SUFFIX: &str = ".importing";
 /// can read back (M-V2).
 const TOO_LARGE_TO_INSTALL: &str = "This project file is too large to install.";
 
-fn invalid(message: impl Into<String>) -> EditorError {
+/// `EditorErrorCode::InvalidProject` -- distinct from the shared
+/// `errors::invalid` (`InvalidRequest`): a whole package FILE failed
+/// validation here, not one request's shape.
+fn invalid_project(message: impl Into<String>) -> EditorError {
     EditorError::new(EditorErrorCode::InvalidProject, message)
-}
-
-fn internal(message: impl Into<String>) -> EditorError {
-    EditorError::new(EditorErrorCode::Internal, message)
 }
 
 /// The project id a store entry named `.<id>.importing` was building, if
@@ -197,7 +197,7 @@ fn read_incoming<'f>(
         }
     };
     if let Some(problem) = asset_id_problem(&incoming.envelope) {
-        return Err(invalid(problem));
+        return Err(invalid_project(problem));
     }
     Ok(incoming)
 }
@@ -242,7 +242,7 @@ impl ImportDir {
     /// free under the `open` lock (`choose_id`), which every project mint
     /// holds too.
     fn install(mut self, root: &Path, id: &str) -> Result<(), EditorError> {
-        let target = project_dir(root, id).ok_or_else(|| invalid("invalid project id"))?;
+        let target = project_dir(root, id).ok_or_else(|| invalid_project("invalid project id"))?;
         std::fs::rename(&self.dir, &target).map_err(map_write_error)?;
         self.installed = true;
         Ok(())
@@ -288,7 +288,7 @@ fn extract_one(
     sha256: &str,
 ) -> Result<Extracted, EditorError> {
     let dest = join_contained(dir, name).ok_or_else(|| {
-        invalid(format!(
+        invalid_project(format!(
             "The package's {label} cannot be saved as a file here."
         ))
     })?;
@@ -302,7 +302,7 @@ fn extract_one(
     // after `ImportDir::install` would leave a project built from a corrupt
     // entry installed.
     if got.bytes != size || got.sha256 != sha256 {
-        return Err(invalid(format!(
+        return Err(invalid_project(format!(
             "The package's {label} does not match its manifest (size or SHA-256); the file is damaged."
         )));
     }
@@ -329,7 +329,7 @@ fn product_file_name<'a>(
         .iter()
         .find(|p| p.id == product_id)
         .map(|p| p.filename.as_str())
-        .ok_or_else(|| invalid(format!("The package's {label} is not in the project.")))?;
+        .ok_or_else(|| invalid_project(format!("The package's {label} is not in the project.")))?;
     let usable = validate_entry_name(&format!("products/{filename}")).is_ok()
         && !filename.contains('/')
         && !is_reserved_device_name(filename)
@@ -337,7 +337,7 @@ fn product_file_name<'a>(
     if usable {
         Ok(filename)
     } else {
-        Err(invalid(format!(
+        Err(invalid_project(format!(
             "The package's {label} has a file name that cannot be saved as a file."
         )))
     }
@@ -566,7 +566,7 @@ fn stored_json(value: &impl serde::Serialize, max: u64) -> Result<String, Editor
     match serde_json::to_writer_pretty(&mut out, value) {
         Ok(()) => String::from_utf8(out.bytes)
             .map_err(|e| internal(format!("Could not encode the project: {e}"))),
-        Err(_) if out.over => Err(invalid(TOO_LARGE_TO_INSTALL)),
+        Err(_) if out.over => Err(invalid_project(TOO_LARGE_TO_INSTALL)),
         Err(e) => Err(internal(format!("Could not encode the project: {e}"))),
     }
 }
@@ -589,7 +589,9 @@ fn import_file(
         })?;
     let is_file = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file());
     if !is_file {
-        return Err(invalid("The chosen project file is not a plain file."));
+        return Err(invalid_project(
+            "The chosen project file is not a plain file.",
+        ));
     }
     let file = File::open(path).map_err(map_write_error)?;
     let Incoming {
@@ -599,7 +601,7 @@ fn import_file(
 
     let _open = lock_ignoring_poison(&state.open);
     // Transport only: taken OUT of the envelope before anything is stored.
-    let facts = take_source_facts(&mut envelope).map_err(invalid)?;
+    let facts = take_source_facts(&mut envelope).map_err(invalid_project)?;
     // Task 46: a product's file is `products\<productId>.mp4` and nothing
     // else -- refused here, before anything is built, like every other
     // name this file carries.
@@ -611,7 +613,7 @@ fn import_file(
         .iter()
         .position(|p| !has_canonical_file_name(p))
     {
-        return Err(invalid(format!(
+        return Err(invalid_project(format!(
             "The file name of product {} in the project file is not its id followed by .mp4.",
             i + 1
         )));

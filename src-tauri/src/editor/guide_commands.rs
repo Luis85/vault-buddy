@@ -49,15 +49,8 @@ use vault_buddy_core::editor::guide::{self, GuideProgress};
 use vault_buddy_core::editor::{new_entity_id, EditorError, EditorErrorCode};
 
 use super::authz::require_editor_window;
+use super::errors::{err, internal};
 use super::prefs_commands::{blocking, local_data};
-
-fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
-    EditorError::new(code, message)
-}
-
-fn internal(message: impl Into<String>) -> EditorError {
-    err(EditorErrorCode::Internal, message)
-}
 
 /// The app-wide preference folder under the app's local data root —
 /// deliberately OUTSIDE `editor-projects\`: guide progress belongs to the
@@ -110,11 +103,7 @@ pub(crate) fn read_guide_progress(root: &Path) -> Result<GuideProgress, EditorEr
 }
 
 fn map_prefs_write_error(e: std::io::Error) -> EditorError {
-    #[cfg(windows)]
-    let full = e.kind() == std::io::ErrorKind::StorageFull || e.raw_os_error() == Some(112);
-    #[cfg(not(windows))]
-    let full = e.kind() == std::io::ErrorKind::StorageFull;
-    if full {
+    if vault_buddy_core::editor::io_errors::is_disk_full(&e) {
         err(
             EditorErrorCode::DiskFull,
             "Not enough disk space to save guide progress.",

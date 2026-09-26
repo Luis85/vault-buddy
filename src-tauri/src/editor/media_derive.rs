@@ -68,6 +68,7 @@ use vault_buddy_core::editor::{is_valid_id, new_entity_id, EditorError, EditorEr
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::require_session;
+use super::errors::err;
 use super::media_commands::{resolve_asset, ResolvedAsset};
 use super::media_jobs::{start_job_in, JobKind, JobPhase, JobReporter, JobTerminal, NoSubscriber};
 use super::prefs_commands::project_id_for;
@@ -133,10 +134,6 @@ pub struct MediaPeaks {
 pub(crate) struct MediaRequest<'a> {
     pub session_id: &'a str,
     pub asset_id: &'a str,
-}
-
-fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
-    EditorError::new(code, message)
 }
 
 fn no_ffmpeg(message: &str) -> EditorError {

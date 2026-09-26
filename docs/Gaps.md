@@ -7492,26 +7492,68 @@ the extraction before them, so a portable import with many files holds other
 opens a little longer (one ffprobe per carried file, each bounded by
 `PROBE_TIMEOUT`).
 
-### GAP-216 · Low (tech debt, narrowed 2026-09-26 — hardening Task 20) · The editor shell repeats its small helpers
+### GAP-216 · CLOSED (hardening Task 22) · The editor shell repeats its small helpers
 `src-tauri/src/editor/*.rs`, `src/composables/useTimelineDrag.ts`
-(final whole-branch review, "stay recorded"). The same few helpers are
+(final whole-branch review, "stay recorded"). The same few helpers were
 defined per file rather than once: `fn err(code, message)` and
 `fn internal(message)` in most `editor/*` modules (twenty-seven private
 `err`/`internal`/`local_data` definitions at the review), `local_data`
 (the app-data-dir resolver) four times, and the `io::ErrorKind::StorageFull` /
-raw OS 112 → `diskFull` mapping six times. Nothing is wrong today; the cost
-is drift — a seventh disk-full mapping that forgets raw error 112. **Fix:**
-one `editor::errors` module (`err`, `internal`, `write_error` with the one
-disk-full rule) that every module imports, and `prefs_commands::local_data`
-as the only resolver. *(Narrowed by hardening Task 20: the `MIN_CLIP_MS`
-literal this entry used to name — tied to `core::editor::mod::limits` by a
-comment alone — is now pinned by
+raw OS 112 → `diskFull` mapping six times. *(Narrowed by hardening Task 20:
+the `MIN_CLIP_MS` literal this entry used to name — tied to
+`core::editor::mod::limits` by a comment alone — is now pinned by
 `tests/useTimelineDrag.test.ts#equals the Rust MIN_CLIP_MS constant`, which
 reads the Rust constant through `tests/helpers/rustSource.ts`'s
 `rustLimit` — the same reader `editorCaptions.test.ts` uses for
 `MAX_CAPTIONS`/`MAX_MARKERS`, extracted into that shared helper so a third
 caller costs no new implementation. A Rust `MIN_CLIP_MS` change the trim
 preview does not follow now fails CI instead of drifting silently.)*
+
+**Closed by Task 22.** Re-measured at the start of the task (drift since the
+review: fifteen `fn err(...)`, TEN `fn internal(...)` — not eight, later
+tasks had grown two more — three PRIVATE `fn local_data(...)` copies beside
+`prefs_commands`'s kept `pub(crate)` one, three `fn invalid(...)` shaped two
+ways (`InvalidRequest` in `relink_media.rs`/`webcam_commands.rs`,
+`InvalidProject` in `package_import.rs`), and five shell sites repeating the
+`#[cfg(windows)] … StorageFull || raw_os_error() == Some(112)` pair
+(`guide_commands::map_prefs_write_error`, `media_import::copy_error`,
+`publish::copy_error`, `save_commands::map_write_error`,
+`webcam_commands::write_error`) — plus `core::editor::package::write_failed`,
+which answered the same question with only HALF of it (`StorageFull` alone,
+silently forgetting the raw Windows code every shell copy carried).
+
+**Fix, one home each:**
+- `core::editor::io_errors::is_disk_full(&io::Error) -> bool` — the ONE
+  disk-full test (`StorageFull` on every platform, Windows' raw 112 gated
+  `cfg(windows)` since 112 names `EHOSTDOWN` on Linux) — used by
+  `package::write_failed` (now correctly `DiskFull` for the raw code too)
+  and by every shell site below.
+- `src-tauri/src/editor/errors.rs` — `err`, `internal`, `invalid`
+  (`InvalidRequest`) and `write_error` (`webcam_commands`'s exact
+  "not enough disk space to `{what}`" / "could not `{what}`" shape,
+  verbatim, now shared by its four call sites and by `webcam_finish.rs`).
+  Every `editor/*` module that had its own `err`/`internal` now imports
+  these instead. The five disk-full sites keep their own richer functions
+  (`WriteDenied`, `Cancelled`, `FileTooLarge` branches and their own
+  wording differ per site, so a behaviour-preserving refactor cannot fold
+  them into one function) but each now calls `is_disk_full` instead of
+  re-deriving the `cfg(windows)` pair by hand.
+- `package_import.rs` keeps its own `invalid_project` (`InvalidProject` —
+  a different code answering a different question, a whole package FILE
+  failing validation rather than one malformed request) rather than
+  sharing the shared `invalid`'s name for two meanings.
+- The three private `local_data` copies (`render_commands.rs`,
+  `save_commands.rs`, `session_commands.rs`) now import
+  `prefs_commands::local_data`, already `pub(crate)` and already how every
+  other module reached it.
+
+After: exactly one `err`, one `internal`, one `invalid` and one
+`write_error` (all in `errors.rs`), one `local_data`
+(`prefs_commands.rs`), zero `#[cfg(windows)] … StorageFull` pairs left in
+the shell, and one `is_disk_full` in core backing all of them. No
+behaviour changed at any call site (`cargo test -p vault-buddy --lib`:
+627 passed; `cargo test -p vault_buddy_core --lib`: 1304 passed, including
+new coverage for `is_disk_full` and `package::write_failed`).
 
 ### GAP-217 · Low · An unreadable `products.json` blocks every save, render, export and publish of its project
 `src-tauri/src/editor/render_jobs.rs` (`read_ledger`), read (and its

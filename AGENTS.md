@@ -195,7 +195,11 @@ vault-buddy/
 │   │                           #     take_editor_request, list_tutorial_projects),
 │   │                           #   editor/ (the tutorial editor: project store, pin, the
 │   │                           #     editor_* session commands, the durable save/list/reopen
-│   │                           #     commands (save_commands.rs) + the workspace view-preference
+│   │                           #     commands (save_commands.rs) + errors.rs (GAP-216: the ONE
+│   │                           #     home for the shell's `err`/`internal`/`invalid`/
+│   │                           #     `write_error` shorthand, every other editor/* module
+│   │                           #     imports instead of growing its own; the disk-full test
+│   │                           #     itself is core's `io_errors::is_disk_full`) + the workspace view-preference
 │   │                           #     commands (prefs_commands.rs, Task 18 — never touches the
 │   │                           #     revision or history) + guide_commands.rs (the app-wide
 │   │                           #     editor-prefs\guide-progress.json read/write, Task 55, and
@@ -288,7 +292,11 @@ vault-buddy/
 │   │                           #     checks.rs + checks_layout.rs = the before-you-share
 │   │                           #     findings, Task 54; guide.rs = the guide-progress
 │   │                           #     document's strict save / lenient read, its lessons
-│   │                           #     include_str!'d from src/editor/guide/steps.json, Task 55)
+│   │                           #     include_str!'d from src/editor/guide/steps.json, Task 55;
+│   │                           #     io_errors.rs = is_disk_full, the ONE "is this a full
+│   │                           #     disk" test (StorageFull or Windows' raw 112, hardening
+│   │                           #     Task 22, GAP-216) `package::write_failed` and the shell's
+│   │                           #     `errors::write_error`-shaped helpers both call)
 │   ├── capture/src/            # AUDIO engine: devices, mixer, encoder, session,
 │   │                           #   recovery, rename
 │   ├── mcp/src/                # MCP server: service (7 tools), http (guards+runner),

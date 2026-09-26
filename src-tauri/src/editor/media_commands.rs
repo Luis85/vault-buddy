@@ -45,6 +45,7 @@ use vault_buddy_core::editor::probe::import_extensions;
 use vault_buddy_core::editor::{is_valid_id, EditorError, EditorErrorCode};
 
 use super::authz::{require_editor_window, require_session};
+use super::errors::err;
 use super::media_derive::{editor_ffmpeg, peaks_in, thumbnail_in, MediaPeaks, MediaRequest};
 use super::media_import::{run_import, FfprobeImportIo, ImportJob};
 use super::media_jobs::{
@@ -69,10 +70,6 @@ pub enum MediaRef {
     Asset(String),
     Product(String),
     Review(String),
-}
-
-fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
-    EditorError::new(code, message)
 }
 
 fn unregistered(what: &str, id: &str) -> EditorError {

@@ -8,18 +8,15 @@
 
 use std::path::Path;
 
-use vault_buddy_core::editor::{EditorError, EditorErrorCode, EditorSession};
+use vault_buddy_core::editor::{EditorError, EditorSession};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
+use super::errors::internal;
 use super::prefs_commands::project_id_for;
 use super::recovery;
 use super::session_commands::CloseDisposition;
 use super::store_io::remove_project;
 use super::EditorState;
-
-fn internal(message: impl Into<String>) -> EditorError {
-    EditorError::new(EditorErrorCode::Internal, message)
-}
 
 /// Take the session out of the two maps — and do nothing else under them
 /// (final review M1: the maps are never held across disk I/O, and the

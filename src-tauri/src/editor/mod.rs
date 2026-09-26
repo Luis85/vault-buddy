@@ -19,6 +19,7 @@ pub mod caption_commands;
 pub mod checks_commands;
 pub mod diagnostics;
 pub(crate) mod discard;
+pub(crate) mod errors;
 pub mod guide_commands;
 pub(crate) mod journal_quarantine;
 pub mod media_commands;

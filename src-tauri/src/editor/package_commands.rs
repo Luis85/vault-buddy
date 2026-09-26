@@ -43,6 +43,7 @@ use vault_buddy_core::editor::{
 };
 
 use super::authz::{require_editor_window, require_session};
+use super::errors::err;
 pub(crate) use super::package_import::import_package_in;
 use super::package_import::FfprobeProber;
 use super::prefs_commands::{blocking, local_data, read_workspace};
@@ -81,10 +82,6 @@ pub struct PackageReceipt {
     pub saved_revision: u64,
     pub file_name: String,
     pub format: PackageFormat,
-}
-
-fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
-    EditorError::new(code, message)
 }
 
 /// The envelope a package carries: the session's project at

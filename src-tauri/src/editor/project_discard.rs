@@ -36,15 +36,12 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_screen::staging;
 
 use super::authz::require_editor_window;
+use super::errors::err;
 use super::prefs_commands::{blocking, local_data};
 use super::project_store::{pinned_project, project_dir, unpin_staged};
 use super::redact::redact_name;
 use super::store_io::{prove_ownership, remove_project};
 use super::EditorState;
-
-fn err(code: EditorErrorCode, message: &str) -> EditorError {
-    EditorError::new(code, message)
-}
 
 /// What a discard says when `project.json` does not prove the folder is this
 /// project's (GAP-214 item 8): fixed role words — never the redaction

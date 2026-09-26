@@ -55,6 +55,7 @@ use vault_buddy_core::editor::{
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::require_session;
+use super::errors::{internal, invalid};
 use super::media_import::{
     copy_owned, describe, extension_of, file_name_of, media_dir, remove_quietly, source_size,
     ImportIo,
@@ -67,14 +68,6 @@ use super::save_commands::session_save_lock;
 use super::session_commands::missing_media;
 use super::store_io::{load_sources, write_sources};
 use super::EditorState;
-
-fn invalid(message: impl Into<String>) -> EditorError {
-    EditorError::new(EditorErrorCode::InvalidRequest, message)
-}
-
-fn internal(message: impl Into<String>) -> EditorError {
-    EditorError::new(EditorErrorCode::Internal, message)
-}
 
 /// Everything one reconnect runs against.
 pub(crate) struct RelinkJob<'a> {

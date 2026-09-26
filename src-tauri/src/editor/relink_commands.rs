@@ -32,14 +32,11 @@ use vault_buddy_core::editor::{EditorError, EditorErrorCode};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::{require_editor_window, require_session};
+use super::errors::internal;
 use super::media_import::FfprobeImportIo;
 use super::prefs_commands::{blocking, local_data};
 use super::relink_media::{check_request, relink_in, targets, RelinkJob};
 use super::EditorState;
-
-fn err(message: impl Into<String>) -> EditorError {
-    EditorError::new(EditorErrorCode::Internal, message)
-}
 
 /// Claims the session's one reconnect slot (`caption_imports`' posture).
 /// Paired with `release_relink` on every way out.
@@ -141,11 +138,11 @@ pub async fn editor_relink_media(
             .spawn(worker)
             .map_err(|e| {
                 log::error!("editor relink: could not start the reconnect thread: {e}");
-                err("The reconnect could not start.")
+                internal("The reconnect could not start.")
             })?;
         handle.join().map_err(|_| {
             log::error!("editor relink: the reconnect thread panicked");
-            err("The reconnect stopped unexpectedly.")
+            internal("The reconnect stopped unexpectedly.")
         })?
     })
     .await;

@@ -8,36 +8,28 @@
 //! named `editor-render` thread and hands the Channel over. Jobs never use
 //! events (ADR invariant 7): progress travels on the caller's Channel only.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, WebviewWindow};
 use vault_buddy_core::editor::render_plan::RenderPlan;
-use vault_buddy_core::editor::{EditorError, EditorErrorCode, EditorProjection};
+use vault_buddy_core::editor::{EditorError, EditorProjection};
 use vault_buddy_screen::ffmpeg_args::EncodeSettings;
 use vault_buddy_screen::render::run::{render, render_refusal, RenderRequestNative};
 use vault_buddy_screen::render::FfmpegCapabilities;
 use vault_buddy_screen::ScreenError;
 
 use super::authz::require_editor_window;
+use super::errors::internal;
 use super::media_jobs::{JobKind, JobPhase, JobProgressDto, JobReporter, JobTerminal};
+use super::prefs_commands::local_data;
 use super::render_jobs::{
     begin_render, no_ffmpeg, products_in, restore_in, run_render_job, ProductDto, RenderJob,
     RenderRequest, RenderRunner, RenderStarted, RenderWork,
 };
 use super::EditorState;
 use crate::ffmpeg::{probe_capabilities, resolve_working_ffmpeg, FfmpegTools};
-
-fn internal(message: impl Into<String>) -> EditorError {
-    EditorError::new(EditorErrorCode::Internal, message)
-}
-
-fn local_data(app: &AppHandle) -> Result<PathBuf, EditorError> {
-    app.path()
-        .app_local_data_dir()
-        .map_err(|e| internal(format!("Could not resolve the app data directory: {e}")))
-}
 
 async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, EditorError> + Send + 'static,

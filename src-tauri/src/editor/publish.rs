@@ -64,6 +64,7 @@ use vault_buddy_core::vault_config::VaultCaptureConfig;
 use vault_buddy_screen::staging_title::sanitize_title;
 
 use super::authz::require_editor_window;
+use super::errors::err;
 use super::media_jobs::{start_job_in, JobKind, JobPhase, JobReporter, JobTerminal, NoSubscriber};
 use super::prefs_commands::{blocking, local_data, project_id_for};
 use super::project_store::project_dir;
@@ -79,10 +80,6 @@ const CANCEL_POLL: Duration = Duration::from_millis(50);
 /// Set once a quit's bounded publish cancel expired (the render term's
 /// `RENDERS_ABANDONED`, for the same Alt+F4 re-close loop).
 static PUBLISHES_ABANDONED: AtomicBool = AtomicBool::new(false);
-
-fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
-    EditorError::new(code, message)
-}
 
 fn unavailable(message: impl Into<String>) -> EditorError {
     err(EditorErrorCode::DestinationUnavailable, message)
@@ -369,10 +366,7 @@ impl Journal<'_> {
 }
 
 fn copy_error(e: io::Error) -> EditorError {
-    #[cfg(windows)]
-    let disk_full = e.kind() == io::ErrorKind::StorageFull || e.raw_os_error() == Some(112);
-    #[cfg(not(windows))]
-    let disk_full = e.kind() == io::ErrorKind::StorageFull;
+    let disk_full = vault_buddy_core::editor::io_errors::is_disk_full(&e);
     if e.kind() == io::ErrorKind::Interrupted {
         err(EditorErrorCode::Cancelled, "The publish was cancelled.")
     } else if disk_full {

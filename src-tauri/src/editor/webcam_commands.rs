@@ -60,6 +60,7 @@ use vault_buddy_core::editor::{is_valid_id, new_entity_id, EditorError, EditorEr
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::{require_editor_window, require_session};
+use super::errors::{err, internal, invalid, write_error};
 use super::prefs_commands::{blocking, local_data, project_id_for};
 use super::project_store::project_dir;
 use super::webcam_finish::{finish_in, FfmpegTakeIo, TakeDto, TakeIo};
@@ -71,18 +72,6 @@ use crate::capture_guard::{CaptureGuard, CaptureKind};
 pub(crate) const HEADER_SESSION: &str = "x-editor-session";
 pub(crate) const HEADER_TAKE: &str = "x-editor-take";
 pub(crate) const HEADER_SEQ: &str = "x-editor-seq";
-
-pub(super) fn err(code: EditorErrorCode, message: impl Into<String>) -> EditorError {
-    EditorError::new(code, message)
-}
-
-fn invalid(message: impl Into<String>) -> EditorError {
-    err(EditorErrorCode::InvalidRequest, message)
-}
-
-pub(super) fn internal(message: impl Into<String>) -> EditorError {
-    err(EditorErrorCode::Internal, message)
-}
 
 /// `editor_webcam_begin`'s answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -430,21 +419,6 @@ fn require_owned_file(path: &Path) -> Result<(), EditorError> {
             "The take's file has been replaced; discard the take.",
         )),
         Err(e) => Err(write_error("reach the take's file", &e)),
-    }
-}
-
-pub(super) fn write_error(what: &str, e: &io::Error) -> EditorError {
-    #[cfg(windows)]
-    let full = e.kind() == io::ErrorKind::StorageFull || e.raw_os_error() == Some(112);
-    #[cfg(not(windows))]
-    let full = e.kind() == io::ErrorKind::StorageFull;
-    if full {
-        err(
-            EditorErrorCode::DiskFull,
-            format!("Not enough disk space to {what}: {e}"),
-        )
-    } else {
-        internal(format!("Could not {what}: {e}"))
     }
 }
 
