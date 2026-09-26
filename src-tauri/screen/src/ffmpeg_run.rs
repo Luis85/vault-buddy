@@ -459,8 +459,9 @@ pub fn run_named(",
         for name in [RENDER_RUNNER.progress_thread, RENDER_RUNNER.stderr_thread] {
             assert!(name.starts_with("editor-render-"), "{name}");
         }
-        let render = include_str!("render/run.rs");
-        let render = render.split("#[cfg(test)]").next().unwrap_or(render);
+        // CRLF on a Windows (autocrlf) checkout; the literal below is LF.
+        let render = include_str!("render/run.rs").replace("\r\n", "\n");
+        let render = render.split("#[cfg(test)]").next().unwrap_or(&render);
         assert!(
             render.contains(
                 "run_named(
