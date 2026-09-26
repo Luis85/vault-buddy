@@ -432,7 +432,7 @@ fn a_transient_read_error_never_quarantines_a_journal_that_might_be_fine() {
         .open(&path)
         .unwrap();
 
-    let cleared = quarantine_before_overwrite(f.root(), "proj-locked", &path);
+    let cleared = quarantine_before_overwrite(f.root(), "proj-locked", &path, false);
 
     drop(held);
     // Hardening Task 18: nor may the write that follows replace it.

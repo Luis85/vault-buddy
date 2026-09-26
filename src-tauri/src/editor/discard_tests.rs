@@ -181,7 +181,7 @@ fn a_discard_refuses_while_a_take_is_finishing_and_succeeds_after() {
     let (io, release) = GatedIo::closed();
     std::thread::scope(|scope| {
         let finishing = scope.spawn(|| finish_in(&f.state, f.root(), &io, &f.session, &take, 0));
-        while f.state.takes.wait_idle(&f.session, Duration::ZERO) {
+        while f.state.takes.wait_idle(&f.session, Duration::ZERO).is_ok() {
             std::thread::yield_now();
         }
         let discarded = f.discard();
@@ -448,4 +448,36 @@ fn a_workspace_save_waits_for_a_discard_in_progress_and_then_finds_the_session_g
     );
     assert_eq!(saved.unwrap_err().code, EditorErrorCode::SessionGone);
     assert!(!f.project_dir().exists(), "nothing recreated the folder");
+}
+
+// Final review M-5: a take being RECOVERED -- a crash's leftover recording,
+// remuxed on this open (`webcam_recover`) -- is not one the user started;
+// the refusal says what is really happening instead of "still being saved".
+#[test]
+fn a_discard_refused_for_a_take_being_recovered_says_so() {
+    use crate::editor::webcam_registry::{TakeEntry, TakeSlot};
+    use vault_buddy_core::editor::take::TakeState;
+    let f = Fixture::new();
+    let slot = std::sync::Arc::new(TakeSlot {
+        session_id: f.session.clone(),
+        project_id: f.project.clone(),
+        dir: f.project_dir().join("takes"),
+        take_id: "take-back".into(),
+        recovered: true,
+        entry: Mutex::new(TakeEntry {
+            state: TakeState::new(),
+            failed: None,
+        }),
+    });
+    lock_ignoring_poison(&f.state.takes.0).insert("take-back".into(), slot.clone());
+    let recovering = lock_ignoring_poison(&slot.entry);
+    let refused = f.discard().expect_err("a take is still being recovered");
+    drop(recovering);
+    assert_eq!(refused.code, EditorErrorCode::InvalidRequest);
+    assert_eq!(
+        refused.message,
+        "A webcam take from an earlier session is still being recovered. Wait for it to \
+         finish, then discard the project."
+    );
+    f.assert_untouched();
 }

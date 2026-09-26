@@ -2868,13 +2868,49 @@ user can export or discard it later.
 > chosen WITHOUT first trying Resume sets an unreadable journal aside
 > silently — the bytes are kept, but only the log says so, because the
 > "Their file is kept in the project folder." copy appears only once a
-> Resume attempt has found the journal unreadable; (ii) a READABLE journal from an earlier
+> Resume attempt has found the journal unreadable; (ii) ~~a READABLE journal from an earlier
 > process that the user declines with "Open saved project" is still
 > removed by the session's next save of the current revision, or replaced
-> by its first journal write — by design under ruling R7 (only an
-> unreadable journal is kept aside; a readable one was offered and
-> declined); (iii) the set-aside's same-second collision retry (the
+> by its first journal write — by design under ruling R7~~ CLOSED
+> 2026-09-26 by the final review's fix wave (I-2, ruling R12 amending R7),
+> below; (iii) the set-aside's same-second collision retry (the
 > numeric suffix) has no test of its own.
+>
+> **2026-09-26 — (ii) closed (final whole-branch review I-2, RULING R12).**
+> R7's premise — "a readable journal was offered and declined" — was
+> wrong: a readable journal can only be Resumed or Discarded through the
+> dialog, so the one way to reach "Open saved project" over one is a
+> Resume that failed for a TRANSIENT reason (a sharing violation in
+> `read_bounded`), right after the dialog said "Their file is kept in the
+> project folder." Now a session minted by an open that did not resume the
+> journal (`editor_open_project` without `useRecovery`, or a staged
+> capture's Edit) is marked by `journal_quarantine::
+> note_unresumed_predecessor` (in `open_project_locked` and
+> `open_staged_session_with`, under `open`); until it has written its own
+> journal, its first write, a save of the current revision and a Discard
+> of its own DIRTY changes set the predecessor aside even when it reads
+> cleanly — to `recovery.unresumed-<unix seconds>[-n].json`, the same
+> `rename_noreplace` rails and collision retries, and the same
+> defer/refuse when the set-aside fails. A readable journal is replaced or
+> deleted only by the session that resumed or wrote it, and by the recovery
+> offer's own Discard (a CLEAN session: the user discarded exactly that
+> journal, A27). Task 9's take recovery is unchanged: it is held back while
+> anything wears the name, and the writer's set-aside is followed at once by
+> the session's own journal. Pinned by `journal_quarantine::tests::
+> a_first_write_sets_an_unresumed_readable_journal_aside`,
+> `…a_save_sets_an_unresumed_readable_journal_aside_instead_of_deleting_it`,
+> `…a_resumed_session_replaces_and_removes_its_own_journal`,
+> `…a_staged_open_over_a_readable_journal_sets_it_aside_too`,
+> `…an_unresumed_journal_that_cannot_be_set_aside_is_never_overwritten`,
+> `…discard_changes_before_the_first_write_keeps_an_unresumed_journal` and
+> `…the_recovery_offers_discard_still_deletes_a_readable_journal`. The same
+> wave made Discard delete only on the cases it knows (a readable journal,
+> or an absent one) and refuse on any other error (M-4,
+> `…a_discard_never_deletes_on_an_unexpected_error`), and reports an
+> unparsable journal in fixed words, the serde detail logged by kind and
+> position only (M-3, `…an_unreadable_journal_is_reported_in_fixed_words`).
+> Cost, as the ruling accepted: one extra `recovery.unresumed-*` file in the
+> project folder per journal a session declined, never deleted by the app.
 
 ### GAP-181 · Low · A caption or chapter trimmed out of its clip is kept but listed nowhere
 `src/editor/captionRules.ts` (`captionRows`, `chapterRows`),
@@ -7174,6 +7210,15 @@ high, latent if a phase with a lower one is ever added; (h)
 (`KeyR`/`KeyF`/`KeyP`/`F5`) is the non-deprecated, layout-independent
 equivalent to move to; (i) no test pins that `follow` stops on a session
 change, or on an adopted render that finished before the dialog opened.
+Also recorded (final whole-branch review M-8, 2026-09-26): (j) (c)'s
+endless retry is also SILENT — `follow` reads with `reconcile({ silent:
+true })`, so a registry that fails for good polls `editor_get_jobs` once a
+second for as long as the dialog stays open, with no toast and no log line
+from the webview; a bounded retry with a one-time notice would be
+friendlier. Relatedly, the same review's M-1 (fixed in that wave): a
+refused discard's reattach reuses the live session, which
+`hydrateNewSession` does not count as new, so it now reconciles the jobs
+itself (`EditorRoot.reattach`).
 
 ### GAP-209 · ~~Medium~~ FIXED 2026-09-25 (Task 58 fix round 1) · The editor's DARK theme misses 4.5:1 for subtle text, clip labels and the primary button
 `src/style.css` (`@theme` defaults), `src/components/ui/AppButton.vue`
@@ -7779,7 +7824,7 @@ that does not PARSE — now say so in fixed wording
 log), so what remains here is `validate_envelope`'s own product-id
 messages.)*
 
-### GAP-220 · Low (test hygiene) · Two lock-ordering tests over the editor's `open` lock still prove "it waited" with a sleep
+### GAP-220 · Low (test hygiene) · Three lock-ordering tests over the editor's `open` lock still prove "it waited" with a sleep (or a signal sent before the lock)
 `src-tauri/src/staged_commands_tests.rs`
 (`a_discard_waits_for_an_open_in_progress_and_then_sees_its_pin`) and
 `src-tauri/src/staging_commands.rs`
@@ -7797,6 +7842,15 @@ discard reached its read inside those 200 ms. **Remedy:** a
 `*_observed` seam (the `session_save_lock_observed` shape) that signals
 just before `open.lock()`, or holding `open` in an `Arc` the discard
 clones.
+A third, recorded by the final whole-branch review (M-2, 2026-09-26):
+`src-tauri/src/editor/session_close_tests.rs`' race test over a
+`discardProject` and an open in progress (~line 109) signals through
+`test_hooks.discard_waiting_for_open`, which `close_in` sets BEFORE it calls
+`open.lock()` — so "the pin is still there" also holds for a discard that
+has simply not reached its unpin yet, and removing the `open` lock from the
+discard goes red only when the discard wins the race. Its RED is
+probabilistic for the same reason; the same remedy applies (signal from
+inside the lock, or a lock the test can observe).
 
 ### GAP-221 · Low (test hygiene) · The test-only structural scans still have blind spots
 `src-tauri/src/structural_scan.rs`, `src-tauri/src/cfg_windows_guard.rs`,

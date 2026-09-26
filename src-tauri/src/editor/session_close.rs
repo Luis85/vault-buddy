@@ -182,13 +182,17 @@ pub(crate) fn close_locked(
         // so its pending journal write is forgotten only once the discard
         // has succeeded, and the user sees role wording -- the detail (a
         // redacted handle at most) goes to the log.
+        //
+        // R12 (final review I-2): a readable journal this session never
+        // resumed nor wrote is kept aside too while the session discards
+        // its OWN unwritten changes (`discard_keeps_readable`).
         CloseDisposition::DiscardRecovery => {
-            super::journal_quarantine::discard_or_quarantine_journal(root, project_id).map_err(
-                |e| {
+            let keep = super::journal_quarantine::discard_keeps_readable(state, session_id);
+            super::journal_quarantine::discard_or_quarantine_journal(root, project_id, keep)
+                .map_err(|e| {
                     log::warn!("editor recovery: discardRecovery failed for {project_id}: {e}");
                     internal("The unsaved changes could not be discarded right now. Try again.")
-                },
-            )?;
+                })?;
             state.journal.forget(session_id);
         }
         CloseDisposition::DiscardProject => {

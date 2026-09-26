@@ -68,6 +68,16 @@ impl TakeSlot {
     }
 }
 
+/// What `wait_idle` found still busy when its bound ran out.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum TakeBusy {
+    /// A take this session began, being written or finished.
+    Saving,
+    /// Only takes a crash interrupted, being recovered on this open
+    /// (`webcam_recover`) — never started by the user this session.
+    Recovering,
+}
+
 /// Every take this process began and has not yet discarded, by take id.
 #[derive(Default)]
 pub struct TakeRegistry(pub(crate) Mutex<HashMap<String, Arc<TakeSlot>>>);
@@ -127,22 +137,30 @@ impl TakeRegistry {
     }
 
     /// Wait (at most `bound`) until no take of `session_id` is mid-write or
-    /// mid-finish — `false` if one still is. A discard's quiesce: it runs
-    /// AFTER the session is marked closing, so every append, finish and
-    /// begin that takes an entry later refuses (`discard.rs`), and this is
-    /// the one that could still be running.
-    pub(crate) fn wait_idle(&self, session_id: &str, bound: Duration) -> bool {
+    /// mid-finish — `Err` naming what is still busy if one still is. A
+    /// discard's quiesce: it runs AFTER the session is marked closing, so
+    /// every append, finish and begin that takes an entry later refuses
+    /// (`discard.rs`), and this is the one that could still be running.
+    pub(crate) fn wait_idle(&self, session_id: &str, bound: Duration) -> Result<(), TakeBusy> {
         let started = Instant::now();
         loop {
-            let busy = self
+            let busy: Vec<bool> = self
                 .slots_of(session_id)
                 .iter()
-                .any(|s| matches!(s.entry.try_lock(), Err(TryLockError::WouldBlock)));
-            if !busy {
-                return true;
+                .filter(|s| matches!(s.entry.try_lock(), Err(TryLockError::WouldBlock)))
+                .map(|s| s.recovered)
+                .collect();
+            if busy.is_empty() {
+                return Ok(());
             }
             if started.elapsed() >= bound {
-                return false;
+                // Final review M-5: a take the user started this session
+                // wins the wording; only a recovery alone is named as one.
+                return Err(if busy.iter().all(|recovered| *recovered) {
+                    TakeBusy::Recovering
+                } else {
+                    TakeBusy::Saving
+                });
             }
             std::thread::sleep(Duration::from_millis(20));
         }

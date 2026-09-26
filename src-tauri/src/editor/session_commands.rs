@@ -488,6 +488,11 @@ pub(crate) fn open_staged_session_with(
             register_session_with(state, opened.envelope.project, |id, project| {
                 EditorSession::resume(id, project, revision)
             });
+        // R12: this open never resumes a journal the project may still hold.
+        if minted {
+            let (sid, pid) = (&projection.snapshot.session_id, &projection.project.id);
+            super::journal_quarantine::note_unresumed_predecessor(state, root, sid, pid);
+        }
         (projection, minted, workspace, opened.sources)
     };
     // After `open` is released (review I1): a recovery can remux for minutes.

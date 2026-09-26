@@ -115,15 +115,39 @@ impl Fixture {
     }
 
     fn set_aside(&self, pid: &str) -> Vec<String> {
+        self.set_aside_as(pid, "recovery.unreadable-")
+    }
+
+    /// What sits beside `recovery.json` under `prefix`, blockers excluded.
+    fn set_aside_as(&self, pid: &str, prefix: &str) -> Vec<String> {
         std::fs::read_dir(self.dir(pid))
             .unwrap()
             .flatten()
             .filter(|e| {
                 let name = e.file_name().to_string_lossy().into_owned();
-                name.starts_with("recovery.unreadable-") && !is_blocker(&e.path())
+                name.starts_with(prefix) && !is_blocker(&e.path())
             })
             .map(|e| std::fs::read_to_string(e.path()).unwrap())
             .collect()
+    }
+
+    /// R12: a project whose `recovery.json` is a READABLE journal an
+    /// earlier session left behind ("Earlier", kept for later), reopened
+    /// WITHOUT resuming it -- where a failed Resume's "Open saved project"
+    /// lands. Returns the new session, the project and the journal's text.
+    fn reopened_over_readable(&self) -> (String, String, String) {
+        let (sid, pid) = self.open();
+        self.rename(&sid, "cmd-0", "Earlier");
+        self.close(&sid, CloseDisposition::Keep).unwrap();
+        let earlier = std::fs::read_to_string(self.journal(&pid)).unwrap();
+        let reopened = open_project_session(&self.state, self.root(), &pid, false).unwrap();
+        (reopened.snapshot.session_id, pid, earlier)
+    }
+
+    fn journal_title(&self, pid: &str) -> String {
+        let landed: RecoveryJournal =
+            serde_json::from_slice(&std::fs::read(self.journal(pid)).unwrap()).unwrap();
+        landed.project.title
     }
 }
 
@@ -139,6 +163,11 @@ fn is_blocker(path: &Path) -> bool {
 /// exhausts its collision retries and FAILS -- deterministically, on every
 /// platform (a sharing violation would also fail the replacing write).
 fn block_set_aside(dir: &Path) -> Vec<PathBuf> {
+    block_set_aside_as(dir, "recovery.unreadable")
+}
+
+/// `block_set_aside` for the names under `prefix`.
+fn block_set_aside_as(dir: &Path, prefix: &str) -> Vec<PathBuf> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -149,9 +178,9 @@ fn block_set_aside(dir: &Path) -> Vec<PathBuf> {
     for secs in now..now + 60 {
         for attempt in 0..20u32 {
             let name = if attempt == 0 {
-                format!("recovery.unreadable-{secs}.json")
+                format!("{prefix}-{secs}.json")
             } else {
-                format!("recovery.unreadable-{secs}-{attempt}.json")
+                format!("{prefix}-{secs}-{attempt}.json")
             };
             let path = dir.join(name);
             std::fs::write(&path, BLOCKER).unwrap();
@@ -305,4 +334,176 @@ fn a_save_keeps_an_unreadable_journal_it_cannot_set_aside() {
 
     assert_eq!(std::fs::read_to_string(f.journal(&pid)).unwrap(), GARBAGE);
     assert!(f.set_aside(&pid).is_empty());
+}
+
+// ---- R12 (amends R7; final review I-2): a readable journal is replaced or
+// deleted only by the session that RESUMED it or wrote it itself. A session
+// minted over a journal it did not resume -- a failed Resume's "Open saved
+// project", the one way to decline a readable journal -- sets it aside
+// first, readable or not, so the Resume dialog's "Their file is kept in the
+// project folder." holds for every failed Resume. ----
+
+#[test]
+fn a_first_write_sets_an_unresumed_readable_journal_aside() {
+    let f = Fixture::new();
+    let (sid, pid, earlier) = f.reopened_over_readable();
+
+    f.rename(&sid, "cmd-1", "Mine");
+    f.flush(1);
+
+    assert_eq!(f.set_aside_as(&pid, "recovery.unresumed-"), [earlier]);
+    assert!(f.set_aside(&pid).is_empty(), "it was never unreadable");
+    assert_eq!(f.journal_title(&pid), "Mine");
+}
+
+#[test]
+fn a_save_sets_an_unresumed_readable_journal_aside_instead_of_deleting_it() {
+    let f = Fixture::new();
+    let (sid, pid, earlier) = f.reopened_over_readable();
+    let revision = snapshot_in(&f.state, &sid).unwrap().snapshot.revision;
+
+    save_project_in(&f.state, f.root(), &sid, revision).unwrap();
+
+    assert!(!f.journal(&pid).exists(), "the offer is answered");
+    assert_eq!(f.set_aside_as(&pid, "recovery.unresumed-"), [earlier]);
+}
+
+// The paired negative: a session that RESUMED the journal owns it -- its
+// writes replace it and a save removes it, nothing is set aside.
+#[test]
+fn a_resumed_session_replaces_and_removes_its_own_journal() {
+    let f = Fixture::new();
+    let (sid, pid) = f.open();
+    f.rename(&sid, "cmd-0", "Earlier");
+    f.close(&sid, CloseDisposition::Keep).unwrap();
+    let resumed = open_project_session(&f.state, f.root(), &pid, true).unwrap();
+    let sid = resumed.snapshot.session_id;
+
+    f.rename(&sid, "cmd-1", "Mine");
+    f.flush(1);
+    assert_eq!(f.journal_title(&pid), "Mine");
+    let revision = snapshot_in(&f.state, &sid).unwrap().snapshot.revision;
+    save_project_in(&f.state, f.root(), &sid, revision).unwrap();
+
+    assert!(!f.journal(&pid).exists());
+    assert!(f.set_aside_as(&pid, "recovery.").is_empty());
+}
+
+// A staged capture's Edit that reopens the project mints a session over the
+// same journal without resuming it: the same rule.
+#[test]
+fn a_staged_open_over_a_readable_journal_sets_it_aside_too() {
+    let f = Fixture::new();
+    let (sid, pid) = f.open();
+    f.rename(&sid, "cmd-0", "Earlier");
+    f.close(&sid, CloseDisposition::Keep).unwrap();
+    let earlier = std::fs::read_to_string(f.journal(&pid)).unwrap();
+    let (sid, _) = f.open();
+
+    f.rename(&sid, "cmd-1", "Mine");
+    f.flush(1);
+
+    assert_eq!(f.set_aside_as(&pid, "recovery.unresumed-"), [earlier]);
+}
+
+// A set-aside that fails defers the write exactly like the unreadable case.
+#[test]
+fn an_unresumed_journal_that_cannot_be_set_aside_is_never_overwritten() {
+    let f = Fixture::new();
+    let (sid, pid, earlier) = f.reopened_over_readable();
+    block_set_aside_as(&f.dir(&pid), "recovery.unresumed");
+
+    f.rename(&sid, "cmd-1", "Mine");
+    f.flush(1);
+
+    assert_eq!(std::fs::read_to_string(f.journal(&pid)).unwrap(), earlier);
+    assert!(f.state.journal.is_pending(&sid));
+}
+
+// Discard changes on a session that has not written its own journal yet
+// would delete the earlier one it declined: kept aside instead...
+#[test]
+fn discard_changes_before_the_first_write_keeps_an_unresumed_journal() {
+    let f = Fixture::new();
+    let (sid, pid, earlier) = f.reopened_over_readable();
+    f.rename(&sid, "cmd-1", "Mine");
+
+    f.close(&sid, CloseDisposition::DiscardRecovery).unwrap();
+
+    assert!(!f.journal(&pid).exists());
+    assert_eq!(f.set_aside_as(&pid, "recovery.unresumed-"), [earlier]);
+}
+
+// ...while the recovery OFFER's own Discard (a clean session: the user
+// chose to discard exactly that journal, A27) still deletes it.
+#[test]
+fn the_recovery_offers_discard_still_deletes_a_readable_journal() {
+    let f = Fixture::new();
+    let (sid, pid, _) = f.reopened_over_readable();
+
+    f.close(&sid, CloseDisposition::DiscardRecovery).unwrap();
+
+    assert!(!f.journal(&pid).exists());
+    assert!(f.set_aside_as(&pid, "recovery.").is_empty());
+}
+
+// Final review M-4: Discard deletes on exactly the cases it knows -- a
+// readable journal (or, `invalidRequest`, one that is absent) -- and treats
+// every other error, today's or a future code, as a refusal.
+#[test]
+fn a_discard_never_deletes_on_an_unexpected_error() {
+    use super::{discard_action, DiscardAction};
+    use vault_buddy_core::editor::EditorError;
+    let err = |code| EditorError::new(code, "x");
+    for code in [
+        EditorErrorCode::Internal,
+        EditorErrorCode::DiskFull,
+        EditorErrorCode::PermissionDenied,
+        EditorErrorCode::WriteDenied,
+    ] {
+        assert_eq!(
+            discard_action(Err(&err(code)), false),
+            DiscardAction::Refuse
+        );
+    }
+    let absent = err(EditorErrorCode::InvalidRequest);
+    assert_eq!(discard_action(Err(&absent), false), DiscardAction::Remove);
+    let bad = err(EditorErrorCode::InvalidProject);
+    assert_eq!(
+        discard_action(Err(&bad), false),
+        DiscardAction::SetAside(super::UNREADABLE)
+    );
+    assert_eq!(discard_action(Ok(()), false), DiscardAction::Remove);
+    assert_eq!(
+        discard_action(Ok(()), true),
+        DiscardAction::SetAside(super::UNRESUMED)
+    );
+}
+
+// Final review M-3: the Resume dialog renders this message; serde's text
+// (which names a hand-edited key) and a hand-edited schema string stay in
+// the log, never in the message.
+#[test]
+fn an_unreadable_journal_is_reported_in_fixed_words() {
+    let f = Fixture::new();
+    let (sid, pid) = f.open();
+    f.rename(&sid, "cmd-0", "Earlier");
+    f.close(&sid, CloseDisposition::Keep).unwrap();
+    let real = std::fs::read_to_string(f.journal(&pid)).unwrap();
+    let cases = [
+        (
+            r#"{"schema":"vault-buddy-recovery/1","secretKey":1}"#.to_string(),
+            "The unsaved changes could not be read.",
+        ),
+        (
+            real.replace("vault-buddy-recovery/1", "secret-format"),
+            "The unsaved changes use an unknown format.",
+        ),
+    ];
+    for (text, message) in cases {
+        std::fs::write(f.journal(&pid), text).unwrap();
+        let refused = open_project_session(&f.state, f.root(), &pid, true).unwrap_err();
+        assert_eq!(refused.code, EditorErrorCode::InvalidProject);
+        assert_eq!(refused.message, message);
+    }
 }

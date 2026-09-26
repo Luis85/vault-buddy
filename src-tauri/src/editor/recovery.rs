@@ -58,7 +58,21 @@
 //! take recovery back (`webcam_recover::recover_after_open`); only (b)
 //! releases it — after (a) the writer at once puts the session's OWN
 //! journal at that name, which a save of the current revision or a Discard
-//! later removes.
+//! later removes.//!
+//! **A readable journal no session resumed is set aside too (R12, amending
+//! R7; final review I-2).** A session minted by an open that did NOT resume
+//! the journal at the name (`editor_open_project` without `useRecovery`, or
+//! a staged capture's Edit) is marked by `note_unresumed_predecessor`; until
+//! it has written its own journal, its first write, a save of the current
+//! revision and a Discard of its own (dirty) changes move that predecessor
+//! to `recovery.unresumed-<unix seconds>.json` even when it reads cleanly,
+//! with the same collision retries and the same defer-on-failure. The only
+//! way to such a session past a READABLE journal is a Resume that failed
+//! for a transient reason and "Open saved project", and the Resume dialog
+//! tells the user that file is kept. A readable journal is replaced or
+//! deleted only by the session that resumed it or wrote it, and by the
+//! recovery offer's own Discard (a clean session: the user discarded
+//! exactly that journal, A27).
 
 use std::collections::HashMap;
 use std::io;
@@ -384,13 +398,26 @@ pub(crate) fn load_journal(root: &Path, project_id: &str) -> Result<RecoveryJour
         ));
     }
     let bytes = read_bounded(&path, limits::MAX_PROJECT_JSON_BYTES)?;
-    let journal: RecoveryJournal = serde_json::from_slice(&bytes)
-        .map_err(|e| invalid(format!("The unsaved changes could not be read: {e}")))?;
+    // Final review M-3: the Resume dialog renders this message, and serde's
+    // own text quotes the file (an unknown key a hand edit added), as a
+    // schema string would -- so the words are fixed and the detail is
+    // logged by its kind and position only (Task 6's `refuse_unparsable`
+    // posture).
+    let journal: RecoveryJournal = serde_json::from_slice(&bytes).map_err(|e| {
+        log::warn!(
+            "editor recovery: the journal of {project_id} did not parse ({:?} at line {}, \
+             column {})",
+            e.classify(),
+            e.line(),
+            e.column()
+        );
+        invalid("The unsaved changes could not be read.".to_string())
+    })?;
     if journal.schema != RECOVERY_SCHEMA {
-        return Err(invalid(format!(
-            "The unsaved changes use an unknown format ({:?}).",
-            journal.schema
-        )));
+        log::warn!("editor recovery: the journal of {project_id} names an unknown schema");
+        return Err(invalid(
+            "The unsaved changes use an unknown format.".to_string(),
+        ));
     }
     if journal.project.id != project_id {
         return Err(invalid(

@@ -37,6 +37,7 @@ use vault_buddy_core::editor::{EditorError, EditorErrorCode};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::media_jobs::JobKind;
+use super::webcam_registry::TakeBusy;
 use super::EditorState;
 
 /// How long a discard waits for an import or a take write to stop before
@@ -144,10 +145,20 @@ fn wait_until(done: impl Fn() -> bool) -> bool {
 /// because nothing else stops them, and a render cancelled on its way to a
 /// refused discard is repeatable. Nothing is REMOVED on any refusal.
 pub(crate) fn quiesce(state: &EditorState, session_id: &str) -> Result<(), EditorError> {
-    if !state.takes.wait_idle(session_id, QUIESCE_WAIT) {
-        return Err(refusal(
-            "A webcam take is still being saved. Wait for it to finish, then discard the project.",
-        ));
+    match state.takes.wait_idle(session_id, QUIESCE_WAIT) {
+        Ok(()) => {}
+        Err(TakeBusy::Saving) => {
+            return Err(refusal(
+                "A webcam take is still being saved. Wait for it to finish, then discard the \
+                 project.",
+            ))
+        }
+        Err(TakeBusy::Recovering) => {
+            return Err(refusal(
+                "A webcam take from an earlier session is still being recovered. Wait for it to \
+                 finish, then discard the project.",
+            ))
+        }
     }
     if !wait_until(|| !lock_ignoring_poison(&state.relinks).contains(session_id)) {
         return Err(refusal(

@@ -28,6 +28,7 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::{require_editor_window, require_session};
 use super::errors::internal;
+use super::journal_quarantine::note_unresumed_predecessor;
 use super::prefs_commands::{local_data, read_workspace};
 use super::project_store::SourceRecord;
 use super::recovery::load_journal;
@@ -446,7 +447,8 @@ fn open_project_locked(
     // `hasRecovery` (and this whole dialog) before the user ever saw it. An
     // unreadable journal is set aside only by the journal writer's first
     // write or by an explicit `discardRecovery` (`recovery.rs`'s module
-    // doc).
+    // doc) -- and so is a readable one this open does not resume (R12,
+    // below).
     let (envelope, sources) = load_project(root, project_file_id)?;
     let workspace = sanitize(&envelope.workspace);
     let committed = envelope.record.revision;
@@ -466,6 +468,14 @@ fn open_project_locked(
         let (projection, minted) = register_session_with(state, envelope.project, |id, p| {
             EditorSession::resume(id, p, committed)
         });
+        // R12 (final review I-2): a session minted WITHOUT resuming the
+        // journal must never replace or delete it, even a readable one --
+        // the only way here past a readable journal is a Resume that failed
+        // for a transient reason, and the dialog says its file is kept.
+        if minted {
+            let session_id = &projection.snapshot.session_id;
+            note_unresumed_predecessor(state, root, session_id, project_file_id);
+        }
         (projection, minted, false)
     };
     Ok(LockedOpen {
