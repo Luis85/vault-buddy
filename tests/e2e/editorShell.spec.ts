@@ -106,6 +106,24 @@ test("at or below 860px the library is a 250px drawer under the preview header",
   await expect(page.getByTestId("editor-header")).toBeInViewport();
 });
 
+// Ruling T4-1: at the editor's default size the header's save text is
+// hidden (concept spec §1.4), but a refused save never is. The stub has no
+// reply for `editor_save_project`, so the port refuses the save.
+test("1280x820: a failed save is visible in the header and the status bar", async ({ page }) => {
+  await openEditor(page, { width: 1280, height: 820 });
+  await expect(page.getByTestId("editor-header-status")).toBeHidden();
+
+  await page.getByTestId("editor-header-save").click();
+
+  const header = page.getByTestId("editor-header-status");
+  await expect(header).toBeVisible();
+  await expect(header).toHaveText("Save failed");
+  const recovery = page.getByTestId("editor-statusbar-recovery");
+  await expect(recovery).toBeVisible();
+  await expect(recovery).toHaveText("Save failed");
+  expect(await recovery.getAttribute("title")).not.toMatch(/<(path|name):#/);
+});
+
 // The editor's floor (its `minWidth`/`minHeight`, tutorial-editor Task 15),
 // its default open size, and two larger ones ("dragged wider" and
 // "maximised" — the sizes GAP-162's two defects were reported at).

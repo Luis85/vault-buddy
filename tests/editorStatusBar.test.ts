@@ -11,6 +11,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import EditorStatusBar from "../src/components/editor/shell/EditorStatusBar.vue";
+import { EditorPortError } from "../src/editor/port";
 import { revealSerial } from "../src/editor/revealBus";
 import type { EditorOpenResult, EditorSnapshot, ProductDto, SaveReceipt } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
@@ -50,7 +51,9 @@ function product(id: string): ProductDto {
   };
 }
 
-async function open(opts: { dirty?: boolean; products?: ProductDto[]; saved?: number[] } = {}) {
+async function open(
+  opts: { dirty?: boolean; products?: ProductDto[]; saved?: number[]; saveFails?: boolean } = {},
+) {
   const store = useEditorProjectStore();
   store.setPort(
     fakePort({
@@ -58,6 +61,16 @@ async function open(opts: { dirty?: boolean; products?: ProductDto[]; saved?: nu
       getProducts: () => Promise.resolve(opts.products ?? []),
       save: (sessionId, expectedRevision) => {
         opts.saved?.push(expectedRevision);
+        if (opts.saveFails) {
+          return Promise.reject(
+            new EditorPortError({
+              code: "diskFull",
+              message: "Cannot write the project file <path:#0a1b2c3d>. The disk is full.",
+              retryable: true,
+              operationId: "op-save",
+            }),
+          );
+        }
         return Promise.resolve<SaveReceipt>({ sessionId, savedRevision: expectedRevision, projectFileId: "project-a" });
       },
     }),
@@ -85,6 +98,26 @@ describe("EditorStatusBar", () => {
 
     expect(saved).toEqual([2]);
     expect(w.get('[data-testid="editor-statusbar-recovery"]').text()).toBe("All changes saved");
+  });
+
+  // Ruling T4-1: a refused save is never invisible. "Save failed" takes
+  // precedence over the dirty/clean copy, its reason (without the log's
+  // redaction handle) is in the tooltip, and a click retries the one save.
+  it("says Save failed when the last save was refused, and a click retries it", async () => {
+    const saved: number[] = [];
+    const w = await open({ dirty: true, saved, saveFails: true });
+    const centre = () => w.get('[data-testid="editor-statusbar-recovery"]');
+
+    await centre().trigger("click");
+    await flushPromises();
+
+    expect(centre().text()).toBe("Save failed");
+    expect(centre().attributes("title")).toBe("Cannot write the project file. The disk is full.");
+    expect(centre().attributes("disabled")).toBeUndefined();
+
+    await centre().trigger("click");
+    await flushPromises();
+    expect(saved).toEqual([2, 2]);
   });
 
   it("counts the rendered products on the right", async () => {

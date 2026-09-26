@@ -79,13 +79,15 @@ function setLibrary(s: PanelState, width: number, show: boolean): PanelState {
   return { ...s, focusPreview: false, libraryDrawerOpen: show, propertiesOpen: show ? false : s.propertiesOpen };
 }
 
-/** Show or hide the inspector where it lives at `width`. Leaves Focus
- * preview. */
+/** Show or hide the inspector where it lives at `width`; showing it while
+ * the library is a drawer closes the library's, so the two never stack.
+ * Leaves Focus preview. */
 function setInspector(s: PanelState, width: number, show: boolean): PanelState {
   const next = inspectorIsDrawerAt(width)
     ? { ...s, propertiesOpen: show }
     : { ...s, propertiesHidden: !show };
-  return { ...next, focusPreview: false };
+  const libraryDrawerOpen = show && libraryIsDrawerAt(width) ? false : s.libraryDrawerOpen;
+  return { ...next, libraryDrawerOpen, focusPreview: false };
 }
 
 function toggleLibrary(s: PanelState, width: number): PanelState {
@@ -93,9 +95,7 @@ function toggleLibrary(s: PanelState, width: number): PanelState {
 }
 
 function toggleInspector(s: PanelState, width: number): PanelState {
-  const show = !inspectorShown(s, width);
-  const next = setInspector(s, width, show);
-  return show && libraryIsDrawerAt(width) ? { ...next, libraryDrawerOpen: false } : next;
+  return setInspector(s, width, !inspectorShown(s, width));
 }
 
 function toggleFocus(s: PanelState): PanelState {

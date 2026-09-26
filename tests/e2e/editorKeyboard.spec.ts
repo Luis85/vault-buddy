@@ -174,14 +174,18 @@ test("keyboard-only journey completes", async ({ page }) => {
   await page.keyboard.press("Control+A");
   await page.keyboard.type("Press Save");
   await page.keyboard.press("Enter");
-  await expect(page.getByTestId("editor-header-status")).toHaveText("Unsaved changes");
+  // At 1280 the header drops its save text (concept spec §1.4); the status
+  // bar's centre slot is what the user sees.
+  const recovery = page.getByTestId("editor-statusbar-recovery");
+  await expect(recovery).toBeVisible();
+  await expect(recovery).toHaveText("Unsaved changes are journaled for recovery");
 
   // Ctrl+S from outside a text field (a field keeps its own keys, so the
-  // user Tabs on to the next button): the header's Save, and the header
-  // says so once Rust's receipt lands.
+  // user Tabs on to the next button): the header's Save, and the status
+  // bar says so once Rust's receipt lands.
   await tabToButton(page);
   await page.keyboard.press("Control+s");
-  await expect(page.getByTestId("editor-header-status")).toHaveText("Saved");
+  await expect(recovery).toHaveText("All changes saved");
 
   expect(await executed(page)).toEqual([
     { kind: "splitClip", clipId: "body", atMs: 3000 },

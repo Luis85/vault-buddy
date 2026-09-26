@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import EditorShell from "../src/components/editor/shell/EditorShell.vue";
 import { clearClipboardForTest } from "../src/editor/clipboard";
+import { EditorPortError } from "../src/editor/port";
 import type { Clip, EditorOpenResult, EditorSnapshot, Project, SaveReceipt } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
@@ -151,6 +152,48 @@ describe("EditorShell — status text", () => {
     await flushPromises();
     expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Saved");
   });
+
+  // Concept spec §1.4: the header drops its save text at or below 1350px
+  // (the status bar's centre slot carries the state there).
+  it("shows the save text above 1350px and hides it at 1350px", () => {
+    setViewportWidth(1351);
+    const wide = mount(EditorShell, { attachTo: document.body });
+    expect(wide.get('[data-testid="editor-header-status"]').isVisible()).toBe(true);
+    wide.unmount();
+
+    setActivePinia(createPinia());
+    setViewportWidth(1350);
+    const narrow = mount(EditorShell, { attachTo: document.body });
+    expect(narrow.get('[data-testid="editor-header-status"]').isVisible()).toBe(false);
+  });
+
+  // Ruling T4-1: a refused save is never hidden, whatever the width — at
+  // the editor's default 1280px the header AND the status bar say so.
+  it("at 1280px a failed save is visible in the header and the status bar", async () => {
+    setViewportWidth(1280);
+    const store = useEditorProjectStore();
+    store.setPort(
+      fakePort({
+        openStaged: () =>
+          Promise.resolve(openResult({ snapshot: snapshot({ revision: 2, persistedRevision: null }) })),
+        save: () =>
+          Promise.reject(
+            new EditorPortError({ code: "diskFull", message: "The disk is full.", retryable: true, operationId: "op" }),
+          ),
+      }),
+    );
+    await store.openStaged("cap one");
+    const w = mount(EditorShell, { attachTo: document.body });
+    expect(w.get('[data-testid="editor-header-status"]').isVisible()).toBe(false);
+
+    await store.save();
+    await flushPromises();
+
+    const header = w.get('[data-testid="editor-header-status"]');
+    expect(header.isVisible()).toBe(true);
+    expect(header.text()).toBe("Save failed");
+    expect(w.get('[data-testid="editor-statusbar-recovery"]').text()).toBe("Save failed");
+  });
 });
 
 function setViewportHeight(height: number) {
@@ -193,8 +236,8 @@ describe("EditorShell — the frame (visual-parity Task 4; design D4, D5)", () =
     expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(true);
   });
 
-  it("above 1080px there is no header toggle, and the preview toolbar's library toggle collapses the column", async () => {
-    setViewportWidth(1181);
+  it("above 1080px (1081) there is no header toggle, and the preview toolbar's library toggle collapses the column", async () => {
+    setViewportWidth(1081);
     const w = mount(EditorShell, { attachTo: document.body });
 
     expect(w.find('[data-testid="editor-header-library-toggle"]').exists()).toBe(false);

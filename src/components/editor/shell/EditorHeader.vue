@@ -97,8 +97,11 @@ const status = computed<string>(() => {
   return editorProject.dirty ? "Unsaved changes" : "Saved";
 });
 
-/** The concept drops the save text at or below 1350px (§1.4). */
-const showSaveText = computed(() => workspace.viewportWidth > SAVE_TEXT_MAX_WIDTH);
+/** The concept drops the save text at or below 1350px (§1.4) — but never
+ * a failed save, which must stay visible at every width (ruling T4-1). */
+const showSaveText = computed(
+  () => workspace.viewportWidth > SAVE_TEXT_MAX_WIDTH || editorProject.saveError !== null,
+);
 
 /** The theme toggle names the theme it switches TO. */
 const themeToggle = computed(() =>
@@ -192,8 +195,8 @@ function onSaveMenu(item: "save" | "portable" | "lightweight" | "open" | "discar
       data-testid="editor-shell-duration"
       class="text-micro text-fg-subtle"
     >{{ durationLabel }}</span>
-    <!-- Hidden at or below 1350px (§1.4); the status bar's centre slot
-         still says it. -->
+    <!-- Hidden at or below 1350px (§1.4) unless a save failed; the status
+         bar's centre slot says it too. -->
     <span
       v-show="showSaveText"
       data-testid="editor-header-status"

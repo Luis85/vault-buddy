@@ -121,12 +121,29 @@ describe("reveals (a finding or a guide lesson asks for a panel)", () => {
     expect(ws.focusPreview).toBe(false);
   });
 
-  it("opens the drawer where the panel is one", () => {
+  it("opens the drawer where the panel is one, and the two drawers never stack", () => {
     const ws = at(820, 640);
     ws.revealInspector();
     expect(ws.inspectorVisible).toBe(true);
     ws.revealLibrary();
     expect(ws.libraryVisible).toBe(true);
+    expect(ws.inspectorVisible).toBe(false);
+    ws.revealInspector();
+    expect(ws.inspectorVisible).toBe(true);
+    expect(ws.libraryVisible).toBe(false);
+  });
+});
+
+describe("the breakpoints are inclusive (§1.4: ≤1080, ≤860)", () => {
+  it.each([
+    [1081, false, false],
+    [1080, false, true],
+    [861, false, true],
+    [860, true, true],
+  ])("at %ipx the library is a drawer: %s, the inspector: %s", (width, library, inspector) => {
+    const ws = at(width);
+    expect(ws.libraryIsDrawer).toBe(library);
+    expect(ws.inspectorIsDrawer).toBe(inspector);
   });
 });
 

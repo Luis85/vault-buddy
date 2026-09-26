@@ -9,8 +9,11 @@
  *
  * - left: where the work lives — "Local only. No media is uploaded."
  * - centre: the session's recovery state, read from `editorProject.dirty`
- *   (an unsaved session is journaled for recovery, Task 37). A click saves
- *   the project through the header's own path (`useProjectSave`).
+ *   (an unsaved session is journaled for recovery, Task 37) — or "Save
+ *   failed" whenever the last save was refused (`editorProject.saveError`,
+ *   ruling T4-1: a refusal is never invisible), its role-worded reason in
+ *   the tooltip. A click saves the project through the header's own path
+ *   (`useProjectSave`).
  * - right: how many products this project has rendered; a click opens the
  *   library on them. Until the library's Project section exists (Task 10)
  *   that is the Products tab, through the same reveal a Checks finding
@@ -19,6 +22,7 @@
 import { computed, watch } from "vue";
 
 import { useProjectSave } from "../../../composables/useProjectSave";
+import { withoutRedactionHandles } from "../../../editor/errorCopy";
 import { requestReveal } from "../../../editor/revealBus";
 import { useEditorProductsStore } from "../../../stores/editorProducts";
 import { useEditorProjectStore } from "../../../stores/editorProject";
@@ -40,9 +44,16 @@ watch(
   { immediate: true },
 );
 
-const recovery = computed(() =>
-  editorProject.dirty ? "Unsaved changes are journaled for recovery" : "All changes saved",
-);
+const recovery = computed(() => {
+  if (editorProject.saveError) return "Save failed";
+  return editorProject.dirty ? "Unsaved changes are journaled for recovery" : "All changes saved";
+});
+/** Why the slot cannot act, else why the last save failed, else what a
+ * click does. */
+const recoveryTitle = computed(() => {
+  const failure = editorProject.saveError;
+  return disabledReason.value ?? (failure ? withoutRedactionHandles(failure.message) : "Save project");
+});
 
 const productsLabel = computed(() => {
   const n = products.current.length;
@@ -75,7 +86,7 @@ function openProducts(): void {
       data-testid="editor-statusbar-recovery"
       class="status-slot"
       :disabled="Boolean(disabledReason)"
-      :title="disabledReason ?? 'Save project'"
+      :title="recoveryTitle"
       @click="save"
     >
       {{ recovery }}
