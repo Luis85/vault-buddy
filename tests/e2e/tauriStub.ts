@@ -29,6 +29,11 @@ const DETAIL = {
  *  about, and `page.route` fulfils it from the fixture either way. */
 export const FIXTURE_VIDEO_URL = "/__fixture__/capture.webm";
 
+/** Where the stubbed `convertFileSrc` points a thumbnail/poster path (any
+ *  `.jpg`/`.jpeg`/`.png`) -- same-origin for the same reason as the video URL
+ *  above; a spec that needs the bytes routes this path with `page.route`. */
+export const FIXTURE_IMAGE_URL = "/__fixture__/thumb.jpg";
+
 /**
  * A decode-valid `EditorOpenResult` (`src/editor/decode.ts`'s
  * `decodeOpenResult`/`decodeProject`/`decodeSnapshot`) for `editor_open_staged`
@@ -85,7 +90,7 @@ export interface StubOptions {
 
 export async function installTauriStub(page: Page, options: StubOptions = {}) {
   await page.addInitScript(
-    ({ base, videoUrl, openResult, replies, sequences }) => {
+    ({ base, videoUrl, imageUrl, openResult, replies, sequences }) => {
       const listeners = new Map<number, unknown>();
       let nextId = 1;
       // Every command the page invoked, in order — what a spec reads to
@@ -124,7 +129,10 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
         metadata: { currentWindow: { label: "editor" }, currentWebview: { label: "editor" } },
         invoke,
-        convertFileSrc: () => videoUrl,
+        // A thumbnail/poster path (`.jpg`/`.jpeg`/`.png`) routes to the image
+        // fixture; everything else (the media preview) keeps today's single
+        // video URL.
+        convertFileSrc: (path: string) => (/\.(jpe?g|png)$/i.test(path) ? imageUrl : videoUrl),
         transformCallback: (cb: unknown) => {
           const id = nextId++;
           (window as unknown as Record<string, unknown>)[`_${id}`] = cb;
@@ -135,6 +143,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
     {
       base: DETAIL.base,
       videoUrl: FIXTURE_VIDEO_URL,
+      imageUrl: FIXTURE_IMAGE_URL,
       openResult: options.openResult ?? EDITOR_OPEN_RESULT,
       replies: options.replies ?? {},
       sequences: options.sequences ?? {},
