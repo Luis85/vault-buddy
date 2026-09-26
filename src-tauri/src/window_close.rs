@@ -107,7 +107,7 @@ fn handle_main_close(window: &Window, api: &CloseRequestApi) {
                 // finalizes below are unbounded. On expiry the gate stops
                 // counting renders, so this re-triggered close cannot loop
                 // on a wedged one.
-                crate::editor::render_jobs::cancel_all_bounded(
+                crate::editor::render_shutdown::cancel_all_bounded(
                     &app,
                     std::time::Duration::from_secs(5),
                 );

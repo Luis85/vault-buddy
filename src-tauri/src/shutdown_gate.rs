@@ -7,7 +7,7 @@
 //! - `capture_commands::recording_blocks_shutdown` — an audio recording,
 //!   whose `.mp3.part` is stranded by an exit;
 //! - `screen_commands::capture_blocks_shutdown` — a screen capture, same;
-//! - `editor::render_jobs::blocks_shutdown` (Task 46, ADR R12) — an editor
+//! - `editor::render_shutdown::blocks_shutdown` (Task 46, ADR R12) — an editor
 //!   RENDER not yet ended (queued and preparing too, since fix round 1): an
 //!   ffmpeg child writing a product into the project store, or about to
 //!   start one, or a finished one being moved into `products\` and
@@ -109,7 +109,7 @@ pub fn shutdown_blocker(app: &AppHandle) -> Option<ShutdownBlocker> {
         Some(ShutdownBlocker::Recording)
     } else if crate::screen_commands::capture_blocks_shutdown(app) {
         Some(ShutdownBlocker::ScreenCapture)
-    } else if crate::editor::render_jobs::blocks_shutdown(app) {
+    } else if crate::editor::render_shutdown::blocks_shutdown(app) {
         Some(ShutdownBlocker::Render)
     } else if crate::editor::publish::blocks_shutdown(app) {
         Some(ShutdownBlocker::Publish)
@@ -127,7 +127,7 @@ pub fn shutdown_is_blocked(app: &AppHandle) -> bool {
 
 /// Poll `cleared` until it answers true or `limit` elapses; `true` iff it
 /// cleared in time. The bounded wait both quit workers' cancels share
-/// (`editor::render_jobs::cancel_all_in`, `editor::publish::cancel_all_in`).
+/// (`editor::render_shutdown::cancel_all_in`, `editor::publish::cancel_all_in`).
 ///
 /// A pure function over a predicate and two durations precisely so BOTH
 /// arms — the clear and the expiry — are asserted on the platform the suite
@@ -245,7 +245,7 @@ mod tests {
         for needle in [
             "recording_blocks_shutdown(",
             "capture_blocks_shutdown(",
-            "render_jobs::blocks_shutdown(",
+            "render_shutdown::blocks_shutdown(",
             "publish::blocks_shutdown(",
         ] {
             assert!(body.contains(needle), "the gate must consult {needle}");
@@ -279,7 +279,7 @@ mod tests {
                 "{name} still cancels the retired export"
             );
             let order = [
-                "render_jobs::cancel_all_bounded(",
+                "render_shutdown::cancel_all_bounded(",
                 "publish::cancel_all_bounded(",
                 "finalize_if_recording(",
                 "finalize_if_capturing(",

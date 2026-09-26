@@ -22,6 +22,7 @@ use super::*;
 use crate::editor::media_jobs::tests::CollectingSink;
 use crate::editor::media_jobs::{cancel_job_in, jobs_in, JobPhase, JobProgressDto};
 use crate::editor::project_store::{minimal_project, SourceLocator, SourceRecord};
+use crate::editor::render_shutdown::{cancel_all_in, render_blocks_shutdown};
 use crate::editor::session_close::close_in;
 use crate::editor::session_commands::{execute_in, CloseDisposition};
 use crate::editor::store_io::create_project;
@@ -807,7 +808,7 @@ fn quit_cancels_a_render_before_finalizing_captures() {
             fn_body(&close, "fn handle_main_close("),
         ),
     ] {
-        let cancel = offset_of(body, "render_jobs::cancel_all_bounded(");
+        let cancel = offset_of(body, "render_shutdown::cancel_all_bounded(");
         for later in ["finalize_if_recording(", "finalize_if_capturing("] {
             assert!(
                 cancel < offset_of(body, later),
@@ -816,5 +817,8 @@ fn quit_cancels_a_render_before_finalizing_captures() {
         }
     }
     let hide = fn_body(&tray, "pub fn hide_buddy(");
-    assert!(!hide.contains("render_jobs"), "hide is not a quit (R12)");
+    assert!(
+        !hide.contains("render_shutdown"),
+        "hide is not a quit (R12)"
+    );
 }

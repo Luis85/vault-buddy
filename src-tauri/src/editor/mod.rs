@@ -43,6 +43,7 @@ pub mod relink_media;
 pub mod render_commands;
 pub mod render_jobs;
 pub mod render_review;
+pub mod render_shutdown;
 pub mod save_commands;
 pub mod session_close;
 pub mod session_commands;

@@ -17,7 +17,8 @@ use vault_buddy_core::editor::{
 use super::*;
 use crate::editor::media_jobs::jobs_in;
 use crate::editor::project_store::minimal_project;
-use crate::editor::render_jobs::{render_blocks_shutdown, write_ledger};
+use crate::editor::render_jobs::write_ledger;
+use crate::editor::render_shutdown::render_blocks_shutdown;
 use crate::editor::store_io::create_project;
 
 const SESSION: &str = "ses-pub";

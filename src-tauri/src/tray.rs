@@ -102,7 +102,7 @@ pub fn quit(app: &AppHandle) {
                 // behind them would go on writing for as long as they take.
                 // Cancel, not finish: a render is repeatable and its
                 // project is kept.
-                crate::editor::render_jobs::cancel_all_bounded(
+                crate::editor::render_shutdown::cancel_all_bounded(
                     &app,
                     std::time::Duration::from_secs(5),
                 );

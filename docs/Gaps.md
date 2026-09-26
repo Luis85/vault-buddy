@@ -3043,7 +3043,7 @@ export keeps its `ExportState` reservation, `export_blocks_shutdown` stays
 true, and the re-triggered `CloseRequested` spawns the worker again — a
 5-second loop for as long as the export stays wedged (the tray's Quit does
 not loop: it calls `finish_quit` directly). The render term added in Task 46
-does NOT have this problem: `render_jobs::cancel_all_bounded` latches
+does NOT have this problem: `render_shutdown::cancel_all_bounded` latches
 `RENDERS_ABANDONED` on expiry and the gate stops counting renders. **Fix:**
 the same latch for the export (or have the worker exit through `finish_quit`
 rather than re-triggering the close).
