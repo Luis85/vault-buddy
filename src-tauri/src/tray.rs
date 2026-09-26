@@ -471,13 +471,16 @@ mod tests {
     // The editor webview reads media through the asset protocol, and this
     // scope IS the security boundary (ADR R7): `$APPLOCALDATA` resolves to
     // the app's own local-data dir, and the scope is an ENUMERATED list --
-    // the staging directory (every staged capture a project adopts by
-    // reference -- `project_store::resolve_source` answers a `staging`
-    // locator with the capture's own staged path, which is why Task 59 kept
-    // this entry when it retired the phase-4 preview) plus exactly four
-    // sub-directories of each tutorial-editor project: `media` (copied
-    // imports), `takes` (webcam takes), `products` (rendered outputs) and
-    // `cache` (review renders). Deliberately NOT `jobs` (pre-flight ruling
+    // the staging directory's MEDIA only (every staged capture a project
+    // adopts by reference -- `project_store::resolve_source` answers a
+    // `staging` locator with the capture's own staged path, which is why
+    // Task 59 kept this entry when it retired the phase-4 preview; `*.mp4`
+    // for the capture and its `<base>.webcam.mp4`, `*.m4a` for its stems,
+    // and never `*`, which served every sidecar and hidden `.part` too --
+    // review S-10, whose file-by-file pin is `asset_scope_guard.rs`) plus
+    // exactly four sub-directories of each tutorial-editor project: `media`
+    // (copied imports), `takes` (webcam takes), `products` (rendered outputs)
+    // and `cache` (review renders). Deliberately NOT `jobs` (pre-flight ruling
     // F18: a job's working files are never preview media), never
     // `project.json`/`sources.json`/`workspace.json`, never a vault path and
     // never `$APPLOCALDATA/*`. `convertFileSrc` is URL conversion, not
@@ -498,7 +501,8 @@ mod tests {
         assert_eq!(
             scope,
             vec![
-                "$APPLOCALDATA/screen-captures/*",
+                "$APPLOCALDATA/screen-captures/*.mp4",
+                "$APPLOCALDATA/screen-captures/*.m4a",
                 "$APPLOCALDATA/editor-projects/*/media/*",
                 "$APPLOCALDATA/editor-projects/*/takes/*",
                 "$APPLOCALDATA/editor-projects/*/products/*",

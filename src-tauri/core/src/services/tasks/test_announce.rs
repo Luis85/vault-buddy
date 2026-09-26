@@ -17,10 +17,10 @@ use std::io::Write as _;
 /// with the test's own name, the name libtest gave the test's thread is put
 /// in front, so every line says WHICH test proved nothing.
 ///
-/// All three current call sites are `#[cfg(unix)]` privilege probes (chmod,
-/// `chattr +i`) with no Windows equivalent, so this is genuinely unused on
-/// that target — the `external_tool.rs` `cfg_attr(not(windows), ...)`
-/// precedent, inverted.
+/// Three call sites are `#[cfg(unix)]` privilege probes (chmod,
+/// `chattr +i`) with no Windows equivalent, and one is `#[cfg(windows)]`
+/// (`no_follow`'s symlink probe, hardening Task 24). The `allow` predates
+/// that Windows caller and is kept for a target that is neither.
 #[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn announce_skip(what: &str) {
     let thread = std::thread::current();

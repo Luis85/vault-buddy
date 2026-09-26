@@ -57,6 +57,7 @@ use vault_buddy_core::editor::take::{
     TAKE_ID_PREFIX, TAKE_MIME_TYPES,
 };
 use vault_buddy_core::editor::{is_valid_id, new_entity_id, EditorError, EditorErrorCode};
+use vault_buddy_core::no_follow::{open_append_no_follow, NoFollowError};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 
 use super::authz::{require_editor_window, require_session};
@@ -295,11 +296,14 @@ pub(crate) fn append_in(
 /// the `before` bytes the take had already accepted, so the part only ever
 /// holds whole, accepted chunks.
 fn append_bytes(part: &Path, before: u64, bytes: &[u8]) -> Result<(), EditorError> {
+    // The no-follow CHECK (every platform) and a no-follow OPEN (Windows,
+    // review S-9): the check alone is check-then-open, and a link swapped
+    // in between would take the chunk to wherever it points.
     require_owned_file(part)?;
-    let file = OpenOptions::new()
-        .append(true)
-        .open(part)
-        .map_err(|e| write_error("save the webcam chunk", &e))?;
+    let file = open_append_no_follow(part).map_err(|e| match e {
+        NoFollowError::NotAPlainFile => internal(REPLACED),
+        NoFollowError::Io(e) => write_error("save the webcam chunk", &e),
+    })?;
     let mut out = BufWriter::new(file);
     let written = out.write_all(bytes).and_then(|()| out.flush());
     if let Err(e) = written {
@@ -410,14 +414,15 @@ pub async fn editor_webcam_discard(
 
 // ---- owned files ----------------------------------------------------------
 
+/// A take's file is held by something other than the plain file we made.
+const REPLACED: &str = "The take's file has been replaced; discard the take.";
+
 /// `Ok` only for a plain file — checked no-follow, so a symlink wearing one
 /// of a take's names is never written through.
 fn require_owned_file(path: &Path) -> Result<(), EditorError> {
     match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.is_file() => Ok(()),
-        Ok(_) => Err(internal(
-            "The take's file has been replaced; discard the take.",
-        )),
+        Ok(_) => Err(internal(REPLACED)),
         Err(e) => Err(write_error("reach the take's file", &e)),
     }
 }

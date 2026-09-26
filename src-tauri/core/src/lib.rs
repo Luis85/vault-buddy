@@ -14,6 +14,7 @@ pub mod document_import;
 pub mod document_import_config;
 pub mod editor;
 pub mod mcp_config;
+pub mod no_follow;
 pub mod obsidian_link;
 pub mod panel_config;
 pub mod process;

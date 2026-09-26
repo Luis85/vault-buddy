@@ -2604,7 +2604,7 @@ after a reconnect"). The thumbnail file itself is still not fingerprinted; a
 future path that changes the file behind an asset id must purge `cache\` AND
 call `forgetDerived` the same way.
 
-### GAP-177 · Low (unverified cause) · The registry-fresh PATH carries unexpanded `%SystemRoot%` entries, and a child `cmd.exe` spawned with it did not find `ping`
+### GAP-177 · Low (unverified cause) · PARTLY CLOSED 2026-09-26 (hardening Task 24: the expansion) · The registry-fresh PATH carries unexpanded `%SystemRoot%` entries, and a child `cmd.exe` spawned with it did not find `ping`
 `src-tauri/src/external_tool.rs` (`registry_path_entries`, `augmented_path`).
 Found by Task 28 on the Windows dev host while writing a stand-in slow tool
 for `media_derive`'s cancel test. `registry_path_entries` reads the `Path`
@@ -2629,6 +2629,29 @@ read the value as `REG_EXPAND_SZ` and expand it) before `merged_path`
 dedupes, with a Windows-only test that a `%SystemRoot%` entry comes back
 expanded; then re-check whether a child `cmd.exe` finds `ping` by name.
 The Task 28 test uses an absolute `%SystemRoot%\System32\PING.EXE` meanwhile.
+
+> **The expansion half is CLOSED (hardening Task 24).** `registry_path_entries`
+> now reads each registry `Path` value through `registry_path_list`, which
+> splits it and expands every entry's `%NAME%` tokens with the pure
+> `expand_env_tokens_with` (the `ExpandEnvironmentStringsW` rules: a name
+> with no value, or `%%`, stays literal and the scan resumes after it; a lone
+> `%` is kept) over the process environment — no new dependency, and pure, so
+> `env_tokens_expand_and_unknown_ones_stay_literal` and
+> `a_registry_path_value_is_split_and_each_entry_expanded` run on every OS.
+> Probed on the Windows dev host afterwards: the merged PATH carries no
+> literal `%` entry any more.
+>
+> **The `ping` half stays OPEN, and the same probe moved its likely cause.**
+> A child `cmd /C ping -n 1 127.0.0.1` STILL failed with the expanded,
+> merged PATH — and ALSO failed with plain `Command::new("cmd")` and the
+> test process's own, un-merged PATH (23 508 characters, 178 entries under
+> `cargo test`), while the same call with a PATH cut down to the
+> `C:\WINDOWS…` entries succeeded. That points at the PATH's LENGTH (cmd.exe
+> handles environment strings up to 8 191 characters) rather than at the
+> merge or the literal tokens; it is not yet proven, and it needs a check
+> on a machine whose ordinary PATH is short — the app's own PATH at run time
+> is the user's, not cargo's. Production is still unaffected (tools are
+> spawned by absolute path, see above).
 
 ### GAP-178 · Low · Duplicating or pasting a crossfaded pair is refused as an overlap instead of carrying its transition
 `src-tauri/core/src/editor/commands/groups.rs` (`check_no_overlap`),
@@ -4910,6 +4933,18 @@ was re-pointed (not deleted) to
 `the_asset_protocol_scope_is_pinned_to_staging_and_the_editor_project_media_dirs`,
 which asserts the exact array and both directives. The app-wide residual
 above now covers those project directories too.
+
+**Update (hardening Task 24, review finding S-10):** the staging entry was
+`screen-captures/*`, and on Windows (where Tauri leaves
+`require_literal_leading_dot` off) that also served every capture's sidecar
+(`<base>.json`: vault id, window title, pin) and every hidden `.part` to all
+six windows. It is now two entries, `screen-captures/*.mp4` (the capture and
+its `<base>.webcam.mp4`) and `screen-captures/*.m4a` (its stems) — a
+six-entry list. `src-tauri/src/asset_scope_guard.rs` pins what the list
+ADMITS, file by file, through a documented mirror of Tauri's glob options:
+no sidecar or in-progress name, and every staged source
+`project_store::resolve_source` answers with. Checklist row T73 is the
+real-preview half.
 
 ### GAP-138 · Low · The staged-capture row on the panel's list view never expires or dismisses
 `src/stores/screenCapture.ts` (`lastStaged`, cleared only by a SUCCESSFUL

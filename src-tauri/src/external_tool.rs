@@ -35,6 +35,52 @@ pub(crate) fn merged_path(base: &str, extra: &[String]) -> String {
     out.join(&sep.to_string())
 }
 
+/// One registry `Path` value as its entries, each with its `%NAME%` tokens
+/// expanded (docs/Gaps.md GAP-177). The value is a `REG_EXPAND_SZ`, and
+/// `winreg`'s `get_value::<String, _>` returns it RAW: without this the
+/// merged PATH began with literal `%SystemRoot%\system32` entries, and a
+/// tool installed under a variable-named folder (a per-user install in
+/// `%LOCALAPPDATA%`) was looked for at a path that does not exist.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn registry_path_list(raw: &str) -> Vec<String> {
+    raw.split(';').map(expand_env_tokens).collect()
+}
+
+/// `expand_env_tokens_with` over the process environment.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn expand_env_tokens(entry: &str) -> String {
+    expand_env_tokens_with(entry, |name| std::env::var(name).ok())
+}
+
+/// Replace every `%NAME%` whose `lookup` answers with its value, the way
+/// Windows' `ExpandEnvironmentStringsW` does for a PATH entry: a name with
+/// no value (or an empty one, `%%`) is left LITERAL, `%`s and all, and the
+/// scan resumes after its closing `%`; a lone `%` with no partner is kept
+/// as it is. Pure (the lookup is a parameter), so every rule is tested on
+/// any OS.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn expand_env_tokens_with(entry: &str, lookup: impl Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(entry.len());
+    let mut rest = entry;
+    while let Some(open) = rest.find('%') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('%') else {
+            // A lone `%`: nothing to expand, keep the rest as it is.
+            out.push_str(&rest[open..]);
+            return out;
+        };
+        let name = &after[..close];
+        match (!name.is_empty()).then(|| lookup(name)).flatten() {
+            Some(value) => out.push_str(&value),
+            None => out.push_str(&rest[open..open + close + 2]),
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Windows: read user + machine PATH from the registry so a just-installed
 /// tool is visible without restarting (a running process keeps its launch
 /// PATH snapshot). Non-Windows: nothing extra (the compile gate + tests).
@@ -53,7 +99,7 @@ fn registry_path_entries() -> Vec<String> {
     for (hive, sub) in reads {
         if let Ok(key) = RegKey::predef(hive).open_subkey(sub) {
             if let Ok(path) = key.get_value::<String, _>("Path") {
-                entries.extend(path.split(';').map(str::to_string));
+                entries.extend(registry_path_list(&path));
             }
         }
     }
@@ -482,6 +528,47 @@ mod tests {
         assert!(
             body.contains("cmd.creation_flags(child_creation_flags())"),
             "the apply must live inside tool_command"
+        );
+    }
+
+    // GAP-177: `%NAME%` tokens in a registry PATH entry are expanded, the
+    // `ExpandEnvironmentStringsW` way.
+    #[test]
+    fn env_tokens_expand_and_unknown_ones_stay_literal() {
+        let lookup = |name: &str| match name {
+            "A" => Some("aa".to_string()),
+            "SystemRoot" => Some(r"C:\WINDOWS".to_string()),
+            _ => None,
+        };
+        let expand = |s: &str| expand_env_tokens_with(s, lookup);
+        assert_eq!(expand(r"%SystemRoot%\system32"), r"C:\WINDOWS\system32");
+        assert_eq!(expand("%A%%A%"), "aaaa");
+        assert_eq!(expand("x%A%y%A%z"), "xaayaaz");
+        assert_eq!(expand("%NOPE%"), "%NOPE%");
+        assert_eq!(expand("%NOPE%%A%"), "%NOPE%aa");
+        assert_eq!(expand("100%%A%"), "100%%A%");
+        assert_eq!(expand("50% off"), "50% off");
+        assert_eq!(expand(r"C:\no\tokens"), r"C:\no\tokens");
+    }
+
+    // The brief's case, through the REAL environment and the registry
+    // value's split: each entry is expanded on its own.
+    #[test]
+    fn a_registry_path_value_is_split_and_each_entry_expanded() {
+        let root = r"C:\vb-test-root";
+        std::env::set_var("VB_TEST_ROOT", root);
+        assert!(std::env::var("NOPE").is_err(), "the test needs NOPE unset");
+        assert_eq!(
+            expand_env_tokens(r"%VB_TEST_ROOT%\bin;%NOPE%"),
+            format!(r"{root}\bin;%NOPE%")
+        );
+        assert_eq!(
+            registry_path_list(r"%VB_TEST_ROOT%\bin;%NOPE%;C:\x"),
+            vec![
+                format!(r"{root}\bin"),
+                "%NOPE%".to_string(),
+                r"C:\x".to_string()
+            ]
         );
     }
 

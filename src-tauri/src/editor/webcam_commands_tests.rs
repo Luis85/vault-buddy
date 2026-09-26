@@ -832,3 +832,14 @@ fn a_real_webm_streamed_in_chunks_lands_indexed() {
         "the landed take gained a duration: {indexed:?}"
     );
 }
+
+// S-9: the append goes through the no-follow OPEN, not the check alone (the
+// Windows arm's real-symlink test is `vault_buddy_core::no_follow`'s own).
+#[test]
+fn the_append_opens_the_part_no_follow() {
+    let src = include_str!("webcam_commands.rs");
+    let body = &src[src.find("fn append_bytes(").unwrap()..];
+    let body = &body[..body.find("\n}\n").unwrap()];
+    // Through the no-follow open, and never a following `OpenOptions` one.
+    assert!(body.contains("open_append_no_follow(part)") && !body.contains("OpenOptions"));
+}

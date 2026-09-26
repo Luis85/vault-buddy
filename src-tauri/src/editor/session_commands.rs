@@ -115,7 +115,7 @@ pub(crate) fn open_staged_in(
             // would refuse its Discard for good. It is left in place (the
             // editor's "Discard this project" removes it) and the capture
             // is adopted or migrated below, which re-pins it.
-            match load_opened(root, &pid).and_then(|o| ensure_sources_name(o, base, &pid)) {
+            match load_opened(root, &pid).and_then(|o| ensure_sources_name(o, base)) {
                 Ok(opened) => return Ok(opened),
                 Err(e) if e.code == EditorErrorCode::InvalidProject => log::warn!(
                     "editor_open_staged: {} is pinned to project {pid:?}, which cannot open it \
@@ -357,11 +357,7 @@ fn staged_stems(
 /// whose own `sources.json` names a DIFFERENT staged capture (or none), so
 /// opening one capture can never open — and later edit or discard — another
 /// capture's project.
-fn ensure_sources_name(
-    opened: OpenedProject,
-    base: &str,
-    project_id: &str,
-) -> Result<OpenedProject, EditorError> {
+fn ensure_sources_name(opened: OpenedProject, base: &str) -> Result<OpenedProject, EditorError> {
     let staged: Vec<&str> = opened
         .sources
         .values()
@@ -373,7 +369,6 @@ fn ensure_sources_name(
     if staged.contains(&base) {
         return Ok(opened);
     }
-    let _ = project_id;
     Err(err(
         EditorErrorCode::InvalidProject,
         "This capture is linked to a project that edits a different capture.",

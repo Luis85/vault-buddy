@@ -97,7 +97,8 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$APPLOCALDATA/screen-captures/*",
+          "$APPLOCALDATA/screen-captures/*.mp4",
+          "$APPLOCALDATA/screen-captures/*.m4a",
           "$APPLOCALDATA/editor-projects/*/media/*",
           "$APPLOCALDATA/editor-projects/*/takes/*",
           "$APPLOCALDATA/editor-projects/*/products/*",

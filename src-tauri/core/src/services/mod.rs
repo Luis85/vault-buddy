@@ -14,6 +14,13 @@ mod recordings;
 mod tasks;
 mod vault;
 
+// The crate's one visible-skip helper, reachable from outside `tasks`
+// (`no_follow`'s Windows symlink probe, hardening Task 24).
+// Windows-only: its one caller there is a `cfg(windows)` test, and an
+// unused re-export would fail the Linux `-D warnings` clippy.
+#[cfg(all(test, windows))]
+pub(crate) use tasks::test_announce;
+
 pub use recordings::{list_recordings, RecordingDto};
 pub use tasks::{
     add_task, count_open_tasks, count_parent_links, create_task_list, delete_task_list,

@@ -1,3 +1,7 @@
+// Test-only pin of what the asset protocol scope ADMITS (S-10), beside
+// `tray.rs`'s pin of its list; the `config_lock_guard` precedent.
+#[cfg(test)]
+mod asset_scope_guard;
 mod capture_commands;
 mod capture_config_commands;
 mod capture_exclusion;
