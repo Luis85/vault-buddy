@@ -46,7 +46,11 @@ export function useEditorRecovery(onSessionChanged: () => void) {
     try {
       rows = await project.port.listProjects();
     } catch (e) {
-      logWarning(`editor recovery: could not list projects: ${toEditorError(e).message}`);
+      // S-15 (hardening Task 12 fix round 1): by code and operationId,
+      // never by message — which can carry a capture's own name in plain
+      // text.
+      const failure = toEditorError(e);
+      logWarning(`editor recovery: could not list projects: ${failure.code} (${failure.operationId})`);
       return;
     }
     // The session may have changed while the listing was in flight — or

@@ -395,6 +395,33 @@ fn a_control_character_in_the_name_is_refused() {
     assert!(jobs_in(&state, SESSION).unwrap().is_empty());
 }
 
+// Fix round 1 (review minor): `char::is_control` alone is a strict subset of
+// `core::yaml_scalar::multiline_needs_escape`'s hazard set -- it misses the
+// YAML line/paragraph separators (U+2028/U+2029, which fold a line the same
+// way a bare newline would) and the BMP noncharacters (U+FFFE/U+FFFF). Each
+// would break the SAME `yaml_quote` call the published note's frontmatter
+// goes through, so each is refused with the same message.
+#[test]
+fn a_yaml_hazard_character_outside_char_is_control_is_also_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let state = EditorState::default();
+    opened(root.path(), &state);
+    let rev = snapshot_revision(&state);
+    for hazard in ['\u{2028}', '\u{2029}', '\u{fffe}', '\u{ffff}'] {
+        let mut bad = request(rev);
+        bad.name = format!("a{hazard}b");
+        let e = refused(begin_render(&state, root.path(), &bad, || {
+            Ok(FakeRunner::new(Behaviour::Writes(b"x".to_vec())))
+        }));
+        assert_eq!(e.code, EditorErrorCode::InvalidRequest, "{hazard:?}");
+        assert_eq!(
+            e.message, "A video name cannot contain control characters.",
+            "{hazard:?}"
+        );
+    }
+    assert!(jobs_in(&state, SESSION).unwrap().is_empty());
+}
+
 // ffmpeg's absence, a capability refusal and a full disk are each refused
 // up front, with the code the frontend acts on -- and none registers a job.
 #[test]

@@ -6949,10 +6949,28 @@ dropped where the refusal's MEANING is otherwise distinct (package export's
 "choose it in the dialog to replace it" case; `guide_commands.rs`'s
 `may_replace`, "not itself guide progress") — because the global rule against
 a name in any error message was found to bind these dialogs too. Nothing in
-this codebase still puts an EXISTING file's name in a message. The webview no
-longer re-logs an editor error's message at all — every logging site now
-prints the error's stable `code` and `operationId` instead (S-15's frontend
-half, the same task).
+this codebase still puts an EXISTING file's name in a message. Every webview
+log site that catches something that MAY be `EditorError`/`EditorPortError`
+shaped prints the error's stable `code` and `operationId` instead of its
+message (S-15's frontend half) — checked by grep against every
+`logWarning`/`logError`/`console.*` call under `src/editor/**`,
+`src/components/editor/**`, `src/composables/useEditor*.ts`,
+`src/stores/editor*.ts` and `EditorRoot.vue`, not assumed from the sites the
+first pass happened to touch: hardening Task 12 fixed ten such sites, and its
+fix round 1 found and fixed four more the first sweep missed —
+`useEditorRecovery.ts`'s failed-listing log, `webcamRecorder.ts`'s
+chunk-append and take-discard logs, and `previewController.ts`'s
+resolve-media log (dead for a real port error today, since
+`PreviewSurface.vue`'s own `resolveUrl` never rejects, but kept uniform with
+its siblings). **What the grep correctly leaves alone**: a caught value that
+is never `EditorError`-shaped has nothing to leak, so its log still prints
+`String(e)` — `EditorRoot.vue`'s `take_editor_request` catch (that command
+returns `Option<...>`, never a `Result`, so a rejection can only be an IPC
+transport failure), `port.ts`'s job-progress-channel decode catch (a
+malformed WIRE message, not an application error), and
+`previewController.ts`'s six other `String(e)` sites (Web Audio/
+`HTMLMediaElement` failures — `AudioContext.resume()`/`.close()`, an
+`<video>`'s `.play()` — never editor-shaped).
 The two capture-base messages this item used to name are gone:
 `session_commands.rs` "Could not unlink the capture …" went with hardening
 Task 2's discard rework, and `project_store.rs` now says "no staged capture

@@ -20,7 +20,14 @@ pub fn yaml_quote(value: &str) -> String {
 /// `0x7F–0x9F` range and so is escaped too — it is a YAML-1.1 line break whose
 /// folding could otherwise silently change the value. `\n`/`\t`/`\r` are handled
 /// by earlier match arms before this predicate is consulted.
-fn multiline_needs_escape(c: char) -> bool {
+///
+/// `pub`: the tutorial editor's render-name refusal (`render_jobs.rs`, S-8)
+/// reuses this exact hazard set — every one of these chars would break the
+/// SAME `yaml_quote` call the published product's note frontmatter goes
+/// through, so a name check that only refused `char::is_control` (a strict
+/// subset — it misses `U+2028`/`U+2029`/`U+FFFE`/`U+FFFF`) would let some of
+/// them through.
+pub fn multiline_needs_escape(c: char) -> bool {
     let u = c as u32;
     u < 0x20 || (0x7f..=0x9f).contains(&u) || matches!(u, 0x2028 | 0x2029 | 0xfffe | 0xffff)
 }

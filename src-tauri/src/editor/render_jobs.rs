@@ -70,6 +70,7 @@ use vault_buddy_core::screen_capture_config::{
     export_size_estimate_bytes, export_space_shortfall, ScreenQuality,
 };
 use vault_buddy_core::sync_util::lock_ignoring_poison;
+use vault_buddy_core::yaml_scalar::multiline_needs_escape;
 use vault_buddy_screen::ffmpeg_args::EncodeSettings;
 use vault_buddy_screen::render::video_graph::file_input_count;
 use vault_buddy_screen::ScreenError;
@@ -371,10 +372,14 @@ fn validated_quality(request: &RenderRequest) -> Result<ScreenQuality, EditorErr
             ),
         ));
     }
-    // S-8: a bare C0/C1 control survives `yaml_quote` (it escapes only
-    // `\`/`"`/newlines) into the product's own note frontmatter and breaks
-    // its YAML. Refused here, before a job -- let alone a note -- exists.
-    if name.chars().any(char::is_control) {
+    // S-8 (fix round 1 widened this from `char::is_control` alone, a
+    // strict subset): any char `core::yaml_scalar::multiline_needs_escape`
+    // treats as a YAML hazard -- C0/C1 controls, the line/paragraph
+    // separators U+2028/U+2029, and the BMP noncharacters U+FFFE/U+FFFF --
+    // survives `yaml_quote` (it escapes only `\`/`"`/newlines) into the
+    // product's own note frontmatter and breaks its YAML. Refused here,
+    // before a job -- let alone a note -- exists.
+    if name.chars().any(multiline_needs_escape) {
         return Err(err(
             EditorErrorCode::InvalidRequest,
             "A video name cannot contain control characters.",

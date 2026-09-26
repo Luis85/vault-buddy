@@ -12,6 +12,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { EditorPortError } from "../src/editor/port";
 import { computeCardLayers } from "../src/editor/previewCardLayer";
 import type { AudioContextLike, GainLike } from "../src/editor/previewController";
 import { MAX_ELEMENTS, PreviewController } from "../src/editor/previewController";
@@ -477,7 +478,38 @@ describe("teardown and failure paths (fix round 1)", () => {
     c.layout(project([track("v")], [clip("a", "v")]), 0);
     await Promise.resolve();
     await Promise.resolve();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("ipc gone"));
+    // Fix round 1 (review Important, "keep the pattern uniform" — this path
+    // is dead for a port error today, since `PreviewSurface.vue`'s own
+    // `resolveUrl` never rejects, but the log still speaks by code and
+    // operationId, never by message. A plain `Error` (not an
+    // `EditorPortError`) falls back to `internal`/`store-local`
+    // (`toEditorError`'s own guard), never "undefined".
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("internal (store-local)"));
+    expect(container.querySelector("video")!.getAttribute("src")).toBeNull();
+    warn.mockRestore();
+  });
+
+  it("a rejecting resolver's editor error is logged by code and operationId, never by message", async () => {
+    const warn = vi.spyOn(logging, "logWarning").mockImplementation(() => undefined);
+    const { c, container } = controller({
+      resolveUrl: () =>
+        Promise.reject(
+          new EditorPortError({
+            code: "internal",
+            message: "no staged capture named Secret Window",
+            retryable: false,
+            operationId: "op-resolve",
+          }),
+        ),
+    });
+    c.layout(project([track("v")], [clip("a", "v")]), 0);
+    await Promise.resolve();
+    await Promise.resolve();
+    const line = warn.mock.calls.map((call) => call[0] as string).find((l) => l.includes("resolving media"));
+    expect(line).toBeDefined();
+    expect(line).not.toContain("Secret");
+    expect(line).toContain("internal");
+    expect(line).toContain("op-resolve");
     expect(container.querySelector("video")!.getAttribute("src")).toBeNull();
     warn.mockRestore();
   });

@@ -15,6 +15,7 @@ import RecoveryDialog from "../src/components/editor/dialogs/RecoveryDialog.vue"
 import type { EditorPort } from "../src/editor/port";
 import { EditorPortError } from "../src/editor/port";
 import type { EditorOpenResult, EditorSnapshot, ProjectSummaryDto } from "../src/editorTypes";
+import { logWarning } from "../src/logging";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
 
@@ -142,6 +143,34 @@ describe("RecoveryDialog", () => {
   it("stays hidden when the project has no recovery file", async () => {
     const { w } = await setup({ rows: [summary({ hasRecovery: false }), summary({ projectFileId: "other" })] });
     expect(w.find('[data-testid="recovery-dialog"]').exists()).toBe(false);
+  });
+
+  // Fix round 1 (review Important): the log line carries the error's stable
+  // code and operationId, never its message — which can carry a capture's
+  // own name in plain text, not only a `<path:#hash8>` handle the
+  // redaction scan can catch.
+  it("logs an unreadable listing by code and operationId, never by message", async () => {
+    const listProjects = vi.fn(() =>
+      Promise.reject(
+        new EditorPortError({
+          code: "internal",
+          message: "no staged capture named Secret Window",
+          retryable: false,
+          operationId: "op-list",
+        }),
+      ),
+    );
+    const { w } = await setup({ overrides: { listProjects } });
+    expect(w.find('[data-testid="recovery-dialog"]').exists()).toBe(false);
+    const line = vi
+      .mocked(logWarning)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((l) => l.includes("could not list projects"))
+      .pop();
+    expect(line).toBeDefined();
+    expect(line).not.toContain("Secret");
+    expect(line).toContain("internal");
+    expect(line).toContain("op-list");
   });
 
   it("Resume closes the clean session and reopens with the journal as the working copy", async () => {

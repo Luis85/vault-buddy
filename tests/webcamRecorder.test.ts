@@ -310,6 +310,41 @@ describe("webcamRecorder — failure and no-op paths", () => {
     expect(FakeRecorder.instances).toEqual([]);
   });
 
+  // Fix round 1 (review Important): the discard-failure log carries the
+  // error's stable code and operationId, never its message — which can
+  // carry a capture's own name in plain text, not only a `<path:#hash8>`
+  // handle the redaction scan can catch.
+  it("logs a failed discard by code and operationId, never by message", async () => {
+    const answer = deferred<{ takeId: string }>();
+    const r = recorder({
+      webcamBegin: () => answer.promise,
+      webcamDiscard: () =>
+        Promise.reject(
+          new EditorPortError({
+            code: "internal",
+            message: "no staged capture named Secret Window",
+            retryable: false,
+            operationId: "op-discard",
+          }),
+        ),
+    });
+    await r.enable();
+    const starting = r.start();
+    await settle();
+    await r.cancel();
+    answer.resolve({ takeId: "take-late" });
+    await starting;
+    await settle();
+    const line = vi
+      .mocked(logWarning)
+      .mock.calls.map((c) => c[0] as string)
+      .find((l) => l.includes("discarding take"));
+    expect(line).toBeDefined();
+    expect(line).not.toContain("Secret");
+    expect(line).toContain("internal");
+    expect(line).toContain("op-discard");
+  });
+
   it("a refused append fails the take, discards it and shows Rust's message", async () => {
     const discarded: string[] = [];
     const r = recorder({
@@ -326,6 +361,35 @@ describe("webcamRecorder — failure and no-op paths", () => {
     });
     expect(discarded).toEqual(["take-7"]);
     expect(devices.tracks().every((t) => t.stopped)).toBe(true);
+  });
+
+  // Fix round 1 (review Important): the chunk-append-failure log carries
+  // the error's stable code and operationId, never its message.
+  it("logs a chunk-append failure by code and operationId, never by message", async () => {
+    const r = recorder({
+      webcamAppend: () =>
+        Promise.reject(
+          new EditorPortError({
+            code: "internal",
+            message: "no staged capture named Secret Window",
+            retryable: false,
+            operationId: "op-append",
+          }),
+        ),
+      webcamDiscard: () => Promise.resolve(),
+    });
+    await r.enable();
+    await r.start();
+    live().emit([1]);
+    await r.stop();
+    const line = vi
+      .mocked(logWarning)
+      .mock.calls.map((c) => c[0] as string)
+      .find((l) => l.includes("was not appended"));
+    expect(line).toBeDefined();
+    expect(line).not.toContain("Secret");
+    expect(line).toContain("internal");
+    expect(line).toContain("op-append");
   });
 
   it("a recorder error ends the take as a failure", async () => {
@@ -442,7 +506,12 @@ describe("webcamRecorder — dispose mid-recording (fix round 1)", () => {
     slow.reject(new Error("take gone"));
     await settle();
     expect(log).toEqual(["append 0", "discard take-7"]);
-    expect(vi.mocked(logWarning)).toHaveBeenCalledWith(expect.stringMatching(/take-7.*chunk 0.*take gone/));
+    // Fix round 1: by code and operationId, not the raw message — a plain
+    // `Error` (not an `EditorPortError`) falls back to `internal`/
+    // `store-local` (`toEditorError`'s own guard), never "undefined".
+    expect(vi.mocked(logWarning)).toHaveBeenCalledWith(
+      expect.stringMatching(/take-7.*chunk 0.*internal.*store-local/),
+    );
   });
 
   it("an append that never answers does not hold the discard forever", async () => {

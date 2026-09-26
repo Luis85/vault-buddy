@@ -35,6 +35,7 @@
  */
 import type { Project } from "../editorTypes";
 import { logWarning } from "../logging";
+import { toEditorError } from "../stores/editorProject";
 import { CardLayerDom } from "./previewCardDom";
 import { computeCardLayers } from "./previewCardLayer";
 import type { Size } from "./previewGeometry";
@@ -255,8 +256,7 @@ export class PreviewController {
     this.active.clear();
     this.free.length = 0;
     this.cards.destroy();
-    // `close()` rejects (InvalidStateError) on an already-closed context:
-    // logged, never an unhandled rejection.
+    // `close()` rejects (InvalidStateError) on an already-closed context: logged, never an unhandled rejection.
     this.audio
       ?.close?.()
       ?.catch((e: unknown) => logWarning(`preview: closing the AudioContext failed (${String(e)})`));
@@ -479,7 +479,7 @@ export class PreviewController {
         this.urls.set(assetId, url);
         if (url && slot.assetId === assetId) slot.el.src = url;
       },
-      (e: unknown) => logWarning(`preview: resolving media for ${assetId} failed (${String(e)})`),
+      (e: unknown) => logWarning(`preview: resolving media for ${assetId} failed: ${toEditorError(e).code} (${toEditorError(e).operationId})`),
     );
   }
 

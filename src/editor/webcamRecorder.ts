@@ -40,6 +40,7 @@
  */
 import type { TakeDto } from "../editorTypes";
 import { logWarning } from "../logging";
+import { toEditorError } from "../stores/editorProject";
 import { type EditorPort,EditorPortError } from "./port";
 
 /** The `MediaRecorder` types Rust accepts, in preference order —
@@ -312,7 +313,14 @@ export class WebcamRecorder {
         await this.deps.port.webcamAppend(session.sessionId, session.takeId, seq, bytes);
       } catch (e) {
         session.failure = e;
-        logWarning(`webcam: take ${session.takeId} chunk ${seq} was not appended: ${String(e)}`);
+        // S-15 (hardening Task 12 fix round 1): by code and operationId,
+        // never by message — which can carry a capture's own name in
+        // plain text. `toEditorError` also guards a non-`EditorPortError`
+        // shape (never "undefined (undefined)").
+        const failure = toEditorError(e);
+        logWarning(
+          `webcam: take ${session.takeId} chunk ${seq} was not appended: ${failure.code} (${failure.operationId})`,
+        );
       }
     });
   }
@@ -410,7 +418,10 @@ export class WebcamRecorder {
    * own close removes it too). */
   private discardOpen(sessionId: string, takeId: string): void {
     this.deps.port.webcamDiscard(sessionId, takeId).catch((e: unknown) => {
-      logWarning(`webcam: discarding take ${takeId} failed: ${String(e)}`);
+      // S-15 (hardening Task 12 fix round 1): by code and operationId,
+      // never by message.
+      const failure = toEditorError(e);
+      logWarning(`webcam: discarding take ${takeId} failed: ${failure.code} (${failure.operationId})`);
     });
   }
 }
