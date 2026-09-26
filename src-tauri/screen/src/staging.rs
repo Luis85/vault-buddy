@@ -109,6 +109,16 @@ pub use crate::staging_stems::{
 /// `editor_commands::is_safe_base` (phase 4) refuses such a name from the
 /// frontend, and `reserve_base` renames past one when minting a base.
 ///
+/// **Delegates to `core::device_names::is_reserved_device_name`** (S-4,
+/// hardening review): this crate already depends on `vault_buddy_core`, so
+/// carrying a second, narrower copy of Microsoft's own device list here was
+/// exactly the drift GAP-108 named as the risk to avoid — this function used
+/// to cover `COM1`-`COM9`/`LPT1`-`LPT9` only, missing `COM0`, `LPT0`, the
+/// superscript-digit spellings and trimming a trailing space before
+/// comparing, all of which the core list already covers. Delegating means
+/// `is_safe_base` refuses every one of those too, through this same
+/// function, without a second list to keep in sync.
+///
 /// `staging_title::sanitize_title` deliberately does NOT consume it. That
 /// function yields a FRAGMENT, which `capture_paths::base_name` prefixes
 /// with `YYYY-MM-DD HHmm ` before it is ever a path component — so a window
@@ -116,32 +126,7 @@ pub use crate::staging_stems::{
 /// `2026-09-21 1430 CON.mp4`, and checking there would only cost that user
 /// an underscore. The rule belongs where a NAME is minted, which is here.
 pub fn is_reserved_device_stem(name: &str) -> bool {
-    let stem = name.split('.').next().unwrap_or(name);
-    matches!(
-        stem.to_ascii_uppercase().as_str(),
-        "CON"
-            | "PRN"
-            | "AUX"
-            | "NUL"
-            | "COM1"
-            | "COM2"
-            | "COM3"
-            | "COM4"
-            | "COM5"
-            | "COM6"
-            | "COM7"
-            | "COM8"
-            | "COM9"
-            | "LPT1"
-            | "LPT2"
-            | "LPT3"
-            | "LPT4"
-            | "LPT5"
-            | "LPT6"
-            | "LPT7"
-            | "LPT8"
-            | "LPT9"
-    )
+    vault_buddy_core::device_names::is_reserved_device_name(name)
 }
 
 /// Keep a base from naming a Windows reserved DEVICE rather than a file.
@@ -477,4 +462,3 @@ mod read_tests;
 #[cfg(test)]
 #[path = "staging_tests.rs"]
 mod tests;
-

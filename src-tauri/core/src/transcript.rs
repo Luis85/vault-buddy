@@ -5,8 +5,7 @@
 //! regenerable sidecars from a finished transcript or a user's edits.
 
 use crate::capture_note::{format_duration, write_atomic_replacing, write_note_atomic, yaml_quote};
-use crate::capture_paths::is_capture_base;
-use crate::vault_walk::dir_entries;
+use crate::{capture_paths::is_capture_base, vault_walk::dir_entries, CREATED_BY};
 use std::path::{Path, PathBuf};
 
 /// Frontmatter marker line values. `pending`/`failed` sidecars are ours to
@@ -63,7 +62,7 @@ pub fn is_regenerable(content: &str) -> bool {
 
 pub fn render_placeholder(mp3_file_name: &str) -> String {
     format!(
-        "---\n{MARKER_PENDING}\ntranscript-of: {}\ncreated-by: Vault Buddy\n---\n\n*Transcribing…*\n",
+        "---\n{MARKER_PENDING}\ntranscript-of: {}\ncreated-by: {CREATED_BY}\n---\n\n*Transcribing…*\n",
         yaml_quote(mp3_file_name)
     )
 }
@@ -76,7 +75,7 @@ pub fn render_error(mp3_file_name: &str, message: &str) -> String {
     // won't happen — same guidance render_cancelled already gives.
     let flat = message.replace(['\n', '\r'], " ");
     format!(
-        "---\n{MARKER_FAILED}\ntranscript-of: {}\ncreated-by: Vault Buddy\n---\n\n\
+        "---\n{MARKER_FAILED}\ntranscript-of: {}\ncreated-by: {CREATED_BY}\n---\n\n\
          > [!warning] Transcription failed\n> {flat}\n>\n\
          > Re-transcribe from the Recordings list to try again.\n",
         yaml_quote(mp3_file_name)
@@ -88,7 +87,7 @@ pub fn render_error(mp3_file_name: &str, message: &str) -> String {
 /// re-transcribe overwrites it. Same frontmatter/`yaml_quote` discipline.
 pub fn render_cancelled(mp3_file_name: &str) -> String {
     format!(
-        "---\n{MARKER_CANCELLED}\ntranscript-of: {}\ncreated-by: Vault Buddy\n---\n\n\
+        "---\n{MARKER_CANCELLED}\ntranscript-of: {}\ncreated-by: {CREATED_BY}\n---\n\n\
          > [!note] Transcription cancelled\n> Re-transcribe from the Recordings list to run it again.\n",
         yaml_quote(mp3_file_name)
     )
@@ -116,7 +115,7 @@ pub fn render_transcript(meta: &TranscriptMeta, segments: &[Segment]) -> String 
         yaml_quote(&format_duration(meta.duration_secs))
     ));
     out.push_str(&format!("generated: {}\n", yaml_quote(&meta.generated_at)));
-    out.push_str("created-by: Vault Buddy\n---\n\n");
+    out.push_str(&format!("created-by: {CREATED_BY}\n---\n\n"));
     let mut wrote_any = false;
     for s in segments {
         let text = s.text.trim();

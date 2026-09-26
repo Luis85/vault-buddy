@@ -94,13 +94,72 @@ fn is_reserved_device_stem_matches_case_insensitively_and_with_any_extension() {
     assert!(is_reserved_device_stem("LPT1"));
     assert!(
         !is_reserved_device_stem("COM10"),
-        "only COM1-COM9 are reserved"
+        "COM10/LPT10 and up are ordinary names"
     );
     assert!(
         !is_reserved_device_stem("console"),
         "a longer name sharing a prefix is not reserved"
     );
     assert!(!is_reserved_device_stem("cap"));
+    // S-4: this now delegates to `core::device_names::is_reserved_device_name`,
+    // which is the WIDER of the two lists Microsoft's own "Naming Files" page
+    // documents (COM0/LPT0 and the superscript digits, plus trimming a
+    // trailing space before comparing) -- `editor_commands::is_safe_base`
+    // shares this same list, so it refuses these too.
+    assert!(
+        is_reserved_device_stem("COM0"),
+        "COM0 is reserved, not only COM1-COM9"
+    );
+    assert!(is_reserved_device_stem("LPT0"));
+    assert!(
+        is_reserved_device_stem("NUL "),
+        "a trailing space is trimmed first"
+    );
+}
+
+// S-4: `editor_commands::is_safe_base` (which refuses a reserved device stem
+// through this very function) and `core::device_names::is_reserved_device_name`
+// must never drift into two different lists again -- that is exactly how
+// GAP-108 happened the first time, and `is_safe_base`'s own doc names this
+// function as the shared source. Checked over BOTH the reserved names and a
+// representative set of ordinary ones, so a widened-then-narrowed edit on
+// either side would show up here even if it happened to keep every single
+// existing fixture above green.
+#[test]
+fn the_screen_and_core_reserved_device_lists_agree() {
+    for name in [
+        "CON",
+        "con",
+        "PRN",
+        "AUX",
+        "NUL",
+        "COM0",
+        "COM1",
+        "COM9",
+        "LPT0",
+        "LPT1",
+        "LPT9",
+        "com1.foo",
+        "CON .mp4",
+        "NUL   ",
+        "COM\u{b9}",
+        "lpt\u{b3}.mp4",
+        "COM10",
+        "LPT10",
+        "console",
+        "cap",
+        "COM",
+        "LPT",
+        "",
+        "a1.mp4",
+        "xCON",
+    ] {
+        assert_eq!(
+            is_reserved_device_stem(name),
+            vault_buddy_core::device_names::is_reserved_device_name(name),
+            "{name:?} disagrees between screen::staging and core::device_names"
+        );
+    }
 }
 
 #[test]
@@ -330,8 +389,7 @@ fn a_rewrite_preserves_keys_this_build_does_not_declare() {
     back.timeline = Some(serde_json::json!({"segments": []}));
     let path = write_sidecar(dir.path(), "cap", &back).unwrap();
 
-    let reread: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let reread: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(reread["exportedTo"], "Work/Screen Captures/cap.md");
     assert_eq!(reread["cropRect"]["y"], 2);
     assert_eq!(reread["timeline"]["segments"], serde_json::json!([]));

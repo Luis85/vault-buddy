@@ -286,15 +286,11 @@ pub fn commit_screen_capture(
             // Some Windows API paths report a taken destination as
             // PermissionDenied rather than AlreadyExists.
             Err(_) if mp4.exists() => continue,
-            Err(e) => {
-                return Err(format!(
-                    "the exported video could not be moved into the vault: {e}"
-                ))
-            }
+            Err(e) => return Err(format!("the video could not be published: {e}")),
         }
     }
     Err(format!(
-        "the exported video could not be moved into the vault: gave up after \
+        "the video could not be published: gave up after \
          {MAX_COMMIT_ATTEMPTS} attempts to find a free name"
     ))
 }
@@ -751,10 +747,52 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            err.contains("could not be moved"),
+            err.contains("could not be published"),
             "unexpected message: {err}"
         );
         assert!(!out.path().join("Clip.mp4").exists());
+    }
+
+    // Carried finding (hardening Task 23): Publish (`editor::publish_io`) is
+    // the ONLY caller left since Task 59 retired the phase-5 export -- these
+    // messages still called the video "the exported video", role wording for
+    // a caller that no longer exists.
+    #[test]
+    fn the_missing_source_message_speaks_of_publishing_not_exporting() {
+        let out = tempfile::tempdir().unwrap();
+        let missing_source = commit_screen_capture(
+            std::path::Path::new("/definitely/not/here.mp4"),
+            out.path(),
+            "Clip",
+        )
+        .unwrap_err();
+        assert!(
+            !missing_source.to_lowercase().contains("export"),
+            "{missing_source}"
+        );
+    }
+
+    // The retries-exhausted arm (MAX_COMMIT_ATTEMPTS = 10,000) is not
+    // practically reachable by writing that many fixture files, so this
+    // reads the function's own source for its sibling literal instead --
+    // both messages come from the same two-line block, and a source scan is
+    // exactly what pins a wording rule neither branch's ordinary test
+    // reaches (the `redact_guard`/`cfg_windows_guard` precedent).
+    #[test]
+    fn the_retries_exhausted_message_speaks_of_publishing_not_exporting() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/screen_capture_paths.rs");
+        let src = std::fs::read_to_string(&path).expect("readable");
+        let body = src
+            .split("pub fn commit_screen_capture(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n}\n").next())
+            .expect("commit_screen_capture's body");
+        assert!(
+            !body.to_lowercase().contains("export"),
+            "commit_screen_capture still mentions export: {body}"
+        );
+        assert!(body.contains("gave up"), "{body}");
     }
 
     #[test]

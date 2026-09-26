@@ -68,10 +68,10 @@ pub struct DocMeta {
 /// task renderers.
 pub fn render_frontmatter(meta: &DocMeta, extra_frontmatter: Option<&str>) -> String {
     let mut fm = format!(
-        "---\ntype: Document\ntags: [vault-buddy-import]\nsource: {}\nimported: {}\nformat: {}\ncreated-by: Vault Buddy\n",
+        "---\ntype: Document\ntags: [vault-buddy-import]\nsource: {}\nimported: {}\nformat: {}\ncreated-by: {}\n",
         yaml_quote(&meta.source_path),
         yaml_quote(&meta.imported),
-        yaml_quote(meta.format.label()),
+        yaml_quote(meta.format.label()), crate::CREATED_BY,
     );
     if let Some(ef) = extra_frontmatter {
         const DOC_RESERVED: &[&str] =

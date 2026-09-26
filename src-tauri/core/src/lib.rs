@@ -41,6 +41,17 @@ pub mod yaml_scalar;
 use chrono::NaiveDate;
 use std::path::Path;
 
+/// The `created-by:` frontmatter value every vault-writing note renderer
+/// stamps (GAP-213; ADR §9 (h), D2): the capture note, the transcript
+/// sidecar, the document-import note and the tutorial note. Before this
+/// constant existed the tutorial note alone wrote the lowercase
+/// `vault-buddy` while every other writer wrote `Vault Buddy` — an
+/// unintentional divergence the ADR recorded rather than a documented
+/// difference. D2 is the user's approved fix: new tutorial notes now match
+/// every other note; notes a build already wrote are untouched (nothing
+/// rewrites an existing file's frontmatter for this alone).
+pub const CREATED_BY: &str = "Vault Buddy";
+
 /// The vault-relative daily-note path (no `.md`) for `date`, and whether the
 /// note file already exists. Split from `daily_note_uri` so callers that must
 /// gate creation (the MCP `open_daily_note` tool) can decide BEFORE a URI is
@@ -97,6 +108,71 @@ mod tests {
 
     fn date() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 7, 3).unwrap()
+    }
+
+    // GAP-213 / D2: all four vault-note writers stamp the SAME created-by
+    // value. Before this fix the tutorial note alone wrote the lowercase
+    // "vault-buddy"; this fails on that one writer until it is switched to
+    // the shared CREATED_BY constant.
+    #[test]
+    fn every_note_writer_stamps_the_one_created_by_value() {
+        let note = capture_note::render_note(
+            &capture_note::NoteMeta {
+                recorded_at: "2026-01-01T00:00:00Z".into(),
+                duration_secs: 1,
+                vault_name: "V".into(),
+                recording_type: "Meeting".into(),
+                paused: None,
+                input_devices: vec![],
+                event: None,
+                transcribe: false,
+                follow_up: false,
+                extra_frontmatter: None,
+                body_template: None,
+            },
+            "r.mp3",
+        );
+        assert!(
+            note.contains(&format!("created-by: {CREATED_BY}\n")),
+            "capture note: {note}"
+        );
+
+        let transcript = transcript::render_placeholder("r.mp3");
+        assert!(
+            transcript.contains(&format!("created-by: {CREATED_BY}\n")),
+            "transcript sidecar: {transcript}"
+        );
+
+        let doc = document_import::render_frontmatter(
+            &document_import::DocMeta {
+                source_path: "/x/a.docx".into(),
+                imported: "2026-01-01".into(),
+                format: document_import::DocFormat::Docx,
+            },
+            None,
+        );
+        assert!(
+            doc.contains(&format!("created-by: {CREATED_BY}\n")),
+            "document-import note: {doc}"
+        );
+
+        let tutorial = editor::note::render_tutorial_note(
+            &editor::note::TutorialNoteMeta {
+                recorded_at: "2026-01-01T00:00:00Z".into(),
+                duration_ms: 1_000,
+                product: "P".into(),
+                revision: 1,
+                range: None,
+                chapters: vec![],
+                extra_frontmatter: None,
+                body_template: None,
+            },
+            "x.mp4",
+        );
+        assert!(
+            tutorial.contains(&format!("created-by: {CREATED_BY}\n")),
+            "tutorial note: {tutorial}"
+        );
     }
 
     #[test]

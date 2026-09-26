@@ -26,6 +26,7 @@ use crate::capture_note::format_duration;
 use crate::screen_note::embed;
 use crate::template::{render_extra_frontmatter, substitute};
 use crate::yaml_scalar::yaml_quote;
+use crate::CREATED_BY;
 
 /// Frontmatter keys this renderer owns. A vault template naming one of
 /// these has that key dropped rather than honoured.
@@ -111,7 +112,7 @@ pub fn render_tutorial_note(meta: &TutorialNoteMeta, mp4_file_name: &str) -> Str
 
     let mut out = String::from("---\n");
     out.push_str("type: Tutorial\n");
-    out.push_str("created-by: vault-buddy\n");
+    out.push_str(&format!("created-by: {CREATED_BY}\n"));
     out.push_str(&format!("recorded: {}\n", yaml_quote(&meta.recorded_at)));
     out.push_str(&format!("duration: {}\n", yaml_quote(&duration)));
     out.push_str(&format!("product: {}\n", yaml_quote(&meta.product)));
@@ -196,7 +197,7 @@ mod tests {
             concat!(
                 "---\n",
                 "type: Tutorial\n",
-                "created-by: vault-buddy\n",
+                "created-by: Vault Buddy\n",
                 "recorded: \"2026-09-24T10:15:00+02:00\"\n",
                 "duration: \"3:17\"\n",
                 "product: \"Walkthrough v2\"\n",

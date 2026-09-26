@@ -167,6 +167,51 @@ fn two_inputs_with_one_stem_keep_the_mix_audible() {
         .all(|c| c.muted));
 }
 
+// D-3 (hardening review): a capture that recorded no audio at all used to
+// build `covering` as `Some(vec![])` for the empty range `1..=0`, read
+// `fits` as false, and warn "0 stem(s) for 0 input(s) not placed (track or
+// clip limit)" on EVERY no-audio migration. `stem_parts` returns its skip
+// reason rather than logging (core has no log-capture test helper), so this
+// asserts the no-audio case yields no reason at all — never
+// `LimitExceeded` — while a genuinely over-limit capture still does
+// (`a_capture_whose_stems_exceed_a_limit_reports_why` below).
+#[test]
+fn a_capture_with_no_recorded_audio_reports_no_skip_reason() {
+    use super::stems::stem_parts;
+    let (parts, skip) = stem_parts(&[], 0, &[(0, 0, 1_000)], 1_000, (1, 1));
+    assert!(parts.is_none(), "no audio recorded -> nothing to place");
+    assert!(
+        skip.is_none(),
+        "a no-audio capture must report no reason at all, got {skip:?}"
+    );
+
+    // Stems recorded but none survived to migrate (an upstream filter
+    // emptied the list) is the same "nothing to consider" shape.
+    let (parts, skip) = stem_parts(&[], 2, &[(0, 0, 1_000)], 1_000, (1, 1));
+    assert!(parts.is_none());
+    assert!(
+        skip.is_none(),
+        "an empty stem list must report no reason either, got {skip:?}"
+    );
+}
+
+// The other side of the same guard: a real over-limit capture (every input
+// covered, but placing all of them would exceed the track/clip cap) still
+// reports `LimitExceeded` for the caller to log -- the D-3 fix must not
+// silence a genuine limit along with the no-audio false positive.
+#[test]
+fn a_capture_whose_stems_exceed_a_limit_reports_why() {
+    use super::stems::{stem_parts, StemSkipReason};
+    let many: Vec<StemInput> = (1..=40).map(|i| stem(i, &format!("Input {i}"))).collect();
+    let (parts, skip) = stem_parts(&many, many.len(), &[(0, 0, 1_000)], 1_000, (0, 0));
+    assert!(parts.is_none());
+    assert_eq!(
+        skip,
+        Some(StemSkipReason::LimitExceeded { covering: 40 }),
+        "an over-limit capture must still report why, got {skip:?}"
+    );
+}
+
 // Stems past the track limit used to be cut to what fit (`take(room)`), and
 // the mix was muted anyway — silencing the inputs left out. All or nothing.
 #[test]

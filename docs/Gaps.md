@@ -7259,7 +7259,7 @@ of its snapshot) and marks it unavailable — the ledger already models an
 unavailable file — plus a per-project size readout in the tutorial projects
 list. Not a data-safety issue: nothing is ever lost, only kept twice.
 
-### GAP-213 · Low · The tutorial companion note says `created-by: vault-buddy`; every other Vault Buddy note says `created-by: Vault Buddy`
+### GAP-213 · ~~Low~~ CLOSED 2026-09-26 (hardening Task 23) · The tutorial companion note says `created-by: vault-buddy`; every other Vault Buddy note says `created-by: Vault Buddy`
 `src-tauri/core/src/editor/note.rs` (`render_tutorial_note`, pinned by its
 own `the_managed_frontmatter_the_embed_and_nothing_else` test) versus
 `src-tauri/core/src/capture_note.rs`, `src-tauri/core/src/transcript.rs` and
@@ -7275,6 +7275,19 @@ Buddy` and update its test in the same commit; a note already published with
 the old value is the user's file and is left alone (a vault write never
 rewrites an existing note), so the fix note should say that old notes keep
 `vault-buddy`. Not done in Task 60 because that task changes no behaviour.
+
+> **2026-09-26 — CLOSED by hardening Task 23 (user decision D2).** One
+> `pub const CREATED_BY: &str = "Vault Buddy";` (`src-tauri/core/src/lib.rs`)
+> is now the single value all four writers stamp —
+> `capture_note::render_note`, `transcript::{render_placeholder,
+> render_error, render_cancelled, render_transcript}`,
+> `document_import::render_frontmatter` and `editor::note::render_tutorial_note`
+> — pinned by a cross-writer test, `every_note_writer_stamps_the_one_created_by_value`
+> (`core/src/lib.rs`), that calls all four renderers and asserts the same
+> line. Only `render_tutorial_note`'s literal changed; the other three
+> already wrote `Vault Buddy` and are otherwise byte-identical. As the fix
+> text above said: a tutorial note a build already wrote keeps its
+> `created-by: vault-buddy` — nothing rewrites an existing note.
 
 ### GAP-214 · Low (items 5–6 CLOSED 2026-09-25, hardening Task 3; item 7 CLOSED 2026-09-25, hardening Task 2; item 8 CLOSED 2026-09-25, hardening Task 4) · What the final review's damaged-project fixes still cannot reach
 `src-tauri/src/editor/project_discard.rs`, `session_commands.rs`

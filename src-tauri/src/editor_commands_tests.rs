@@ -85,6 +85,12 @@ fn a_reserved_device_name_is_refused() {
     assert!(!is_safe_base("COM1"));
     assert!(!is_safe_base("LPT1"));
     assert!(!is_safe_base("com1.foo"));
+    // S-4: `is_safe_base` refuses through `staging::is_reserved_device_stem`,
+    // which now delegates to `core::device_names::is_reserved_device_name`
+    // -- the wider of the two lists (COM0/LPT0 included). Before that
+    // delegation `is_safe_base("COM0")` was true (a false negative).
+    assert!(!is_safe_base("COM0"));
+    assert!(!is_safe_base("LPT0"));
 }
 
 // T-1: no existing fixture carried a control character, so the

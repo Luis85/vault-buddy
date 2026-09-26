@@ -220,13 +220,23 @@ pub fn from_staged(input: &StagedInput<'_>, project_id: &str) -> MigrationResult
 
     // The webcam's track and clips come after; reserve their share.
     let webcam_share = input.webcam.as_ref().map_or((0, 0), |_| (1, placed.len()));
-    let parts = stems::stem_parts(
+    let (parts, skip) = stems::stem_parts(
         input.stems,
         input.input_count,
         &placed,
         input.duration_ms,
         (tracks.len() + webcam_share.0, clips.len() + webcam_share.1),
     );
+    // `stem_parts` returns WHY rather than logging itself (D-3), so a test
+    // can assert the no-audio case yields no reason at all instead of
+    // scraping a log line: only a genuine limit is worth telling the user
+    // about, never a capture that recorded no audio in the first place.
+    if let Some(stems::StemSkipReason::LimitExceeded { covering }) = skip {
+        log::warn!(
+            "migrate: {covering} stem(s) for {} input(s) not placed (track or clip limit); the mix stays audible",
+            input.input_count
+        );
+    }
     if let Some((stem_assets, stem_tracks, stem_clips)) = parts {
         // Every input is laid out as a stem: the capture's MIX is muted.
         for clip in &mut clips {

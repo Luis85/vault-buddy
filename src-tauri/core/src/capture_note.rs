@@ -11,6 +11,7 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::capture_embed::{embed_line, TRANSCRIPT_LINK_SUFFIX};
+use crate::CREATED_BY;
 
 pub struct NoteMeta {
     pub recorded_at: String,
@@ -109,7 +110,7 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
     if let Some(event) = &meta.event {
         out.push_str(&format!("event: {}\n", yaml_quote(event)));
     }
-    out.push_str("created-by: Vault Buddy\n");
+    out.push_str(&format!("created-by: {CREATED_BY}\n"));
     // Extra frontmatter: rendered via render_extra_frontmatter, which
     // resolves placeholders, parses as YAML, and drops reserved keys
     // (fence-safe) so a user field can never break the block or shadow a
