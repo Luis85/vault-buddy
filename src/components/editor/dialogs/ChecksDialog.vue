@@ -17,22 +17,31 @@
  * **Continue to render** asks the header's Render button to open its
  * dialog (`requestReveal("render")`); it is disabled, with the reason
  * beside it, while anything blocks — the same rule the Render dialog holds.
+ *
+ * Visual-parity Task 21 (concept spec §9.4, screen 07): 680 wide, the
+ * issue rows and closing help of the concept, and its footer — **Export
+ * diagnostics** (Help's own path, `useDiagnosticsExport`) · **Back to
+ * edit** · **Continue to render**. The concept's "editable project has not
+ * been downloaded" note is browser-only and has no native twin (design
+ * D10): a native project is committed by Save project.
  */
 import { computed, ref, watch } from "vue";
 
+import { useDiagnosticsExport } from "../../../composables/useDiagnosticsExport";
 import { revealFinding } from "../../../editor/checkReveal";
 import { requestReveal } from "../../../editor/revealBus";
 import type { CheckFinding } from "../../../editorTypes";
 import { useEditorChecksStore } from "../../../stores/editorChecks";
-import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
 import ChecksDestination from "./ChecksDestination.vue";
 import ChecksFindingList from "./ChecksFindingList.vue";
+import DialogButton from "./DialogButton.vue";
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ (e: "close"): void }>();
 
 const checks = useEditorChecksStore();
+const { exportDiagnostics } = useDiagnosticsExport();
 /** The vault picker is showing instead of the list. */
 const choosing = ref(false);
 
@@ -85,7 +94,7 @@ function continueToRender(): void {
 
     <div
       data-testid="checks-dialog"
-      class="flex flex-col gap-3"
+      class="flex flex-col gap-4"
     >
       <ChecksDestination
         v-if="choosing"
@@ -94,9 +103,11 @@ function continueToRender(): void {
       />
       <template v-else>
         <ChecksFindingList @act="act" />
-        <p class="text-micro text-fg-subtle">
-          No automatic speech transcription, content review or privacy detection
-          is performed. This is not an accessibility certification.
+        <p
+          data-testid="checks-help"
+          class="text-[10px] text-fg-muted"
+        >
+          No automatic speech transcription, content review or privacy detection is performed. This is not an accessibility certification.
         </p>
       </template>
     </div>
@@ -108,25 +119,28 @@ function continueToRender(): void {
       <span
         v-if="renderReason"
         data-testid="checks-render-reason"
-        class="text-micro text-fg-subtle"
+        class="mr-auto text-[10px] text-fg-muted"
       >{{ renderReason }}</span>
-      <AppButton
-        variant="secondary"
-        size="sm"
+      <DialogButton
+        data-testid="checks-diagnostics"
+        @click="exportDiagnostics"
+      >
+        Export diagnostics
+      </DialogButton>
+      <DialogButton
         data-testid="checks-back"
         @click="emit('close')"
       >
         Back to edit
-      </AppButton>
-      <AppButton
+      </DialogButton>
+      <DialogButton
         variant="primary"
-        size="sm"
         data-testid="checks-render"
-        :disabled="Boolean(renderReason)"
+        :reason="renderReason"
         @click="continueToRender"
       >
         Continue to render
-      </AppButton>
+      </DialogButton>
     </template>
   </DialogHost>
 </template>

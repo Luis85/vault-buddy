@@ -6,38 +6,52 @@
  * `editorProject.execute` (an ordinary acknowledged, undoable edit). The
  * project had no other control for its destination; the Publish dialog
  * picks a vault per publish and never writes it back.
+ *
+ * A refused edit is the store's `lastError`, and this picker prints it
+ * beside its own Save — so while it is on screen it claims `lastError`
+ * (`useInlineLastError`, ruling T7-1) and the shell's feedback watcher
+ * does not toast the same refusal a second time.
  */
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 
+import { useInlineLastError } from "../../../composables/useInlineLastError";
 import type { VaultChoice } from "../../../editorTypes";
 import { toEditorError, useEditorProjectStore } from "../../../stores/editorProject";
-import AppButton from "../../ui/AppButton.vue";
 import DestinationFields from "./DestinationFields.vue";
+import DialogButton from "./DialogButton.vue";
 
 const emit = defineEmits<{ (e: "done"): void; (e: "cancel"): void }>();
 
 const editorProject = useEditorProjectStore();
 const destination = editorProject.project?.destination;
+const inline = useInlineLastError(() => true);
 
 const vaults = ref<VaultChoice[]>([]);
 const vaultId = ref(destination?.vault ?? "");
 const folder = ref(destination?.folder ?? "");
 const dated = ref(destination?.dated ?? false);
 const saving = ref(false);
-const error = ref<string | null>(null);
+const listError = ref<string | null>(null);
+
+const error = computed(() => listError.value ?? inline.error.value?.message ?? null);
+const reason = computed(() => {
+  if (!vaultId.value) return "Choose a vault first.";
+  return saving.value ? "Setting the destination…" : null;
+});
 
 onMounted(async () => {
   try {
     vaults.value = await editorProject.port.listVaults();
   } catch (e) {
-    error.value = `The vault list could not be read. ${toEditorError(e).message}`.trim();
+    listError.value = `The vault list could not be read. ${toEditorError(e).message}`.trim();
   }
 });
 
 async function save(): Promise<void> {
-  if (!vaultId.value || saving.value) return;
+  if (reason.value) return;
   saving.value = true;
-  error.value = null;
+  listError.value = null;
+  inline.clear();
   const ok = await editorProject.execute({
     kind: "setDestination",
     vaultId: vaultId.value,
@@ -46,17 +60,15 @@ async function save(): Promise<void> {
   });
   saving.value = false;
   if (ok) emit("done");
-  else error.value = editorProject.lastError?.message ?? "The destination could not be set.";
 }
-
 </script>
 
 <template>
   <section
     data-testid="checks-destination"
-    class="flex flex-col gap-2 text-xs"
+    class="flex flex-col gap-3 text-xs"
   >
-    <h3 class="font-semibold text-fg-secondary">
+    <h3 class="font-semibold text-fg">
       Where this tutorial goes
     </h3>
     <DestinationFields
@@ -79,25 +91,22 @@ async function save(): Promise<void> {
       <span
         v-if="!vaultId"
         data-testid="checks-destination-reason"
-        class="text-micro text-fg-subtle"
+        class="text-[10px] text-fg-muted"
       >Choose a vault first.</span>
-      <AppButton
-        variant="ghost"
-        size="sm"
+      <DialogButton
         data-testid="checks-destination-cancel"
         @click="emit('cancel')"
       >
         Back to checks
-      </AppButton>
-      <AppButton
+      </DialogButton>
+      <DialogButton
         variant="primary"
-        size="sm"
         data-testid="checks-destination-save"
-        :disabled="!vaultId || saving"
+        :reason="reason"
         @click="save"
       >
         Set destination
-      </AppButton>
+      </DialogButton>
     </div>
   </section>
 </template>

@@ -54,7 +54,8 @@ describe("RenderDialog — the form", () => {
     // One product already exists, so this is the second.
     expect(name.value).toBe("Walkthrough v2");
     expect((w.get('[data-testid="render-dialog-quality-balanced"]').element as HTMLInputElement).checked).toBe(true);
-    expect((w.get('[data-testid="render-dialog-scope-whole"]').element as HTMLInputElement).checked).toBe(true);
+    // Visual-parity Task 21: the whole project unless the review-range box is ticked.
+    expect((w.get('[data-testid="render-dialog-scope-range"]').element as HTMLInputElement).checked).toBe(false);
     expect(w.get('[data-testid="render-dialog-originals"]').text()).toContain(
       "Your originals and this project are not changed",
     );

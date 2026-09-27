@@ -33,10 +33,19 @@
  * name it was started under went too, so its completion line says so
  * without one — and a Review render (no product) says only that it
  * finished.
+ *
+ * Visual-parity Task 21 (concept spec §9.6, screen 09): the concept's form
+ * (`RenderSettingsForm`) with the destination vault by NAME (design D6,
+ * `useVaultName` — never the registry id), and its footer: **Save project
+ * instead** — the header's own Save project (`useProjectSave`: no second
+ * save while one runs), after which this dialog steps aside — and
+ * **Render video**.
  */
 import { computed, ref, watch } from "vue";
 
+import { useProjectSave } from "../../../composables/useProjectSave";
 import { useRenderJob } from "../../../composables/useRenderJob";
+import { useVaultName } from "../../../composables/useVaultName";
 import { completionText, isComplete } from "../../../editor/renderProgress";
 import { msFromSeconds, secondsText } from "../../../editor/renderRanges";
 import { openChecks } from "../../../editor/revealBus";
@@ -46,8 +55,8 @@ import { useEditorChecksStore } from "../../../stores/editorChecks";
 import { useEditorJobsStore } from "../../../stores/editorJobs";
 import { useEditorProductsStore } from "../../../stores/editorProducts";
 import { useEditorProjectStore } from "../../../stores/editorProject";
-import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
+import DialogButton from "./DialogButton.vue";
 import PublishDialog from "./PublishDialog.vue";
 import RenderOutcome from "./RenderOutcome.vue";
 import RenderSettingsForm from "./RenderSettingsForm.vue";
@@ -59,6 +68,10 @@ const editorProject = useEditorProjectStore();
 const jobs = useEditorJobsStore();
 const products = useEditorProductsStore();
 const checks = useEditorChecksStore();
+const projectSave = useProjectSave();
+/** Looked up only while the dialog is open: it stays mounted, closed. */
+const vaultName = useVaultName(() => (props.open ? (editorProject.project?.destination.vault ?? "") : ""));
+const canvas = computed(() => editorProject.project?.canvas ?? { width: 0, height: 0, fps: 0 });
 
 const nameDraft = ref<string | null>(null);
 const quality = ref<RenderQuality>("balanced");
@@ -188,6 +201,27 @@ function reviewChecks(): void {
   openChecks();
 }
 
+const checksError = computed(() => checks.currentError?.message ?? null);
+const closeReason = computed(() => {
+  if (!busy.value) return null;
+  return starting.value ? "Starting the render…" : "A render is running.";
+});
+/** The render's parent and where a publish goes (the form's facts). */
+const facts = computed(() => ({
+  revision: editorProject.snapshot?.revision ?? 0,
+  title: editorProject.snapshot?.title ?? "",
+  folder: editorProject.project?.destination.folder ?? "",
+}));
+
+/** Save project instead: the header's Save project, then out of the way.
+ * Never while a start is in flight — that render still needs following. */
+const saveInsteadReason = computed(() => (busy.value ? "Starting the render…" : projectSave.disabledReason.value));
+function saveInstead(): void {
+  if (saveInsteadReason.value) return;
+  projectSave.save();
+  close();
+}
+
 /** Visual-parity Task 10 (D9): the library's Project section, through the
  * Project menu's and the status bar's own helper. */
 function showProducts(): void {
@@ -202,19 +236,19 @@ function showProducts(): void {
     label="Render a video"
     :closable="!busy"
     close-testid="render-dialog-close"
-    :close-reason="busy ? (starting ? 'Starting the render…' : 'A render is running.') : null"
+    :close-reason="closeReason"
     @close="close"
   >
     <template #title>
       Render a video
     </template>
     <template #subtitle>
-      A finished video from your editable workspace.
+      A finished output from your editable workspace.
     </template>
 
     <div
       data-testid="render-dialog"
-      class="flex flex-col gap-3"
+      class="flex flex-col gap-4"
     >
       <template v-if="showForm">
         <RenderSettingsForm
@@ -224,8 +258,14 @@ function showProducts(): void {
           v-model:start="startText"
           v-model:end="endText"
           :checks-summary="checks.summary"
-          :checks-error="checks.currentError?.message ?? null"
+          :checks-error="checksError"
           :blocking="checks.blocking"
+          :revision="facts.revision"
+          :title="facts.title"
+          :vault-name="vaultName"
+          :folder="facts.folder"
+          :canvas="canvas"
+          :duration-ms="durationMs"
           @review-checks="reviewChecks"
         />
       </template>
@@ -236,6 +276,7 @@ function showProducts(): void {
         :status="status"
         :product-id="productId"
         :name="startedName"
+        :vault-name="vaultName"
         @cancel="cancel"
         @another="another"
         @publish="publishOpen = true"
@@ -256,17 +297,24 @@ function showProducts(): void {
       <span
         v-if="startReason"
         data-testid="render-dialog-start-reason"
-        class="text-micro text-fg-subtle"
+        class="mr-auto text-[10px] text-fg-muted"
       >{{ startReason }}</span>
-      <AppButton
+      <DialogButton
+        data-testid="render-dialog-save-instead"
+        :reason="saveInsteadReason"
+        @click="saveInstead"
+      >
+        Save project instead
+      </DialogButton>
+      <DialogButton
         variant="primary"
-        size="sm"
+        icon="video"
         data-testid="render-dialog-start"
-        :disabled="Boolean(startReason)"
+        :reason="startReason"
         @click="start"
       >
         Render video
-      </AppButton>
+      </DialogButton>
     </template>
   </DialogHost>
 </template>

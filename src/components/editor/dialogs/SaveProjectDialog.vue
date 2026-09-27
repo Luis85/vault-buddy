@@ -1,68 +1,91 @@
 <script setup lang="ts">
 /**
- * Save a project file (Task 39; F-40; SCREENS 08 "Save editable project";
- * A17). Explains the two formats — portable (a `.vbproject.zip` carrying
- * the available originals, including those a retained render snapshot
- * still uses) and lightweight (a `.vbproject.json` whose originals are
- * reconnected later) — then hands the choice to Rust, which opens its own
- * save dialog (`useProjectExport`).
+ * Save a copy as project file (Task 39; F-40; SCREENS 08; A17; design D8:
+ * Save project itself commits with no dialog — this is the Project menu's
+ * "Save a copy as project file…"). Explains the two formats — portable (a
+ * `.vbproject.zip` carrying the available originals, including those a
+ * retained render snapshot still uses) and lightweight (a `.vbproject.json`
+ * whose originals are reconnected later) — then hands the choice to Rust,
+ * which opens its own save dialog (`useProjectExport`).
  *
- * The heading and the actions stay reachable while the body scrolls
- * (sticky inside `DialogHost`'s own scroll box); the radios are ordinary
- * full-size inputs inside full-width labels. The status line reports
- * pending, success, failure and cancel, and says "Saved to <file name>"
- * ONLY from a matching receipt. Escape and the backdrop close the dialog
- * except while a save is pending, whose reply the dialog still owes the
- * user. Every Rust message renders as text (mustache), never as markup.
+ * Visual-parity Task 21 (concept spec §9.5, screen 08): the intro tile,
+ * the **Project name** (Rust's save dialog suggests the file name from the
+ * tutorial's title, so a changed name RENAMES the tutorial first — one
+ * `rename` edit, the concept's own "Rename project" step — and the copy is
+ * of the renamed revision), the two format cards (`SaveCopyFormats`), the
+ * checklist of what a copy keeps, and Keep editing · **Save copy**. The
+ * concept's "Include available rendered videos" checkbox has no native
+ * backend — a project file never carries rendered videos — so its slot
+ * says where they stay instead of offering a box that could not be
+ * honoured (design D14).
+ *
+ * The status line (`SaveCopyStatus`) reports pending, success, failure and
+ * cancel, and says "Saved to <file name>" ONLY from a matching receipt. A
+ * refused rename is the store's `lastError`, shown in that status line;
+ * this dialog claims it while open (`useInlineLastError`, ruling T7-1) so
+ * the shell does not toast it too. Escape and the backdrop close the dialog
+ * except while the rename or the save is pending, whose reply the dialog
+ * still owes the user. Every Rust message renders as text, never markup.
  */
 import { computed, ref, watch } from "vue";
 
+import { useInlineLastError } from "../../../composables/useInlineLastError";
 import { useProjectExport } from "../../../composables/useProjectPackage";
 import type { PackageFormat } from "../../../editorTypes";
-import AppButton from "../../ui/AppButton.vue";
+import { useEditorProjectStore } from "../../../stores/editorProject";
+import EditorIcon from "../icons/EditorIcon.vue";
 import DialogHost from "../shell/DialogHost.vue";
+import DialogButton from "./DialogButton.vue";
+import SaveCopyFormats from "./SaveCopyFormats.vue";
+import SaveCopyStatus from "./SaveCopyStatus.vue";
 
 const props = defineProps<{ open: boolean; initialFormat: PackageFormat }>();
 const emit = defineEmits<{ (e: "close"): void }>();
 
+const editorProject = useEditorProjectStore();
 const exporter = useProjectExport();
 const { state } = exporter;
+const inline = useInlineLastError(() => props.open);
 const format = ref<PackageFormat>(props.initialFormat);
+const name = ref("");
+const renaming = ref(false);
+
+/** What every copy keeps (concept §9.5 `.project-save-checklist`). */
+const KEPT = ["All tracks & clips", "Fades & teaching layers", "Mixer & chapter markers", "Playhead & workspace layout"];
+const PREPARING = "Preparing the project file…";
 
 watch(
   () => props.open,
   (open) => {
     if (!open) return;
     format.value = props.initialFormat;
+    name.value = editorProject.snapshot?.title ?? "";
     exporter.reset();
   },
+  { immediate: true },
 );
 
-const pending = computed(() => state.value.phase === "pending");
-const confirmLabel = computed(() =>
-  format.value === "portable" ? "Save portable copy…" : "Save lightweight copy…",
-);
-
-/** The one status line — derived from the export's own state, never a
- * timer, so "Saved to" can only follow a receipt. */
-const status = computed<{ text: string; alert: boolean }>(() => {
-  const s = state.value;
-  switch (s.phase) {
-    case "pending":
-      return { text: "Preparing the project file…", alert: false };
-    case "success":
-      return { text: `Saved to ${s.fileName}`, alert: false };
-    case "failure":
-      return { text: `The project file was not saved. ${s.message}`, alert: true };
-    case "cancelled":
-      return { text: "Nothing was saved — the file dialog was closed.", alert: false };
-    default:
-      return { text: "", alert: false };
-  }
+const pending = computed(() => renaming.value || state.value.phase === "pending");
+/** Keep editing and the ✕ wait for a reply the dialog still owes. */
+const waitReason = computed(() => (pending.value ? PREPARING : null));
+const reason = computed<string | null>(() => {
+  if (pending.value) return PREPARING;
+  return name.value.trim() ? null : "Give the project a name.";
 });
 
-function save(): void {
-  void exporter.run(format.value);
+/** Rename first when the name changed; the copy is of what is on screen. */
+async function save(): Promise<void> {
+  if (reason.value) return;
+  inline.clear();
+  exporter.reset();
+  const title = name.value.trim();
+  if (title !== editorProject.snapshot?.title) {
+    renaming.value = true;
+    const ok = await editorProject.execute({ kind: "rename", title });
+    renaming.value = false;
+    if (!ok) return;
+  }
+  await exporter.run(format.value);
 }
 
 function close(): void {
@@ -73,117 +96,114 @@ function close(): void {
 <template>
   <DialogHost
     :open="open"
-    label="Save a project file"
+    label="Save a copy as project file"
     :closable="!pending"
-    :close-reason="pending ? 'Preparing the project file…' : null"
+    :close-reason="waitReason"
     @close="close"
   >
     <template #title>
-      Save a project file
+      Save a copy as project file
     </template>
     <template #subtitle>
-      Keep an editable copy outside the editor. Nothing is rendered or flattened, and
-      your original media is never changed.
+      Keep the workspace in a file. Continue whenever you are ready.
     </template>
 
     <div
       data-testid="save-project-dialog"
-      class="flex flex-col gap-3"
+      class="flex flex-col gap-4"
     >
-      <fieldset class="flex flex-col gap-2">
-        <legend class="sr-only">
-          Project file format
-        </legend>
-        <label
-          class="flex cursor-pointer gap-3 rounded-control border border-line p-3 hover:bg-hover-subtle"
-          :class="format === 'portable' ? 'border-focus bg-hover-subtle' : ''"
+      <div
+        data-testid="save-project-intro"
+        class="mb-1.5 flex items-start gap-4"
+      >
+        <span class="shrink-0 rounded-xl border border-line bg-accent-bg p-3 text-accent">
+          <EditorIcon
+            name="folder"
+            :size="28"
+          />
+        </span>
+        <div>
+          <h3 class="mb-[7px] text-[15px] font-semibold text-fg">
+            Your workspace. Ready to continue.
+          </h3>
+          <p class="text-[11px] leading-[1.6] text-fg-secondary">
+            Save an editable copy without rendering. Nothing is flattened, and your original media is never changed.
+          </p>
+        </div>
+      </div>
+
+      <label class="flex min-w-0 flex-col gap-[5px] text-[10px] text-fg-secondary">
+        Project name
+        <input
+          v-model="name"
+          data-testid="save-project-name"
+          type="text"
+          maxlength="160"
+          :disabled="pending"
+          class="text-xs"
         >
-          <input
-            v-model="format"
-            type="radio"
-            name="save-project-format"
-            value="portable"
-            data-testid="save-project-format-portable"
-            class="mt-0.5 h-4 w-4 accent-violet-500"
-          >
-          <span class="flex flex-col gap-1">
-            <span class="text-sm font-medium text-fg">Portable project (.vbproject.zip)</span>
-            <span class="text-xs text-fg-secondary">
-              Your edit plus the available original media in one ZIP, up to 200 MiB. Open
-              it with “Open a project file” to continue on any computer.
-            </span>
-          </span>
-        </label>
-        <label
-          class="flex cursor-pointer gap-3 rounded-control border border-line p-3 hover:bg-hover-subtle"
-          :class="format === 'lightweight' ? 'border-focus bg-hover-subtle' : ''"
-        >
-          <input
-            v-model="format"
-            type="radio"
-            name="save-project-format"
-            value="lightweight"
-            data-testid="save-project-format-lightweight"
-            class="mt-0.5 h-4 w-4 accent-violet-500"
-          >
-          <span class="flex flex-col gap-1">
-            <span class="text-sm font-medium text-fg">Lightweight project file (.vbproject.json)</span>
-            <span class="text-xs text-fg-secondary">
-              Your edit and workspace only — a small file with no media inside.
-            </span>
-          </span>
-        </label>
-      </fieldset>
+      </label>
+
+      <SaveCopyFormats
+        v-model="format"
+        :disabled="pending"
+      />
 
       <p
-        v-if="format === 'portable'"
-        data-testid="save-project-originals-warning"
-        class="rounded-control border border-gold/30 bg-gold-bg p-2 text-xs text-gold"
+        data-testid="save-project-products"
+        class="text-[10px] leading-[1.6] text-fg-muted"
       >
-        A portable file includes your original recordings and imported media — also the
-        parts you trimmed or covered. Share a rendered video instead when the people you
-        send it to must not receive the originals. Media that is no longer available is
-        left out and listed for reconnection when the file is opened.
-      </p>
-      <p
-        v-else
-        data-testid="save-project-reconnect-note"
-        class="text-xs text-fg-secondary"
-      >
-        Opening this file on another computer lists every original as missing: keep your
-        media, and reconnect it there.
-      </p>
-      <p class="text-xs text-fg-muted">
-        Rendered videos and the editable snapshot behind each one are kept with the
-        project, together with any original a snapshot still uses.
+        Rendered videos stay in this project's workspace. Each render's record and the edit it was made from are
+        always kept in the file.
       </p>
 
-      <p
-        data-testid="save-project-status"
-        :role="status.alert ? 'alert' : 'status'"
-        class="min-h-4 break-words text-xs"
-        :class="status.alert ? 'text-danger-fg' : 'text-fg-secondary'"
+      <ul
+        data-testid="save-project-checklist"
+        class="my-1.5 grid grid-cols-2 gap-3 text-[11px] text-fg max-[560px]:grid-cols-1"
       >
-        {{ status.text }}
-      </p>
+        <li
+          v-for="item in KEPT"
+          :key="item"
+          class="flex items-center gap-2"
+        >
+          <EditorIcon
+            name="check"
+            :size="15"
+            class="shrink-0 text-audio"
+          />
+          {{ item }}
+        </li>
+      </ul>
+
+      <SaveCopyStatus
+        :format="format"
+        :state="state"
+        :refusal="inline.error.value?.message ?? null"
+      />
     </div>
 
     <template #footer>
-      <AppButton
-        variant="ghost"
+      <span
+        v-if="reason && !pending"
+        data-testid="save-project-reason"
+        class="mr-auto text-[10px] text-fg-muted"
+      >{{ reason }}</span>
+      <DialogButton
         data-testid="save-project-cancel"
-        :disabled="pending"
+        :reason="waitReason"
         @click="close"
       >
         Keep editing
-      </AppButton>
-      <AppButton
+      </DialogButton>
+      <DialogButton
+        variant="primary"
+        icon="save"
         data-testid="save-project-confirm"
-        :disabled="pending"
+        :reason="reason"
         @click="save"
       >
-        {{ confirmLabel }}
-      </AppButton>
+        Save copy
+      </DialogButton>
     </template>
   </DialogHost>
 </template>

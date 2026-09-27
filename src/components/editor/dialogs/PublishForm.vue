@@ -20,7 +20,7 @@ const createNote = defineModel<boolean>("createNote", { required: true });
 </script>
 
 <template>
-  <div class="flex flex-col gap-2 text-xs">
+  <div class="flex flex-col gap-3">
     <DestinationFields
       v-model:vault-id="vaultId"
       v-model:folder="folder"
@@ -29,13 +29,12 @@ const createNote = defineModel<boolean>("createNote", { required: true });
       :disabled="disabled"
       testid="publish"
     />
-    <label class="flex items-center gap-2">
+    <label class="flex items-center gap-2 text-[11px] text-fg">
       <input
         v-model="createNote"
         data-testid="publish-create-note"
         type="checkbox"
         :disabled="disabled"
-        class="accent-violet-500"
       >
       Write a companion note with its chapters
     </label>

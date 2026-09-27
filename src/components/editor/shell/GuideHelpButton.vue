@@ -30,11 +30,10 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
+import { useDiagnosticsExport } from "../../../composables/useDiagnosticsExport";
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { onReveal } from "../../../editor/revealBus";
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
-import { toEditorError, useEditorProjectStore } from "../../../stores/editorProject";
-import { useNotificationsStore } from "../../../stores/notifications";
 import type { LearningTab } from "../guide/LearningCenter.vue";
 import LearningCenter from "../guide/LearningCenter.vue";
 import HeaderButton from "./HeaderButton.vue";
@@ -58,20 +57,7 @@ const root = ref<HTMLElement | null>(null);
 const centerOpen = ref(false);
 const centerTab = ref<LearningTab>("walkthrough");
 
-const editorProject = useEditorProjectStore();
-const notifications = useNotificationsStore();
-
-/** A dismissed dialog says nothing; a refusal says why. */
-async function exportDiagnostics(): Promise<void> {
-  try {
-    const name = await editorProject.port.exportDiagnostics();
-    if (name) {
-      notifications.success(`Saved diagnostics to ${name}. It holds counts and error codes, never project content.`);
-    }
-  } catch (e) {
-    notifications.error(`The diagnostics could not be saved. ${toEditorError(e).message}`);
-  }
-}
+const { exportDiagnostics } = useDiagnosticsExport();
 
 function choose(item: HelpItem): void {
   open.value = false;

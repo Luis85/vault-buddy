@@ -996,3 +996,121 @@ for (const size of [{ width: 1080, height: 760 }, { width: 860, height: 640 }, {
     expect(await mixerTopIsPainted(page)).toBe(true);
   });
 }
+
+// Task 21 (screens 07–09, concept spec §9.4–9.6; design D6, D8, D10): the
+// share dialogs — Before you share, Save a copy as project file, Render a
+// video — in the concept's shared chrome, measured in the built bundle.
+const PARITY_FINDINGS = [
+  {
+    id: "chk-gap-c4",
+    severity: "warning",
+    code: "gap",
+    message: "No clip on Screen recording from 0:12.0 to 0:13.5.",
+    target: { kind: "clip", id: "c4" },
+    action: "select",
+  },
+  {
+    id: "chk-excludedCaptions-project",
+    severity: "info",
+    code: "excludedCaptions",
+    message: "Captions are turned off, so 2 captions will not appear in the render.",
+    target: { kind: "project", id: null },
+    action: "openCaptions",
+  },
+];
+
+/** The open dialog's footer buttons, in order. */
+function footerLabels(page: Page): Promise<string[]> {
+  return page.getByTestId("dialog-host-content").locator("footer button").allInnerTexts();
+}
+
+test.describe("parity 1600x1000: the share dialogs (screens 07–09, §9.4–9.6)", () => {
+  test("Before you share: 680 wide, summary box, issue rows, footer of three", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, {
+      invitation: false,
+      replies: { editor_get_checks: PARITY_FINDINGS },
+    });
+    await page.getByTestId("editor-header-checks").click();
+    await expect(page.getByTestId("checks-dialog")).toBeVisible();
+    await page.screenshot({ path: "test-results/parity/built-07-checks.png" });
+    await composite(page, "07-checks.png", "test-results/parity/built-07-checks.png", "vs-07-checks");
+
+    expect((await box(page, "dialog-host-content")).width).toBeCloseTo(680, 0);
+    await expect(page.getByTestId("checks-summary").locator("b")).toHaveText("0 blockers · 1 review warning");
+    // §9.4: the kind chip is at least 48 wide, mono 9px.
+    const chip = await box(page, "check-kind-chk-excludedCaptions-project");
+    expect(chip.width).toBeGreaterThanOrEqual(48);
+    await expect(page.getByTestId("check-kind-chk-excludedCaptions-project")).toHaveText("NOTE");
+    await expect(page.getByTestId("check-kind-chk-gap-c4")).toHaveText("REVIEW");
+    // The action button is 30 tall, with its chevron.
+    expect((await box(page, "check-action-chk-excludedCaptions-project")).height).toBeCloseTo(30, 0);
+    await expect(page.getByTestId("check-action-chk-excludedCaptions-project")).toHaveText("Open Captions");
+    expect(await footerLabels(page)).toEqual(["Export diagnostics", "Back to edit", "Continue to render"]);
+    await expect(page.getByTestId("checks-dialog")).not.toContainText(/download/i);
+  });
+
+  test("Save a copy: intro, name, two option cards, the checklist, Keep editing · Save copy", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("editor-header-project-menu").click();
+    await page.getByTestId("editor-project-menu-item-saveCopy").click();
+    await expect(page.getByTestId("save-project-dialog")).toBeVisible();
+    await page.screenshot({ path: "test-results/parity/built-08-save-project.png" });
+    await composite(page, "08-save-project.png", "test-results/parity/built-08-save-project.png", "vs-08-save-project");
+
+    expect((await box(page, "dialog-host-content")).width).toBeCloseTo(560, 0);
+    await expect(page.getByTestId("save-project-name")).toHaveValue("Create your first project");
+    const portable = await box(page, "save-project-option-portable");
+    const light = await box(page, "save-project-option-lightweight");
+    expect(portable.width).toBeCloseTo(light.width, 0);
+    expect(light.y).toBeGreaterThan(portable.y + portable.height);
+    // §9.5: the checklist is 2×2.
+    const items = page.getByTestId("save-project-checklist").locator("li");
+    await expect(items).toHaveCount(4);
+    const xs = await items.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().left)));
+    expect(new Set(xs).size).toBe(2);
+    expect(await footerLabels(page)).toEqual(["Keep editing", "Save copy"]);
+  });
+
+  test("Render a video: range box, parent card, profile, callout, Save project instead · Render video", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("editor-header-render").click();
+    await expect(page.getByTestId("render-dialog")).toBeVisible();
+    await page.screenshot({ path: "test-results/parity/built-09-render.png" });
+    await composite(page, "09-render.png", "test-results/parity/built-09-render.png", "vs-09-render");
+
+    expect((await box(page, "dialog-host-content")).width).toBeCloseTo(560, 0);
+    await expect(page.getByTestId("render-dialog-revision")).toHaveText(/^PROJECT · r\d+$/);
+    // D6: the destination vault by its NAME.
+    await expect(page.getByTestId("render-dialog-destination")).toContainText("Knowledge vault");
+    await expect(page.getByTestId("render-dialog")).not.toContainText("vault-e2e");
+    // D10: the profile card holds native quality radios, no browser review.
+    await expect(page.getByTestId("render-dialog-profile").locator('input[type="radio"]')).toHaveCount(3);
+    await expect(page.getByTestId("render-dialog")).not.toContainText(/browser/i);
+    await expect(page.getByTestId("render-dialog-originals").locator("b")).toHaveText("A new output, never an overwrite.");
+    expect(await footerLabels(page)).toEqual(["Save project instead", "Render video"]);
+    // The footer never scrolls away: it sits at the dialog's bottom edge.
+    const dialog = await box(page, "dialog-host-content");
+    const start = await box(page, "render-dialog-start");
+    expect(start.y + start.height).toBeLessThanOrEqual(dialog.y + dialog.height);
+  });
+});
+
+// D16 / the 960×640 floor: each share dialog fits the window, its primary
+// action on screen without scrolling the page.
+for (const [open, dialog, primary] of [
+  ["editor-header-checks", "checks-dialog", "checks-render"],
+  ["editor-header-render", "render-dialog", "render-dialog-start"],
+] as const) {
+  test(`${dialog} fits 960x640 with its primary action on screen`, async ({ page }) => {
+    await openParity(page, { width: 960, height: 640 }, { invitation: false });
+    await page.getByTestId(open).click();
+    await expect(page.getByTestId(dialog)).toBeVisible();
+    const host = await box(page, "dialog-host-content");
+    expect(host.x).toBeGreaterThanOrEqual(0);
+    expect(host.y).toBeGreaterThanOrEqual(0);
+    expect(host.x + host.width).toBeLessThanOrEqual(960);
+    expect(host.y + host.height).toBeLessThanOrEqual(640);
+    const button = await box(page, primary);
+    expect(button.y + button.height).toBeLessThanOrEqual(640);
+  });
+}

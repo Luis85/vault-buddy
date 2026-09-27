@@ -27,15 +27,21 @@
  * shown. The receipt names the landed file(s) and offers Open (the note
  * when there is one, else the video — `open_screen_capture`); a note that
  * could not be written is a warning beside a video that WAS published.
+ *
+ * Visual-parity Task 21: the shared dialog chrome of the Render and Checks
+ * dialogs — the form in the body, its actions (Cancel · Publish, then
+ * Done · Open in Obsidian) in the footer — and every vault by its NAME
+ * (design D6), in the picker and in the receipt.
  */
 import { computed, ref, watch } from "vue";
 
 import type { PublishReceipt, VaultChoice } from "../../../editorTypes";
 import { logWarning } from "../../../logging";
 import { toEditorError, useEditorProjectStore } from "../../../stores/editorProject";
-import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
+import DialogButton from "./DialogButton.vue";
 import PublishForm from "./PublishForm.vue";
+import PublishResult from "./PublishResult.vue";
 
 const props = defineProps<{ open: boolean; productId: string | null; productName: string }>();
 const emit = defineEmits<{ (e: "close"): void }>();
@@ -133,6 +139,9 @@ const reason = computed<string | null>(() => {
   return null;
 });
 
+/** Close and Cancel wait for a publish in flight. */
+const cancelReason = computed(() => (publishing.value ? "Publishing…" : null));
+
 async function publish(): Promise<void> {
   const sessionId = editorProject.sessionId;
   const productId = props.productId;
@@ -151,12 +160,6 @@ async function publish(): Promise<void> {
   } finally {
     publishing.value = false;
   }
-}
-
-/** A path's last component — the landed NAME, which is all the dialog
- * shows (the full path only travels to `open_screen_capture`). */
-function fileName(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path;
 }
 
 async function openInObsidian(): Promise<void> {
@@ -184,7 +187,7 @@ function close(): void {
     label="Publish to vault"
     :closable="!publishing"
     close-testid="publish-close"
-    :close-reason="publishing ? 'Publishing…' : null"
+    :close-reason="cancelReason"
     @close="close"
   >
     <template #title>
@@ -199,70 +202,19 @@ function close(): void {
       data-testid="publish-dialog"
       class="flex flex-col gap-3"
     >
-      <div
+      <PublishResult
         v-if="receipt"
-        data-testid="publish-result"
-        role="status"
-        class="flex flex-col gap-1 text-xs text-fg-secondary"
-      >
-        <p>Published into {{ receipt.vaultName }}:</p>
-        <p
-          data-testid="publish-video-name"
-          class="font-medium text-fg"
-        >
-          {{ fileName(receipt.videoPath) }}
-        </p>
-        <p
-          v-if="receipt.notePath"
-          data-testid="publish-note-name"
-          class="font-medium text-fg"
-        >
-          {{ fileName(receipt.notePath) }}
-        </p>
-        <p
-          v-if="receipt.warning"
-          data-testid="publish-warning"
-          class="text-danger-fg"
-        >
-          {{ receipt.warning }}
-        </p>
-        <div class="flex justify-end">
-          <AppButton
-            variant="primary"
-            size="sm"
-            data-testid="publish-open"
-            @click="openInObsidian"
-          >
-            Open in Obsidian
-          </AppButton>
-        </div>
-      </div>
-      <template v-else>
-        <PublishForm
-          v-model:vault-id="vaultId"
-          v-model:folder="folder"
-          v-model:dated="dated"
-          v-model:create-note="createNote"
-          :vaults="vaults"
-          :disabled="publishing"
-        />
-        <div class="flex items-center justify-end gap-2">
-          <span
-            v-if="reason"
-            data-testid="publish-start-reason"
-            class="text-micro text-fg-subtle"
-          >{{ reason }}</span>
-          <AppButton
-            variant="primary"
-            size="sm"
-            data-testid="publish-start"
-            :disabled="reason !== null"
-            @click="publish"
-          >
-            Publish
-          </AppButton>
-        </div>
-      </template>
+        :receipt="receipt"
+      />
+      <PublishForm
+        v-else
+        v-model:vault-id="vaultId"
+        v-model:folder="folder"
+        v-model:dated="dated"
+        v-model:create-note="createNote"
+        :vaults="vaults"
+        :disabled="publishing"
+      />
       <p
         v-if="error"
         role="alert"
@@ -272,5 +224,47 @@ function close(): void {
         {{ error }}
       </p>
     </div>
+
+    <template #footer>
+      <template v-if="receipt">
+        <DialogButton
+          data-testid="publish-done"
+          @click="close"
+        >
+          Done
+        </DialogButton>
+        <DialogButton
+          variant="primary"
+          icon="vault"
+          data-testid="publish-open"
+          @click="openInObsidian"
+        >
+          Open in Obsidian
+        </DialogButton>
+      </template>
+      <template v-else>
+        <span
+          v-if="reason"
+          data-testid="publish-start-reason"
+          class="mr-auto text-[10px] text-fg-muted"
+        >{{ reason }}</span>
+        <DialogButton
+          data-testid="publish-cancel"
+          :reason="cancelReason"
+          @click="close"
+        >
+          Cancel
+        </DialogButton>
+        <DialogButton
+          variant="primary"
+          icon="upload"
+          data-testid="publish-start"
+          :reason="reason"
+          @click="publish"
+        >
+          Publish
+        </DialogButton>
+      </template>
+    </template>
   </DialogHost>
 </template>

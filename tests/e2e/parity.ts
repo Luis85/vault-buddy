@@ -46,6 +46,9 @@ export interface OpenParityOptions {
   workspace?: Record<string, unknown>;
   /** Commands that reject with this `EditorError` (`installTauriStub`). */
   rejects?: Record<string, unknown>;
+  /** Replies merged over `PARITY_REPLIES` — findings for the Checks dialog
+   * (visual-parity Task 21). */
+  replies?: Record<string, unknown>;
   /** Fields merged into the sample project — an extra cue to measure
    * (visual-parity Task 19 fix round 1). */
   project?: Partial<(typeof PARITY_OPEN_RESULT)["project"]>;
@@ -68,7 +71,7 @@ export async function openParity(
   const workspace = theme === null ? saved : { ...saved, theme };
   await installTauriStub(page, {
     openResult: { ...PARITY_OPEN_RESULT, project: { ...PARITY_OPEN_RESULT.project, ...opts.project }, workspace },
-    replies: { ...PARITY_REPLIES, editor_get_workspace: workspace },
+    replies: { ...PARITY_REPLIES, ...opts.replies, editor_get_workspace: workspace },
     rejects: opts.rejects,
   });
   await page.route(`**${FIXTURE_VIDEO_URL}`, (route) =>

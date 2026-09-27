@@ -1,18 +1,31 @@
 <script setup lang="ts">
 /**
- * The Render dialog's settings (Task 47; SCREENS 09): the product's name,
- * its quality, whole-or-range (numeric start/end in output seconds), the
- * checks summary and the originals statement. Presentational — every
- * choice is a `v-model` the dialog owns; nothing here starts anything.
- *
- * The checks (Task 54): the "N blockers · M review warnings" summary and
- * every blocking finding by name — the ones that keep Render disabled —
- * with "Review all checks" for the rest. A read that failed says so
- * rather than implying a pass (R20).
+ * The Render dialog's settings (Task 47; SCREENS 09; visual-parity Task
+ * 21, concept spec §9.6 top to bottom): the review-range box (a checkbox,
+ * its help, From/To in output seconds), the render's parent — the
+ * `PROJECT · r{revision}` pill, the title and what stays editable — the
+ * product's name, where a publish goes (the vault by NAME, design D6; read
+ * only here, the Publish dialog picks per publish), the output profile with
+ * the native quality radios (`RenderProfileCard`), the "new output" callout
+ * and the checks (`RenderChecksSummary`). Presentational — every choice is
+ * a `v-model` the dialog owns; nothing here starts anything.
  */
 import type { CheckFinding, RenderQuality } from "../../../editorTypes";
+import RenderChecksSummary from "./RenderChecksSummary.vue";
+import RenderProfileCard from "./RenderProfileCard.vue";
 
-defineProps<{ checksSummary: string; checksError: string | null; blocking: CheckFinding[] }>();
+defineProps<{
+  checksSummary: string;
+  checksError: string | null;
+  blocking: CheckFinding[];
+  revision: number;
+  title: string;
+  /** The destination vault's name, or `null` when none is set. */
+  vaultName: string | null;
+  folder: string;
+  canvas: { width: number; height: number; fps: number };
+  durationMs: number;
+}>();
 const emit = defineEmits<{ (e: "review-checks"): void }>();
 
 const name = defineModel<string>("name", { required: true });
@@ -22,76 +35,33 @@ const scope = defineModel<"whole" | "range">("scope", { required: true });
 const start = defineModel<string | number>("start", { required: true });
 const end = defineModel<string | number>("end", { required: true });
 
-const QUALITIES: { id: RenderQuality; label: string; hint: string }[] = [
-  { id: "low", label: "Low", hint: "Smallest file, fastest render." },
-  { id: "balanced", label: "Balanced", hint: "Good quality at a moderate size." },
-  { id: "high", label: "High", hint: "Best quality, largest file." },
-];
-const FIELD = "rounded-control border border-line bg-raised px-2 py-1 text-sm text-fg";
+const FIELD = "flex min-w-0 flex-col gap-[5px] text-[10px] text-fg-secondary";
 </script>
 
 <template>
-  <label class="flex flex-col gap-1 text-xs text-fg-secondary">
-    Rendered video name
-    <input
-      v-model="name"
-      data-testid="render-dialog-name"
-      :class="FIELD"
-    >
-  </label>
-
-  <fieldset class="flex flex-col gap-1">
-    <legend class="text-xs text-fg-secondary">
-      Quality
-    </legend>
-    <label
-      v-for="q in QUALITIES"
-      :key="q.id"
-      class="flex cursor-pointer items-center gap-2 text-sm text-fg"
-    >
-      <input
-        v-model="quality"
-        type="radio"
-        name="render-quality"
-        :value="q.id"
-        :data-testid="`render-dialog-quality-${q.id}`"
-        class="h-4 w-4 accent-violet-500"
-      >
-      {{ q.label }} <span class="text-xs text-fg-subtle">{{ q.hint }}</span>
-    </label>
-  </fieldset>
-
-  <fieldset class="flex flex-col gap-1">
-    <legend class="text-xs text-fg-secondary">
-      What to render
-    </legend>
-    <label class="flex cursor-pointer items-center gap-2 text-sm text-fg">
+  <section
+    data-testid="render-dialog-range-box"
+    class="rounded-[9px] border border-line bg-app p-3.5"
+  >
+    <label class="flex items-center gap-2 text-xs font-semibold text-fg">
       <input
         v-model="scope"
-        type="radio"
-        name="render-scope"
-        value="whole"
-        data-testid="render-dialog-scope-whole"
-        class="h-4 w-4 accent-violet-500"
-      >
-      The whole project
-    </label>
-    <label class="flex cursor-pointer items-center gap-2 text-sm text-fg">
-      <input
-        v-model="scope"
-        type="radio"
-        name="render-scope"
-        value="range"
+        type="checkbox"
+        true-value="range"
+        false-value="whole"
         data-testid="render-dialog-scope-range"
-        class="h-4 w-4 accent-violet-500"
       >
-      A range of the output
+      Render a short review range
     </label>
+    <p class="mt-2 text-[10px] leading-[1.6] text-fg-muted">
+      Test a section before rendering everything. All layers in this time range are included; the editable project
+      is not trimmed.
+    </p>
     <div
       v-if="scope === 'range'"
-      class="grid grid-cols-2 gap-2"
+      class="mt-3 grid grid-cols-2 gap-[9px]"
     >
-      <label class="flex flex-col gap-1 text-xs text-fg-secondary">
+      <label :class="FIELD">
         From (seconds)
         <input
           v-model="start"
@@ -99,10 +69,10 @@ const FIELD = "rounded-control border border-line bg-raised px-2 py-1 text-sm te
           min="0"
           step="0.1"
           data-testid="render-dialog-range-start"
-          :class="FIELD"
+          class="text-xs"
         >
       </label>
-      <label class="flex flex-col gap-1 text-xs text-fg-secondary">
+      <label :class="FIELD">
         To (seconds)
         <input
           v-model="end"
@@ -110,54 +80,70 @@ const FIELD = "rounded-control border border-line bg-raised px-2 py-1 text-sm te
           min="0"
           step="0.1"
           data-testid="render-dialog-range-end"
-          :class="FIELD"
+          class="text-xs"
         >
       </label>
     </div>
-  </fieldset>
-
-  <section class="flex flex-col gap-1 rounded-control border border-line p-2">
-    <div class="flex items-center justify-between gap-2">
-      <h3 class="text-xs font-semibold text-fg-secondary">
-        Checks
-      </h3>
-      <button
-        type="button"
-        data-testid="render-dialog-open-checks"
-        class="cursor-pointer rounded px-1 text-micro text-fg-secondary underline hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
-        @click="emit('review-checks')"
-      >
-        Review all checks
-      </button>
-    </div>
-    <p
-      data-testid="render-dialog-checks-summary"
-      class="text-xs text-fg"
-    >
-      {{ checksError ? `Checks could not be read. ${checksError}` : checksSummary }}
-    </p>
-    <ul
-      data-testid="render-dialog-checks"
-      class="list-disc pl-4 text-xs text-fg-muted"
-    >
-      <li
-        v-for="finding in blocking"
-        :key="finding.id"
-        class="text-danger-fg"
-      >
-        {{ finding.message }}
-      </li>
-      <li v-if="blocking.length === 0 && !checksError">
-        Nothing blocks this render.
-      </li>
-    </ul>
   </section>
+
+  <section
+    data-testid="render-dialog-parent"
+    class="flex flex-col items-start gap-2.5 rounded-[9px] border border-line p-[17px]"
+  >
+    <span
+      data-testid="render-dialog-revision"
+      class="rounded bg-accent-bg px-1.5 py-0.5 text-[9px] tracking-[0.3px] text-accent-ink"
+    >PROJECT · r{{ revision }}</span>
+    <b class="max-w-full text-sm font-semibold break-words text-fg">{{ title }}</b>
+    <small class="text-[11px] text-fg-muted">This render becomes a product. The project stays editable.</small>
+  </section>
+
+  <label :class="FIELD">
+    Rendered video name
+    <input
+      v-model="name"
+      data-testid="render-dialog-name"
+      class="text-xs"
+    >
+  </label>
+
+  <dl
+    data-testid="render-dialog-destination"
+    class="grid grid-cols-2 gap-[9px] text-[10px] text-fg-secondary"
+  >
+    <div class="flex min-w-0 flex-col gap-[5px]">
+      <dt>Destination vault</dt>
+      <dd class="truncate text-xs text-fg">
+        {{ vaultName ?? "Not chosen yet" }}
+      </dd>
+    </div>
+    <div class="flex min-w-0 flex-col gap-[5px]">
+      <dt>Folder inside vault</dt>
+      <dd class="truncate text-xs text-fg">
+        {{ folder || "The vault's screen-capture folder" }}
+      </dd>
+    </div>
+  </dl>
+
+  <RenderProfileCard
+    v-model:quality="quality"
+    :canvas="canvas"
+    :duration-ms="durationMs"
+  />
 
   <p
     data-testid="render-dialog-originals"
-    class="rounded-control border border-accent/30 bg-accent/10 p-2 text-xs text-accent-fg"
+    class="flex flex-col gap-1 rounded-[7px] border border-accent/20 bg-accent-bg p-3.5 text-[11px] leading-[1.7] text-fg-secondary"
   >
-    Your originals and this project are not changed. The render becomes a new
-    product; the project stays editable.
+    <b class="text-accent-ink">A new output, never an overwrite.</b>
+    Your originals and this project are not changed. The render becomes a new product in this project's workspace,
+    with the exact edit it was made from.
   </p>
+
+  <RenderChecksSummary
+    :summary="checksSummary"
+    :error="checksError"
+    :blocking="blocking"
+    @review-checks="emit('review-checks')"
+  />
 </template>

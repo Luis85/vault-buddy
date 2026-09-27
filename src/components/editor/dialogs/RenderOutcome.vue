@@ -8,13 +8,16 @@
  * **Render another** — and (visual-parity Task 10, design D9) **Show in
  * workspace**, the library's Project section where every product lives.
  * Presentational: the dialog owns the job.
+ *
+ * Visual-parity Task 21: the completion names where a publish goes by the
+ * vault's NAME (design D6) — never its id — or says no vault is set yet.
  */
 import { computed, ref } from "vue";
 
 import type { RenderProgressView } from "../../../editor/renderProgress";
-import AppButton from "../../ui/AppButton.vue";
 import ProductPlayer from "../preview/ProductPlayer.vue";
 import RenderProgress from "../preview/RenderProgress.vue";
+import DialogButton from "./DialogButton.vue";
 
 const props = defineProps<{
   job: RenderProgressView | null;
@@ -25,6 +28,8 @@ const props = defineProps<{
   /** Set only from a `complete` terminal. */
   productId: string | null;
   name: string;
+  /** The project's destination vault by name; `null` when none is set. */
+  vaultName: string | null;
 }>();
 const emit = defineEmits<{
   (e: "cancel"): void;
@@ -38,6 +43,11 @@ const media = computed(() => (props.productId ? { productId: props.productId } :
 const statusRole = computed(() => (props.status?.alert ? "alert" : "status"));
 const statusClass = computed(() => (props.status?.alert ? "text-danger-fg" : "text-fg-secondary"));
 const againLabel = computed(() => (media.value ? "Render another" : "Try again"));
+const publishLine = computed(() =>
+  props.vaultName
+    ? `Publish it into ${props.vaultName} with Publish to vault…, or keep it in this project's workspace.`
+    : "Publish it into a vault with Publish to vault…, or keep it in this project's workspace.",
+);
 
 function another(): void {
   watching.value = false;
@@ -59,55 +69,53 @@ function another(): void {
   >
     {{ status.text }}
   </p>
+  <p
+    v-if="media"
+    data-testid="render-dialog-publish-line"
+    class="text-[11px] text-fg-muted"
+  >
+    {{ publishLine }}
+  </p>
   <ProductPlayer
     v-if="watching && media"
     :media="media"
     :label="`Rendered video: ${name}`"
   />
   <div class="flex flex-wrap items-center justify-end gap-2">
-    <AppButton
+    <DialogButton
       v-if="running"
-      variant="secondary"
-      size="sm"
       data-testid="render-dialog-cancel"
       @click="emit('cancel')"
     >
       Cancel render
-    </AppButton>
+    </DialogButton>
     <template v-if="media">
-      <AppButton
-        variant="secondary"
-        size="sm"
+      <DialogButton
         data-testid="render-dialog-watch"
         @click="watching = true"
       >
         Watch rendered file
-      </AppButton>
-      <AppButton
-        variant="secondary"
-        size="sm"
+      </DialogButton>
+      <DialogButton
         data-testid="render-dialog-publish"
         @click="emit('publish')"
       >
         Publish to vault…
-      </AppButton>
-      <AppButton
-        variant="ghost"
-        size="sm"
+      </DialogButton>
+      <DialogButton
         data-testid="render-dialog-products"
         @click="emit('products')"
       >
         Show in workspace
-      </AppButton>
+      </DialogButton>
     </template>
-    <AppButton
+    <DialogButton
       v-if="status"
       variant="primary"
-      size="sm"
       data-testid="render-dialog-another"
       @click="another"
     >
       {{ againLabel }}
-    </AppButton>
+    </DialogButton>
   </div>
 </template>

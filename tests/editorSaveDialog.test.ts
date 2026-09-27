@@ -206,7 +206,9 @@ describe("EditorHeader — the Project menu's save items", () => {
       (w.get('[data-testid="save-project-format-portable"]').element as HTMLInputElement).checked,
     ).toBe(true);
     await w.get('[data-testid="save-project-format-lightweight"]').setValue(true);
-    expect(w.get('[data-testid="save-project-confirm"]').text()).toBe("Save lightweight copy…");
+    // Visual-parity Task 21 (screen 08): one "Save copy"; the card says which.
+    expect(w.get('[data-testid="save-project-confirm"]').text()).toBe("Save copy");
+    expect(w.get('[data-testid="save-project-option-lightweight"]').classes()).toContain("border-accent");
 
     await w.get('[data-testid="save-project-cancel"]').trigger("click");
     await chooseProjectMenuItem(w, "openFile");

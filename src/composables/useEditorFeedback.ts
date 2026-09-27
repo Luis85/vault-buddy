@@ -17,6 +17,8 @@
  *   newer error replaced it, the session closed — the toast is dismissed.
  *   Without that a refusal the person already moved past stayed over the
  *   timeline, and a "disk is full" outlived the save that fixed it.
+ *   An error raised while a dialog renders `lastError` inline
+ *   (`useInlineLastError`, ruling T7-1) is shown there and not toasted.
  * - **A revision conflict** parks the edit in `conflictIntent` (never
  *   resent on its own, R20); the toast's Retry is the explicit resend
  *   (`retryConflict`). A later edit that lands clears `conflictIntent`, and
@@ -38,6 +40,7 @@ import { onScopeDispose, watch } from "vue";
 import type { EditorError } from "../editorTypes";
 import { useEditorProjectStore } from "../stores/editorProject";
 import { useNotificationsStore } from "../stores/notifications";
+import { lastErrorShownInline } from "./useInlineLastError";
 
 const CONFLICT_MESSAGE = "Your edit wasn't applied because the project changed. Retry?";
 
@@ -67,7 +70,7 @@ export function useEditorFeedback() {
     ([error]) => {
       if (error && !toasted.has(error)) {
         toasted.add(error);
-        errorToasts.push({ error, id: notifications.error(error.message) });
+        if (!lastErrorShownInline()) errorToasts.push({ error, id: notifications.error(error.message) });
       }
       dropStaleErrorToasts();
     },

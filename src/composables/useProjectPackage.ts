@@ -16,7 +16,7 @@ import { ref } from "vue";
 import type { EditorError, PackageFormat, PackageReceipt } from "../editorTypes";
 import { toEditorError, useEditorProjectStore } from "../stores/editorProject";
 
-type ExportState =
+export type ExportState =
   | { phase: "idle" }
   | { phase: "pending" }
   | { phase: "success"; fileName: string }

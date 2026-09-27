@@ -1,11 +1,13 @@
 <script setup lang="ts">
 /**
- * The Checks dialog's body (Task 54; SCREENS 07): the "N blockers · M
- * review warnings" summary, then the findings grouped Fix / Review / Note,
- * each row with its reveal button — or, when the read failed, that failure
- * and nothing that could read as a pass. Split out of `ChecksDialog` for
- * the template-complexity ratchet; the dialog owns what a row's button
- * does.
+ * The Checks dialog's body (Task 54; SCREENS 07; visual-parity Task 21,
+ * concept spec §9.4): the summary box ("N blockers · M review warnings"
+ * and what the checks inspect), then one list of issue rows — FIX, then
+ * REVIEW, then NOTE — each with its reveal button; an empty list is the
+ * concept's callout; a failed read says so and nothing that could read as
+ * a pass. Each severity keeps its own labelled group, so a screen reader
+ * still hears which ones block. Split out of `ChecksDialog` for the
+ * template-complexity ratchet; the dialog owns what a row's button does.
  */
 import { computed } from "vue";
 
@@ -17,10 +19,10 @@ const emit = defineEmits<{ (e: "act", finding: CheckFinding): void }>();
 
 const checks = useEditorChecksStore();
 
-const GROUPS: { severity: CheckSeverity; title: string; tag: string }[] = [
-  { severity: "blocking", title: "Fix before rendering", tag: "FIX" },
-  { severity: "warning", title: "Review", tag: "REVIEW" },
-  { severity: "info", title: "Notes", tag: "NOTE" },
+const GROUPS: { severity: CheckSeverity; title: string }[] = [
+  { severity: "blocking", title: "Fix before rendering" },
+  { severity: "warning", title: "Review" },
+  { severity: "info", title: "Notes" },
 ];
 
 const groups = computed(() =>
@@ -35,48 +37,42 @@ const groups = computed(() =>
     v-if="checks.currentError"
     role="alert"
     data-testid="checks-error"
-    class="rounded-control border border-danger/40 p-2 text-xs text-danger-fg"
+    class="rounded-[9px] border border-danger/40 p-3.5 text-xs text-danger-fg"
   >
     Checks could not be read. {{ checks.currentError.message }}
   </p>
   <template v-else>
     <div
       data-testid="checks-summary"
-      class="flex flex-col gap-0.5 rounded-control border border-line p-3"
+      class="flex flex-col gap-[7px] rounded-[9px] border border-line bg-app p-3.5"
     >
-      <p class="text-sm font-semibold text-fg">
-        {{ checks.summary }}
-      </p>
-      <p class="text-xs text-fg-muted">
-        These checks inspect the edit, not the meaning of your tutorial.
-      </p>
+      <b class="text-[13px] font-semibold text-fg">{{ checks.summary }}</b>
+      <span class="text-[11px] text-fg-muted">These checks inspect the edit, not the meaning of your tutorial.</span>
     </div>
     <p
       v-if="groups.length === 0"
       data-testid="checks-empty"
-      class="text-xs text-fg-secondary"
+      class="rounded-[7px] border border-accent/20 bg-accent-bg p-3.5 text-[11px] text-fg-secondary"
     >
-      Nothing to fix or review. Watch the rendered file and check its sound,
-      captions and private details before sharing.
+      <b class="text-accent-ink">No structural issues found.</b>
+      Watch the rendered file and check its sound, captions and private details before sharing.
     </p>
-    <section
-      v-for="group in groups"
-      :key="group.severity"
-      :data-testid="`checks-group-${group.severity}`"
-      :aria-label="group.title"
-    >
-      <h3 class="text-xs font-semibold text-fg-secondary">
-        {{ group.title }}
-      </h3>
-      <ul>
-        <ChecksFindingRow
-          v-for="finding in group.items"
-          :key="finding.id"
-          :finding="finding"
-          :tag="group.tag"
-          @act="emit('act', finding)"
-        />
-      </ul>
-    </section>
+    <div v-else>
+      <section
+        v-for="group in groups"
+        :key="group.severity"
+        :data-testid="`checks-group-${group.severity}`"
+        :aria-label="group.title"
+      >
+        <ul>
+          <ChecksFindingRow
+            v-for="finding in group.items"
+            :key="finding.id"
+            :finding="finding"
+            @act="emit('act', finding)"
+          />
+        </ul>
+      </section>
+    </div>
   </template>
 </template>

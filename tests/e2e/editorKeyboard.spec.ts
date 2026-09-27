@@ -426,12 +426,14 @@ for (const theme of ["light", "dark"] as const) {
     };
 
     // The portable row is selected (the dialog opens on the format the
-    // menu item named); the lightweight row is only tinted under the pointer.
+    // menu item named) and, since visual-parity Task 21 (concept §9.5
+    // `.save-option:has(input:checked)`), wears the accent tint rather than
+    // the hover one; the lightweight row is only tinted under the pointer.
     await page.getByTestId("editor-header-project-menu").click();
     await page.getByTestId("editor-project-menu-item-saveCopy").click();
     await expect(page.getByTestId("save-project-originals-warning")).toBeVisible();
     await page.mouse.move(0, 0);
-    await expectTint(SUBTLE_ROWS[0]);
+    expect(await surfaceContrast(page, SUBTLE_ROWS[0]), "the selected card's accent tint").toBeGreaterThanOrEqual(1.08);
     await page.hover(SUBTLE_ROWS[1]);
     await expectTint(SUBTLE_ROWS[1]);
     await page.keyboard.press("Escape");
@@ -526,6 +528,32 @@ for (const theme of ["light", "dark"] as const) {
     await openEditor(page, theme, undefined, { editor_get_checks: [WARNING] });
     await expect(page.getByTestId("editor-header-checks-count")).toHaveText("1");
     expect(await lowContrast(page)).toEqual([]);
+  });
+}
+
+// Visual-parity Task 21 (concept §9.4, §9.6; D16): the Checks dialog's
+// FIX / REVIEW / NOTE chips, its rows and footer, and the Render dialog's
+// cards and callout read 4.5:1 in both themes.
+const SHARE_FINDINGS = [
+  { id: "chk-missingMedia-intro", severity: "blocking", code: "missingMedia", message: "A file is missing.", target: { kind: "clip", id: "intro" }, action: "reconnect" },
+  WARNING,
+  { id: "chk-excludedCaptions-project", severity: "info", code: "excludedCaptions", message: "Captions are off.", target: { kind: "project", id: null }, action: "openCaptions" },
+];
+for (const theme of ["light", "dark"] as const) {
+  test(`${theme} theme text meets 4.5:1 in the Checks and Render dialogs`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    await openEditor(page, theme, undefined, {
+      editor_get_checks: SHARE_FINDINGS,
+      list_vaults: [{ id: "vault-e2e", name: "Knowledge vault", path: "C:/v", open: false }],
+    });
+    await page.getByTestId("editor-header-checks").click();
+    await expect(page.getByTestId("check-kind-chk-missingMedia-intro")).toHaveText("FIX");
+    expect(await lowContrast(page), "Checks").toEqual([]);
+    await page.getByTestId("checks-back").click();
+
+    await page.getByTestId("editor-header-render").click();
+    await expect(page.getByTestId("render-dialog-profile")).toBeVisible();
+    expect(await lowContrast(page), "Render").toEqual([]);
   });
 }
 
