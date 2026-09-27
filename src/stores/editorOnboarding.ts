@@ -213,9 +213,10 @@ export const useEditorOnboardingStore = defineStore("editorOnboarding", {
       this.progress.preferences = { ...this.progress.preferences, ...preferences };
       this.persist();
     },
-    /** Restore progress file (Task 57): install what Rust validated,
-     * PAUSED — restoring never starts the guide, and the invitation it
-     * answers stays answered. Saved like any other change (so not at all
+    /** Load progress file… (Task 57's "Restore progress file…", renamed
+     * to the concept's wording by visual-parity Task 23): install what Rust
+     * validated, PAUSED — restoring never starts the guide, and the
+     * invitation it answers stays answered. Saved like any other change (so not at all
      * after a failed read: see the module doc). */
     restoreFrom(restored: GuideProgress): void {
       this.progress = { ...hydrate(restored), active: false, collapsed: false, invitationDismissed: true };

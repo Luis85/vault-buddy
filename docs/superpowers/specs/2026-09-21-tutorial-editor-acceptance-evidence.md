@@ -85,7 +85,7 @@ Reading a row:
 | F-46 | Guided onboarding | `src-tauri/core/src/editor/guide_tests.rs#the_compiled_steps_are_the_22_lessons_in_order`, `src-tauri/src/editor/guide_commands_tests.rs#guide_progress_round_trips_through_the_app_wide_prefs_folder`, `tests/editorGuideCoach.test.ts#walking all 22 steps sends zero editor_execute and zero device or file requests`, `tests/editorOnboardingStore.test.ts#progress resumes at the exact step id`, `tests/e2e/editorGuide.spec.ts#coach resolves every target at 960x640` | not yet evaluated — T48–T55 |
 | F-47 | Learning center | `tests/editorLearningCenter.test.ts#search ignores case and diacritics`, `tests/editorLearningCenter.test.ts#shortcut table matches shortcuts.ts`, `src-tauri/src/editor/guide_commands_tests.rs#guide_progress_file_round_trips_and_rejects_foreign_json` | not yet evaluated — T56, T57, T78 |
 | F-48 | Focused responsive shell | `tests/editorShell.test.ts#shows Save project and Render video as separate buttons`, `tests/editorShell.test.ts#at or below 1080px the inspector is a closed drawer; the preview header's properties toggle opens it and the header stays`, `tests/e2e/editorShell.spec.ts#exactly one preview toolbar row at 960x640`, `src-tauri/core/src/editor/workspace.rs#sanitize_drops_unknown_and_mistyped_fields`, `tests/e2e/editorParity.spec.ts#frame: header 56, library 244, inspector 276, status 25`, `tests/e2e/editorParity.spec.ts#the headers stay pinned when a nudged clip's focus scrolls the lanes` | not yet evaluated — T59, T60 (R-A2), T74–T76 |
-| F-49 | Keyboard and accessible controls | `tests/e2e/editorKeyboard.spec.ts#keyboard-only journey completes`, `tests/e2e/editorKeyboard.spec.ts#forced colors keep selection visible`, `tests/editorA11y.test.ts#every icon-only button has an accessible name`, `tests/editorShortcutsWired.test.ts#every key the shortcut table lists does what the table says`, `tests/e2e/editorNoop.spec.ts#the sweep names a planted no-op and a planted reasonless disabled control` | not yet evaluated — T53, T58 (R-A1), T77, T79 (R-A2) |
+| F-49 | Keyboard and accessible controls | `tests/e2e/editorKeyboard.spec.ts#keyboard-only journey completes`, `tests/e2e/editorKeyboard.spec.ts#forced colors keep selection visible`, `tests/editorA11y.test.ts#every icon-only button has an accessible name`, `tests/editorShortcutsWired.test.ts#every key the shortcut table lists does what the table says`, `tests/e2e/editorNoop.spec.ts#the sweep names a planted no-op and a planted reasonless disabled control` | not yet evaluated — T53, T58, T77 (R-A1); T79 (R-A2) |
 | F-50 | Local privacy and diagnostics | `src-tauri/src/editor/diagnostics_tests.rs#diagnostics_contain_no_paths_or_names`, `src-tauri/src/editor/redact_guard.rs#editor_logs_redact_paths`, `src-tauri/core/src/editor/redact.rs#a_path_becomes_a_stable_hash_and_nothing_else`, `tests/editorLearningCenter.test.ts#Export diagnostics asks Rust to write the file and says where it landed` | not yet evaluated — T61 |
 
 ## Cross-cutting invariants (ADR §8)
@@ -134,13 +134,13 @@ gate has checklist rows; none carries a result.
 
 | Gate | What | Checklist rows | Status |
 | --- | --- | --- | --- |
-| R-H1 | Physical camera and microphone | T32–T36 | open, unrun |
+| R-H1 | Physical camera and microphone | T32–T36, T80, T81 | open, unrun |
 | R-H2 | Windows ffmpeg against a real staged fMP4 (layers, libass fonts, xfade/acrossfade, encoder choice) | T23–T26, T62 | open, unrun |
 | R-H3 | Synchronized webcam producer (drift, unplug, busy device) | T37–T41 | open, unrun |
 | R-H4 | Per-input stems writer | T42–T44 | open, unrun |
 | R-H5 | Disk full during save, render and publish on a real volume | T30 (publish), T65 (save and render) | open, unrun |
-| R-A1 | Narrator and NVDA on WebView2 | T53, T58 | open, unrun |
-| R-A2 | Windows contrast themes at 150 % and 200 % | T59, T60 | open, unrun |
+| R-A1 | Narrator and NVDA on WebView2 | T53, T58, T77 | open, unrun |
+| R-A2 | Windows contrast themes at 150 % and 200 % | T59, T60, T79 | open, unrun |
 | R-M1 | Memory: ten-minute 1080p30 tutorial, 3 video + 2 audio layers | T66 | open, unrun |
 | R-P1 | Product decision: a native package limit beyond 200 MiB of media | — (a decision, not a check) | open |
 | R-P2 | Product decision: the `zip` crate dependency (major 4, the one `tauri-plugin-updater` already locks) | — (a decision, not a check) | open |
@@ -163,7 +163,7 @@ above.
 (`docs/superpowers/plans/2026-09-26-tutorial-editor-visual-parity.md`)
 restyled the editor to the concept and added two Playwright gates,
 `tests/e2e/editorParity.spec.ts` (regions measured against the concept,
-composites for screens 01–14) and `tests/e2e/editorNoop.spec.ts` (every
+composites for all fifteen concept screens, 01–15; screen 15's counterpart is the window's "could not be opened" line after a refused open) and `tests/e2e/editorNoop.spec.ts` (every
 visible control does something; every disabled one says why; every refusal
 is visible). Its Task 25 added checklist rows T74–T81 — the dark default,
 the drawers, the pinned label column, the context menus, the docked coach,

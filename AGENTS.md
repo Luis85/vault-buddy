@@ -107,7 +107,7 @@ here is deliberately only the shipped increments.
 | [docs/superpowers/specs/](docs/superpowers/specs/) | Dated design specs — the *why* behind each increment's shape |
 | [docs/superpowers/plans/](docs/superpowers/plans/) | Dated implementation plans that executed those specs |
 | [docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md](docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md) | The screen-capture feature's manual Windows checklist — a RUNNING document across phases, not one phase's gate. It carries **57 rows** today — 1–55 plus 27a and 27b — of which **23** carry a result; the count is measured on the tree, not incremented (it has been wrong before from incrementing, which is why the one-liner to re-measure it lives in the file's own header). An empty Result column means unrun, which is not the same as failed. **The deferral is LIFTED**: the user began running it on 2026-09-21, batch by batch. Rows 1–13, 16, 17, 29 and 37–43 carry results (11 and 12 are DEFERRED by the author's decision to after the remaining Phase 3 work, not passed; 16, 17 and 43 passed on the GAP-166 fix build and re-run on the next installer); 14, 15, 18–28, 30–36, 44–52 **and 53–55** are still unrun — 34 rows. **Rows 44–52 are the region-capture indicator's own verification** (GAP-165), added when it landed and not run since: row 44 is the GATE, re-testing GAP-166's exact symptom against the SIXTH excluded window, and a failure there costs the indicator its capture exclusion and the feature with it. Row 49 is expected BLOCKED on the single-monitor verification machine, like row 13. **Rows 41–43 were added BY that pass**, each for something it found: GAP-164 (fixed), GAP-165 (an approved design never implemented) and GAP-166 (Vault Buddy breaking File Explorer's toolbar, unlocalised). Row 13 is BLOCKED — the verification machine has one monitor, so the mixed-DPI case its own module doc calls most likely to fail cannot be reached at all. **Rows 53–55** were added by the gap close-out: 53 records a window titled `CON` (the only thing that can test GAP-108's close-out against the Win32 name resolver rather than against reasoning), and 54–55 collect the evidence GAP-122's first-frame rework needs before anyone attempts it — the declared-vs-delivered sizes across window styles, and a window resized mid-capture, which is the one case where the prediction is known to go stale. **Task 59 superseded 15 rows** (19, 20, 21, 27, 27a, 27b, 28, 29, 30, 31, 32, 33, 36, 37, 38 — plus row 34's editor half) when it retired the phase-4 editor and the phase-5 export they tested: each now opens with **SUPERSEDED** and names the tutorial-editor row that replaces it; none was deleted, and 12 of the 34 unrun rows are among them, so 22 unrun rows still test something that exists (the file's header carries the one-liner) |
-| [docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md](docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md) | The tutorial-editor increment's manual Windows checklist — created by Task 15, a RUNNING document across that increment's own tasks (the screen-capture checklist's own precedent). Carries **81 rows** today (T1–T81), **0** with a result (T7 is obsolete since Task 59 retired the legacy strip it guarded): T1–T3 verify Task 15's own `editor_open_staged` open paths (from the capture bar, from the staged list, and that a second open of the same capture reuses the session); T4–T5 close GAP-170 (the app-wide IPC ACL exhaustiveness gap Task 11 opened); T6–T7 are Task 21's timeline interactions in real WebView2 (pointer-captured drag/trim/Escape, and the shell's shortcut dispatcher not double-handling the legacy strip's Ctrl+Z); T8–T10 are Task 22's preview (audible playback through `editor_media_url` and Web Audio, local monitor mute/rate, and the widened asset scope still refusing `project.json`, `jobs` and vault paths); T11 is Task 25's media import (a mixed batch with one corrupt file, through the native dialog and a real ffprobe); T12–T13 are Task 27's detached audio and mixer (a detached clip audible once and in sync, a silent video refused, solo, the monitoring-only mute and the preview peak); T14 is Task 28's waveforms and thumbnails (a real long recording's waveform off the UI thread, a poster frame through the asset protocol from `cache\`, the cache surviving a reopen, and the no-ffmpeg hint); T15 is Task 31's picture-in-picture handles, transforms and speed (a real mouse dragging the handles over a playing picture, a circular/rotated/mirrored/cropped frame in WebView2, and `preservesPitch` at 2×); T16 is Task 32's canvas ratio and colour presets (letterboxing at each ratio, the one-time Checks toast, CSS colour filters on a playing picture); T17 is Task 35's teaching cues (the SVG overlay pinned over the playing picture, an arrow endpoint dragged as one Undo step, a zoom that never shows the letterbox, the privacy cover's permanent notice, and a cue reachable through a full-frame layout box); T18 is Task 36's captions and chapters (the native subtitle dialog with a real CRLF/WebVTT file, the skipped-cue report, the preview caption layer's position/size/off, captions re-timed by a 2× speed, and a chapter following a trim); T19–T20 are Task 37's recovery and close guard (a process killed mid-edit resuming its last acknowledged edit, Discard leaving `project.json` byte-identical, and Keep for later surviving a reopen with no recovery prompt); T21–T22 are Task 39's project files and Task 40's reconnect; T23–T26 are Task 45's real-ffmpeg renders (a real staged capture with cues, libass's fonts, a non-libx264 build, the untouched-capture remux); T27 is Task 46's render job under a quit, Alt+F4, the updater and a discard; T28 is Task 47's Render dialog, product library (Watch, Restore, a missing file) and Review played back in WebView2; T29–T31 are Task 48's publish into a vault (a same-name collision and the subtitle export, a full disk, and a quit/updater/crash mid-copy); T32–T36 are Task 50's webcam takes on a real camera (no prompt before Enable camera, a blocked or busy camera and a missing ffmpeg leaving the project alone, a real take reviewed and retaken, Add to timeline's presenter placement rendered as a circle, and the camera's light going off on every way out); T37–T41 are Task 52's synchronized webcam beside a screen capture (ten-minute A/V drift across claps, an unplugged webcam finalizing early while the screen continues, a webcam another app holds refusing the start, pause/resume keeping both aligned, and no webcam = the unchanged capture); T42–T44 are Task 53's per-input audio stems (two inputs as two stems that match the mix at both ends, pause and a stem that cannot be written, and stems off = the unchanged capture); T45–T47 are Task 54's before-you-share checks (every finding's button revealing its object in real WebView2 — selection, output-time seek, scroll, the mixer/Webcam/Layout surfaces and focus on the ratio control; a real missing file blocking Render while warnings do not; and the canvas toast's Open Checks, the destination picker and the dialog read by Narrator); T48–T50 are Task 55's guide progress and targets (the progress file landing in the app-wide `editor-prefs` folder and in no project, a malformed file read as fresh while an unreadable one shows "Session only", and the new timeline **Edit actions** menu opening at its button); T51–T55 are Task 56's guided walkthrough (every lesson's control found and never covered in a real window at both sizes, resume after a hide, a reopen and a quit, F6/Escape/F1/? with Narrator, a modal dialog suspending the coach with no camera prompt, and no guide pixel in a rendered file plus a contrast theme and animations off); T56–T57 are Task 57's progress file through Windows' own dialogs (Save progress file writes lesson progress only and never replaces a file that is not guide progress; Restore installs it paused, with no coach, no camera prompt and no project change, and refuses a foreign file); T58–T61 are Task 58's (the keyboard journey with Narrator and then NVDA, a Windows contrast theme at 150 % and at 200 % with the light editor theme's contrast, and Export diagnostics through Windows' own dialog holding only counts and codes, plus redacted log lines); T62–T63 are Task 59's (an untouched capture rendered and published end to end, lossless by md5, the successor of the retired phase-5 Save; and Discard project unpinning a capture the Record Screen list can then discard, with a refused discard's message free of any redaction handle); T64–T66 are Task 60's (the concept bundle's final representative journey, walked by a person — never claimed by an agent; disk full during Save project and during a render, R-H5's other two halves; and R-M1's memory measurement on a named machine); T67–T68 are the final whole-branch review's (Discard project refused while a real webcam take or import is still writing, then succeeding; and a project too damaged to open re-migrated from its capture's Edit and discarded from the editor's "could not be opened" line through the live ACL); T69 is hardening Task 9's (a webcam take a killed process interrupted, offered back as "Webcam take N (recovered)" on the project's next open, playable and seekable — or kept raw without ffmpeg); T70 is hardening Task 10's (a capture's first Edit with real-time AV scanning on, riding out `create_project`'s own rename against a scanner momentarily holding the just-written store files open); T71 is hardening Task 13's (AltGr chords on a non-US keyboard and Delete on a focused select never fire an editing shortcut); T72 is hardening Task 15's (F5/Ctrl+R/Ctrl+F/Ctrl+P doing nothing in a release build — the one place `preventDefault` beating WebView2's browser accelerators can be proven — and a devtools reload coming back on the same project with a running render's progress, GAP-208); T73 is hardening Task 24's (a staged capture, its webcam file and a stem still playing in the editor preview after the staging scope narrowed to `*.mp4`/`*.m4a`, review S-10); T74–T81 are the visual-parity plan's Task 25 (on real WebView2: the dark default and a light theme that sticks, the drawers at 1080/860 and the panel toggles at full width, the pinned track label column, the context menus and their submenus by mouse, keyboard and Narrator, the docked coach and the learning center, a Windows contrast theme on the new chrome, and — on a real camera and microphone — the webcam dialog's microphone picker and level meter, Insert at timeline time and Mirror, and Cancel request plus a permission answered late turning the camera straight off); and the file carries Task 60's map of every residual gate (R-H1–R-H5, R-A1, R-A2, R-M1 and the two product decisions R-P1/R-P2) to its rows — all OPEN — re-measure with the file's own one-liner, never increment |
+| [docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md](docs/superpowers/specs/2026-09-21-tutorial-editor-windows-verification.md) | The tutorial-editor increment's manual Windows checklist — created by Task 15, a RUNNING document across that increment's own tasks (the screen-capture checklist's own precedent). Carries **81 rows** today (T1–T81), **0** with a result (T7 is obsolete since Task 59 retired the legacy strip it guarded): T1–T3 verify Task 15's own `editor_open_staged` open paths (from the capture bar, from the staged list, and that a second open of the same capture reuses the session); T4–T5 close GAP-170 (the app-wide IPC ACL exhaustiveness gap Task 11 opened); T6–T7 are Task 21's timeline interactions in real WebView2 (pointer-captured drag/trim/Escape, and the shell's shortcut dispatcher not double-handling the legacy strip's Ctrl+Z); T8–T10 are Task 22's preview (audible playback through `editor_media_url` and Web Audio, local monitor mute/rate, and the widened asset scope still refusing `project.json`, `jobs` and vault paths); T11 is Task 25's media import (a mixed batch with one corrupt file, through the native dialog and a real ffprobe); T12–T13 are Task 27's detached audio and mixer (a detached clip audible once and in sync, a silent video refused, solo, the monitoring-only mute and the preview peak); T14 is Task 28's waveforms and thumbnails (a real long recording's waveform off the UI thread, a poster frame through the asset protocol from `cache\`, the cache surviving a reopen, and the no-ffmpeg hint); T15 is Task 31's picture-in-picture handles, transforms and speed (a real mouse dragging the handles over a playing picture, a circular/rotated/mirrored/cropped frame in WebView2, and `preservesPitch` at 2×); T16 is Task 32's canvas ratio and colour presets (letterboxing at each ratio, the one-time Checks toast, CSS colour filters on a playing picture); T17 is Task 35's teaching cues (the SVG overlay pinned over the playing picture, an arrow endpoint dragged as one Undo step, a zoom that never shows the letterbox, the privacy cover's permanent notice, and a cue reachable through a full-frame layout box); T18 is Task 36's captions and chapters (the native subtitle dialog with a real CRLF/WebVTT file, the skipped-cue report, the preview caption layer's position/size/off, captions re-timed by a 2× speed, and a chapter following a trim); T19–T20 are Task 37's recovery and close guard (a process killed mid-edit resuming its last acknowledged edit, Discard leaving `project.json` byte-identical, and Keep for later surviving a reopen with no recovery prompt); T21–T22 are Task 39's project files and Task 40's reconnect; T23–T26 are Task 45's real-ffmpeg renders (a real staged capture with cues, libass's fonts, a non-libx264 build, the untouched-capture remux); T27 is Task 46's render job under a quit, Alt+F4, the updater and a discard; T28 is Task 47's Render dialog, product library (Watch, Restore, a missing file) and Review played back in WebView2; T29–T31 are Task 48's publish into a vault (a same-name collision and the subtitle export, a full disk, and a quit/updater/crash mid-copy); T32–T36 are Task 50's webcam takes on a real camera (no prompt before Enable camera, a blocked or busy camera and a missing ffmpeg leaving the project alone, a real take reviewed and retaken, Add to timeline's presenter placement rendered as a circle, and the camera's light going off on every way out); T37–T41 are Task 52's synchronized webcam beside a screen capture (ten-minute A/V drift across claps, an unplugged webcam finalizing early while the screen continues, a webcam another app holds refusing the start, pause/resume keeping both aligned, and no webcam = the unchanged capture); T42–T44 are Task 53's per-input audio stems (two inputs as two stems that match the mix at both ends, pause and a stem that cannot be written, and stems off = the unchanged capture); T45–T47 are Task 54's before-you-share checks (every finding's button revealing its object in real WebView2 — selection, output-time seek, scroll, the mixer/Webcam/Layout surfaces and focus on the ratio control; a real missing file blocking Render while warnings do not; and the canvas toast's Open Checks, the destination picker and the dialog read by Narrator); T48–T50 are Task 55's guide progress and targets (the progress file landing in the app-wide `editor-prefs` folder and in no project, a malformed file read as fresh while an unreadable one shows "Session only", and the new timeline **Edit actions** menu opening at its button); T51–T55 are Task 56's guided walkthrough (every lesson's control found and never covered in a real window at both sizes, resume after a hide, a reopen and a quit, F6/Escape/F1/? with Narrator, a modal dialog suspending the coach with no camera prompt, and no guide pixel in a rendered file plus a contrast theme and animations off); T56–T57 are Task 57's progress file through Windows' own dialogs (Save progress file writes lesson progress only and never replaces a file that is not guide progress; **Load progress file…** (Task 57's Restore, renamed by visual-parity Task 23) installs it paused, with no coach, no camera prompt and no project change, and refuses a foreign file); T58–T61 are Task 58's (the keyboard journey with Narrator and then NVDA, a Windows contrast theme at 150 % and at 200 % with the light editor theme's contrast, and Export diagnostics through Windows' own dialog holding only counts and codes, plus redacted log lines); T62–T63 are Task 59's (an untouched capture rendered and published end to end, lossless by md5, the successor of the retired phase-5 Save; and Discard project unpinning a capture the Record Screen list can then discard, with a refused discard's message free of any redaction handle); T64–T66 are Task 60's (the concept bundle's final representative journey, walked by a person — never claimed by an agent; disk full during Save project and during a render, R-H5's other two halves; and R-M1's memory measurement on a named machine); T67–T68 are the final whole-branch review's (Discard project refused while a real webcam take or import is still writing, then succeeding; and a project too damaged to open re-migrated from its capture's Edit and discarded from the editor's "could not be opened" line through the live ACL); T69 is hardening Task 9's (a webcam take a killed process interrupted, offered back as "Webcam take N (recovered)" on the project's next open, playable and seekable — or kept raw without ffmpeg); T70 is hardening Task 10's (a capture's first Edit with real-time AV scanning on, riding out `create_project`'s own rename against a scanner momentarily holding the just-written store files open); T71 is hardening Task 13's (AltGr chords on a non-US keyboard and Delete on a focused select never fire an editing shortcut); T72 is hardening Task 15's (F5/Ctrl+R/Ctrl+F/Ctrl+P doing nothing in a release build — the one place `preventDefault` beating WebView2's browser accelerators can be proven — and a devtools reload coming back on the same project with a running render's progress, GAP-208); T73 is hardening Task 24's (a staged capture, its webcam file and a stem still playing in the editor preview after the staging scope narrowed to `*.mp4`/`*.m4a`, review S-10); T74–T81 are the visual-parity plan's Task 25 (on real WebView2: the dark default and a light theme that sticks, the inspector drawer at 1080 (the 860 library drawer sits below the window's 960 floor) and the panel toggles at full width, the pinned track label column, the context menus and their submenus by mouse, keyboard and Narrator, the docked coach and the learning center, a Windows contrast theme on the new chrome, and — on a real camera and microphone — the webcam dialog's microphone picker and level meter, Insert at timeline time and Mirror, and Cancel request plus a permission answered late turning the camera straight off); and the file carries Task 60's map of every residual gate (R-H1–R-H5, R-A1, R-A2, R-M1 and the two product decisions R-P1/R-P2) to its rows — all OPEN — re-measure with the file's own one-liner, never increment |
 | [docs/superpowers/specs/2026-09-21-tutorial-editor-acceptance-evidence.md](docs/superpowers/specs/2026-09-21-tutorial-editor-acceptance-evidence.md) | The tutorial editor's release evidence (Task 60): one row per concept-bundle F-ID (all 50) naming the tests that prove it as `path#test name` and the checklist rows that still have to, the ADR's GAP-N1..N5 placeholders mapped to real Gaps entries, the residual gates (all open) and the branch-completeness and baseline checks. **`tests/editorEvidence.test.ts` checks it**: a row naming a test file or test that no longer exists turns CI red |
 | [docs/Gaps.md](docs/Gaps.md) | The audited backlog of known issues, weaknesses, tech debt, and untested paths — check it before "discovering" a known problem, extend it when you find a new one |
 
@@ -155,7 +155,8 @@ vault-buddy/
 │   │       └── inspector/      # InspectorHeading/Tabs/Section + the per-tab sections;
 │   │                           #   ClipInspector, MultiInspector (+ AdjustAllSection),
 │   │                           #   TrackInspector, EmptyInspector, the cue fields (Tasks 13–15)
-│   │       └── dialogs/        # every editor dialog, on DialogHost; DialogButton and
+│   │       └── dialogs/        # the editor's dialogs, on DialogHost (the learning
+│   │                           #   center, a DialogHost too, lives in guide/); DialogButton and
 │   │                           #   DialogCloseButton are their buttons (visual-parity Tasks
 │   │                           #   21–24) — never the panel window's AppButton/IconButton
 │   │       └── preview/        # PreviewSurface + TransportBar — the layered preview stage
@@ -2072,8 +2073,9 @@ tokens"; the refusal and inline-error rules are in "Frontend state".
 - **No control is a no-op** (D14). Every enabled control has an observable
   effect; every refused command is visible (a toast, or the dialog's own
   inline line — never both, never neither); every disabled control carries
-  its reason by pointer (`title`) AND by keyboard (the menu's hint line, or
-  the toast a disabled shortcut raises); a control with no backend is
+  its reason by pointer (`title`) and, where the control stays focusable,
+  by keyboard (the menu's hint line, or the toast a disabled shortcut
+  raises); a control with no backend is
   removed, not left disabled "until later". Browser-only concept copy keeps
   its slot with native wording (D10). `tests/e2e/editorNoop.spec.ts` is the
   gate (see Testing conventions). Clicking the preview picture selects the
@@ -3816,79 +3818,59 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
   them without touching call sites. The white-opacity glass surfaces
   (`bg-white/5`, `bg-white/10`, `border-white/10`) stay literal — already
   consistent, and tokenizing them risks `color-mix` drift.
-- **The tutorial editor (`src/components/editor/shell/`, Task 16, F-48)
-  adds its own token set to the same `@theme` block** rather than reusing
-  the panel's palette wholesale — it reuses `fg`/`accent`/`focus`/`danger`/
-  `rounded-control`/`text-micro` but needs thirteen more the panel never did:
-  `--color-stage`/`-panel`/`-raised`/`-line` (workspace surfaces),
-  `-video`/`-video-bg`/`-audio`/`-audio-bg`/`-gold`/`-gold-bg` (media-type
-  and fade-handle accents), mapped verbatim from
-  `docs/concepts/vault-buddy-editor/contracts/design-tokens.json`, and
-  `--color-hover` (Task 14, review I-2/F-M4 — not from the contract: the
-  editor's own hover/pressed-surface tint, added because every
-  `hover:bg-white/10` under `src/components/editor/**` — 33 files,
-  `grep -rl "hover:bg-white/10" src/components/editor` measured, not the
-  brief's stale 30 — read as designed on the dark stage but at ~1.1:1 on
-  the light theme's white/near-white panels; `SaveProjectMenu.vue`'s (retired by visual-parity Task 8)
-  literal `border-white/10 bg-white/5` toggle chip converted to
-  `border-line bg-raised` the same pass, for the same reason. This is an
-  EDITOR-only token: the panel window's own white-opacity glass
-  (`bg-white/5`, `bg-white/10`, `border-white/10`, the bullet above) stays
-  literal — it is already consistent there and carries no light-theme
-  surface to fail against), and `--color-track` (Task 14 fix round 1, the
-  same review — a SEPARATE token from `--color-hover`: the trim handles'
-  and progress-bar tracks' `bg-white/10` is a static UI-COMPONENT boundary
-  (WCAG 1.4.11's ~3:1 floor, not a hover tint's lighter weight), so
-  `--color-hover`'s light value alone wasn't enough — measured (fix round
-  2 corrected this: the first pass composited against pure black rather
-  than the token's own slate-900) 3.68:1 to 3.99:1 in light across every
-  surface it's used against, worst case `--color-video-bg`, the trim
-  handles' own backdrop (3.65:1 as actually measured against the built
-  app); `--color-line`'s
-  solid dark value doesn't equal `bg-white/10`'s composited result, so it
-  couldn't stand in either), and `--color-hover-subtle` (GAP-206's recorded
-  residual — `--color-hover`'s lighter sibling for the rows that carried
-  `bg-white/5`: the Save project dialog's format rows, hover and selected,
-  and the learning center's chapter/lesson rows, white over white at
-  1.00:1 in light; light is `rgb(15 23 42 / 0.05)`, 1.11:1 on `panel`,
-  still lighter than `--color-hover`'s 1.13:1). Dark
-  values are the `@theme` defaults (`--color-hover`'s and `--color-track`'s
-  dark values are both the literal `rgb(255 255 255 / 0.1)` they replace,
-  and `--color-hover-subtle`'s the `rgb(255 255 255 / 0.05)` of
-  `bg-white/5`, so the dark theme stays byte-identical; no `white/N`
-  literal is left under `src/components/editor/**`, which
-  `tests/editorThemeTokens.test.ts` pins); `[data-theme="light"]` (set on
-  `document.documentElement` by `EditorShell`, watching the
-  `editorWorkspace` store's own `theme` field — Task 18 moved the STATE
-  there, persisted through `editor_save_workspace`; `EditorShell` keeps only
-  the one thing that stays view-local, applying the `data-theme` attribute)
-  overrides all thirteen — and, since Task 58 (GAP-206), the TEXT tokens too:
-  `fg`/`fg-secondary`/`fg-muted`/`fg-subtle`, `accent`/`accent-fg`,
-  `danger`/`danger-fg`, `focus`, `color-scheme: light` and `--color-app`
-  (the window backdrop, `bg-app` on `EditorRoot`'s `main`), so every text
-  reads at 4.5:1 or more on every light surface —
-  `tests/e2e/editorKeyboard.spec.ts` measures it. A surface in the editor
-  must therefore use a token background (`bg-panel`/`bg-raised`/`bg-stage`,
-  never a literal `bg-slate-800`), or the light ladder puts dark text on it.
-  `[data-theme="dark"]` (fix round 1, GAP-209) overrides only
-  `--color-fg-subtle` (#8e98aa) and `--color-video` (#b39ef0) in the editor
-  window — the `@theme` defaults stay the bundle's — and AppButton's primary
-  is `bg-accent-strong` app-wide (white on violet-500 read 4.40:1); the
-  contrast e2e check runs in both themes. **Forced colours** (Windows
-  contrast themes) drop every box-shadow, which is how `ring-*` focus rings
-  and the selected clip were drawn: `style.css`' unlayered
-  `@media (forced-colors: active)` block gives `:focus-visible` and
-  `[role="option"][aria-selected="true"]` an outline, and the `vb-playhead`/
-  `vb-handle` classes (the playhead; trim, fade and layout handles) keep a
-  system colour of their own. Four
-  more custom properties — `--editor-sidebar` (244px) / `--editor-inspector`
-  (276px) / `--editor-timeline` (400px) / `--editor-label` (196px) — are
-  region sizes, not colors, so Tailwind emits them as plain CSS variables
-  with no matching utility class; `EditorShell`'s own scoped `<style>`
-  reads them via `var(...)` for its grid-template-columns.
+- **The tutorial editor adds its own token set** (Task 16, F-48; its
+  values re-measured against `src/style.css` at visual-parity Task 25)
+  rather than reusing the panel's palette wholesale. Surfaces `app` /
+  `stage` / `panel` / `raised` / `line`, the media-type and fade accents
+  `video`/`video-bg`/`audio`/`audio-bg`/`gold`/`gold-bg`, and three tints
+  with a history: `hover` (Task 14, review I-2/F-M4 — the editor's
+  hover/pressed surface; it replaced every `hover:bg-white/10` under
+  `src/components/editor/**`, white over white in light; since the port it
+  is SOLID, the concept's `#30303c` dark / `#eeebf5` light), `track` (Task
+  14 fix round 1 — a static UI-component boundary, WCAG 1.4.11's 3:1, for
+  the progress tracks; dark keeps the `rgb(255 255 255 / 0.1)` it replaced,
+  light is `rgb(15 23 42 / 0.55)`, 3.65:1 on `video-bg`, its tightest
+  backdrop) and `hover-subtle` (GAP-206's residual — the lighter row tint
+  for the Save a copy format cards and the learning center's rows; dark
+  `rgb(255 255 255 / 0.05)`, light `rgb(15 23 42 / 0.05)`, 1.11:1 on
+  `panel`). `track` and `hover-subtle` have no concept counterpart; every
+  other value is the concept's, per the next bullet. No `white/N` literal is
+  left under `src/components/editor/**` (`tests/editorThemeTokens.test.ts`
+  pins it), so a surface in the editor must use a token background
+  (`bg-panel`/`bg-raised`/`bg-stage`, never a literal `bg-slate-800`) or
+  one theme puts the wrong ink on it. **Which blocks set what:** the
+  editor-only names carry their DARK value as the `@theme static` default
+  and `[data-theme="light"]` overrides them (plus `color-scheme: light`);
+  the names the panel window shares — the `fg` ladder, `accent`/`accent-fg`,
+  `danger-fg`, `focus` — keep the panel's values in `@theme`, and
+  `[data-theme="dark"]` gives the editor the concept's (`fg` #f0eef6,
+  `fg-secondary` #c5c2d0, `fg-muted` #a39fac, `accent` #b6a2f5, `accent-fg`
+  #dacdff, `danger-fg` #ffa3b4, `focus` #d4c1ff) plus two measured deltas
+  (`fg-subtle` #8e98aa, GAP-209; `video` #b39ef0 over the concept's
+  #aa92ed), while `[data-theme="light"]` gives the light set. `EditorShell`
+  sets `data-theme` on `document.documentElement` from `editorWorkspace`'s
+  `theme` (Task 18 persists it through `editor_save_workspace`), and no
+  other window sets it. Every text reads 4.5:1 or more on every surface in
+  both themes — `tests/e2e/editorKeyboard.spec.ts` measures it, over the
+  two-clip project and over the populated parity project. The panel's
+  `AppButton` primary stays `bg-accent-strong` app-wide (GAP-209: white on
+  violet-500 read 4.40:1). **Forced colours** (Windows contrast themes)
+  drop every box-shadow, which is how `ring-*` focus rings and the selected
+  clip were drawn: `style.css`' unlayered `@media (forced-colors: active)`
+  block gives `:focus-visible` and `[role="option"][aria-selected="true"]`
+  an outline, and the `vb-playhead`/`vb-handle` classes (the playhead;
+  trim, fade and layout handles) keep a system colour of their own. The
+  region sizes are plain CSS variables (not a Tailwind namespace, so no
+  utility class): `--editor-sidebar` (244px), `--editor-inspector` (276px),
+  `--editor-sidebar-compact` and `--editor-library-drawer` are read by the
+  shell's grid (`useShellLayout`, `EditorShell`); `--editor-timeline`
+  (400px) and `--editor-label` (196px) are read by NOTHING — they record the
+  full-size values only. The timeline's height lives in
+  `src/editor/panelLayout.ts` (`TIMELINE_DEFAULT_HEIGHT`) and the label
+  column's width in `trackLabelWidthAt` (196/184/174; see the tutorial editor domain), so change
+  those, not the variables.
 - **Since the visual-parity port the editor's tokens take the concept's
-  values** (design D2, Task 3; the bullet above is how the set grew, and its
-  hex values are history). `src/style.css` has two scopes: names only the
+  values** (design D2, Task 3). `src/style.css` has two scopes: names only the
   editor uses (`@theme static`) carry their DARK value as the default and
   `[data-theme="light"]` overrides them; names the panel window shares
   (the `fg` ladder, `accent`, `focus`, `danger`) keep the panel's values in
@@ -4061,8 +4043,10 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
     960×640 it checks the compact frame. The region tests also write a
     side-by-side composite — concept screenshot | built screenshot — to
     `test-results/parity/vs-*.png` (`composite`), pass or fail, for a human
-    to LOOK at: every concept screen 01–12, plus 13 (the light theme) and 14
-    (forced colours). A green run proves the measurements, not the look; a
+    to LOOK at: every concept screen 01–15 — 13 is the light theme, 14
+    forced colours, and 15 (the browser reference's "could not start" page)
+    is matched by the window's own "could not be opened" line after a
+    refused open. A green run proves the measurements, not the look; a
     task that restyles a region reads its composite with its own eyes
     before reporting. The tokens test pins the concept palette in both
     themes.
@@ -4149,7 +4133,7 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
   document; a Todo is a checklist line; a Capture is not necessarily
   audio) in code, UI copy, and docs.
 - **PRs:** every PR gets an automated Codex review (chatgpt-codex-connector
-  bot) plus GitGuardian secret scanning. CI = the four jobs below. Treat
+  bot) plus GitGuardian secret scanning. CI = the five jobs below. Treat
   bot findings as real leads: verify against the code, fix what's
   confirmed, resolve the thread.
 
