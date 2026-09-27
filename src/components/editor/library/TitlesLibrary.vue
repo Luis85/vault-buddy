@@ -13,7 +13,11 @@
  * unlocked video track, top-down, free for the card's whole span, else a
  * new video track above the topmost one, then the card on it. Taking the
  * first video track regardless (as this used to) aimed at a track Rust
- * refused whenever the playhead sat over an overlay.
+ * refused whenever the playhead sat over an overlay. A new track at the TOP
+ * is `addCard`'s own `trackId: null` (a new index-0 video track, the
+ * timeline's "Add title here" precedent): ONE command, so one undo step
+ * and no half-done state if it is refused. Only a new track below an
+ * audio track at the top takes the two-step `addTrack` + `addCard`.
  *
  * **An empty title falls back to the preset's own label** ("Intro",
  * "Chapter", …) rather than sending an empty string -- a blank card is
@@ -22,7 +26,8 @@
  */
 import { ref } from "vue";
 
-import { insertOnFreeTrack } from "../../../editor/placeOnFreeTrack";
+import type { EditorCommand } from "../../../editor/editorCommandTypes";
+import { insertOnFreeTrack, placeOnFreeTrack } from "../../../editor/placeOnFreeTrack";
 import type { CardPreset } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -45,24 +50,25 @@ const PRESETS: { id: CardPreset; label: string }[] = [
 ];
 
 function insertCard(preset: CardPreset, label: string): void {
+  const p = project.project;
+  if (!p) return;
   const startMs = workspace.playheadMs;
-  const cardTitle = title.value.trim() || label;
-  const cardSubtitle = subtitle.value.trim();
-  void insertOnFreeTrack(
-    (command) => project.execute(command),
-    () => project.project,
-    "video",
-    { atMs: startMs, lengthMs: DEFAULT_CARD_DURATION_MS },
-    (trackId) => ({
-      kind: "addCard",
-      preset,
-      trackId,
-      startMs,
-      durationMs: DEFAULT_CARD_DURATION_MS,
-      title: cardTitle,
-      subtitle: cardSubtitle,
-    }),
-  );
+  const span = { atMs: startMs, lengthMs: DEFAULT_CARD_DURATION_MS };
+  const card = (trackId: string | null): EditorCommand => ({
+    kind: "addCard",
+    preset,
+    trackId,
+    startMs,
+    durationMs: DEFAULT_CARD_DURATION_MS,
+    title: title.value.trim() || label,
+    subtitle: subtitle.value.trim(),
+  });
+  const placement = placeOnFreeTrack(p, "video", span.atMs, span.lengthMs);
+  if ("newTrackIndex" in placement && placement.newTrackIndex === 0) {
+    void project.execute(card(null));
+    return;
+  }
+  void insertOnFreeTrack((command) => project.execute(command), () => project.project, "video", span, card);
 }
 </script>
 

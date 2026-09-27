@@ -3411,13 +3411,16 @@ the discard dialog, a refused open — shows a user the log's correlation
 handle instead of the role wording. Every refusal is VISIBLE (visual-parity
 Task 7): `useEditorFeedback`, mounted once by `EditorShell`, toasts each
 new `lastError` object once (a failed save included — the header's "Save
-failed" carries the reason as its `title`), turns a `conflictIntent` into a
-toast whose Retry calls `retryConflict` (dismissed when a later edit clears
-it), and says a matched-but-disabled shortcut's registry reason, at most
-once per 1.5 s, while the keydown still bubbles; Copy confirms itself in
+failed" carries the reason as its `title`) and dismisses that sticky toast
+once neither `lastError` nor `saveError` holds the object any more, turns a
+`conflictIntent` into a toast whose Retry calls `retryConflict` (dismissed
+when a later edit clears it), dismisses both when the shell unmounts, and
+says a matched-but-disabled shortcut's registry reason, at most once per
+1.5 s per reason, while the keydown still bubbles; Copy confirms itself in
 `clipboard.ts`. Every insert at the playhead (the media "+", the Titles
 cards, the asset menu) goes through `placeOnFreeTrack`: a free track of the
-kind for the whole span, else `addTrack` then the insert.
+kind for the whole span, else `addTrack` then the insert — except a Titles
+card needing a new TOP track, which is one `addCard{trackId: null}`.
 The tutorial editor's OWN shortcuts (Task 21) are deliberately NOT a second
 `window` listener: `EditorShell.vue` binds one `@keydown` on its root, routes
 it through `shortcuts.ts`' `shouldHandle` (text fields, and anything inside an

@@ -141,6 +141,97 @@ describe("a refused edit", () => {
   });
 });
 
+describe("an error toast lives as long as its error (fix round 1)", () => {
+  // Error toasts have no TTL. Before this they were never dismissed, so a
+  // refusal the person had already moved past stayed over the timeline.
+  it("a successful edit after a refusal leaves no error toast", async () => {
+    let refuse = true;
+    const { store } = await openShell({
+      execute: () => {
+        if (refuse) return Promise.reject(refusal("Clips overlap."));
+        return Promise.resolve({ snapshot: openResult(2).snapshot, project: project() });
+      },
+    });
+    await store.execute({ kind: "undo" });
+    await flushPromises();
+    expect(toasts("error")).toHaveLength(1);
+
+    refuse = false;
+    await store.execute({ kind: "undo" });
+    await flushPromises();
+
+    expect(store.lastError).toBeNull();
+    expect(toasts()).toEqual([]);
+  });
+
+  it("a successful save after a failed one leaves no error toast", async () => {
+    let full = true;
+    const { store, w } = await openShell({
+      save: (sessionId, expectedRevision) =>
+        full
+          ? Promise.reject(refusal("The disk is full.", "diskFull"))
+          : Promise.resolve({ sessionId, savedRevision: expectedRevision, projectFileId: "project-a" }),
+    });
+    await store.save();
+    await flushPromises();
+    expect(toasts("error").map((t) => t.message)).toEqual(["The disk is full."]);
+
+    full = false;
+    await store.save();
+    await flushPromises();
+
+    expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Saved");
+    expect(toasts()).toEqual([]);
+  });
+
+  // A failed save's toast follows `saveError`, not `lastError`: an edit
+  // that lands clears `lastError`, but the project is still unsaved and the
+  // header still says "Save failed" — the reason stays with it.
+  it("a failed save's toast survives a later successful edit", async () => {
+    const { store, w } = await openShell({
+      save: () => Promise.reject(refusal("The disk is full.", "diskFull")),
+      execute: () => Promise.resolve({ snapshot: openResult(2).snapshot, project: project() }),
+    });
+    await store.save();
+    await store.execute({ kind: "undo" });
+    await flushPromises();
+
+    expect(store.lastError).toBeNull();
+    expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Save failed");
+    expect(toasts("error").map((t) => t.message)).toEqual(["The disk is full."]);
+  });
+
+  // The toasts belong to the session the shell shows: when the shell goes
+  // (EditorRoot unmounts it with its session), so do they.
+  it("unmounting the shell dismisses its error and Retry toasts", async () => {
+    const { store, w } = await openShell({ execute: () => Promise.reject(refusal("Clips overlap.")) });
+    await store.execute({ kind: "undo" });
+    store.conflictIntent = { kind: "undo" };
+    await flushPromises();
+    expect(toasts()).toHaveLength(2);
+
+    w.unmount();
+
+    expect(toasts()).toEqual([]);
+  });
+
+  it("a newer refusal replaces the older one; closing the session clears it", async () => {
+    let n = 0;
+    const { store } = await openShell({
+      execute: () => Promise.reject(refusal(`Refused ${++n}.`)),
+      closeSession: () => Promise.resolve(),
+    });
+    await store.execute({ kind: "undo" });
+    await store.execute({ kind: "undo" });
+    await flushPromises();
+    expect(toasts("error").map((t) => t.message)).toEqual(["Refused 2."]);
+
+    await store.close("keep");
+    await flushPromises();
+    expect(toasts()).toEqual([]);
+  });
+});
+
 describe("a revision conflict", () => {
   it("offers Retry, which resends the parked command", async () => {
     const sent: EditorCommand[] = [];
@@ -252,5 +343,64 @@ describe("a disabled shortcut", () => {
     press(w, "Delete");
 
     expect(toasts("info").map((t) => t.message)).toEqual(["Select a clip first"]);
+  });
+
+  // Fix round 1: the limit is per reason — a DIFFERENT refusal a moment
+  // later still speaks (identical messages are deduped by the store).
+  it("a different reason 1 s later is still said", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(10_000);
+    const { w } = await openShell();
+    press(w, "Delete");
+    useEditorWorkspaceStore().select(["c1"]);
+    useEditorWorkspaceStore().setPlayhead(1_500);
+    vi.setSystemTime(11_000);
+    press(w, "s");
+
+    expect(toasts("info").map((t) => t.message)).toEqual(["Select a clip first", CLIP_BOUNDARY]);
+  });
+
+  it("an S typed into a text field says nothing", async () => {
+    const { w } = await openShell();
+    useEditorWorkspaceStore().select(["c1"]);
+    useEditorWorkspaceStore().setPlayhead(1_500);
+    await w.get('[data-testid="editor-shell-title"]').trigger("click");
+    const input = w.get('[data-testid="editor-header-title-input"]');
+    input.element.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true, cancelable: true }));
+    await flushPromises();
+
+    expect(toasts()).toEqual([]);
+  });
+
+  it("a combo pressed inside an open menu says nothing", async () => {
+    const store = useEditorProjectStore();
+    store.setPort(fakeEditorPort({ openStaged: () => Promise.resolve(openResult()) }));
+    await store.openStaged("cap");
+    const w = mount(EditorShell, {
+      attachTo: document.body,
+      slots: { timeline: '<div role="menu"><button data-testid="in-menu">Split</button></div>' },
+    });
+    w.get('[data-testid="in-menu"]').element.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true }),
+    );
+    await flushPromises();
+
+    expect(toasts()).toEqual([]);
+  });
+
+  it("a disabled shortcut's keydown still bubbles past the shell", async () => {
+    const { w } = await openShell();
+    const reached: string[] = [];
+    const onWindowKeydown = (e: KeyboardEvent) => reached.push(e.key);
+    window.addEventListener("keydown", onWindowKeydown);
+    try {
+      const event = press(w, "Delete");
+      await flushPromises();
+      expect(toasts("info").map((t) => t.message)).toEqual(["Select a clip first"]);
+      expect(event.defaultPrevented).toBe(false);
+      expect(reached).toEqual(["Delete"]);
+    } finally {
+      window.removeEventListener("keydown", onWindowKeydown);
+    }
   });
 });

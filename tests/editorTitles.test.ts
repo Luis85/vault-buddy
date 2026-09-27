@@ -7,8 +7,9 @@
  *
  * Track choice is `MediaLibrary`'s "+" rule (`placeOnFreeTrack`, visual-
  * parity Task 7): the first unlocked VIDEO track free for the card's span,
- * else a new video track above the topmost one and the card on it
- * (`editorPlaceOnFreeTrack.test.ts` pins the full sequence).
+ * else a new video track above the topmost one — `addCard`'s own
+ * `trackId: null` when that is the top (`editorPlaceOnFreeTrack.test.ts`
+ * pins both sequences).
  */
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -123,13 +124,12 @@ describe("TitlesLibrary", () => {
     ]);
   });
 
-  // This fake never mints the track, so the card that would follow the
-  // `addTrack` is not sent — an insert never follows a track that did not land.
-  it("adds a video track on top when no unlocked video track exists", async () => {
+  it("inserts on a new top video track (trackId: null) when no unlocked video track exists", async () => {
     const w = await mountLibrary([track("v1", "video", true), track("a1", "audio")]);
     await w.get('[data-testid="titles-add-intro"]').trigger("click");
-    await flushPromises();
-    expect(executed).toEqual([{ kind: "addTrack", trackKind: "video", name: "Video 2", index: 0 }]);
+    expect(executed).toEqual([
+      { kind: "addCard", preset: "intro", trackId: null, startMs: 5_000, durationMs: 3_000, title: "Intro", subtitle: "" },
+    ]);
   });
 
   it("does nothing when no project is open", async () => {

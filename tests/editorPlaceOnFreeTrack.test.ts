@@ -149,15 +149,47 @@ describe("Titles cards land on a free track", () => {
     ]);
   });
 
-  it("with every video track busy, adds a video track on top and puts the card on it", async () => {
+  // Fix round 1 (Ruling T7-2): a new TOP track is `addCard`'s own
+  // `trackId: null` — one command, one undo step, never a track left behind
+  // by a refused second step.
+  it("with every video track busy, sends ONE addCard that makes its own top track", async () => {
     const sent: EditorCommand[] = [];
     await openParity(12_000, sent);
     const w = mount(TitlesLibrary);
     await w.get('[data-testid="titles-add-intro"]').trigger("click");
     await flushPromises();
     expect(sent).toEqual([
-      { kind: "addTrack", trackKind: "video", name: "Video 4", index: 0 },
-      { kind: "addCard", preset: "intro", trackId: "new", startMs: 12_000, durationMs: 3_000, title: "Intro", subtitle: "" },
+      { kind: "addCard", preset: "intro", trackId: null, startMs: 12_000, durationMs: 3_000, title: "Intro", subtitle: "" },
+    ]);
+  });
+
+  it("a new video track below an audio track at the top is added first, then the card on it", async () => {
+    const sent: EditorCommand[] = [];
+    const store = useEditorProjectStore();
+    const audioFirst = project([track("a1", "audio"), track("v1", "video")], [clip("x", "v1", 0, 60_000)]);
+    let current = audioFirst;
+    store.setPort(
+      fakeEditorPort({
+        openStaged: () => Promise.resolve({ ...PARITY_OPEN_RESULT, project: audioFirst }),
+        execute: (req) => {
+          sent.push(req.command);
+          if (req.command.kind === "addTrack") {
+            const tracks = [...current.tracks];
+            tracks.splice(req.command.index, 0, track("new", req.command.trackKind));
+            current = { ...current, tracks };
+          }
+          return Promise.resolve({ snapshot: { ...PARITY_OPEN_RESULT.snapshot, revision: 99 + sent.length }, project: current });
+        },
+      }),
+    );
+    await store.openStaged("audio-first");
+    useEditorWorkspaceStore().setPlayhead(1_000);
+    const w = mount(TitlesLibrary);
+    await w.get('[data-testid="titles-add-blank"]').trigger("click");
+    await flushPromises();
+    expect(sent).toEqual([
+      { kind: "addTrack", trackKind: "video", name: "Video 2", index: 1 },
+      { kind: "addCard", preset: "blank", trackId: "new", startMs: 1_000, durationMs: 3_000, title: "Blank", subtitle: "" },
     ]);
   });
 });
