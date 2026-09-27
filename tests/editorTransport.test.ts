@@ -324,6 +324,27 @@ describe("PreviewSurface", () => {
       expect(workspace.selected).toBeNull();
     });
 
+    // Fix round 1: a selected full-frame clip's layout box covers the whole
+    // canvas and sits ABOVE the stage, so the press reaches the box, never
+    // the stage. The PiP above it must still be clickable.
+    it("with the full-frame clip selected, a press on its box over the PiP selects the PiP", async () => {
+      const { w, workspace } = await surface();
+      const rect = () => ({ left: 20, top: 10, width: 800, height: 600, right: 820, bottom: 610, x: 20, y: 10, toJSON: () => ({}) });
+      (w.get('[data-testid="layout-handles"]').element as HTMLElement).getBoundingClientRect = rect;
+      workspace.select(["c1"]);
+      await flushPromises();
+      const box = w.get('[data-testid="layout-box"]');
+      await box.trigger("pointerdown", { button: 0, pointerId: 1, clientX: 20 + 800 * 0.85, clientY: 85 + 450 * 0.15 });
+      expect(workspace.selectionClipIds).toEqual(["c2"]);
+
+      // A press on the box away from any other picture is still a move of
+      // the selected clip: it keeps its selection.
+      workspace.select(["c1"]);
+      await flushPromises();
+      await w.get('[data-testid="layout-box"]').trigger("pointerdown", { button: 0, pointerId: 1, clientX: 420, clientY: 310 });
+      expect(workspace.selectionClipIds).toEqual(["c1"]);
+    });
+
     it("a hidden track's clip is not under the pointer", async () => {
       const hidden: Project = { ...LAYERED, tracks: [{ ...LAYERED.tracks[0], visible: false }, LAYERED.tracks[1]] };
       const { w } = await mountSurface(() => Promise.resolve("C:\\x\\cap.mp4"), hidden);

@@ -301,6 +301,13 @@ function createMutators(f: WorkspaceFields, persist: () => void, getDurationMs: 
       f.selected.value = next;
       persist();
     },
+    /** A picture click (visual-parity Task 11, D15): these clips and no
+     * selected cue, in one persist. */
+    selectClipsOnly(ids: string[]): void {
+      f.selectionClipIds.value = [...new Set(ids)];
+      f.selected.value = null;
+      persist();
+    },
     setPlayhead(ms: number): void {
       f.playheadMs.value = clamp(ms, [0, getDurationMs()]);
       persist();

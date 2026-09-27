@@ -79,7 +79,7 @@ const selectionCount = computed(() => workspace.selectionClipIds.length);
 const hasSelection = computed(() => selectionCount.value > 0);
 const isMultiSelection = computed(() => selectionCount.value > 1);
 
-// ---- roving tabindex over the tablist (the PreviewToolbar/ContextMenu
+// ---- roving tabindex over the tablist (the preview Toolstrip/ContextMenu
 // precedent: arrow keys move focus, Home/End jump to the ends) -- via the
 // shared `useRovingTablist` composable (Task 33 fix round 1: this file's
 // own copy of the handler and `LibraryPanel.vue`'s were extracted into it

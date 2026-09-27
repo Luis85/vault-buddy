@@ -10,9 +10,10 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import PreviewHeader from "../src/components/editor/shell/PreviewHeader.vue";
+import type { EditorCommand } from "../src/editor/editorCommandTypes";
 import { previewDensity } from "../src/editor/previewHeader";
 import { requestReveal, revealSerial } from "../src/editor/revealBus";
-import type { Asset, Clip, Project, Track } from "../src/editorTypes";
+import type { Asset, Clip, Effect, Project, Track } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
 import { useNotificationsStore } from "../src/stores/notifications";
@@ -67,6 +68,16 @@ function project(clips: Clip[] = [clip("c1")], tracks: Track[] = [track("v1")]):
 }
 
 let executed: unknown[];
+/** While true the fake Rust refuses every edit. */
+let refuseEdits = false;
+
+/** What the fake Rust answers: a canvas change, or a new cue named `fx-new`. */
+function applied(p: Project, command: EditorCommand): Project {
+  if (command.kind === "setCanvas") return { ...p, canvas: { ...p.canvas, width: command.width, height: command.height } };
+  if (command.kind !== "addEffect") return p;
+  const cue: Effect = { id: "fx-new", clip_id: command.clipId, kind: command.effectKind, start_ms: command.startMs, end_ms: command.endMs, x: 0.5, y: 0.5, color: "#ffd279" };
+  return { ...p, effects: [...p.effects, cue] };
+}
 let openCount = 0;
 
 async function open(p: Project = project()): Promise<void> {
@@ -91,9 +102,8 @@ async function open(p: Project = project()): Promise<void> {
         Promise.resolve({ snapshot, project: p, workspace: {}, missing: [], sourceBase: base, recovered: false }),
       execute: (req) => {
         executed.push(req.command);
-        const canvas =
-          req.command.kind === "setCanvas" ? { ...p.canvas, width: req.command.width, height: req.command.height } : p.canvas;
-        return Promise.resolve({ snapshot: { ...snapshot, revision: 2 }, project: { ...p, canvas } });
+        if (refuseEdits) return Promise.reject(new Error("refused"));
+        return Promise.resolve({ snapshot: { ...snapshot, revision: 2 }, project: applied(p, req.command) });
       },
       saveWorkspace: () => Promise.resolve(),
     }),
@@ -141,6 +151,7 @@ async function mountAtWidth(width: number) {
 beforeEach(() => {
   setActivePinia(createPinia());
   executed = [];
+  refuseEdits = false;
   setViewport(1600);
   delete document.documentElement.dataset.theme;
 });
@@ -244,6 +255,8 @@ describe("PreviewHeader — the toolstrip (§4.1)", () => {
     await w.get('[data-testid="preview-tool-arrow"]').trigger("click");
     await flushPromises();
     expect(executed).toEqual([expect.objectContaining({ kind: "addEffect", clipId: "c1", effectKind: "arrow" })]);
+    expect(ws.selectionClipIds).toEqual(["c1"]);
+    expect(ws.selected).toEqual({ type: "effect", id: "fx-new" });
   });
 
   it("a disabled tool says why, on hover and on press", async () => {
@@ -310,6 +323,23 @@ describe("PreviewHeader — density (§11, measured on the header's own width)",
     expect(w.find('[data-testid="preview-heading"]').exists()).toBe(false);
     expect(w.get('[data-testid="preview-more-tools"]').text()).toBe("More");
     expect(w.get('[data-testid="preview-review"]').text()).toBe("Review");
+  });
+
+  it("narrowing from wide to compact with More focused keeps one tab stop, on More", async () => {
+    // Regression (carried from the old toolbar's "clamp" test): More is
+    // index 4 in the wide strip and index 2 in the compact one. An
+    // unclamped index would match no button and drop the strip from the
+    // Tab order entirely.
+    await open();
+    const w = await mountAtWidth(1080);
+    const strip = w.get('[data-testid="preview-toolstrip"]');
+    await strip.trigger("keydown", { key: "End" });
+    expect(document.activeElement?.getAttribute("data-testid")).toBe("preview-more-tools");
+    const el = w.get('[data-testid="preview-header"]').element as HTMLElement;
+    Object.defineProperty(el, "clientWidth", { configurable: true, value: 480 });
+    observed.cb?.();
+    await flushPromises();
+    expect(strip.findAll('button[tabindex="0"]').map((b) => b.attributes("data-testid"))).toEqual(["preview-more-tools"]);
   });
 
   it("under 520: Highlight and Zoom move into More, and Review is icon-only", async () => {
@@ -473,6 +503,20 @@ describe("the ratio button and Frame your tutorial (§9.11)", () => {
     await flushPromises();
     expect(w.find('[data-testid="frame-dialog"]').exists()).toBe(false);
     expect(executed).toEqual([]);
+  });
+
+  it("a refused change keeps the dialog open and raises no Checks toast", async () => {
+    await open();
+    refuseEdits = true;
+    const w = mount(PreviewHeader, { attachTo: document.body });
+    await w.get('[data-testid="preview-ratio"]').trigger("click");
+    await flushPromises();
+    await w.get('[data-testid="frame-choice-720x720"]').trigger("click");
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "setCanvas", width: 720, height: 720 }]);
+    expect(w.find('[data-testid="frame-dialog"]').exists()).toBe(true);
+    expect(useNotificationsStore().items.some((n) => n.message.startsWith("Canvas changed"))).toBe(false);
+    expect(w.get('[data-testid="preview-ratio"]').text()).toBe("16:9");
   });
 
   it("a canvas finding's reveal puts focus on the ratio button", async () => {

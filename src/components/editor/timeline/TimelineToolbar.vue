@@ -3,7 +3,8 @@
  * The timeline's own control row (Task 20; F-14; brief's own Behavior
  * section: "split/delete/undo/redo/snap/zoom/fit buttons from the action
  * registry"). Split/delete/undo/redo read `resolveActions`/`commandFor` from
- * the SAME `actions.ts` registry `PreviewToolbar.vue`/`ContextMenu.vue`
+ * the SAME `actions.ts` registry the preview header's `Toolstrip.vue` and
+ * `ContextMenu.vue`
  * already read (`baseActionContext`, Task 20's own shared builder) — so a
  * disabled reason here can never disagree with the other two surfaces.
  *

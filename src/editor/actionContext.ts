@@ -2,9 +2,11 @@
  * The action registry's base `ActionContext` (Task 17's `project`/`snapshot`/
  * `playheadMs`/`selectedClipIds`/clipboard fields), shared by every caller
  * that resolves actions from a surface with no pointer target of its own —
- * `PreviewToolbar.vue` and `TimelineToolbar.vue` (Task 20).
+ * the preview header (`PreviewHeader.vue`, which replaced Task 17's
+ * `PreviewToolbar` in visual-parity Task 11) and `TimelineToolbar.vue`
+ * (Task 20).
  *
- * Task 17 shipped `PreviewToolbar` with this hardcoded (`playheadMs: 0,
+ * Task 17 shipped its `PreviewToolbar` with this hardcoded (`playheadMs: 0,
  * selectedClipIds: []`) because `editorWorkspace` — the store that actually
  * OWNS playhead/selection — didn't land until Task 18, one task later; its
  * own module doc says so explicitly ("Until then this toolbar's context is

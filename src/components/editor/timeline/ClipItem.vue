@@ -8,7 +8,7 @@
  * zoom or scroll itself.
  *
  * Selection is a direct store write (`editorWorkspace.select`, the
- * `PreviewToolbar`/`InspectorPanel` precedent of components calling a store
+ * `PreviewHeader`/`InspectorPanel` precedent of components calling a store
  * directly rather than emitting purely upward) — the only thing this
  * component bubbles UP is "open a context menu here", because the ONE
  * `ContextMenu` instance lives at `TimelineView.vue`, several components

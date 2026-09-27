@@ -22,6 +22,11 @@
  * undoes the letterbox, against this overlay's own rect — the same rect as
  * the stage, since both fill the same wrapper. The keyboard alternative to
  * dragging is the Layout inspector's numeric fields.
+ *
+ * A press on the box's body where another clip's picture is on top
+ * (`stageHit.clipAtPoint`) selects that clip rather than moving this one —
+ * otherwise a selected full-frame clip would swallow every picture click
+ * (design D15; the concept never grabs a full-width clip from the picture).
  */
 import { computed, ref } from "vue";
 
@@ -33,6 +38,7 @@ import type { Handle, NormBox } from "../../../editor/layoutGeometry";
 import { HANDLES, moveBox, resizeFromHandle, roundBox } from "../../../editor/layoutGeometry";
 import type { Box, Size } from "../../../editor/previewGeometry";
 import { boxStyle as styleOfBox, clipBox } from "../../../editor/previewGeometry";
+import { clipAtPoint } from "../../../editor/stageHit";
 import { clipIsActive } from "../../../editor/timeMap";
 import type { Clip, Project } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
@@ -133,12 +139,26 @@ function stop(): void {
   emit("preview", null);
 }
 
+/** D15 (visual-parity Task 11 fix round 1): a press on the box's body
+ * over another clip's picture — a picture-in-picture above a selected
+ * full-frame clip — selects that clip instead of moving this one. The
+ * handles themselves always resize. */
+function selectsAnother(mode: "move" | Handle, p: { x: number; y: number }, clip: Clip): boolean {
+  const project = editorProject.project;
+  if (mode !== "move" || !project) return false;
+  const hit = clipAtPoint(project, workspace.playheadMs, p);
+  if (hit === null || hit === clip.id) return false;
+  workspace.selectClipsOnly([hit]);
+  return true;
+}
+
 function begin(event: PointerEvent, mode: "move" | Handle): void {
   const clip = target.value;
   if (event.button !== 0 || !clip) return;
+  const p = pointAt(event);
+  if (selectsAnother(mode, p, clip)) return;
   (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
   boxRef.value?.focus();
-  const p = pointAt(event);
   drag = { mode, clipId: clip.id, startX: p.x, startY: p.y, start: { x: clip.x, y: clip.y, w: clip.w, h: clip.h } };
 }
 

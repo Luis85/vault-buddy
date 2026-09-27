@@ -4,7 +4,8 @@
  * … A later task that wires the clipboard replaces these two literals, not
  * the callers." This is that later task, and the promise is kept literally —
  * `baseActionContext` now reads `clipboardFragment` below instead of the
- * hardcoded `false`/`null`, and every existing caller (`PreviewToolbar.vue`,
+ * hardcoded `false`/`null`, and every existing caller (the preview toolbar,
+ * since visual-parity Task 11 `PreviewHeader.vue`,
  * `TimelineToolbar.vue`, `TimelineView.vue`'s context menu) needed no change
  * at all.
  *

@@ -256,8 +256,7 @@ function onPointerDown(event: PointerEvent): void {
   if (event.button !== 0 || !el || !project) return;
   const point = pointerToCanvas(event, el.getBoundingClientRect(), canvas.value, zoom.value);
   const hit = clipAtPoint(project, currentMs.value, point);
-  workspace.select(hit ? [hit] : []);
-  workspace.setSelected(null);
+  workspace.selectClipsOnly(hit ? [hit] : []);
 }
 </script>
 

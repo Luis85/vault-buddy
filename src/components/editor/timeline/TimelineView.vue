@@ -14,8 +14,8 @@
  * shell sizes from `editorWorkspace.timelineHeightPx`, and the resize
  * handle is the shell's own splitter row above it (`TimelineSplitter`).
  *
- * `viewportWidth` is a TEST-ONLY prop override (the `PreviewToolbar.
- * overflowCount` precedent) — `undefined` in production, where a
+ * `viewportWidth` is a TEST-ONLY prop override (the retired preview
+ * toolbar's `overflowCount` precedent) — `undefined` in production, where a
  * `ResizeObserver` measures the real scroll container; happy-dom implements
  * neither a layout engine nor (reliably) `ResizeObserver`, so a test drives
  * the width directly. The un-overridden default (1000px) is deliberately a

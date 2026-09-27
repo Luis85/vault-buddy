@@ -3,7 +3,8 @@
  * The Inspector's Clip category (Task 21; F-48; SCREENS-AND-INTERACTIONS.md
  * §04: "Inspector categories are Clip, Layout, Fades, Audio, Speed and
  * Color"). Fills `InspectorPanel.vue`'s `#clip` slot (`EditorRoot.vue` wires
- * it, the same seam `PreviewToolbar`/`InspectorPanel`/`TimelineView` were
+ * it, the same seam the preview toolbar (now `PreviewHeader`), `InspectorPanel`
+ * and `TimelineView` were
  * dropped into in earlier tasks) with the numeric-entry ALTERNATIVE to
  * dragging (SCREENS-AND-INTERACTIONS.md §04): Name, Start, In, Out, and a
  * derived (read-only) Duration, plus Earlier/Later — the exact same
@@ -174,7 +175,7 @@ watch(
 
 // ---- Earlier / Later --------------------------------------------------
 // The SAME `actions.ts` registry the timeline toolbar and context menu
-// read (`baseActionContext`, the `PreviewToolbar`/`TimelineToolbar`
+// read (`baseActionContext`, the `PreviewHeader`/`TimelineToolbar`
 // precedent) — this section's `clipIds` prop already equals
 // `workspace.selectionClipIds` whenever it renders (`InspectorPanel`'s
 // own template), so `primaryTargetClip`'s "falls back to a single

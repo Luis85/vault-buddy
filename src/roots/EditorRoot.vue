@@ -347,8 +347,8 @@ onBeforeUnmount(() => {
     >
       <!-- Task 19: the inspector shell (six category tabs + the shared
            draft composable later sections build on) fills the shell's
-           `inspector` slot from here, the same seam `PreviewToolbar`
-           filled in Task 17. Task 21 fills its FIRST real category slot,
+           `inspector` slot from here, the same seam the preview toolbar
+           (now `PreviewHeader`) filled in Task 17. Task 21 fills its FIRST real category slot,
            `#clip`, with `ClipSection` — keyed on the SELECTION only (a
            different clip is a different set of drafts); an undo/drag/nudge
            on the same clip reaches its drafts live, without a remount
@@ -406,8 +406,8 @@ onBeforeUnmount(() => {
         </InspectorPanel>
       </template>
       <!-- Task 20: the virtualized multi-track timeline fills the shell's
-           `timeline` slot, the same seam `PreviewToolbar`/`InspectorPanel`
-           filled in Tasks 17/19. -->
+           `timeline` slot, the same seam the preview toolbar (now
+           `PreviewHeader`) and `InspectorPanel` filled in Tasks 17/19. -->
       <template #timeline>
         <TimelineView />
       </template>

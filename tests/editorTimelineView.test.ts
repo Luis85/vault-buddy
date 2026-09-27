@@ -382,7 +382,7 @@ describe("TimelineView — context menu (right-click and Shift+F10)", () => {
 });
 
 describe("TimelineToolbar", () => {
-  it("split/delete/undo/redo read enabled/reason from the SAME action registry as PreviewToolbar", async () => {
+  it("split/delete/undo/redo read enabled/reason from the SAME action registry as the preview header", async () => {
     executed = [];
     await openProject();
     const w = mount(TimelineView);
