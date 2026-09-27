@@ -94,7 +94,7 @@ async function confirm(): Promise<void> {
 
     <div
       data-testid="discard-project-dialog"
-      class="flex w-96 max-w-full flex-col gap-3"
+      class="flex flex-col gap-3"
     >
       <p class="text-sm text-fg-secondary">
         Its edits, rendered videos and review files are deleted from this computer.

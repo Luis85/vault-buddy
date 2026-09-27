@@ -54,7 +54,7 @@ defineExpose({ check: recovery.check });
     <div
       v-if="offer"
       data-testid="recovery-dialog"
-      class="flex w-96 max-w-full flex-col gap-3"
+      class="flex flex-col gap-3"
     >
       <p class="text-sm text-fg-secondary">
         “{{ offer.title }}” (last saved {{ savedAt }}) has changes that were never

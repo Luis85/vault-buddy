@@ -45,7 +45,7 @@ defineExpose({ request: guard.request });
 
     <div
       data-testid="close-guard"
-      class="flex w-96 max-w-full flex-col gap-3"
+      class="flex flex-col gap-3"
     >
       <p
         v-if="mode === 'render'"
