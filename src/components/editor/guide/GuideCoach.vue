@@ -7,11 +7,13 @@
  * inside it) and never advances the lesson; only Back/Next do.
  *
  * - **Where.** The lesson's typed key is resolved through the registry and
- *   tracked (`useCoachTarget`); the card goes beside it without covering it,
- *   or docks below 1100 px (`position.ts`). Before a lesson shows, its safe
+ *   tracked (`useCoachTarget`); the card goes right, left, below or above
+ *   it — the first that fits, preferring one that leaves an open menu
+ *   uncovered — or shrinks into the larger free band and scrolls its copy
+ *   (`position.ts`, concept §9.2). Before a lesson shows, its safe
  *   preparation reveals the tab, drawer or selection its control needs
  *   (`prepare.ts`) — view state only.
- * - **Nothing reaches a render.** Ring and card are fixed-position siblings
+ * - **Nothing reaches a render.** Ring, label and card are fixed-position siblings
  *   mounted by `EditorShell` OUTSIDE the preview section, drawn over the
  *   page, pointer-transparent (the ring) — never inside `PreviewSurface`,
  *   whose stage is what a render mirrors.
@@ -24,20 +26,27 @@
  *   `editorOnboarding.suspended`) neither ring nor card renders; closing it
  *   shows the same lesson, and focus is the dialog's to restore.
  * - **Dimming** is optional (`preferences.dimming`) and off whenever motion
- *   is reduced; it is a shadow around the ring, so it never blocks a click.
+ *   is reduced; it is a shadow around the ring, so it never blocks a click
+ *   (`GuideHighlight`).
+ * - **The chapter title** in the card's top bar pauses the walkthrough and
+ *   opens the learning center's chapters (the concept's "contents"), which
+ *   `GuideHelpButton` owns — so focus goes to Help first, and returns there
+ *   when the center closes.
  */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 
 import { useCoachTarget } from "../../../composables/useCoachTarget";
 import { GUIDE_CHAPTERS, GUIDE_STEPS, lessonCopy, STEP_TARGETS } from "../../../editor/guide/content";
-import type { Size } from "../../../editor/guide/position";
 import { placeCoach } from "../../../editor/guide/position";
 import { prepareLesson } from "../../../editor/guide/prepare";
 import { resolve } from "../../../editor/guide/targets";
+import { requestReveal } from "../../../editor/revealBus";
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import GuideCoachCard from "./GuideCoachCard.vue";
+import GuideHighlight from "./GuideHighlight.vue";
+import GuideMini from "./GuideMini.vue";
 
 const guide = useEditorOnboardingStore();
 const workspace = useEditorWorkspaceStore();
@@ -66,14 +75,13 @@ const ringVisible = computed(() => showing.value && target.rect.value !== null);
 
 // ---- placement ------------------------------------------------------------
 
-const CARD_WIDTH = 340;
 /** Before the card has rendered once (and in a layout-less test DOM). */
 const FALLBACK_HEIGHT = 300;
 const card = ref<HTMLElement | null>(null);
 const cardHeight = ref(FALLBACK_HEIGHT);
 
 /** The card's natural height: its parts' full content, even while its
- * body is scrolled inside a capped card. */
+ * copy is scrolled inside a capped card. */
 function measureCard(): void {
   const el = card.value;
   if (!el) return;
@@ -81,10 +89,9 @@ function measureCard(): void {
   if (natural > 0) cardHeight.value = natural + 2;
 }
 
-const placement = computed(() => {
-  const size: Size = { width: CARD_WIDTH, height: cardHeight.value };
-  return placeCoach(target.rect.value, size, target.viewport.value);
-});
+const placement = computed(() =>
+  placeCoach(target.rect.value, cardHeight.value, target.viewport.value, target.menu.value),
+);
 const px = (n: number) => `${Math.round(n)}px`;
 const cardStyle = computed(() => ({
   left: px(placement.value.x),
@@ -92,21 +99,13 @@ const cardStyle = computed(() => ({
   width: px(placement.value.width),
   maxHeight: px(placement.value.maxHeight),
 }));
-const ringStyle = computed(() => {
-  const r = target.rect.value;
-  return r ? { left: px(r.x - 4), top: px(r.y - 4), width: px(r.width + 8), height: px(r.height + 8) } : {};
-});
 
 function reducedMotion(): boolean {
   const motion = guide.progress.preferences.motion;
   if (motion !== "system") return motion === "reduced";
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
-/** The ring's label sits above the control, or inside the ring's lower
- * edge when the control is at the top of the window. */
-const labelClass = computed(() => ((target.rect.value?.y ?? 0) < 28 ? "-bottom-6" : "-top-6"));
 const dimmed = computed(() => guide.progress.preferences.dimming && !reducedMotion());
-const ringClass = computed(() => ({ "guide-ring-dim": dimmed.value, "guide-ring-animated": !reducedMotion() }));
 
 // ---- a lesson arriving -----------------------------------------------------
 
@@ -186,6 +185,14 @@ function onCollapse(): void {
   void nextTick(() => document.querySelector<HTMLElement>('[data-testid="guide-resume"]')?.focus());
 }
 
+/** The chapter title: pause, then the learning center's chapters, with
+ * focus on Help so it comes back there when the center closes. */
+function onContents(): void {
+  guide.pause();
+  focusHelp();
+  requestReveal("learningCenter");
+}
+
 function onRestart(): void {
   guide.restart();
   void nextTick(focusCard);
@@ -231,20 +238,15 @@ defineExpose({ toggleFocus, dismiss });
 </script>
 
 <template>
-  <div
-    v-if="ringVisible"
-    data-guide-layer="ring"
-    data-testid="guide-ring"
-    aria-hidden="true"
-    class="guide-ring pointer-events-none fixed z-[39] rounded-control"
-    :class="ringClass"
-    :style="ringStyle"
-  >
-    <span
-      class="absolute left-0 whitespace-nowrap rounded-control border border-guide-edge bg-accent-bg px-1.5 py-0.5 text-micro text-accent-ink"
-      :class="labelClass"
-    >{{ copy?.label }}</span>
-  </div>
+  <GuideHighlight
+    v-if="ringVisible && target.rect.value && copy"
+    :rect="target.rect.value"
+    :label="copy.label"
+    :viewport="target.viewport.value"
+    :menu-open="target.menu.value !== null"
+    :dimmed="dimmed"
+    :animated="!reducedMotion()"
+  />
 
   <section
     v-if="showing && step && copy"
@@ -256,7 +258,7 @@ defineExpose({ toggleFocus, dismiss });
     :data-step-id="step.id"
     :data-target-state="targetState"
     :data-placement="placement.mode"
-    class="fixed z-40 flex flex-col overflow-hidden rounded-control border border-focus bg-panel text-fg shadow-xl"
+    class="fixed z-40 flex flex-col overflow-hidden rounded-[13px] border border-guide-edge bg-panel text-fg shadow-[var(--editor-guide-shadow)]"
     :style="cardStyle"
     @keydown="onCardKeydown"
   >
@@ -265,6 +267,7 @@ defineExpose({ toggleFocus, dismiss });
       :step-id="step.id"
       :title="step.title"
       :warning="warning"
+      :explored="guide.progress.explored.includes(step.id)"
       :copy="copy"
       :chapter-title="chapterTitle"
       :position="position"
@@ -274,6 +277,7 @@ defineExpose({ toggleFocus, dismiss });
       :off-screen="offScreen"
       :can-focus-target="canFocusTarget"
       :session-only="guide.sessionOnly"
+      @contents="onContents"
       @collapse="onCollapse"
       @pause="onPause"
       @back="guide.back()"
@@ -283,32 +287,11 @@ defineExpose({ toggleFocus, dismiss });
     />
   </section>
 
-  <button
-    v-if="collapsedShowing"
-    type="button"
-    data-guide-layer="resume"
-    data-testid="guide-resume"
-    class="fixed right-4 bottom-4 z-40 cursor-pointer rounded-control border border-focus bg-panel px-3 py-1.5 text-xs text-fg shadow-lg hover:bg-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-    @click="guide.start()"
-  >
-    Resume guide · {{ position }}
-  </button>
+  <GuideMini
+    v-if="collapsedShowing && step"
+    :position="`${guide.stepIndex + 1}/${GUIDE_STEPS.length}`"
+    :title="step.title"
+    @expand="guide.start()"
+    @dismiss="onPause"
+  />
 </template>
-
-<style scoped>
-.guide-ring {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 0;
-}
-.guide-ring-dim {
-  box-shadow: 0 0 0 9999px rgb(0 0 0 / 0.4);
-}
-.guide-ring-animated {
-  transition: left 150ms ease, top 150ms ease, width 150ms ease, height 150ms ease;
-}
-@media (forced-colors: active) {
-  .guide-ring {
-    outline-color: Highlight;
-  }
-}
-</style>

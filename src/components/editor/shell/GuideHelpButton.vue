@@ -15,9 +15,10 @@
  * shortcut table) and, since Task 58, **Export diagnostics** (Rust's own
  * save dialog writes counts, capabilities and error codes — never project
  * content — to a new file; a toast says where it landed). There is
- * deliberately no item for anything not built yet. The menu closes on a
- * choice, on Escape (focus back on Help) and on a pointer press outside it
- * — the behaviour Task 39's Save menu had.
+ * deliberately no item for anything not built yet. Since visual-parity
+ * Task 23 (ruling T8-1) the menu is the one `MenuPanel` (`helpMenu.ts`
+ * holds the items), so it opens, moves, closes and gives focus back
+ * exactly like the Project and View menus.
  *
  * Visual-parity Task 8 (concept spec §2 `.guide-help-button`): the book
  * icon in the accent colour, and a 5px gold dot after the label while a
@@ -28,113 +29,94 @@
  * shortcut table ("Keyboard shortcuts & help…") through the reveal bus —
  * the learning center stays this component's.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 
 import { useDiagnosticsExport } from "../../../composables/useDiagnosticsExport";
 import { useGuideTarget } from "../../../composables/useGuideTarget";
+import { HELP_MENU_HEADING, HELP_MENU_SUBTITLE, helpMenuItems } from "../../../editor/helpMenu";
 import { onReveal } from "../../../editor/revealBus";
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
 import type { LearningTab } from "../guide/LearningCenter.vue";
 import LearningCenter from "../guide/LearningCenter.vue";
+import MenuPanel from "../menus/MenuPanel.vue";
 import HeaderButton from "./HeaderButton.vue";
-
-type HelpItem = "center" | "resume" | "shortcuts" | "diagnostics";
-
-const ITEMS: readonly { id: HelpItem; label: string; testid: string }[] = [
-  { id: "center", label: "Learning center", testid: "editor-help-learning-center" },
-  { id: "resume", label: "Resume walkthrough", testid: "editor-help-resume" },
-  { id: "shortcuts", label: "Keyboard shortcuts", testid: "editor-help-shortcuts" },
-  { id: "diagnostics", label: "Export diagnostics", testid: "editor-help-diagnostics" },
-];
 
 const onboarding = useEditorOnboardingStore();
 /** A walkthrough stopped part way: a lesson to resume, the coach not up. */
 const paused = computed(() => onboarding.progress.currentStepId !== null && !onboarding.progress.active);
 const helpTarget = useGuideTarget("header.help");
 
+const trigger = ref<HTMLButtonElement | null>(null);
+function setTrigger(el: unknown): void {
+  helpTarget(el as HTMLButtonElement | null);
+  const root: unknown = (el as { $el?: unknown } | null)?.$el ?? el;
+  trigger.value = root instanceof HTMLButtonElement ? root : null;
+}
 const open = ref(false);
-const root = ref<HTMLElement | null>(null);
 const centerOpen = ref(false);
 const centerTab = ref<LearningTab>("walkthrough");
 
 const { exportDiagnostics } = useDiagnosticsExport();
 
-function choose(item: HelpItem): void {
-  open.value = false;
-  if (item === "resume") {
-    onboarding.start();
-    return;
-  }
-  if (item === "diagnostics") {
-    void exportDiagnostics();
-    return;
-  }
-  centerTab.value = item === "shortcuts" ? "shortcuts" : "walkthrough";
+/** The learning center, on `tab`. Focus goes to Help first: the center's
+ * `DialogHost` gives focus back to whatever had it when it opened, and the
+ * menu item (or the coach's chapter title) that asked is gone by then. */
+function openCenter(tab: LearningTab): void {
+  trigger.value?.focus();
+  centerTab.value = tab;
   centerOpen.value = true;
 }
 
-/** The View menu's "Keyboard shortcuts & help…" (visual-parity Task 11):
- * the learning center, on its Shortcuts tab — this button owns it. */
-onReveal("shortcuts", () => choose("shortcuts"));
+const items = computed(() =>
+  helpMenuItems({
+    openLearningCenter: () => openCenter("walkthrough"),
+    resumeWalkthrough: () => onboarding.start(),
+    openShortcuts: () => openCenter("shortcuts"),
+    exportDiagnostics: () => void exportDiagnostics(),
+  }),
+);
 
-function onEscape(event: KeyboardEvent): void {
-  if (!open.value) return;
-  event.stopPropagation();
-  open.value = false;
-  root.value?.querySelector<HTMLElement>('[data-testid="editor-header-help"]')?.focus();
+/** The View menu's "Keyboard shortcuts & help…" (visual-parity Task 11)
+ * and the coach's chapter title (Task 23): this button owns the center. */
+onReveal("shortcuts", () => openCenter("shortcuts"));
+onReveal("learningCenter", () => openCenter("walkthrough"));
+
+/** The open menu closes itself on a press outside it; the trigger is
+ * outside it, so without this a press there would close and reopen it. */
+function onTriggerPointerDown(event: PointerEvent): void {
+  if (open.value) event.stopPropagation();
 }
-
-function onPointerDown(event: PointerEvent): void {
-  if (open.value && !root.value?.contains(event.target as Node)) open.value = false;
-}
-
-onMounted(() => document.addEventListener("pointerdown", onPointerDown));
-onBeforeUnmount(() => document.removeEventListener("pointerdown", onPointerDown));
 </script>
 
 <template>
-  <div
-    ref="root"
-    class="relative"
-    @keydown.esc="onEscape"
+  <HeaderButton
+    :ref="setTrigger"
+    icon="book"
+    icon-class="text-accent"
+    data-testid="editor-header-help"
+    aria-haspopup="menu"
+    :aria-expanded="open"
+    title="Help, the learning center and the guided walkthrough (F1 resumes it)"
+    @pointerdown="onTriggerPointerDown"
+    @click="open = !open"
   >
-    <HeaderButton
-      :ref="helpTarget"
-      icon="book"
-      icon-class="text-accent"
-      data-testid="editor-header-help"
-      aria-haspopup="menu"
-      :aria-expanded="open"
-      title="Help, the learning center and the guided walkthrough (F1 resumes it)"
-      @click="open = !open"
-    >
-      Help
-      <span
-        v-if="paused"
-        data-testid="editor-header-help-resume-dot"
-        aria-hidden="true"
-        class="h-[5px] w-[5px] rounded-full bg-gold"
-      />
-    </HeaderButton>
-    <div
-      v-if="open"
-      role="menu"
-      aria-label="Help"
-      class="absolute right-0 top-full z-20 mt-1 flex min-w-48 flex-col gap-0.5 rounded-control border border-line bg-panel p-1 shadow-lg"
-    >
-      <button
-        v-for="item in ITEMS"
-        :key="item.id"
-        type="button"
-        role="menuitem"
-        :data-testid="item.testid"
-        class="cursor-pointer rounded px-2 py-1 text-left text-xs text-fg-secondary hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-        @click="choose(item.id)"
-      >
-        {{ item.label }}
-      </button>
-    </div>
-  </div>
+    Help
+    <span
+      v-if="paused"
+      data-testid="editor-header-help-resume-dot"
+      aria-hidden="true"
+      class="h-[5px] w-[5px] rounded-full bg-gold"
+    />
+  </HeaderButton>
+  <MenuPanel
+    v-if="open && trigger"
+    testid="editor-help-menu"
+    :heading="HELP_MENU_HEADING"
+    :subtitle="HELP_MENU_SUBTITLE"
+    :items="items"
+    :anchor="trigger"
+    @close="open = false"
+  />
   <span
     v-if="onboarding.sessionOnly"
     data-testid="editor-header-guide-session-only"

@@ -140,12 +140,14 @@ vault-buddy/
 │   │       └── library/        # MediaLibrary — asset cards, Import (Rust's own dialog),
 │   │                           #   per-file results, "+" at the playhead (Task 25)
 │   │       └── guide/          # GuideInvitation + GuideCoach (+ GuideCoachCard,
+│   │                           #   GuideHighlight (ring + label), GuideMini,
 │   │                           #   GuideStartOver) — the guided walkthrough (Task 56),
 │   │                           #   mounted by EditorShell OUTSIDE the preview section;
 │   │                           #   its pure placement/preparation live in
 │   │                           #   src/editor/guide/{position,prepare}.ts; LearningCenter
-│   │                           #   (+ LearningWalkthrough/Answers/Shortcuts/Preferences) —
-│   │                           #   the learning center behind Help (Task 57), its quick
+│   │                           #   (+ LearningHero/Walkthrough/Answers/Shortcuts/Preferences) —
+│   │                           #   the learning center behind Help's MenuPanel items
+│   │                           #   (src/editor/helpMenu.ts) (Task 57), its quick
 │   │                           #   answers + shortcut table in src/editor/guide/answers.ts
 │   ├── stores/                 # Pinia: vaults, capture, screenCapture, documentImports,
 │   │                           #   pandoc, ffmpeg, updates, settings, settingsStatus, notifications,

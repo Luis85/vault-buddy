@@ -4,6 +4,9 @@
  * builds from `shortcuts.ts` — one row per action, every key bound to it —
  * then the two keys `shortcuts.ts` answers with a predicate instead of a
  * table entry. A single source: change a binding there, and this changes.
+ * Visual-parity Task 23 (concept §9.3): ruled rows, the action on the left
+ * and its keys on the right. The concept's "All editor shortcuts" button
+ * is omitted (D14): this table already is every shortcut.
  */
 import { OTHER_KEYS, SHORTCUT_TABLE } from "../../../editor/guide/answers";
 
@@ -14,31 +17,31 @@ const ROWS = [
 </script>
 
 <template>
-  <section class="flex max-h-[50vh] flex-col gap-2 overflow-y-auto pr-1 text-xs">
-    <p class="text-fg-muted">
-      Shortcuts work while focus is in the editor and not in a text field.
-    </p>
-    <table class="w-full border-collapse">
-      <tbody>
-        <tr
-          v-for="row in ROWS"
-          :key="row.id"
-          :data-testid="row.action ? 'learning-shortcut' : 'learning-shortcut-other'"
-          :data-action="row.action"
-          class="border-b border-line"
-        >
-          <td class="py-1 text-fg-secondary">
-            {{ row.label }}
-          </td>
-          <td class="py-1 text-right">
-            <kbd
-              v-for="key in row.keys"
-              :key="key"
-              class="ml-1 rounded border border-line bg-raised px-1 font-mono text-fg"
-            >{{ key }}</kbd>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+  <section>
+    <div class="mb-[17px]">
+      <h3 class="mb-[5px] text-[15px] font-semibold tracking-[-0.2px] text-fg">
+        Keep your hands on the keyboard.
+      </h3>
+      <p class="text-xs text-fg-muted">
+        The same controls are available without dragging or right-clicking. Shortcuts work while focus is in the
+        editor, not in a text field.
+      </p>
+    </div>
+    <div
+      v-for="row in ROWS"
+      :key="row.id"
+      :data-testid="row.action ? 'learning-shortcut' : 'learning-shortcut-other'"
+      :data-action="row.action"
+      class="flex items-center justify-between gap-5 border-b border-line py-[11px] text-xs"
+    >
+      <span class="text-fg-secondary">{{ row.label }}</span>
+      <span class="flex shrink-0 gap-1">
+        <kbd
+          v-for="key in row.keys"
+          :key="key"
+          class="vb-mono rounded-[4px] border border-line bg-raised px-[7px] py-1 text-[11px] whitespace-nowrap text-fg"
+        >{{ key }}</kbd>
+      </span>
+    </div>
   </section>
 </template>

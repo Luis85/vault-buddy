@@ -278,7 +278,7 @@ describe("menus and dialogs return focus", () => {
     (help.element as HTMLElement).focus();
     await help.trigger("click");
     await flushPromises();
-    await w.get('[data-testid="editor-help-learning-center"]').trigger("click");
+    await w.get('[data-testid="editor-help-menu-item-learningCenter"]').trigger("click");
     await flushPromises();
     expect(document.querySelector('[data-testid="learning-center"]')).not.toBeNull();
     await pressEscapeOn(document.activeElement!);

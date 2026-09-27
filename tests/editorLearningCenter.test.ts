@@ -168,7 +168,7 @@ async function click(w: VueWrapper, testid: string): Promise<void> {
 
 async function openCenter(w: VueWrapper): Promise<void> {
   await click(w, "editor-header-help");
-  await click(w, "editor-help-learning-center");
+  await click(w, "editor-help-menu-item-learningCenter");
 }
 
 const center = (w: VueWrapper) => w.find('[data-testid="learning-center"]');
@@ -197,8 +197,16 @@ describe("the Help menu", () => {
 
     await click(w, "editor-header-help");
 
+    // Ruling T8-1: the one MenuPanel, with the Project and View menus' test
+    // ids; each item's label is its `.truncate` span (a kbd may follow).
     const items = w.findAll('[role="menu"][aria-label="Help"] [role="menuitem"]');
-    expect(items.map((i) => i.text())).toEqual([
+    expect(items.map((i) => i.attributes("data-testid"))).toEqual([
+      "editor-help-menu-item-learningCenter",
+      "editor-help-menu-item-resume",
+      "editor-help-menu-item-shortcuts",
+      "editor-help-menu-item-diagnostics",
+    ]);
+    expect(items.map((i) => i.get(".truncate").text())).toEqual([
       "Learning center",
       "Resume walkthrough",
       "Keyboard shortcuts",
@@ -213,7 +221,7 @@ describe("the Help menu", () => {
     const w = await mountEditor();
 
     await click(w, "editor-header-help");
-    await click(w, "editor-help-diagnostics");
+    await click(w, "editor-help-menu-item-diagnostics");
 
     expect(calls.filter((c) => c === "exportDiagnostics")).toHaveLength(1);
     expect(calls).not.toContain("execute");
@@ -229,7 +237,7 @@ describe("the Help menu", () => {
     const w = await mountEditor();
 
     await click(w, "editor-header-help");
-    await click(w, "editor-help-diagnostics");
+    await click(w, "editor-help-menu-item-diagnostics");
     expect(useNotificationsStore().items).toEqual([]);
 
     answer = () =>
@@ -242,7 +250,7 @@ describe("the Help menu", () => {
         }),
       );
     await click(w, "editor-header-help");
-    await click(w, "editor-help-diagnostics");
+    await click(w, "editor-help-menu-item-diagnostics");
     expect(useNotificationsStore().items.map((n) => [n.kind, n.message])).toEqual([
       ["error", "The diagnostics could not be saved. support.json already exists."],
     ]);
@@ -253,7 +261,7 @@ describe("the Help menu", () => {
     const w = await mountEditor();
 
     await click(w, "editor-header-help");
-    await click(w, "editor-help-resume");
+    await click(w, "editor-help-menu-item-resume");
 
     expect(coach(w).attributes("data-step-id")).toBe("fades");
   });
@@ -261,7 +269,7 @@ describe("the Help menu", () => {
   it("Keyboard shortcuts opens the learning center on its shortcut table", async () => {
     const w = await mountEditor();
     await click(w, "editor-header-help");
-    await click(w, "editor-help-shortcuts");
+    await click(w, "editor-help-menu-item-shortcuts");
 
     const rows = w.findAll('[data-testid="learning-shortcut"]');
     expect(rows.map((r) => r.attributes("data-action"))).toEqual(SHORTCUT_TABLE.map((r) => r.actionId));
@@ -301,7 +309,7 @@ describe("the learning center", () => {
     expect(await label(fresh())).toBe("Start walkthrough");
     expect(await label(fresh({ currentStepId: "split", reviewed: ["welcome", "split"] }))).toBe("Resume walkthrough");
     expect(await label(fresh({ currentStepId: "help", reviewed: [...STEP_IDS], completed: true }))).toBe(
-      "Start walkthrough again",
+      "Revisit walkthrough",
     );
   });
 
@@ -419,6 +427,65 @@ describe("the learning center", () => {
     await useEditorOnboardingStore().flush();
 
     expect(saved?.preferences).toEqual({ dimming: false, motion: "reduced" });
+  });
+});
+
+// Visual-parity Task 23 (concept spec §9.3, SCREENS 11).
+describe("the learning center's concept anatomy", () => {
+  it("870 wide: the bar, the hero with its ring, the underlined tabs, the cards, the safety box and the footer", async () => {
+    const w = await mountEditor();
+    await openCenter(w);
+    expect(w.get('[data-testid="dialog-host-content"]').attributes("style")).toContain("width: 870px");
+    const c = center(w);
+    expect(c.get("header").text()).toBe("Help & learning center");
+    expect(c.text()).toContain("YOUR EDITOR, EXPLAINED");
+    expect(c.get("h2").text()).toBe("From recording to a clear tutorial.");
+    expect(w.get('[data-testid="learning-resume-detail"]').text()).toBe("7 chapters · 22 short steps · no setup needed");
+    const ring = w.get('[data-testid="learning-progress"]');
+    expect(ring.attributes("role")).toBe("img");
+    expect(ring.attributes("aria-label")).toBe("0 of 22 steps reviewed");
+    expect(ring.text()).toBe("0%0 / 22 reviewed");
+    expect(ring.attributes("style")).toContain("conic-gradient");
+    expect(c.text()).toContain("Pick up a skill.");
+    // Seven cards; the last spans both columns.
+    const cards = w.findAll('[data-testid^="learning-card-"]');
+    expect(cards).toHaveLength(7);
+    expect(cards[6].classes()).toContain("sm:col-span-2");
+    expect(w.get('[data-testid="learning-chapter-orient"]').text()).toContain("0/4");
+    expect(c.text()).toContain("See 4 steps");
+    expect(c.text()).toContain("Your edit stays yours.");
+    expect(w.get('[data-testid="learning-storage"]').text()).toBe("Progress remembered on this PC");
+    expect(w.get('[data-testid="learning-preferences"]').element.tagName).toBe("DETAILS");
+  });
+
+  it("a paused walkthrough: Resume, where it continues, the lesson marked Resume here", async () => {
+    await install(fresh({ currentStepId: "split", reviewed: STEP_IDS.slice(0, 6) }));
+    const w = await mountEditor();
+    await openCenter(w);
+    expect(w.get('[data-testid="learning-resume"]').text()).toBe("Resume walkthrough");
+    expect(w.get('[data-testid="learning-resume-detail"]').text()).toBe("Continue at step 6 · Cut a clip, not the original.");
+    expect(w.get('[data-testid="learning-progress"]').text()).toContain("27%");
+    const split = w.get('[data-testid="learning-lesson-split"]');
+    expect(split.attributes("aria-current")).toBe("step");
+    expect(split.text()).toContain("Resume here");
+    // The first chapter is all read: a teal check.
+    expect(w.get('[data-testid="learning-chapter-orient"]').text()).toContain("4/4");
+  });
+
+  it("every lesson read: the reviewed overline and heading", async () => {
+    await install(fresh({ reviewed: [...STEP_IDS], completed: true, currentStepId: "help" }));
+    const w = await mountEditor();
+    await openCenter(w);
+    expect(w.get('[data-testid="learning-finished"]').text()).toBe("WALKTHROUGH REVIEWED");
+    expect(center(w).get("h2").text()).toBe("A reference whenever you need it.");
+    expect(w.get('[data-testid="learning-resume-detail"]').text()).toBe("22 of 22 steps reviewed. Repeat any chapter below.");
+  });
+
+  it("the footer says Session only when progress cannot be stored", async () => {
+    const w = await mountEditor();
+    useEditorOnboardingStore().sessionOnly = true;
+    await openCenter(w);
+    expect(w.get('[data-testid="learning-storage"]').text()).toBe("Session only");
   });
 });
 

@@ -1,29 +1,24 @@
 /**
- * Where the guide's coach card goes (Task 56; F-46; ONBOARDING.md § Overlay,
- * positioning and focus: "Prefer positioning beside the target without
- * covering it or essential controls. On narrow windows dock the card with a
- * visible target region, scroll if needed and retain pause/collapse
- * controls."). Pure: viewport pixels in, a placement out — no DOM, so the
- * arithmetic is tested as a table (`tests/editorGuideCoach.test.ts`).
+ * Where the guide's coach card and its target label go (Task 56; visual-
+ * parity Task 23; concept spec §9.2, the reference's `onboarding.js:
+ * function layout`). Pure: viewport pixels in, a placement out — no DOM, so
+ * every branch is a unit test (`tests/editorGuidePosition.test.ts`).
  *
- * The free space around the target is four strips — right, left, below,
- * above — each running to the viewport's edge minus `EDGE_MARGIN_PX`, and
- * `TARGET_GAP_PX` clear of the target. They are tried largest first
- * ("candidate sides by available space"):
+ * The card is `min(362, window − 24)` wide and never taller than the
+ * window less 24. Four candidates are tried in the concept's order —
+ * **right** of the target (18 px clear, centred on it vertically, clamped
+ * 12 px inside the window), **left**, **below** (centred horizontally) and
+ * **above** — and the first that fits wholly inside the window wins,
+ * preferring one that leaves an open menu uncovered. When none fits, the
+ * larger free band above or below the target, if it is at least 240 px,
+ * takes the card at that band's height and only its copy scrolls
+ * ("compact-scroll": the explanation scrolls rather than cover the very
+ * control it explains); otherwise the card is pinned to the far edge
+ * ("compact"). With no target it waits in the top-right corner.
  *
- * - **beside** (viewport at least `DOCKED_BELOW_PX` wide): the first strip
- *   the whole card fits in; the card sits against the target, centred on
- *   it along the other axis and clamped into the strip.
- * - **docked** (narrower, or nothing fits whole): the largest strip at
- *   least `MIN_CARD` in size; the card is anchored to that strip's outer
- *   corner and sized to it, and `maxHeight` makes the card's own body
- *   scroll rather than grow over the target. Its header and its
- *   Pause/Back/Next row are what `MIN_CARD` keeps.
- *
- * Either way the card stays inside its strip, so it never covers the
- * target. A target the strips cannot clear at all (bigger than the
- * viewport less a card) is clipped to the viewport first; the caller
- * scrolls a lesson's control into view before placing.
+ * The label chip names the control: at the target's left edge, 30 px above
+ * it (10 px below it near the top of the window), never wider than 250 and
+ * hidden under 700 px wide or while a menu is open.
  */
 export interface Rect {
   x: number;
@@ -35,109 +30,128 @@ export interface Size {
   width: number;
   height: number;
 }
-export type Side = "right" | "left" | "bottom" | "top";
+
+export type PlacementMode = "right" | "left" | "below" | "above" | "compact-scroll" | "compact" | "free";
+
 export interface Placement {
-  mode: "beside" | "docked";
-  /** The strip the card sits in; `null` when there is no target. */
-  side: Side | null;
+  mode: PlacementMode;
   x: number;
   y: number;
   width: number;
-  /** The card never grows past this; its body scrolls instead. */
+  /** The card never grows past this; its copy scrolls instead. */
   maxHeight: number;
 }
 
-/** Below this viewport width the card docks (the brief's 1100 px). */
-export const DOCKED_BELOW_PX = 1100;
+export const CARD_MAX_WIDTH = 362;
 /** Clear space between the card and the highlighted control. */
-export const TARGET_GAP_PX = 12;
-/** Clear space between the card and the viewport's edge. */
-export const EDGE_MARGIN_PX = 8;
-/** The smallest card that still shows its header and Pause/Back/Next. */
-export const MIN_CARD: Size = { width: 240, height: 120 };
+export const TARGET_GAP_PX = 18;
+/** Clear space between the card and the window's edge. */
+export const EDGE_PAD_PX = 12;
+/** The smallest free band the card may shrink into and scroll. */
+export const COMPACT_MIN_BAND_PX = 240;
+/** Where a card with no target sits from the top. */
+export const FREE_TOP_PX = 95;
+/** The card's height floor in a very short window. */
+const MIN_CARD_HEIGHT_PX = 175;
 
-const SIDES: readonly Side[] = ["right", "left", "bottom", "top"];
+export const LABEL_MAX_WIDTH = 250;
+export const LABEL_HIDDEN_BELOW_PX = 700;
+const LABEL_EDGE_PX = 8;
+const LABEL_ABOVE_PX = 30;
+const LABEL_BELOW_PX = 10;
+/** A target closer to the top than this gets its label below it. */
+const LABEL_NEAR_TOP_PX = 34;
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(Math.max(v, lo), Math.max(lo, hi));
 }
 
-/** `target` clipped to the viewport. */
-function clipTo(target: Rect, vp: Size): Rect {
-  const x = clamp(target.x, 0, vp.width);
-  const y = clamp(target.y, 0, vp.height);
-  return {
-    x,
-    y,
-    width: clamp(target.x + target.width, x, vp.width) - x,
-    height: clamp(target.y + target.height, y, vp.height) - y,
-  };
+function overlaps(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
-/** The four free strips around `t`, each clear of it by the gap. */
-function strips(t: Rect, vp: Size): Record<Side, Rect> {
-  const m = EDGE_MARGIN_PX;
+/** The card's width in a window `viewportWidth` wide. */
+export function coachWidth(viewportWidth: number): number {
+  return Math.min(CARD_MAX_WIDTH, viewportWidth - 2 * EDGE_PAD_PX);
+}
+
+interface Candidate {
+  mode: PlacementMode;
+  x: number;
+  y: number;
+}
+
+/** The four candidates beside `t`, in the concept's order. */
+function candidates(t: Rect, w: number, h: number, vp: Size): Candidate[] {
+  const pad = EDGE_PAD_PX;
   const g = TARGET_GAP_PX;
-  const full = { y: m, height: vp.height - 2 * m };
-  const wide = { x: m, width: vp.width - 2 * m };
-  const right = t.x + t.width + g;
-  const below = t.y + t.height + g;
+  const cy = clamp(t.y + t.height / 2 - h / 2, pad, vp.height - h - pad);
+  const cx = clamp(t.x + t.width / 2 - w / 2, pad, vp.width - w - pad);
+  return [
+    { mode: "right", x: t.x + t.width + g, y: cy },
+    { mode: "left", x: t.x - w - g, y: cy },
+    { mode: "below", x: cx, y: t.y + t.height + g },
+    { mode: "above", x: cx, y: t.y - h - g },
+  ];
+}
+
+/** The first candidate wholly inside the window, preferring one that
+ * leaves `menu` uncovered; `null` when none fits. */
+function firstFit(t: Rect, w: number, h: number, vp: Size, menu: Rect | null): Candidate | null {
+  const pad = EDGE_PAD_PX;
+  const valid = candidates(t, w, h, vp).filter(
+    (c) => c.x >= pad && c.y >= pad && c.x + w <= vp.width - pad && c.y + h <= vp.height - pad,
+  );
+  const clear = menu ? valid.find((c) => !overlaps({ x: c.x, y: c.y, width: w, height: h }, menu)) : undefined;
+  return clear ?? valid[0] ?? null;
+}
+
+/** No candidate fits: the larger band above/below, or pinned. */
+function squeezed(t: Rect, h: number, vp: Size): { mode: PlacementMode; y: number; height: number } {
+  const above = t.y - TARGET_GAP_PX - EDGE_PAD_PX;
+  const below = vp.height - (t.y + t.height) - TARGET_GAP_PX - EDGE_PAD_PX;
+  const room = Math.max(above, below);
+  if (room >= COMPACT_MIN_BAND_PX && room < h) {
+    const y = below >= above ? t.y + t.height + TARGET_GAP_PX : t.y - TARGET_GAP_PX - room;
+    return { mode: "compact-scroll", y, height: room };
+  }
+  const y = t.y > vp.height / 2 ? EDGE_PAD_PX : vp.height - h - EDGE_PAD_PX;
+  return { mode: "compact", y, height: h };
+}
+
+/** Where the coach card goes for a target (or none), given the card's
+ * natural height and any open menu's box. */
+export function placeCoach(target: Rect | null, naturalHeight: number, viewport: Size, menu: Rect | null = null): Placement {
+  const w = coachWidth(viewport.width);
+  let maxHeight = Math.max(MIN_CARD_HEIGHT_PX, viewport.height - 2 * EDGE_PAD_PX);
+  let h = Math.min(naturalHeight, maxHeight);
+  let mode: PlacementMode = "free";
+  let x = viewport.width - w - EDGE_PAD_PX;
+  let y = Math.min(FREE_TOP_PX, viewport.height - h - EDGE_PAD_PX);
+  if (target) {
+    const fit = firstFit(target, w, h, viewport, menu);
+    if (fit) ({ mode, x, y } = fit);
+    else {
+      const band = squeezed(target, h, viewport);
+      ({ mode, y } = band);
+      if (band.mode === "compact-scroll") maxHeight = h = band.height;
+    }
+  }
   return {
-    right: { ...full, x: right, width: Math.max(0, vp.width - m - right) },
-    left: { ...full, x: m, width: Math.max(0, t.x - g - m) },
-    bottom: { ...wide, y: below, height: Math.max(0, vp.height - m - below) },
-    top: { ...wide, y: m, height: Math.max(0, t.y - g - m) },
+    mode,
+    x: clamp(x, EDGE_PAD_PX, viewport.width - w - EDGE_PAD_PX),
+    y: clamp(y, EDGE_PAD_PX, viewport.height - h - EDGE_PAD_PX),
+    width: w,
+    maxHeight,
   };
 }
 
-/** Sides by the strip's area, largest first (ties in `SIDES` order). */
-function bySpace(regions: Record<Side, Rect>): Side[] {
-  const area = (s: Side) => regions[s].width * regions[s].height;
-  return [...SIDES].sort((a, b) => area(b) - area(a));
-}
-
-function besideIn(side: Side, r: Rect, t: Rect, card: Size): Placement {
-  const horizontal = side === "right" || side === "left";
-  const x = horizontal
-    ? side === "right" ? r.x : r.x + r.width - card.width
-    : clamp(t.x + t.width / 2 - card.width / 2, r.x, r.x + r.width - card.width);
-  const y = horizontal
-    ? clamp(t.y + t.height / 2 - card.height / 2, r.y, r.y + r.height - card.height)
-    : side === "bottom" ? r.y : r.y + r.height - card.height;
-  return { mode: "beside", side, x, y, width: card.width, maxHeight: r.y + r.height - y };
-}
-
-function dockedIn(side: Side, r: Rect, card: Size): Placement {
-  const width = Math.min(card.width, r.width);
-  const height = Math.min(card.height, r.height);
-  // The strip's outer corner: away from the target, along the edge.
-  const x = side === "left" ? r.x : r.x + r.width - width;
-  const y = side === "top" ? r.y : r.y + r.height - height;
-  return { mode: "docked", side, x, y, width, maxHeight: r.y + r.height - y };
-}
-
-/** Where the coach card goes for a target (or none) in a viewport. */
-export function placeCoach(target: Rect | null, card: Size, viewport: Size): Placement {
-  if (target === null) {
-    const width = Math.min(card.width, viewport.width - 2 * EDGE_MARGIN_PX);
-    const height = Math.min(card.height, viewport.height - 2 * EDGE_MARGIN_PX);
-    return {
-      mode: "docked",
-      side: null,
-      x: viewport.width - EDGE_MARGIN_PX - width,
-      y: viewport.height - EDGE_MARGIN_PX - height,
-      width,
-      maxHeight: height,
-    };
-  }
-  const t = clipTo(target, viewport);
-  const regions = strips(t, viewport);
-  const order = bySpace(regions);
-  if (viewport.width >= DOCKED_BELOW_PX) {
-    const fits = order.find((s) => regions[s].width >= card.width && regions[s].height >= card.height);
-    if (fits) return besideIn(fits, regions[fits], t, card);
-  }
-  const roomy = order.find((s) => regions[s].width >= MIN_CARD.width && regions[s].height >= MIN_CARD.height);
-  const side = roomy ?? order[0];
-  return dockedIn(side, regions[side], card);
+/** Where the target's label chip goes, or `null` when it is hidden. */
+export function placeLabel(target: Rect | null, labelWidth: number, viewport: Size, menuOpen: boolean): { x: number; y: number } | null {
+  if (!target || menuOpen || viewport.width < LABEL_HIDDEN_BELOW_PX) return null;
+  const w = Math.min(LABEL_MAX_WIDTH, labelWidth);
+  return {
+    x: clamp(target.x, LABEL_EDGE_PX, viewport.width - w - LABEL_EDGE_PX),
+    y: target.y > LABEL_NEAR_TOP_PX ? target.y - LABEL_ABOVE_PX : target.y + target.height + LABEL_BELOW_PX,
+  };
 }

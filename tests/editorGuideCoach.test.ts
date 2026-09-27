@@ -1,15 +1,14 @@
 /**
  * The guided walkthrough itself (Task 56; F-46, F-49; SCREENS 01, 10;
  * A23–A26): the first-use invitation, the coach that points at the REAL
- * control, its placement (`position.ts`), keyboard ownership (F6, Escape)
+ * control (its placement: `editorGuidePosition.test.ts`), keyboard ownership (F6, Escape)
  * and suspension under a modal dialog.
  *
  * Every walkthrough test mounts the whole editor shell (the slot filling
  * `EditorRoot` uses) over a recording port, so "the guide never edits"
  * is a statement about what was SENT, not what a store holds. happy-dom
  * has no layout, so `getBoundingClientRect` is stubbed to one asymmetric
- * box: the coach renders its highlight only for a target with a real box,
- * and the placement arithmetic has its own table below.
+ * box: the coach renders its highlight only for a target with a real box.
  */
 import { mockConvertFileSrc } from "@tauri-apps/api/mocks";
 import { enableAutoUnmount, flushPromises, mount, type VueWrapper } from "@vue/test-utils";
@@ -21,8 +20,6 @@ vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }
 
 import { dialogStackSize } from "../src/editor/dialogs";
 import { GUIDE_STEPS, STEP_TARGETS } from "../src/editor/guide/content";
-import type { Rect, Size } from "../src/editor/guide/position";
-import { DOCKED_BELOW_PX, EDGE_MARGIN_PX, MIN_CARD, placeCoach, TARGET_GAP_PX } from "../src/editor/guide/position";
 import { resolve } from "../src/editor/guide/targets";
 import type { EditorPort } from "../src/editor/port";
 import { checksDialogOpen } from "../src/editor/revealBus";
@@ -34,86 +31,7 @@ import { MountedShell, shellPort } from "./helpers/guideShell";
 
 enableAutoUnmount(afterEach);
 
-// ---- position.ts ----------------------------------------------------------
-
-/** Where a placement's card really lands: `maxHeight` caps it. */
-function cardBox(p: ReturnType<typeof placeCoach>, card: Size): Rect {
-  return { x: p.x, y: p.y, width: p.width, height: Math.min(card.height, p.maxHeight) };
-}
-
-function intersects(a: Rect, b: Rect): boolean {
-  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-}
-
-/** Six real control shapes, as fractions of the viewport so each exists at
- * every size: small header button, library button, the wide transport, a
- * full-width toolbar, the tall inspector, a tiny bottom-left track menu.
- * Deliberately asymmetric (x ≠ y fractions, w ≠ h). */
-const TARGETS: [string, (vp: Size) => Rect][] = [
-  ["header help", (vp) => ({ x: vp.width * 0.7, y: vp.height * 0.01, width: 60, height: 28 })],
-  ["library import", (vp) => ({ x: vp.width * 0.01, y: vp.height * 0.1, width: 120, height: 36 })],
-  ["transport", (vp) => ({ x: vp.width * 0.3, y: vp.height * 0.5, width: vp.width * 0.4, height: 40 })],
-  ["timeline toolbar", (vp) => ({ x: 0, y: vp.height * 0.62, width: vp.width, height: 32 })],
-  ["inspector", (vp) => ({ x: vp.width * 0.74, y: vp.height * 0.08, width: vp.width * 0.25, height: vp.height * 0.6 })],
-  ["track menu", (vp) => ({ x: vp.width * 0.12, y: vp.height * 0.93, width: 24, height: 24 })],
-];
-const VIEWPORTS: Size[] = [
-  { width: 1600, height: 1000 },
-  { width: 1280, height: 820 },
-  { width: 960, height: 640 },
-];
-const CARD: Size = { width: 340, height: 320 };
-
-describe("position.ts", () => {
-  it("position.ts never overlaps the target rect", () => {
-    for (const vp of VIEWPORTS) {
-      for (const [name, shape] of TARGETS) {
-        const target = shape(vp);
-        const p = placeCoach(target, CARD, vp);
-        const box = cardBox(p, CARD);
-        const where = `${name} at ${vp.width}x${vp.height}: ${JSON.stringify(box)}`;
-        expect(intersects(box, target), `covers the target — ${where}`).toBe(false);
-        expect(box.x >= EDGE_MARGIN_PX && box.y >= EDGE_MARGIN_PX, `off the top/left — ${where}`).toBe(true);
-        expect(box.x + box.width <= vp.width - EDGE_MARGIN_PX, `off the right — ${where}`).toBe(true);
-        expect(box.y + box.height <= vp.height - EDGE_MARGIN_PX, `off the bottom — ${where}`).toBe(true);
-        // Always big enough to keep its header and Pause/Back/Next row.
-        expect(box.width >= MIN_CARD.width && box.height >= MIN_CARD.height, `too small — ${where}`).toBe(true);
-        expect(p.mode, `mode — ${where}`).toBe(vp.width < DOCKED_BELOW_PX ? "docked" : "beside");
-      }
-    }
-  });
-
-  it("beside mode sits next to the target, on the side with the most room", () => {
-    const vp = { width: 1600, height: 1000 };
-    // A button high on the left: the right-hand side has the most room.
-    const target = { x: 40, y: 200, width: 120, height: 36 };
-    const p = placeCoach(target, CARD, vp);
-    expect(p).toMatchObject({ mode: "beside", side: "right", x: 40 + 120 + TARGET_GAP_PX, width: CARD.width });
-    // Centred on the target's own middle.
-    expect(p.y).toBe(200 + 18 - CARD.height / 2);
-  });
-
-  it("docked mode anchors the card to the viewport edge away from the target", () => {
-    const vp = { width: 960, height: 640 };
-    const target = { x: 0, y: 380, width: 960, height: 32 };
-    const p = placeCoach(target, CARD, vp);
-    // More room above the toolbar than below it: docked at the top.
-    expect(p).toMatchObject({ mode: "docked", side: "top", y: EDGE_MARGIN_PX, x: 960 - EDGE_MARGIN_PX - CARD.width });
-    expect(p.maxHeight).toBe(380 - TARGET_GAP_PX - EDGE_MARGIN_PX);
-  });
-
-  it("no target docks the card in the bottom-right corner", () => {
-    const vp = { width: 1280, height: 820 };
-    expect(placeCoach(null, CARD, vp)).toEqual({
-      mode: "docked",
-      side: null,
-      x: 1280 - EDGE_MARGIN_PX - CARD.width,
-      y: 820 - EDGE_MARGIN_PX - CARD.height,
-      width: CARD.width,
-      maxHeight: CARD.height,
-    });
-  });
-});
+// Placement arithmetic: tests/editorGuidePosition.test.ts.
 
 // ---- the walkthrough in the mounted editor --------------------------------
 
@@ -245,7 +163,7 @@ describe("the invitation", () => {
 
     // Help → Resume walkthrough (Task 57 made Help a menu).
     await click(w, "editor-header-help");
-    await click(w, "editor-help-resume");
+    await click(w, "editor-help-menu-item-resume");
     expect(coach(w).attributes("data-step-id")).toBe("welcome");
     expect(w.get('[data-testid="guide-coach-count"]').text()).toBe("1 / 22");
   });
@@ -298,7 +216,7 @@ describe("the coach", () => {
     expect(second.find('[data-testid="guide-invitation"]').exists()).toBe(false);
 
     await click(second, "editor-header-help");
-    await click(second, "editor-help-resume");
+    await click(second, "editor-help-menu-item-resume");
     expect(coach(second).attributes("data-step-id")).toBe("fades");
     expect(second.get('[data-testid="guide-coach-count"]').text()).toBe("13 / 22");
     expect(useEditorOnboardingStore().progress.reviewed).toEqual(STEP_IDS.slice(0, 13));
@@ -337,7 +255,7 @@ describe("the coach", () => {
     expect(target && preview.contains(target)).toBe(true);
 
     const layers = [...document.querySelectorAll("[data-guide-layer]")];
-    expect(layers.map((l) => l.getAttribute("data-guide-layer")).sort()).toEqual(["card", "ring"]);
+    expect(layers.map((l) => l.getAttribute("data-guide-layer")).sort()).toEqual(["card", "label", "ring"]);
     for (const layer of layers) {
       // …while nothing the guide draws is.
       expect(preview.contains(layer)).toBe(false);
@@ -441,7 +359,7 @@ describe("the coach", () => {
     await goTo(w, "undo");
     await click(w, "guide-collapse");
     expect(coach(w).exists()).toBe(false);
-    expect(w.get('[data-testid="guide-resume"]').text()).toContain("7 / 22");
+    expect(w.get('[data-testid="guide-resume"]').text()).toContain("7/22 · You can take an edit back.");
 
     await click(w, "guide-resume");
     expect(coach(w).attributes("data-step-id")).toBe("undo");
@@ -488,5 +406,96 @@ describe("the coach", () => {
       }
       await click(w, "guide-next");
     }
+  });
+});
+
+// ---- visual-parity Task 23: the concept's invitation, coach and label ------
+
+describe("the concept's guide surfaces (§9.1–9.2)", () => {
+  it("the invitation carries the overline, the compass, the heading, both answers and the footer", async () => {
+    const w = await mountEditor();
+    const invitation = w.get('[data-testid="guide-invitation"]');
+    expect(invitation.text()).toContain("NEW HERE? START HERE.");
+    expect(invitation.get("h2").text()).toBe("A little guidance.A clearer first edit.");
+    expect(invitation.find("h2 br").exists()).toBe(true);
+    expect(invitation.text()).toContain("Get to know the editor, one useful step at a time.");
+    expect(w.get('[data-testid="guide-invitation-start"]').text()).toBe("Show me around");
+    expect(w.get('[data-testid="guide-invitation-dismiss"]').text()).toBe("Not now");
+    expect(invitation.text()).toContain("Always available from Help · No editing required");
+    expect(invitation.classes()).toEqual(expect.arrayContaining(["w-[350px]", "right-6", "top-[76px]"]));
+  });
+
+  it("the card: chapter, GUIDED WALKTHROUGH with its counter, the task's three voices and D10's storage words", async () => {
+    const w = await mountEditor();
+    await click(w, "guide-invitation-start");
+    const card = coach(w);
+    expect(w.get('[data-testid="guide-coach-contents"]').text()).toBe("Find your way");
+    expect(card.text()).toContain("GUIDED WALKTHROUGH");
+    expect(w.get('[data-testid="guide-coach-count"]').classes()).toContain("vb-mono");
+    // No task in the welcome lesson: the plain prompt.
+    expect(w.get('[data-testid="guide-coach-task"]').attributes("data-voice")).toBe("prompt");
+    expect(w.get('[data-testid="guide-coach-task"]').text()).toBe("Read this step, then continue when you are ready.");
+    expect(w.get('[data-testid="guide-coach-storage"]').text()).toBe("Progress remembered on this PC");
+    expect(card.text()).toContain("F6 to focus control");
+    expect(w.get('[data-testid="guide-next"]').text()).toBe("Next");
+    expect(w.get('[data-testid="guide-coach-progress"]').attributes("style")).toContain(`width: ${100 / 22}%`);
+
+    // An optional edit speaks in gold; trying the control turns it teal.
+    await goTo(w, "fades");
+    expect(w.get('[data-testid="guide-coach-task"]').attributes("data-voice")).toBe("edit");
+    expect(w.get('[data-testid="guide-coach-task"]').text()).toBe("Optional edit: try a 0.5-second fade. Undo remains available.");
+    await w.get('[data-testid="fades-section"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="guide-coach-task"]').attributes("data-voice")).toBe("tried");
+    expect(w.get('[data-testid="guide-coach-task"]').text()).toBe("Control explored. Continue whenever you are ready.");
+
+    await goTo(w, "help");
+    expect(w.get('[data-testid="guide-next"]').text()).toBe("Finish guide");
+  });
+
+  it("Back carries its reason on the first lesson", async () => {
+    const w = await mountEditor();
+    await click(w, "guide-invitation-start");
+    const back = w.get('[data-testid="guide-back"]');
+    expect(back.attributes("disabled")).toBeDefined();
+    expect(back.attributes("title")).toBe("This is the first step.");
+  });
+
+  it("says Session only when progress cannot be stored", async () => {
+    const w = await mountEditor();
+    useEditorOnboardingStore().sessionOnly = true;
+    await click(w, "guide-invitation-start");
+    expect(w.get('[data-testid="guide-coach-storage"]').text()).toBe("Session only");
+  });
+
+  it("the chapter title pauses the walkthrough and opens the learning center's chapters", async () => {
+    const w = await mountEditor();
+    await click(w, "guide-invitation-start");
+    await goTo(w, "split");
+    await click(w, "guide-coach-contents");
+
+    expect(useEditorOnboardingStore().progress).toMatchObject({ active: false, currentStepId: "split" });
+    expect(w.find('[data-testid="learning-center"]').exists()).toBe(true);
+    expect(w.get('[data-testid="learning-tab-walkthrough"]').attributes("aria-selected")).toBe("true");
+    expect(calls).not.toContain("execute");
+  });
+
+  it("the target label names the lesson's control", async () => {
+    const w = await mountEditor();
+    await click(w, "guide-invitation-start");
+    await goTo(w, "fades");
+    const label = w.get('[data-testid="guide-target-label"]');
+    expect(label.text()).toBe("Fade controls");
+    expect(label.attributes("aria-hidden")).toBe("true");
+  });
+
+  it("the minimized bar's ✕ pauses, and Help resumes the same lesson", async () => {
+    const w = await mountEditor();
+    await click(w, "guide-invitation-start");
+    await goTo(w, "undo");
+    await click(w, "guide-collapse");
+    await click(w, "guide-mini-close");
+    expect(w.find('[data-testid="guide-mini"]').exists()).toBe(false);
+    expect(useEditorOnboardingStore().progress).toMatchObject({ active: false, currentStepId: "undo" });
   });
 });

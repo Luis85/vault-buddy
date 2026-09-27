@@ -21,6 +21,12 @@ export type LearningTab = "walkthrough" | "answers" | "shortcuts";
  * was read (`hasFinished`, from `reviewed`) — never the `completed` flag a
  * revisit clears (docs/Gaps.md GAP-205 (6)).
  *
+ * **The concept's hub (visual-parity Task 23; concept spec §9.3, SCREENS
+ * 11)**: 870 wide, scrolling as a whole (`DialogHost`'s `flush` body): the
+ * "Help & learning center" bar with its ✕, the hero (`LearningHero`: the
+ * start/resume action and the progress ring), the underlined tabs, the
+ * section, and "Progress & preferences" as the footer's disclosure.
+ *
  * **The tabs are a real tablist** (GAP-207 (5), deferred from Task 57's
  * review): each `role="tab"` names the `role="tabpanel"` it controls via
  * `aria-controls`, the panel names the active tab back via
@@ -29,15 +35,15 @@ export type LearningTab = "walkthrough" | "answers" | "shortcuts";
  * through the shared `useRovingTablist` composable — the same one those
  * two panels use, rather than a third hand-rolled copy (`cloneGroups 0`).
  */
-import { computed, ref, watch } from "vue";
+import { ref, watch } from "vue";
 
 import { useRovingTablist } from "../../../composables/useRovingTablist";
 import type { GuideStepId } from "../../../editor/guide/content";
-import { GUIDE_STEPS } from "../../../editor/guide/content";
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
-import AppButton from "../../ui/AppButton.vue";
+import EditorIcon from "../icons/EditorIcon.vue";
 import DialogHost from "../shell/DialogHost.vue";
 import LearningAnswers from "./LearningAnswers.vue";
+import LearningHero from "./LearningHero.vue";
 import LearningPreferences from "./LearningPreferences.vue";
 import LearningShortcuts from "./LearningShortcuts.vue";
 import LearningWalkthrough from "./LearningWalkthrough.vue";
@@ -78,15 +84,6 @@ const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
   },
 );
 
-const total = GUIDE_STEPS.length;
-/** Says what `start()` will do: a finished guide is revisited from lesson
- * 1, so it is "again", never a resume. */
-const resumeLabel = computed(() => {
-  const p = onboarding.progress;
-  if (p.completed) return "Start walkthrough again";
-  return p.currentStepId === null ? "Start walkthrough" : "Resume walkthrough";
-});
-
 function jump(id: GuideStepId): void {
   onboarding.jumpTo(id);
   emit("close");
@@ -106,43 +103,39 @@ function restart(): void {
     :open="open"
     label="Help and learning center"
     :width="870"
-    close-testid="learning-close"
+    flush
     @close="emit('close')"
   >
-    <template #title>
-      Help and learning center
-    </template>
-
     <div
       data-testid="learning-center"
-      class="flex flex-col gap-3"
+      class="flex flex-col"
     >
-      <div class="flex flex-wrap items-center gap-3">
-        <p
-          data-testid="learning-progress"
-          class="min-w-0 flex-1 text-xs text-fg-muted"
+      <header class="flex items-center justify-between border-b border-line px-[21px] py-[13px] text-xs text-fg-secondary">
+        <span class="flex items-center gap-[9px]">
+          <EditorIcon
+            name="book"
+            class="text-accent"
+          />
+          Help &amp; learning center
+        </span>
+        <button
+          type="button"
+          data-testid="learning-close"
+          aria-label="Close Help"
+          class="flex h-8 w-8 items-center justify-center border-transparent bg-transparent p-1.5 text-fg-secondary"
+          @click="emit('close')"
         >
-          {{ onboarding.reviewedCount }} / {{ total }} lessons read
-          <span
-            v-if="onboarding.hasFinished"
-            data-testid="learning-finished"
-            class="ml-1 text-success"
-          >· You have read every lesson</span>
-        </p>
-        <AppButton
-          size="sm"
-          data-testid="learning-resume"
-          @click="resume"
-        >
-          {{ resumeLabel }}
-        </AppButton>
-      </div>
+          <EditorIcon name="x" />
+        </button>
+      </header>
+
+      <LearningHero @resume="resume" />
 
       <div
         role="tablist"
         aria-label="Help sections"
         data-testid="learning-tablist"
-        class="flex gap-1 border-b border-line"
+        class="flex gap-[23px] border-b border-line px-[34px]"
         @keydown="onTablistKeydown"
       >
         <button
@@ -156,8 +149,8 @@ function restart(): void {
           :aria-controls="panelId(t.id)"
           :tabindex="active === t.id ? 0 : -1"
           :data-testid="`learning-tab-${t.id}`"
-          class="cursor-pointer border-b-2 px-2 py-1 text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-          :class="active === t.id ? 'border-violet-400 text-fg' : 'border-transparent text-fg-muted hover:text-fg'"
+          class="relative rounded-none border-transparent bg-transparent pt-[15px] pb-3 text-xs font-[550] hover:bg-transparent"
+          :class="active === t.id ? 'text-accent-ink after:absolute after:right-0 after:-bottom-px after:left-0 after:h-0.5 after:bg-accent' : 'text-fg-muted hover:text-fg'"
           @click="active = t.id"
         >
           {{ t.label }}
@@ -169,6 +162,7 @@ function restart(): void {
         role="tabpanel"
         :aria-labelledby="tabId(active)"
         data-testid="learning-panel"
+        class="px-[34px] py-6"
       >
         <LearningWalkthrough
           v-if="active === 'walkthrough'"

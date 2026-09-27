@@ -313,7 +313,7 @@ async function lowContrast(page: Page): Promise<string[]> {
       const id = el.closest("[data-testid]")?.getAttribute("data-testid") ?? el.tagName;
       return ratio < 4.5 ? `${id} "${text.slice(0, 30)}" ${ratio.toFixed(2)}:1` : null;
     };
-    const roots = ["editor-header", "editor-shell-library", "editor-shell-inspector", "editor-timeline", "editor-statusbar", "preview-header"]
+    const roots = ["editor-header", "editor-shell-library", "editor-shell-inspector", "editor-timeline", "editor-statusbar", "preview-header", "guide-invitation", "guide-coach", "guide-mini"]
       .map((id) => document.querySelector(`[data-testid="${id}"]`))
       .concat(Array.from(document.querySelectorAll('[role="menu"]')))
       .concat(Array.from(document.querySelectorAll('[role="dialog"]')))
@@ -418,9 +418,9 @@ for (const theme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: theme });
     await openEditor(page, theme);
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-    const expectTint = async (selector: string) => {
+    const expectTint = async (selector: string, pinned = true) => {
       const ratio = await surfaceContrast(page, selector);
-      if (theme === "light") expect(ratio, `${selector} tint in light`).toBeGreaterThanOrEqual(1.08);
+      if (theme === "light" || !pinned) expect(ratio, `${selector} tint in ${theme}`).toBeGreaterThanOrEqual(1.08);
       // The pre-fix `bg-white/5` measurement, to the canvas's byte rounding.
       else expect(ratio, `${selector} tint in dark (unchanged)`).toBeCloseTo(1.1583538594, 6);
     };
@@ -439,11 +439,18 @@ for (const theme of ["light", "dark"] as const) {
     await page.keyboard.press("Escape");
 
     await page.getByTestId("editor-header-help").click();
-    await page.getByTestId("editor-help-learning-center").click();
+    await page.getByTestId("editor-help-menu-item-learningCenter").click();
     await expect(page.getByTestId("learning-center")).toBeVisible();
+    // Visual-parity Task 23 (concept §9.3): a chapter's lessons sit behind
+    // its "See n steps" disclosure.
+    await page.getByTestId("learning-card-orient").locator("summary").click();
+    // The chapter cards sit on `--bg` since visual-parity Task 23 (concept
+    // §9.3 `.guide-chapter{background:var(--bg)}`), not on `panel`, so the
+    // same token composites to a different (still visible) dark tint: the
+    // pinned `panel` figure no longer describes them.
     for (const selector of SUBTLE_ROWS.slice(2)) {
       await page.hover(selector);
-      await expectTint(selector);
+      await expectTint(selector, false);
     }
   });
 }
@@ -572,6 +579,39 @@ for (const theme of ["light", "dark"] as const) {
     await page.getByTestId("mixer-toggle").click();
     await expect(page.getByTestId("mixer-popover")).toBeVisible();
     expect(await lowContrast(page), "Mixer").toEqual([]);
+  });
+}
+
+// Visual-parity Task 23 (D16): the guide's surfaces — the invitation, the
+// coach card in each of its task voices, the minimized bar and the
+// learning center — read at 4.5:1 in both themes.
+for (const theme of ["light", "dark"] as const) {
+  test(`${theme} theme: the guide's surfaces meet 4.5:1`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    await openEditor(page, theme, { width: 1600, height: 1000 }, {
+      editor_get_guide_progress: { ...FRESH_PROGRESS, invitationDismissed: false },
+    });
+    await expect(page.getByTestId("guide-invitation")).toBeVisible();
+    expect(await lowContrast(page), "invitation").toEqual([]);
+
+    await page.getByTestId("guide-invitation-start").click();
+    await expect(page.getByTestId("guide-coach")).toBeVisible();
+    expect(await lowContrast(page), "coach, prompt").toEqual([]);
+    await page.getByTestId("guide-collapse").click();
+    await expect(page.getByTestId("guide-mini")).toBeVisible();
+    expect(await lowContrast(page), "minimized").toEqual([]);
+
+    await page.getByTestId("editor-header-help").click();
+    await page.getByTestId("editor-help-menu-item-learningCenter").click();
+    await expect(page.getByTestId("learning-center")).toBeVisible();
+    await page.getByTestId("learning-card-orient").locator("summary").click();
+    await page.getByTestId("learning-preferences").locator("summary").click();
+    expect(await lowContrast(page), "learning center").toEqual([]);
+
+    // The gold "optional edit" voice (fades), from a chapter jump.
+    await page.getByTestId("learning-chapter-polish").click();
+    await expect(page.getByTestId("guide-coach-task")).toHaveAttribute("data-voice", "edit");
+    expect(await lowContrast(page), "coach, optional edit").toEqual([]);
   });
 }
 

@@ -73,11 +73,11 @@ const STEP_IDS = [
   "checks", "save", "render", "products", "help",
 ];
 
-async function openEditor(page: Page) {
+async function openEditor(page: Page, size = { width: 960, height: 640 }, progress: Record<string, unknown> = FRESH_PROGRESS) {
   await installTauriStub(page, {
     openResult: OPEN_RESULT,
     replies: {
-      editor_get_guide_progress: FRESH_PROGRESS,
+      editor_get_guide_progress: progress,
       editor_save_guide_progress: null,
       editor_get_workspace: {},
       editor_save_workspace: null,
@@ -88,7 +88,7 @@ async function openEditor(page: Page) {
   await page.route(`**${FIXTURE_VIDEO_URL}`, (route) =>
     route.fulfill({ contentType: "video/webm", body: readFileSync(FIXTURE) }),
   );
-  await page.setViewportSize({ width: 960, height: 640 });
+  await page.setViewportSize(size);
   await page.goto("/");
   await expect(page.getByTestId("editor-shell")).toBeAttached();
 }
@@ -107,7 +107,9 @@ test("coach resolves every target at 960x640", async ({ page }) => {
     // The lesson's REAL control was found and has a box on screen — not
     // registered-but-hidden in a closed drawer, not missing.
     await expect(coach, `lesson ${id}`).toHaveAttribute("data-target-state", /^(direct|overflow)$/);
-    await expect(coach).toHaveAttribute("data-placement", "docked");
+    // Concept §9.2: a side that fits whole, else the scrolling band — never
+    // pinned over the control at the editor's floor.
+    await expect(coach).toHaveAttribute("data-placement", /^(right|left|below|above|compact-scroll)$/);
 
     const ring = page.getByTestId("guide-ring");
     await expect(ring, `lesson ${id}: ring`).toBeInViewport();
@@ -151,4 +153,46 @@ test("the invitation leaves the editor usable and does not take focus", async ({
   await expect(page.getByTestId("editor-header-project-menu")).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByTestId("editor-project-menu")).toBeVisible();
   await expect(invitation).toBeVisible();
+});
+
+// Visual-parity Task 23 (concept §9.2, SCREEN 10): at the concept's own
+// size the Fades lesson's card docks LEFT of the inspector — never over it
+// — and the ring surrounds the Fades section, its label chip above.
+test("at 1600x1000 the Fades lesson docks left of the inspector, the ring around Fades", async ({ page }) => {
+  await openEditor(page, { width: 1600, height: 1000 }, {
+    ...FRESH_PROGRESS, invitationDismissed: true, currentStepId: "fades", reviewed: STEP_IDS.slice(0, 12),
+  });
+  await page.getByTestId("editor-header-help").click();
+  await page.getByTestId("editor-help-menu-item-resume").click();
+  const coach = page.getByTestId("guide-coach");
+  await expect(coach).toHaveAttribute("data-step-id", "fades");
+  await expect(coach).toHaveAttribute("data-placement", "left");
+
+  const section = page.getByTestId("fades-section");
+  const inspector = page.getByTestId("editor-shell-inspector");
+  await expect(section).toBeVisible();
+  await expect
+    .poll(async () => {
+      const r = (await page.getByTestId("guide-ring").boundingBox())!;
+      const s = (await section.boundingBox())!;
+      return r.x <= s.x - 3 && r.y <= s.y - 3 && r.x + r.width >= s.x + s.width + 3 && r.y + r.height >= s.y + s.height + 3;
+    }, { message: "the ring surrounds the Fades section" })
+    .toBe(true);
+  const card = (await coach.boundingBox())!;
+  const panel = (await inspector.boundingBox())!;
+  expect(card.width).toBeCloseTo(362, 0);
+  expect(card.x + card.width, "the card sits left of the inspector").toBeLessThanOrEqual(panel.x);
+  expect(overlaps(card, (await section.boundingBox())!)).toBe(false);
+  const label = page.getByTestId("guide-target-label");
+  await expect(label).toHaveText("Fade controls");
+  await expect(label).toBeVisible();
+  expect((await label.boundingBox())!.y).toBeLessThan((await section.boundingBox())!.y);
+});
+
+test("the invitation is 350 wide, 24 from the right and 76 from the top", async ({ page }) => {
+  await openEditor(page, { width: 1600, height: 1000 });
+  const box = (await page.getByTestId("guide-invitation").boundingBox())!;
+  expect(box.width).toBeCloseTo(350, 0);
+  expect(box.x + box.width).toBeCloseTo(1600 - 24, 0);
+  expect(box.y).toBeCloseTo(76, 0);
 });

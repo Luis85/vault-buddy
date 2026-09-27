@@ -6,7 +6,8 @@
  * dialog, (Task 57) the preview toolbar's Review, which Ctrl+E asks
  * for, (visual-parity Task 10) the library's Project section, which
  * `LibraryPanel` answers, and (Task 11) the learning center's Shortcuts
- * tab, which the View menu asks `GuideHelpButton` for, and (Task 15) the
+ * tab, which the View menu asks `GuideHelpButton` for (and, Task 23, its
+ * chapters, which the coach's chapter title asks for), and (Task 15) the
  * preview's playback, which the Fades tab's "Preview entrance" asks
  * `PreviewSurface` for, and (Task 22 fix round 1) its play/pause, which the
  * mixer's "Play / pause preview" asks the same surface for — the
@@ -26,11 +27,11 @@ import { reactive, ref, watch } from "vue";
 
 export type RevealSurface =
   | "reconnect" | "webcam" | "mixer" | "ratio" | "timeline" | "library" | "inspector" | "render" | "review"
-  | "projectSection" | "shortcuts" | "playback" | "playPause";
+  | "projectSection" | "shortcuts" | "learningCenter" | "playback" | "playPause";
 
 const SURFACES: readonly RevealSurface[] = [
   "reconnect", "webcam", "mixer", "ratio", "timeline", "library", "inspector", "render", "review",
-  "projectSection", "shortcuts", "playback", "playPause",
+  "projectSection", "shortcuts", "learningCenter", "playback", "playPause",
 ];
 
 const requested = reactive(Object.fromEntries(SURFACES.map((s) => [s, 0])) as Record<RevealSurface, number>);

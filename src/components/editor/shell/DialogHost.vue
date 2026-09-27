@@ -72,8 +72,11 @@ const props = withDefaults(
      * `title` tooltip so a caller's refusal is never a silent no-op. The
      * accessible name stays the literal "Close" either way. */
     closeReason?: string | null;
+    /** The body without its 20px padding and 16px gap: a dialog that draws
+     * its own regions edge to edge (the learning center, concept §9.3). */
+    flush?: boolean;
   }>(),
-  { closable: true, width: 560, closeTestid: "dialog-close", closeReason: null },
+  { closable: true, width: 560, closeTestid: "dialog-close", closeReason: null, flush: false },
 );
 const emit = defineEmits<{
   (e: "close"): void;
@@ -228,7 +231,8 @@ function onBackdrop(): void {
 
       <div
         data-testid="dialog-host-body"
-        class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5"
+        class="flex min-h-0 flex-1 flex-col overflow-y-auto"
+        :class="flush ? '' : 'gap-4 p-5'"
       >
         <slot />
       </div>

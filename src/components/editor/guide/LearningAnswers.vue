@@ -4,12 +4,15 @@
  * lessons as the coach tells them (`answers.ts` — case- and
  * diacritic-insensitive), each answer opening to its text and a **Show me
  * in the editor** jump to that lesson. The answers say where controls are
- * now; there is no second, hand-written answer list.
+ * now; there is no second, hand-written answer list. Visual-parity Task 23
+ * (concept §9.3): the search field with its magnifier, then the answers
+ * as ruled rows.
  */
 import { computed, ref } from "vue";
 
 import { searchAnswers } from "../../../editor/guide/answers";
 import type { GuideStepId } from "../../../editor/guide/content";
+import EditorIcon from "../icons/EditorIcon.vue";
 
 const emit = defineEmits<{ (e: "jump", id: GuideStepId): void }>();
 
@@ -18,39 +21,50 @@ const answers = computed(() => searchAnswers(query.value));
 </script>
 
 <template>
-  <section class="flex max-h-[50vh] flex-col gap-2 overflow-y-auto pr-1">
-    <input
-      v-model="query"
-      type="search"
-      data-testid="learning-search"
-      aria-label="Search quick answers"
-      placeholder="Search: audio, saving, camera…"
-      autocomplete="off"
-      class="w-full rounded-control border border-line bg-raised px-2 py-1 text-sm text-fg placeholder:text-fg-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-    >
+  <section>
+    <label class="mb-4 flex items-center gap-[11px]">
+      <EditorIcon
+        name="search"
+        class="shrink-0 text-fg-muted"
+      />
+      <input
+        v-model="query"
+        type="search"
+        data-testid="learning-search"
+        aria-label="Search quick answers"
+        placeholder="Search audio, saving, camera…"
+        autocomplete="off"
+        class="min-h-[39px] w-full text-[13px] placeholder:text-fg-subtle"
+      >
+    </label>
     <details
       v-for="a in answers"
       :key="a.stepId"
       data-testid="learning-answer"
       :data-step-id="a.stepId"
-      class="rounded-control border border-line px-2 py-1"
+      class="border-b border-line py-[13px]"
     >
-      <summary class="cursor-pointer text-sm text-fg">
+      <summary class="cursor-pointer py-[3px] text-[13px] text-fg">
         {{ a.question }}
       </summary>
-      <p class="mt-1 text-xs text-fg-secondary">
+      <p class="mt-3 mb-[5px] text-xs leading-[1.75] text-fg-secondary">
         {{ a.answer }}
       </p>
-      <p class="mt-1 text-xs text-fg-muted">
+      <p class="text-[11px] leading-[1.65] text-fg-muted">
         {{ a.tip }}
       </p>
       <button
         type="button"
         :data-testid="`learning-answer-show-${a.stepId}`"
-        class="mt-1 cursor-pointer text-xs text-accent-fg underline focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        :aria-label="`Show me in the editor: ${a.label}`"
+        class="mt-1 flex items-center gap-1 border-transparent bg-transparent px-0.5 text-xs text-accent-ink hover:underline"
         @click="emit('jump', a.stepId)"
       >
-        Show me in the editor ({{ a.label }})
+        Show me in the editor
+        <EditorIcon
+          name="chevronRight"
+          :size="13"
+        />
       </button>
     </details>
     <p

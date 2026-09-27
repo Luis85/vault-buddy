@@ -133,12 +133,12 @@ type CopyOverride = Partial<Record<"label" | "body" | "tip" | "task", string>>;
  * - `select`: there is no Clear selection item and no V shortcut;
  * - `split`: the delete modes are "Leave gap" and "Close gap on this
  *   track", not "Ripple this track";
- * - `context`: only a clip has a right-click menu;
  * - `chapters`: there is no companion-note preview;
- * - `save`: Save project stores the project here, there is no download,
- *   recovery is the native journal, and a copy as a project file is the
- *   Project menu's "Save a copy as project file…" (visual-parity Task 8
- *   retired the menu beside Save project);
+ * - `save`: the lesson highlights the header's Save project, which stores
+ *   the project in Vault Buddy (no download, no portable file — that is
+ *   the Project menu's "Save a copy as project file…", visual-parity Task
+ *   8), and recovery is the native journal; since visual-parity Task 23
+ *   the body and task describe that button, the control the ring is on;
  * - `render`: an ffmpeg render has no three-minute limit, lands in the
  *   project's Products, and Publish DOES write a copy into a vault;
  * - `products`: the Project menu has no "workspace files" list — its
@@ -146,7 +146,9 @@ type CopyOverride = Partial<Record<"label" | "body" | "tip" | "task", string>>;
  *   (visual-parity Task 10, design D9), where the rendered products live;
  * `help` carried an override until Task 57 shipped the learning center its
  * verbatim text describes (Help's menu, chapter jumps, quick answers,
- * shortcuts); it is the concept text again.
+ * shortcuts); it is the concept text again. So is `context` since
+ * visual-parity Task 23: tracks (Task 17), teaching cues (Task 19) and
+ * media rows (Task 9) have right-click menus now, as its text says.
  * `tests/editorGuideContent.test.ts` pins every entry whole.
  */
 export const LESSON_COPY_OVERRIDES: Readonly<Partial<Record<GuideStepId, CopyOverride>>> = {
@@ -160,9 +162,6 @@ export const LESSON_COPY_OVERRIDES: Readonly<Partial<Record<GuideStepId, CopyOve
   split: {
     tip: "Leave gap keeps other clips in place. Close gap on this track closes the gap on this track only, which can change its alignment with other tracks.",
   },
-  context: {
-    body: "Right-click a clip for the actions that apply to it. Edit actions in the timeline opens the same menu for the selected clips without a right click.",
-  },
   tracks: {
     tip: "Adding a track is optional: dropping media below the last track makes a new one too.",
   },
@@ -173,8 +172,9 @@ export const LESSON_COPY_OVERRIDES: Readonly<Partial<Record<GuideStepId, CopyOve
     task: "Look through the chapter list. Adding a chapter is optional.",
   },
   save: {
-    tip: "Save project stores the editable project in Vault Buddy on this computer, and unsaved edits are kept for recovery if the editor closes. A portable project file may include uncensored originals.",
-    task: "Open the Project menu to save a copy as a project file. Saving is optional.",
+    body: "Save project keeps the editable workspace without rendering: the timeline, teaching layers and render history are stored in Vault Buddy on this computer, so you can continue later.",
+    tip: "Unsaved edits are kept for recovery if the editor closes. To move or back up a project, use Project → Save a copy as project file…; a portable copy may include uncensored originals.",
+    task: "Choose Save project, or press Ctrl+S, when you want to store your changes. Saving is optional.",
   },
   render: {
     tip: "Rendering runs on this computer with your installed ffmpeg and adds the video to this project's Products. Publishing a product copies it, with an optional companion note, into a vault. Keep the editable project for later changes.",

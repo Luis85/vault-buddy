@@ -12,6 +12,12 @@
  * `found` is the registered element; `rect` is its box only when it has
  * one — a control inside a closed drawer is registered but has no size,
  * and the coach says so instead of drawing a ring around nothing.
+ *
+ * `menu` is the box of whatever menu is open (visual-parity Task 23,
+ * concept §9.2: the card prefers a place that leaves it uncovered, and the
+ * target label hides while it is open). It is read from the DOM — every
+ * editor menu renders `role="menu"` through `MenuPanel` — rather than from
+ * a second registry of open menus.
  */
 import type { ShallowRef } from "vue";
 import { onBeforeUnmount, shallowRef, watch } from "vue";
@@ -29,6 +35,8 @@ export interface CoachTarget {
   found: ShallowRef<ResolvedGuideTarget | null>;
   rect: ShallowRef<Rect | null>;
   viewport: ShallowRef<Size>;
+  /** The open menu's box, or `null` while no menu is open. */
+  menu: ShallowRef<Rect | null>;
   state: () => TargetState;
   measure: () => void;
 }
@@ -36,6 +44,15 @@ export interface CoachTarget {
 function boxOf(el: Element | undefined): Rect | null {
   const r = el?.getBoundingClientRect();
   return r && r.width > 0 && r.height > 0 ? { x: r.left, y: r.top, width: r.width, height: r.height } : null;
+}
+
+/** The first open menu with a box (a menu's submenu sits beside it). */
+function openMenuBox(): Rect | null {
+  for (const el of document.querySelectorAll('[role="menu"]')) {
+    const box = boxOf(el);
+    if (box) return box;
+  }
+  return null;
 }
 
 function sameRect(a: Rect | null, b: Rect | null): boolean {
@@ -54,6 +71,7 @@ export function useCoachTarget(key: () => GuideTargetKey | null, live: () => boo
   const found = shallowRef<ResolvedGuideTarget | null>(null);
   const rect = shallowRef<Rect | null>(null);
   const viewport = shallowRef<Size>({ width: window.innerWidth, height: window.innerHeight });
+  const menu = shallowRef<Rect | null>(null);
 
   function measure(): void {
     const k = key();
@@ -61,6 +79,13 @@ export function useCoachTarget(key: () => GuideTargetKey | null, live: () => boo
     if (!sameTarget(found.value, next)) found.value = next;
     const box = boxOf(next?.element);
     if (!sameRect(rect.value, box)) rect.value = box;
+    measureWindow();
+  }
+
+  /** The window's size and any open menu's box, re-assigned on change. */
+  function measureWindow(): void {
+    const open = live() ? openMenuBox() : null;
+    if (!sameRect(menu.value, open)) menu.value = open;
     const vp = viewport.value;
     if (vp.width !== window.innerWidth || vp.height !== window.innerHeight) {
       viewport.value = { width: window.innerWidth, height: window.innerHeight };
@@ -97,5 +122,5 @@ export function useCoachTarget(key: () => GuideTargetKey | null, live: () => boo
   );
   onBeforeUnmount(stop);
 
-  return { found, rect, viewport, state, measure };
+  return { found, rect, viewport, menu, state, measure };
 }

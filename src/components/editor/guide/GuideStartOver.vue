@@ -25,7 +25,7 @@ function confirm(): void {
     v-if="!confirming"
     type="button"
     data-testid="guide-start-over"
-    class="cursor-pointer rounded px-1 text-fg-subtle underline hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+    class="border-transparent bg-transparent px-0.5 text-[11px] whitespace-nowrap text-fg-muted hover:underline"
     @click="confirming = true"
   >
     Start over

@@ -165,6 +165,8 @@
   --editor-library-drawer: 250px;
   /* The drawers' lift (the concept's `--shadow`). */
   --editor-shadow: 0 18px 60px #0005;
+  /* The guide's surfaces' lift (concept `--guide-shadow`, §9.1–9.3). */
+  --editor-guide-shadow: 0 20px 70px #0006;
   /* Every menu's edge and lift (concept §8 `.context-panel`, Task 5). */
   --color-menu-edge: color-mix(in srgb, var(--color-line) 65%, var(--color-fg-muted));
   --editor-menu-shadow: 0 16px 55px #0006, 0 2px 6px #0003;
@@ -183,6 +185,7 @@
 [data-theme="light"] {
   color-scheme: light;
   --editor-shadow: 0 18px 60px #2b194025;
+  --editor-guide-shadow: 0 20px 70px #25163a33;
   --color-fg: #292632;
   --color-fg-secondary: #504b5d;
   --color-fg-muted: #5f5969;
@@ -383,6 +386,16 @@ body,
   .vb-lane-locked::after {
     forced-color-adjust: none;
     background: repeating-linear-gradient(135deg, transparent 0 8px, GrayText 8px 10px);
+  }
+  /* The guide's ring and its progress line (concept §9.2's own
+     forced-colors rule: `#guideRing{border:3px solid Highlight}`). */
+  .vb-guide-ring {
+    forced-color-adjust: none;
+    border: 3px solid Highlight;
+  }
+  .vb-guide-progress {
+    forced-color-adjust: none;
+    background-color: Highlight;
   }
 }
 

@@ -111,9 +111,6 @@ describe("native lesson copy", () => {
       split: {
         tip: "Leave gap keeps other clips in place. Close gap on this track closes the gap on this track only, which can change its alignment with other tracks.",
       },
-      context: {
-        body: "Right-click a clip for the actions that apply to it. Edit actions in the timeline opens the same menu for the selected clips without a right click.",
-      },
       tracks: {
         tip: "Adding a track is optional: dropping media below the last track makes a new one too.",
       },
@@ -124,8 +121,9 @@ describe("native lesson copy", () => {
         task: "Look through the chapter list. Adding a chapter is optional.",
       },
       save: {
-        tip: "Save project stores the editable project in Vault Buddy on this computer, and unsaved edits are kept for recovery if the editor closes. A portable project file may include uncensored originals.",
-        task: "Open the Project menu to save a copy as a project file. Saving is optional.",
+        body: "Save project keeps the editable workspace without rendering: the timeline, teaching layers and render history are stored in Vault Buddy on this computer, so you can continue later.",
+        tip: "Unsaved edits are kept for recovery if the editor closes. To move or back up a project, use Project → Save a copy as project file…; a portable copy may include uncensored originals.",
+        task: "Choose Save project, or press Ctrl+S, when you want to store your changes. Saving is optional.",
       },
       render: {
         tip: "Rendering runs on this computer with your installed ffmpeg and adds the video to this project's Products. Publishing a product copies it, with an optional companion note, into a vault. Keep the editable project for later changes.",

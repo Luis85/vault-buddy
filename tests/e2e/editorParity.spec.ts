@@ -1191,3 +1191,65 @@ for (const [open, dialog, primary] of [
     expect(button.y + button.height).toBeLessThanOrEqual(640);
   });
 }
+
+// Visual-parity Task 23 (concept spec §9.2–9.3, screens 10–11): the coach
+// on the Fades lesson, docked left of the inspector, and the learning
+// center.
+test.describe("parity 1600x1000: the guide (screens 10–11, §9.2–9.3)", () => {
+  test("the coach on Fades: 362 wide, left of the inspector, the ring and its label", async ({ page }) => {
+    // A dismissed invitation and a walkthrough paused on Fades (13 / 22).
+    await openParity(page, { width: 1600, height: 1000 }, {
+      replies: {
+        editor_get_guide_progress: {
+          ...(PARITY_REPLIES.editor_get_guide_progress as object),
+          invitationDismissed: true,
+          currentStepId: "fades",
+          reviewed: ["welcome", "media", "preview", "timeline", "select", "split", "undo", "arrange", "context", "tracks", "webcam", "layout"],
+        },
+      },
+    });
+    await page.getByTestId("editor-header-help").click();
+    await page.getByTestId("editor-help-menu-item-resume").click();
+    const coach = page.getByTestId("guide-coach");
+    await expect(coach).toHaveAttribute("data-step-id", "fades");
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: "test-results/parity/built-10-onboarding.png" });
+    await composite(page, "10-onboarding.png", "test-results/parity/built-10-onboarding.png", "vs-10-onboarding");
+
+    await expect(coach).toHaveAttribute("data-placement", "left");
+    const card = await box(page, "guide-coach");
+    expect(card.width).toBeCloseTo(362, 0);
+    expect(card.x + card.width).toBeLessThanOrEqual((await box(page, "editor-shell-inspector")).x);
+    await expect(page.getByTestId("guide-coach-count")).toHaveText("13 / 22");
+    await expect(page.getByTestId("guide-coach-contents")).toHaveText("Smooth the edges");
+    await expect(page.getByTestId("guide-coach-title")).toHaveCSS("font-size", "23px");
+    await expect(page.getByTestId("guide-coach-task")).toHaveAttribute("data-voice", "edit");
+    await expect(page.getByTestId("guide-coach-storage")).toHaveText("Progress remembered on this PC");
+    await expect(page.getByTestId("guide-target-label")).toHaveText("Fade controls");
+    expect((await box(page, "guide-coach-progress")).height).toBeCloseTo(3, 0);
+  });
+
+  test("the learning center: 870 wide, the hero and its 128px ring, three tabs, two columns of chapters", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("editor-header-help").click();
+    await page.getByTestId("editor-help-menu-item-learningCenter").click();
+    await expect(page.getByTestId("learning-center")).toBeVisible();
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: "test-results/parity/built-11-learning-center.png" });
+    await composite(page, "11-learning-center.png", "test-results/parity/built-11-learning-center.png", "vs-11-learning-center");
+
+    expect((await box(page, "dialog-host-content")).width).toBeCloseTo(870, 0);
+    const ring = await box(page, "learning-progress");
+    expect(ring.width).toBeCloseTo(128, 0);
+    expect(ring.height).toBeCloseTo(128, 0);
+    await expect(page.getByTestId("learning-progress")).toContainText("0%");
+    await expect(page.getByTestId("learning-tablist").getByRole("tab")).toHaveText(["Walkthrough", "Quick answers", "Shortcuts"]);
+    const orient = await box(page, "learning-card-orient");
+    const edit = await box(page, "learning-card-edit");
+    const last = await box(page, "learning-card-return");
+    expect(Math.abs(orient.y - edit.y)).toBeLessThanOrEqual(1);
+    expect(edit.x).toBeGreaterThan(orient.x + orient.width);
+    expect(last.width).toBeCloseTo(edit.x + edit.width - orient.x, 0);
+    await expect(page.getByTestId("learning-center")).not.toContainText(/this device|download/i);
+  });
+});

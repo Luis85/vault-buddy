@@ -17,24 +17,32 @@
  *
  * The status line is set only from a reply — "Saved to" names the file Rust
  * reported writing. Every message renders as text.
+ *
+ * Visual-parity Task 23 (concept §9.3): the learning center's footer, a
+ * "Progress & preferences" disclosure whose summary says where progress is
+ * kept (design D10: "Progress remembered on this PC", or "Session only"
+ * when it cannot be stored). The concept's "Load progress file" names the
+ * restore.
  */
 import { computed, ref } from "vue";
 
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
 import { useEditorProjectStore } from "../../../stores/editorProject";
-import AppButton from "../../ui/AppButton.vue";
+import EditorIcon from "../icons/EditorIcon.vue";
 
 const onboarding = useEditorOnboardingStore();
 const project = useEditorProjectStore();
 
 const busy = ref(false);
+const BUSY_REASON = "Waiting for the file dialog to close.";
 const status = ref<{ text: string; alert: boolean }>({ text: "", alert: false });
 
 const storageNote = computed(() =>
   onboarding.sessionOnly
-    ? "Progress cannot be stored on this device right now and lasts until the editor closes. Save a progress file to keep it."
-    : "Progress is stored for you on this computer, apart from your projects.",
+    ? "Progress cannot be stored on this PC right now and lasts until the editor closes. Save a progress file to keep it."
+    : "Progress is stored for you on this PC, apart from your projects.",
 );
+const storageBadge = computed(() => (onboarding.sessionOnly ? "Session only" : "Progress remembered on this PC"));
 
 function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -81,66 +89,81 @@ async function restoreFile(): Promise<void> {
 </script>
 
 <template>
-  <section class="flex flex-col gap-2 border-t border-line pt-3 text-xs">
-    <h3 class="font-semibold text-fg-secondary">
-      Progress and preferences
-    </h3>
-    <p class="text-fg-muted">
-      {{ storageNote }}
-    </p>
-    <label class="flex items-center gap-2 text-fg-secondary">
-      <input
-        type="checkbox"
-        data-testid="learning-pref-dimming"
-        class="h-4 w-4 accent-violet-500"
-        :checked="onboarding.progress.preferences.dimming"
-        @change="onDimming"
+  <footer class="border-t border-line bg-app px-[34px] pt-[17px] pb-5 text-[11px] text-fg-secondary">
+    <details data-testid="learning-preferences">
+      <summary class="flex min-h-6 cursor-pointer items-center justify-between gap-3 text-xs text-fg">
+        Progress &amp; preferences
+        <span
+          data-testid="learning-storage"
+          class="text-[10px] text-fg-muted"
+        >{{ storageBadge }}</span>
+      </summary>
+      <p class="my-3 leading-[1.7] text-fg-muted">
+        {{ storageNote }}
+      </p>
+      <label class="my-[9px] flex items-center gap-2">
+        <input
+          type="checkbox"
+          data-testid="learning-pref-dimming"
+          :checked="onboarding.progress.preferences.dimming"
+          @change="onDimming"
+        >
+        Dim the surrounding editor during a step
+      </label>
+      <label class="mb-3.5 flex items-center gap-2">
+        Motion
+        <select
+          data-testid="learning-pref-motion"
+          class="text-[11px]"
+          :value="onboarding.progress.preferences.motion"
+          @change="onMotion"
+        >
+          <option value="system">Follow Windows</option>
+          <option value="reduced">Reduced</option>
+          <option value="full">Full</option>
+        </select>
+      </label>
+      <div class="flex flex-wrap gap-[9px]">
+        <button
+          type="button"
+          data-testid="learning-save-file"
+          :disabled="busy"
+          :title="busy ? BUSY_REASON : undefined"
+          class="flex items-center gap-1.5 rounded-[7px] border border-line bg-panel px-2.5 py-1.5 text-[11px] text-fg"
+          @click="saveFile"
+        >
+          <EditorIcon
+            name="save"
+            :size="15"
+          />
+          Save progress file…
+        </button>
+        <button
+          type="button"
+          data-testid="learning-restore-file"
+          :disabled="busy"
+          :title="busy ? BUSY_REASON : undefined"
+          class="flex items-center gap-1.5 rounded-[7px] border border-line bg-panel px-2.5 py-1.5 text-[11px] text-fg"
+          @click="restoreFile"
+        >
+          <EditorIcon
+            name="folder"
+            :size="15"
+          />
+          Load progress file…
+        </button>
+      </div>
+      <small class="mt-3 block text-[10px] text-fg-muted">
+        Progress files contain lesson identifiers and these preferences only, never your project or media.
+      </small>
+      <p
+        data-testid="learning-file-status"
+        :role="status.alert ? 'alert' : 'status'"
+        class="mt-2 min-h-4 break-words"
+        :class="status.alert ? 'text-danger-fg' : 'text-fg-secondary'"
       >
-      Dim the editor around the highlighted control
-    </label>
-    <label class="flex items-center gap-2 text-fg-secondary">
-      Motion
-      <select
-        data-testid="learning-pref-motion"
-        class="rounded-control border border-line bg-raised px-1 py-0.5 text-fg"
-        :value="onboarding.progress.preferences.motion"
-        @change="onMotion"
-      >
-        <option value="system">Follow Windows</option>
-        <option value="reduced">Reduced</option>
-        <option value="full">Full</option>
-      </select>
-    </label>
-    <div class="flex flex-wrap gap-2">
-      <AppButton
-        size="sm"
-        variant="secondary"
-        data-testid="learning-save-file"
-        :disabled="busy"
-        @click="saveFile"
-      >
-        Save progress file…
-      </AppButton>
-      <AppButton
-        size="sm"
-        variant="secondary"
-        data-testid="learning-restore-file"
-        :disabled="busy"
-        @click="restoreFile"
-      >
-        Restore progress file…
-      </AppButton>
-    </div>
-    <p class="text-fg-subtle">
-      A progress file holds lesson names and these preferences only — never your project or media.
-    </p>
-    <p
-      data-testid="learning-file-status"
-      :role="status.alert ? 'alert' : 'status'"
-      class="min-h-4 break-words"
-      :class="status.alert ? 'text-danger-fg' : 'text-fg-secondary'"
-    >
-      {{ status.text }}
-    </p>
-  </section>
+        {{ status.text }}
+      </p>
+    </details>
+  </footer>
 </template>
