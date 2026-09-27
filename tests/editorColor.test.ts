@@ -176,6 +176,16 @@ describe("ColorSection", () => {
     expect(w.get('[data-testid="color-preset-warm"]').attributes("aria-pressed")).toBe("true");
   });
 
+  // Fix round 1: the treatment every clip already wears is not an edit.
+  it("the tile the selection already wears sends nothing", async () => {
+    await open(project([clip("c1", { adjustments: WARM })]));
+    const w = mount(ColorSection, { props: { clipIds: ["c1"] } });
+    await w.get('[data-testid="color-preset-warm"]').trigger("click");
+    await w.get('[data-testid="color-preset-original"]').trigger("click");
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "setAdjustments", clipIds: ["c1"], adjustments: null }]);
+  });
+
   it("custom values light no tile", async () => {
     await open(project([clip("c1", { adjustments: { ...WARM, brightness: 1.5 } })]));
     const w = mount(ColorSection, { props: { clipIds: ["c1"] } });

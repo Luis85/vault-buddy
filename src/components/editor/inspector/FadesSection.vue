@@ -14,9 +14,8 @@
  * the clip menu's own Fades items (`menuSetsClip.ts`: both edges, never
  * past half the clip), run through their own `run` with their own reasons.
  *
- * The half-duration LIMIT is read once at setup (the caller keys this
- * component on the SELECTION): a preview of the refusal, never a substitute
- * for Rust's own — `set_fades` re-checks the clip's CURRENT duration. One
+ * The half-duration LIMIT follows the live clip: a preview of the refusal,
+ * never a substitute for Rust's own — `set_fades` re-checks it. One
  * clip only: a multi-selection gets a note (R20). A locked track disables
  * every edit — the inspector's frame says why, each control carries the
  * reason — while Preview entrance, which changes nothing, still plays.
@@ -61,8 +60,8 @@ const locked = computed(() => lockReason.value !== null);
 const durationMs = computed(() => (clip.value ? clipOutputDuration(clip.value.in_ms, clip.value.out_ms, clip.value.speed ?? 1) : 0));
 
 /** Mirrors `core::editor::commands::fades::fade_limit` (`duration / 2`,
- * floored), read once. */
-const halfDurationMs = Math.floor(durationMs.value / 2);
+ * floored), from the live clip, so a trim while the tab is open moves it. */
+const halfDurationMs = computed(() => Math.floor(durationMs.value / 2));
 
 function commit(fades: { fadeInMs?: number; fadeOutMs?: number; fadeCurve?: FadeCurve }): Promise<boolean> {
   const c = clip.value;
@@ -73,11 +72,11 @@ function commit(fades: { fadeInMs?: number; fadeOutMs?: number; fadeCurve?: Fade
 const drafts = clip.value
   ? {
       fadeIn: useInspectorDraft(
-        secondsField({ value: () => clip.value?.fade_in_ms ?? 0, label: "Fade in", maxMs: halfDurationMs }),
+        secondsField({ value: () => clip.value?.fade_in_ms ?? 0, label: "Fade in", maxMs: () => halfDurationMs.value }),
         (fadeInMs) => commit({ fadeInMs }),
       ),
       fadeOut: useInspectorDraft(
-        secondsField({ value: () => clip.value?.fade_out_ms ?? 0, label: "Fade out", maxMs: halfDurationMs }),
+        secondsField({ value: () => clip.value?.fade_out_ms ?? 0, label: "Fade out", maxMs: () => halfDurationMs.value }),
         (fadeOutMs) => commit({ fadeOutMs }),
       ),
     }

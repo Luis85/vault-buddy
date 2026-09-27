@@ -5,7 +5,8 @@
  * item of that length (`menuSetsClip.ts`: both edges, never past half the
  * clip), run through its own `run` and refused with its own reason — a
  * locked track is the Fades menu's. The preset the clip already wears
- * (both edges at that length, as the menu would clamp it) reads as pressed.
+ * (both edges at that length, as the menu would clamp it) reads as pressed,
+ * and pressing it again sends nothing.
  */
 import { computed } from "vue";
 
@@ -28,12 +29,9 @@ const presets = computed(() => {
   return PRESETS.map((p) => {
     const item = findMenuAction(menu, `fades-${p.ms}`);
     const both = Math.min(p.ms, props.halfDurationMs);
-    return {
-      ...p,
-      run: () => item?.run?.(),
-      reason: reasonOf(item, fades),
-      pressed: props.fadeInMs === both && props.fadeOutMs === both,
-    };
+    const pressed = props.fadeInMs === both && props.fadeOutMs === both;
+    // The preset the clip already wears is not an edit.
+    return { ...p, run: () => pressed || item?.run?.(), reason: reasonOf(item, fades), pressed };
   });
 });
 </script>

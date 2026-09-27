@@ -81,6 +81,7 @@ function onToggle(event: Event): void {
     :max="range.max * range.scale"
     :step="range.step"
     :suffix="range.suffix"
+    :disabled="disabled"
     :commit="commitRange"
   />
   <label

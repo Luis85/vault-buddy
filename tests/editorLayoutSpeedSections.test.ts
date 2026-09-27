@@ -10,12 +10,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import SpeedSection from "../src/components/editor/inspector/SpeedSection.vue";
 import type { EditorCommand } from "../src/editor/editorCommandTypes";
-import { speedRipple } from "../src/editor/speedRipple";
+import { GROUPED_WITH_CLIP, speedRipple } from "../src/editor/speedRipple";
 import type { Clip, Project, Track } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
 
 enableAutoUnmount(afterEach);
+// The ripple choice is window-local state: never leak one test's into the next.
+afterEach(() => {
+  speedRipple.value = "ripple";
+});
 
 function track(id: string, overrides: Partial<Track> = {}): Track {
   return { id, kind: "video", name: id, visible: true, locked: false, muted: false, solo: false, volume: 1, ...overrides };
@@ -89,7 +93,8 @@ async function open(p: Project, refuse: EditorCommand["kind"] | null = null): Pr
       execute: (req) => {
         executed.push(req.command);
         if (req.command.kind === refuse) return Promise.reject(new Error("refused"));
-        return Promise.resolve({ snapshot: { ...snapshot, revision: 2 }, project: p });
+        // Every accepted command is a new revision, so each reply installs.
+        return Promise.resolve({ snapshot: { ...snapshot, revision: 1 + executed.length }, project: p });
       },
       saveWorkspace: () => Promise.resolve(),
     }),
@@ -157,7 +162,22 @@ describe("SpeedSection", () => {
     await w.get('[data-testid="speed-section-speed"]').setValue("2");
     await flushPromises();
     expect(executed).toEqual([{ kind: "setSpeed", clipId: "c1", speed: 2, preservePitch: true }]);
-    speedRipple.value = "ripple";
+  });
+
+  // Fix round 1 (ruling T15-2): a clip grouped with a clip after it cannot
+  // move the following clips without moving itself.
+  it("grouped clips that would move wrongly leave only Keep following clips in place, and say why", async () => {
+    await open(project([clip("c1", { group_id: "g" }), clip("c2", { start_ms: 4_700, group_id: "g" })]));
+    const w = mount(SpeedSection, { props: { clipIds: ["c1"] } });
+    const ripple = w.get('[data-testid="speed-section-ripple"]');
+    expect((ripple.element as HTMLSelectElement).value).toBe("leave");
+    const move = ripple.get('option[value="ripple"]');
+    expect(move.attributes("disabled")).toBeDefined();
+    expect(move.attributes("title")).toBe(GROUPED_WITH_CLIP);
+    expect(w.get('[data-testid="speed-section-ripple-reason"]').text()).toBe(GROUPED_WITH_CLIP);
+    await w.get('[data-testid="speed-section-speed"]').setValue("0.5");
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "setSpeed", clipId: "c1", speed: 0.5, preservePitch: true }]);
   });
 
   it("a speed Rust refuses after the following clips moved puts them back", async () => {
@@ -167,8 +187,10 @@ describe("SpeedSection", () => {
     await select.setValue("0.5");
     await flushPromises();
     expect(executed.map((c) => c.kind)).toEqual(["moveClips", "setSpeed", "undo"]);
-    // The select shows the speed the clip still has.
+    // The select shows the speed the clip still has, and the refusal is
+    // still what the editor says — the undo's own reply does not erase it.
     expect((select.element as HTMLSelectElement).value).toBe("1");
+    expect(useEditorProjectStore().lastError?.message).toBe("refused");
   });
 
   it("a locked track disables speed and says why", async () => {

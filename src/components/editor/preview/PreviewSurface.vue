@@ -256,13 +256,11 @@ function togglePlay(): void {
 }
 
 // The Fades tab's "Preview entrance" (visual-parity Task 15): the playhead
-// moves to the clip's start and the preview plays from there.
+// moves to the clip's start — the playhead watcher above seeks there — and
+// the preview plays from it.
 onReveal("playback", () => {
-  const ms = requestedPlaybackMs();
-  workspace.setPlayhead(ms);
-  if (!controller) return;
-  void controller.seek(ms);
-  controller.play();
+  workspace.setPlayhead(requestedPlaybackMs());
+  controller?.play();
 });
 
 /** D15: select the topmost visible clip under a primary press, or clear

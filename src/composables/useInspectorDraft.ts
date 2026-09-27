@@ -130,16 +130,20 @@ export function percentField(opts: {
 export function secondsField(opts: {
   value: () => number;
   label: string;
-  maxMs: number;
+  /** The most a value may be — a getter when it follows the projection
+   * (a fade's half-clip bound after a trim), read at parse time. */
+  maxMs: number | (() => number);
   /** The least a value may be (a transition's overlap is at least 1 ms). */
   minMs?: number;
 }): InspectorField<number> {
-  const [min, max] = [(opts.minMs ?? 0) / 1000, opts.maxMs / 1000];
-  const seconds = numberField({ value: () => opts.value() / 1000, label: opts.label, min, max, rangeLabel: `${min} and ${max} s` });
+  const min = (opts.minMs ?? 0) / 1000;
+  const maxMs = opts.maxMs;
   return {
     value: opts.value,
     format: (ms: number) => String(ms / 1000),
     parse(raw: string): InspectorParseResult<number> {
+      const max = (typeof maxMs === "function" ? maxMs() : maxMs) / 1000;
+      const seconds = numberField({ value: () => 0, label: opts.label, min, max, rangeLabel: `${min} and ${max} s` });
       const typed = seconds.parse(raw);
       return typed.ok ? { ok: true, value: Math.round(typed.value * 1000) } : typed;
     },

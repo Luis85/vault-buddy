@@ -94,37 +94,45 @@ async function remove(): Promise<void> {
     >
       {{ MASK_WARNING }}
     </p>
-    <CuePropertySection
-      v-for="s in before"
-      :key="s.id"
-      :section="s"
-      :effect="effect"
-      :lock-reason="lockReason"
-      :send="sendProps"
-    />
-    <InspectorSection title="Timing within this clip">
-      <CueTiming
-        :effect="effect"
-        :clip="clip"
-        :disabled="locked"
-        :send="send"
-      />
-    </InspectorSection>
-    <CuePropertySection
-      v-if="position"
-      :section="position"
-      :effect="effect"
-      :lock-reason="lockReason"
-      :send="sendProps"
-    />
-    <InspectorButton
-      class="mt-1 self-start"
-      icon="trash"
-      data-testid="effect-remove"
-      :reason="lockReason"
-      @click="remove"
+    <!-- Every edit below refuses on a locked track; the fieldset says why. -->
+    <fieldset
+      data-testid="effect-section-fields"
+      :disabled="locked"
+      :title="lockReason ?? undefined"
+      class="flex min-w-0 flex-col"
     >
-      Remove cue
-    </InspectorButton>
+      <CuePropertySection
+        v-for="s in before"
+        :key="s.id"
+        :section="s"
+        :effect="effect"
+        :lock-reason="lockReason"
+        :send="sendProps"
+      />
+      <InspectorSection title="Timing within this clip">
+        <CueTiming
+          :effect="effect"
+          :clip="clip"
+          :disabled="locked"
+          :send="send"
+        />
+      </InspectorSection>
+      <CuePropertySection
+        v-if="position"
+        :section="position"
+        :effect="effect"
+        :lock-reason="lockReason"
+        :send="sendProps"
+      />
+      <InspectorButton
+        class="mt-1 self-start"
+        icon="trash"
+        data-testid="effect-remove"
+        :reason="lockReason"
+        @click="remove"
+      >
+        Remove cue
+      </InspectorButton>
+    </fieldset>
   </div>
 </template>

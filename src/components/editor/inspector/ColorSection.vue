@@ -62,6 +62,11 @@ function send(adjustments: Adjustments | null): Promise<boolean> {
   return editorProject.execute({ kind: "setAdjustments", clipIds: clips.value.map((c) => c.id), adjustments });
 }
 
+/** The treatment every selected clip already wears is not an edit. */
+function pick(id: string, adjustments: Adjustments | null): void {
+  if (id !== activeId.value) void send(adjustments);
+}
+
 function slide(key: keyof Adjustments, percent: number): Promise<boolean> {
   return send({ ...current.value, [key]: percent / 100 });
 }
@@ -80,7 +85,7 @@ function slide(key: keyof Adjustments, percent: number): Promise<boolean> {
         prefix="color-preset"
         :active-id="activeId"
         :reason="lockReason"
-        @pick="(t) => send(t.adjustments)"
+        @pick="(t) => pick(t.id, t.adjustments)"
       />
     </InspectorSection>
     <InspectorSection title="Fine adjustments">

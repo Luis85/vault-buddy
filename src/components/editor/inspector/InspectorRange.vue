@@ -5,11 +5,13 @@
  * the thumb while it moves, and `commit` runs once on release — a drag is
  * one edit, not one per pixel. A new committed value (an undo) moves the
  * thumb, and a refused commit (`false`, `useInspectorDraft`'s rule) puts it
- * back where the projection says it is.
+ * back where the projection says it is. `disabled` (a locked track) stops
+ * the thumb moving at all; the caller carries the reason.
  */
 import { ref, watch } from "vue";
 
 const props = defineProps<{
+  disabled?: boolean;
   label: string;
   value: number;
   min: number;
@@ -49,6 +51,7 @@ async function onChange(event: Event): Promise<void> {
       :min="min"
       :max="max"
       :step="step"
+      :disabled="disabled"
       :value="live"
       @input="onInput"
       @change="onChange"

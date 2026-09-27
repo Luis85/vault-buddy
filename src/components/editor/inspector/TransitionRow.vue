@@ -11,7 +11,7 @@
  * stays mounted.
  *
  * The overlap's bound mirrors Rust's `transitions::duration_bound` through
- * `transitionRules.transitionBoundMs`, read once at setup: a preview of the
+ * `transitionRules.transitionBoundMs`, from the live clips: a preview of the
  * refusal, never the authority — `set_transition_duration` re-checks on
  * every commit.
  */
@@ -29,25 +29,29 @@ const props = defineProps<{ transition: Transition; side: "in" | "out"; lockReas
 
 const editorProject = useEditorProjectStore();
 
-const from = editorProject.clipById(props.transition.from);
-const to = editorProject.clipById(props.transition.to);
-const boundMs = from && to ? transitionBoundMs(from, to) : 0;
+const from = computed(() => editorProject.clipById(props.transition.from));
+const to = computed(() => editorProject.clipById(props.transition.to));
+/** The pair's bound from the live clips, so a trim while the tab is open
+ * moves it. */
+const boundMs = computed(() => (from.value && to.value ? transitionBoundMs(from.value, to.value) : 0));
 
 const live = computed(() => editorProject.project?.transitions.find((t) => t.id === props.transition.id));
 const durationMs = computed(() => live.value?.duration_ms ?? props.transition.duration_ms);
 const title = computed(() => (props.transition.kind === "dissolve" ? "Cross dissolve" : "Equal-power crossfade"));
 const partner = computed(() => {
-  const clip = props.side === "in" ? from : to;
+  const clip = props.side === "in" ? from.value : to.value;
   const name = clip?.name ?? (props.side === "in" ? props.transition.from : props.transition.to);
   return props.side === "in" ? `From ${name}` : `Into ${name}`;
 });
 
 function setDuration(ms: number): Promise<boolean> {
+  // The overlap already in place is not an edit.
+  if (ms === durationMs.value) return Promise.resolve(true);
   return editorProject.execute({ kind: "setTransitionDuration", transitionId: props.transition.id, durationMs: ms });
 }
 
 const duration = useInspectorDraft(
-  secondsField({ value: () => durationMs.value, label: "Overlap", minMs: 1, maxMs: boundMs }),
+  secondsField({ value: () => durationMs.value, label: "Overlap", minMs: 1, maxMs: () => boundMs.value }),
   setDuration,
 );
 
@@ -78,6 +82,8 @@ function onRemove(): void {
       :field="duration"
       label="Overlap (s)"
       testid="transition-row-duration"
+      :disabled="lockReason !== null"
+      :title="lockReason ?? undefined"
       :step="0.05"
       :min="0"
     />

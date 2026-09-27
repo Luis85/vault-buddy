@@ -9,7 +9,15 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { EditorCommand } from "../src/editor/editorCommandTypes";
-import { runInOrderOrUndo, speedCommands } from "../src/editor/speedRipple";
+import {
+  COLLIDES,
+  GROUPED_WITH_CLIP,
+  REACHES_START,
+  rippleProblem,
+  rippleRefusal,
+  runInOrderOrUndo,
+  speedCommands,
+} from "../src/editor/speedRipple";
 import type { Clip, Project } from "../src/editorTypes";
 
 function clip(id: string, start: number, overrides: Partial<Clip> = {}): Clip {
@@ -67,6 +75,52 @@ describe("speedCommands", () => {
   });
 });
 
+// Fix round 1 (ruling T15-2): Rust's moveClips moves a clip's whole group
+// and clamps a negative delta at the start of the timeline, so a ripple is
+// sent only when the client can see neither would bite.
+describe("rippling next to groups", () => {
+  it("the safe ungrouped case still ripples at every speed", () => {
+    expect(rippleRefusal(PROJECT, C1, [0.25, 0.5, 2, 4])).toBeNull();
+    expect(speedCommands(PROJECT, C1, 2, true, "ripple")).toHaveLength(2);
+  });
+
+  it("(a) a clip grouped with a clip after it cannot ripple: it would move itself", () => {
+    const p = project([clip("c1", 700, { group_id: "g" }), clip("c2", 4_700, { group_id: "g" })]);
+    expect(rippleProblem(p, p.clips[0], 0.5)).toBe(GROUPED_WITH_CLIP);
+    expect(speedCommands(p, p.clips[0], 0.5, true, "ripple")).toEqual([
+      { kind: "setSpeed", clipId: "c1", speed: 0.5, preservePitch: true },
+    ]);
+  });
+
+  it("(b) a follower's partner on another track that would pass the start is refused, not clamped", () => {
+    const p = project([
+      clip("c1", 700),
+      clip("c2", 4_700, { group_id: "g" }),
+      clip("x1", 1_000, { track_id: "v2", group_id: "g" }),
+    ]);
+    // A 2x speed-up pulls the followers 2000 ms earlier; x1 starts at 1000.
+    expect(rippleProblem(p, p.clips[0], 2)).toBe(REACHES_START);
+    expect(rippleProblem(p, p.clips[0], 0.5)).toBeNull();
+    expect(speedCommands(p, p.clips[0], 2, true, "ripple")).toHaveLength(1);
+    expect(rippleRefusal(p, p.clips[0], [0.5, 2])).toBe(REACHES_START);
+  });
+
+  it("(c) each video grouped with its audio: a speed-up would drive B' into A'", () => {
+    const p = project([
+      clip("a", 700, { group_id: "ga" }),
+      clip("a2", 700, { track_id: "au", group_id: "ga" }),
+      clip("b", 4_700, { group_id: "gb" }),
+      clip("b2", 4_700, { track_id: "au", group_id: "gb" }),
+    ]);
+    expect(rippleProblem(p, p.clips[0], 2)).toBe(COLLIDES);
+    expect(speedCommands(p, p.clips[0], 2, true, "ripple")).toEqual([
+      { kind: "setSpeed", clipId: "a", speed: 2, preservePitch: true },
+    ]);
+    // A slowdown moves B and B' later together: nothing is in their way.
+    expect(rippleProblem(p, p.clips[0], 0.5)).toBeNull();
+  });
+});
+
 describe("runInOrderOrUndo", () => {
   const first: EditorCommand = { kind: "removeEffect", effectId: "a" };
   const second: EditorCommand = { kind: "removeEffect", effectId: "b" };
@@ -81,6 +135,20 @@ describe("runInOrderOrUndo", () => {
     const execute = vi.fn((c: EditorCommand) => Promise.resolve(c !== second));
     expect(await runInOrderOrUndo(execute, [first, second])).toBe(false);
     expect(execute.mock.calls.map((c) => c[0])).toEqual([first, second, { kind: "undo" }]);
+  });
+
+  // Fix round 1: the undo's own reply clears the store's error, so the
+  // refusal that caused it is put back once the undo has landed.
+  it("the refusal outlives the undo that rolls it back", async () => {
+    let error: string | null = null;
+    const execute = vi.fn((c: EditorCommand) => {
+      if (c === second) error = "Refused";
+      else if (c.kind === "undo") error = null;
+      return Promise.resolve(c !== second);
+    });
+    const hold = { read: () => error, keep: (e: string) => (error = e) };
+    expect(await runInOrderOrUndo(execute, [first, second], hold)).toBe(false);
+    expect(error).toBe("Refused");
   });
 
   it("a refused first step sends nothing more", async () => {

@@ -693,6 +693,28 @@ describe("teaching cues — edges", () => {
     expect(executed).toEqual([]);
   });
 
+  // Fix round 1: a cue's sliders refuse on a locked track too — a slider
+  // that moves and snaps back says nothing.
+  it("every cue slider is disabled on a locked track, with the reason", async () => {
+    await openProject(
+      project({
+        tracks: [track("v1", { locked: true, name: "Screen" })],
+        effects: [
+          effect(),
+          effect({ id: "t", kind: "text", text: "Hi", fontSize: 32, w: 0.4, h: 0.15 }),
+          effect({ id: "s", kind: "spotlight", w: 0.3, h: 0.3, dim: 0.65 }),
+          effect({ id: "z", kind: "zoom", factor: 2, easing: 0 }),
+        ],
+      }),
+    );
+    const sliders = { arr: "stroke", t: "fontSize", s: "dim", z: "factor" } as const;
+    for (const [id, key] of Object.entries(sliders)) {
+      const w = mount(EffectSection, { props: { effectId: id } });
+      expect(w.get(`[data-testid="effect-field-${key}"]`).attributes("disabled"), `${id} ${key}`).toBeDefined();
+      expect(w.get('[data-testid="effect-section-fields"]').attributes("title")).toBe("Track Screen is locked");
+    }
+  });
+
   it("EffectSection renders nothing for a cue that no longer exists", async () => {
     await openProject();
     const w = mount(EffectSection, { props: { effectId: "gone" } });

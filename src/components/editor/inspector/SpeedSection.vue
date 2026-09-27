@@ -9,7 +9,9 @@
  * captions keep their source times, and a slowdown that would run into the
  * next clip is refused with the reason. "Move following clips on this
  * track" makes that room first (`speedRipple.ts`), and a refusal after the
- * move puts the clips back.
+ * move puts the clips back and keeps saying why. When the clip's groups
+ * would make that move go wrong, the option is disabled with the reason and
+ * the tab keeps the following clips in place (ruling T15-2).
  *
  * `setSpeed` takes one clip, so a multi-selection gets a note rather than
  * a silent edit of `clipIds[0]` (R20). A locked track disables the tab; the
@@ -18,7 +20,7 @@
 import { computed } from "vue";
 
 import { useSelectedClips } from "../../../composables/useSelectedClips";
-import { runInOrderOrUndo, speedCommands, speedRipple } from "../../../editor/speedRipple";
+import { rippleRefusal, runInOrderOrUndo, speedCommands, speedRipple } from "../../../editor/speedRipple";
 import { clipOutputDuration } from "../../../editor/timeMap";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { formatMenuTime } from "../menus/menuModel";
@@ -38,6 +40,14 @@ const speed = computed(() => clip.value?.speed ?? 1);
 const preservePitch = computed(() => clip.value?.preserve_pitch ?? true);
 const options = computed(() => (SPEEDS.includes(speed.value) ? SPEEDS : [...SPEEDS, speed.value].sort((a, b) => a - b)));
 
+/** Why this clip cannot move its following clips (ruling T15-2): its
+ * groups would move wrongly at one of the offered speeds. The choice then
+ * reads, and acts, as keeping them in place. */
+const rippleReason = computed(() =>
+  clip.value && editorProject.project ? rippleRefusal(editorProject.project, clip.value, options.value) : null,
+);
+const ripple = computed(() => (rippleReason.value ? "leave" : speedRipple.value));
+
 const timeline = computed(() => (clip.value ? clipOutputDuration(clip.value.in_ms, clip.value.out_ms, speed.value) : 0));
 const source = computed(() => (clip.value ? clip.value.out_ms - clip.value.in_ms : 0));
 
@@ -45,8 +55,13 @@ function send(value: number, pitch: boolean): Promise<boolean> {
   const c = clip.value;
   const project = editorProject.project;
   if (!c || !project || lockReason.value) return Promise.resolve(false);
-  const commands = speedCommands(project, c, value, pitch, speedRipple.value);
-  return runInOrderOrUndo((command) => editorProject.execute(command), commands);
+  const commands = speedCommands(project, c, value, pitch, ripple.value);
+  // A rollback's undo clears the refusal it answers; put a copy back, so
+  // the toast says why the speed did not change.
+  return runInOrderOrUndo((command) => editorProject.execute(command), commands, {
+    read: () => editorProject.lastError,
+    keep: (error) => (editorProject.lastError = { ...error }),
+  });
 }
 
 /** A refused change puts the control back where the projection says. */
@@ -107,13 +122,26 @@ function onRipple(event: Event): void {
         <select
           data-testid="speed-section-ripple"
           class="text-[11px] text-fg"
-          :value="speedRipple"
+          :value="ripple"
           @change="onRipple"
         >
-          <option value="ripple">Move following clips on this track</option>
+          <option
+            value="ripple"
+            :disabled="rippleReason !== null"
+            :title="rippleReason ?? undefined"
+          >
+            Move following clips on this track
+          </option>
           <option value="leave">Keep following clips in place</option>
         </select>
       </label>
+      <p
+        v-if="rippleReason"
+        data-testid="speed-section-ripple-reason"
+        class="text-[10px] leading-[1.6] text-fg-muted"
+      >
+        {{ rippleReason }}
+      </p>
       <label class="flex items-center gap-2 text-[11px] text-fg">
         <input
           data-testid="speed-section-pitch"

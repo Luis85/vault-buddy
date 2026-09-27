@@ -313,6 +313,32 @@ describe("FadesSection", () => {
     ]);
   });
 
+  // Fix round 1: pressing the preset the clip already wears is not an edit.
+  it("the preset the clip already wears sends nothing", async () => {
+    const { w, executed } = await mountFadesSection({ clips: [clip({ out_ms: 5_300, fade_in_ms: 500, fade_out_ms: 500 })] });
+    await w.get('[data-testid="fades-section-preset-500"]').trigger("click");
+    await flushPromises();
+    expect(executed).toEqual([]);
+  });
+
+  // Fix round 1: the half-clip bound follows a trim made while the tab is open.
+  it("the fade bound and the pressed preset follow a trim while the tab stays open", async () => {
+    const { w, executed } = await mountFadesSection({ clips: [clip({ out_ms: 5_300, fade_in_ms: 1_000, fade_out_ms: 1_000 })] });
+    expect(w.get('[data-testid="fades-section-preset-1000"]').attributes("aria-pressed")).toBe("true");
+    const store = useEditorProjectStore();
+    // Trimmed to 1000 ms elsewhere; Rust clamped the fades to half of it.
+    store.project = project({ clips: [clip({ fade_in_ms: 500, fade_out_ms: 500 })] });
+    await flushPromises();
+    // Gentle · 1s now means 0.5 s at each edge, which the clip wears.
+    expect(w.get('[data-testid="fades-section-preset-1000"]').attributes("aria-pressed")).toBe("true");
+    const field = w.get('[data-testid="fades-section-fade-in"]');
+    await field.setValue("0.6");
+    await field.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(w.get('[data-testid="fades-section-fade-in-error"]').text()).toContain("between 0 and 0.5 s");
+    expect(executed).toEqual([]);
+  });
+
   it("Preview entrance plays from the clip's start", async () => {
     const { w, executed } = await mountFadesSection();
     const before = revealSerial("playback");

@@ -23,6 +23,7 @@ import TransportBar from "../src/components/editor/preview/TransportBar.vue";
 import type { EditorPort } from "../src/editor/port";
 import { EditorPortError } from "../src/editor/port";
 import type { AudioContextLike, GainLike } from "../src/editor/previewController";
+import { requestPlaybackFrom } from "../src/editor/revealBus";
 import type { EditorOpenResult, MediaRef, Project } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
@@ -477,6 +478,20 @@ describe("PreviewSurface", () => {
     failOld(new EditorPortError({ code: "sourceMissing", message: "gone", retryable: false, operationId: "op" }));
     await flushPromises();
     expect(w.find('[data-testid="preview-unavailable"]').exists()).toBe(false);
+  });
+
+  // Visual-parity Task 15 fix round 1: the Fades tab's "Preview entrance"
+  // asks for playback from a clip's start; the surface seeks and plays.
+  it("a playback request moves the playhead there and plays the preview", async () => {
+    const { w } = await mountSurface(() => Promise.resolve("C:\\x\\cap.mp4"));
+    requestPlaybackFrom(2_500);
+    await flushPromises();
+    const video = w.get('[data-testid="preview-layers"] video').element as HTMLVideoElement;
+    expect(useEditorWorkspaceStore().playheadMs).toBe(2_500);
+    expect(video.currentTime).toBeCloseTo(2.5, 6);
+    expect(video.paused).toBe(false);
+    expect(w.get('[data-testid="transport-play"]').attributes("aria-label")).toBe("Pause");
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("a playhead moved elsewhere (the timeline) seeks the preview", async () => {

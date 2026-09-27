@@ -271,4 +271,43 @@ describe("FadesSection: Between two clips", () => {
       "These clips allow a blend of at most 0.65 s.",
     );
   });
+
+  // Fix round 1: the current blend is not an edit, the overlap field
+  // refuses on a locked track, and the bound follows a trim.
+  it("pressing the blend already in place sends nothing", async () => {
+    const { w, executed } = await mountFades("c2", { transitions: [transition({ duration_ms: 500 })] });
+    const current = w.get('[data-testid="transition-row-blend-500"]');
+    expect(current.attributes("aria-pressed")).toBe("true");
+    await current.trigger("click");
+    await flushPromises();
+    expect(executed).toEqual([]);
+  });
+
+  it("the overlap field is disabled on a locked track, with the reason", async () => {
+    const { w } = await mountFades("c2", {
+      transitions: [transition()],
+      tracks: [track("v1", { locked: true }), track("a1", { kind: "audio" })],
+    });
+    const field = w.get('[data-testid="transition-row-duration"]');
+    expect(field.attributes("disabled")).toBeDefined();
+    expect(field.element.closest("label")?.getAttribute("title")).toBe("Track v1 is locked");
+  });
+
+  it("the blend bound follows a trim made while the tab stays open", async () => {
+    const { w } = await mountFades("c2", { transitions: [transition()] });
+    expect(w.get('[data-testid="transition-row-blend-500"]').attributes("aria-disabled")).toBeUndefined();
+    const store = useEditorProjectStore();
+    const p = store.project as Project;
+    // c1 trimmed to 800 ms: at most 0.4 s of blend.
+    store.project = { ...p, clips: p.clips.map((c) => (c.id === "c1" ? { ...c, out_ms: 900 } : c)) };
+    await flushPromises();
+    expect(w.get('[data-testid="transition-row-blend-500"]').attributes("title")).toBe(
+      "These clips allow a blend of at most 0.4 s.",
+    );
+    const field = w.get('[data-testid="transition-row-duration"]');
+    await field.setValue("0.45");
+    await field.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(w.get('[data-testid="transition-row-duration-error"]').text()).toContain("between 0.001 and 0.4 s");
+  });
 });
