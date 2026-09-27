@@ -1,21 +1,47 @@
 <script setup lang="ts">
 /**
- * The preview's transport row (Task 22; F-04, F-14, F-25): play/pause
- * (also Space), current/total time, monitoring volume + mute, playback rate.
+ * The preview's transport row (Task 22; F-04, F-14, F-25), restyled to the
+ * concept by visual-parity Task 12 (concept spec §4.3): 46px on `--bg`
+ * under a `line` border (40px in a window 760px tall or less,
+ * `editorWorkspace.shortWindow`).
+ *
+ * - **Left**: the monitor mute icon button, a 48×8 sample-peak meter and a
+ *   borderless playback-rate select (0.5×/1×/1.5×/2× — the concept's own
+ *   list). "Audio mixer" and "Sound" leave this row (D10): the mixer is
+ *   reachable from View ⋯ → Audio mixer… (visual-parity Task 11) and, once
+ *   Task 20 lands, the Audio tab and the timeline footer. `MixerPopover`
+ *   keeps its place here for now, icon-only rather than a labelled button,
+ *   because the guided walkthrough's "audio" lesson
+ *   (`src/editor/guide/steps.json`, target `[data-action="mixer"]`) needs a
+ *   real, visible control to point at until that later home exists — see
+ *   `MixerPopover.vue`'s own doc.
+ * - **Centre**: Go to start / Go to end (both move `editorWorkspace`'s
+ *   playhead directly, exactly how a timeline click seeks), the 34px round
+ *   Play/Pause (also Space), and the mono timecode `MM:SS.d / MM:SS.d`
+ *   (`formatTimecode`, the concept's own `fmt(ms, true)` — current in ink,
+ *   "/ total" muted).
+ * - **Right**: the D10 canvas badge, "{W} × {H} · {fps} fps · PREVIEW" from
+ *   the project's own canvas (replacing the concept's browser-only "SAMPLE
+ *   PROJECT · LOCAL PREVIEW" wording) — hidden below the concept's 620px
+ *   break (`TRANSPORT_BADGE_MIN_WIDTH`).
  *
  * Presentational for the clock — `playing`/`currentMs`/`durationMs` come in
  * as props from `PreviewSurface`, which owns the non-reactive
- * `PreviewController` — and store-backed for the two MONITORING fields the
- * workspace persists (`monitor_muted`, `playback_rate`). Both are
- * `editorWorkspace` view state: muting the preview or slowing it down is
- * not an edit, so nothing here ever reaches `editorProject.execute`.
+ * `PreviewController` — and store-backed for the workspace fields this row
+ * touches (`monitor_muted`, `playback_rate`, `playhead_ms`). None of it is
+ * an edit: muting the preview, changing its rate or moving the playhead is
+ * `editorWorkspace` view state, never `editorProject.execute`.
  *
- * The audio mixer (Task 27, `MixerPopover`) opens from this row too, beside
- * the speaker, and receives the preview's `readPeak` for its peak meter.
+ * The concept's own transport carries no monitoring-VOLUME control, only
+ * the mute toggle — this app's earlier volume slider (Task 22) left with
+ * this restyle; monitoring now plays at full volume except when muted
+ * (`PreviewSurface.vue`'s own doc says why).
  *
- * The monitoring VOLUME is a prop/`update:volume` pair, not a workspace
- * field: R16's sanitized `workspace.json` has no volume field, so it lives
- * for the window's lifetime only rather than being quietly dropped on save.
+ * The peak meter samples `readPeak` — the preview controller's sample
+ * peak — on a fixed interval (`usePolledValue`, the same poll
+ * `MixerPeakMeter.vue` uses), never at frame rate, and reads silent
+ * whenever `playing` is false, mirroring the concept's own
+ * `if (!ui.playing) peakMeter.style.width = '0%'`.
  *
  * **Space** is bound on `window` (the preview has no single element that
  * would reliably hold focus), and deliberately yields wherever Space
@@ -23,39 +49,46 @@
  * own Space is its activation (a focused button would otherwise toggle
  * twice — its native click plus this), an open menu/dialog, and a
  * keystroke a focused timeline clip already claimed (`defaultPrevented`).
- *
- * **Frame (visual-parity Task 4, concept spec §4.3):** the bar is one 46px
- * row (40 in a window 760px tall or less) on `--bg` under a `line` border;
- * Task 12 restyles what is in it.
  */
-import { onBeforeUnmount, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
+import { usePolledValue } from "../../../composables/usePolledValue";
+import { TRANSPORT_BADGE_MIN_WIDTH } from "../../../editor/panelLayout";
 import { shouldHandle } from "../../../editor/shortcuts";
+import type { Canvas } from "../../../editorTypes";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
-import { formatDuration } from "../../../utils/formatDuration";
+import type { EditorIconName } from "../icons/conceptIcons";
+import EditorIcon from "../icons/EditorIcon.vue";
 import MixerPopover from "../shell/MixerPopover.vue";
 
-defineProps<{
+const props = defineProps<{
   playing: boolean;
   currentMs: number;
   durationMs: number;
-  /** Monitoring volume, 0..1. */
-  volume: number;
-  /** The preview's sample peak, for the mixer's meter. */
+  /** The project's canvas, for the D10 badge; `null` before a project is
+   * known (never rendered as a false "0 × 0"). */
+  canvas: Canvas | null;
+  /** The preview's sample peak, for this row's meter and the mixer's. */
   readPeak?: () => number | null;
 }>();
 const emit = defineEmits<{
   (e: "toggle-play"): void;
-  (e: "update:volume", value: number): void;
 }>();
 
-/** The workspace clamps to 0.25..2 (`editorWorkspace`'s own range). */
-const RATES = [0.25, 0.5, 1, 1.5, 2] as const;
+/** §4.3's own list. */
+const RATES = [0.5, 1, 1.5, 2] as const;
+/** The concept's dB floor for the meter's fill (`(db+60)/60`) and its
+ * "hot" threshold (`peak-hot`, `session-safety.js`'s `value >= .98`). */
+const METER_DB_FLOOR = -60;
+const METER_HOT_THRESHOLD = 0.98;
+const PEAK_POLL_MS = 100;
 
 const workspace = useEditorWorkspaceStore();
 /** The guide's `transport` (Task 55). */
 const transportTarget = useGuideTarget("transport");
+
+// ---- Space toggles Play/Pause -----------------------------------------------
 
 /** Elements whose own Space is their activation or their text. */
 const OWNS_SPACE =
@@ -76,65 +109,112 @@ function onWindowKeydown(event: KeyboardEvent) {
 onMounted(() => window.addEventListener("keydown", onWindowKeydown));
 onBeforeUnmount(() => window.removeEventListener("keydown", onWindowKeydown));
 
+// ---- centre: seek, play, timecode -------------------------------------------
+
+function goToStart(): void {
+  workspace.setPlayhead(0);
+}
+function goToEnd(): void {
+  workspace.setPlayhead(props.durationMs);
+}
+
+/** The concept's own `fmt(ms, decimal=true)`: `MM:SS.d`, both fields
+ * zero-padded, one decisecond. */
+function formatTimecode(ms: number): string {
+  const clamped = Math.max(0, ms);
+  const totalSeconds = Math.floor(clamped / 1000);
+  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  const tenths = Math.floor((clamped % 1000) / 100);
+  return `${minutes}:${seconds}.${tenths}`;
+}
+const timecodeCurrent = computed(() => formatTimecode(props.currentMs));
+const timecodeTotal = computed(() => formatTimecode(props.durationMs));
+
+// ---- left: mute, peak meter, rate --------------------------------------------
+
+const monitorLabel = computed(() => (workspace.monitorMuted ? "Unmute monitoring" : "Mute monitoring"));
+const monitorIcon = computed(() => (workspace.monitorMuted ? "muted" : "volume"));
+
 function onRate(event: Event) {
   workspace.setPlaybackRate(Number((event.target as HTMLSelectElement).value));
 }
-function onVolume(event: Event) {
-  emit("update:volume", Number((event.target as HTMLInputElement).value));
-}
+
+const peak = usePolledValue(() => (props.readPeak ? props.readPeak() : null), PEAK_POLL_MS);
+/** Silent whenever nothing is playing — the concept's own rule, so a
+ * leftover sample from before a pause never lingers on the bar. */
+const peakFraction = computed(() => {
+  if (!props.playing) return 0;
+  const value = peak.value;
+  if (value === null || value <= 0) return 0;
+  const db = 20 * Math.log10(value);
+  return Math.min(1, Math.max(0, (db - METER_DB_FLOOR) / -METER_DB_FLOOR));
+});
+const peakFillClass = computed(() => {
+  const hot = props.playing && (peak.value ?? 0) >= METER_HOT_THRESHOLD;
+  return hot ? "bg-danger" : "bg-audio";
+});
+
+// ---- centre: Play/Pause, kept as one computed so the template carries no
+// per-field ternary of its own (fallow's template-complexity ratchet). ----
+
+const playState = computed<{ icon: EditorIconName; label: string; title: string }>(() => ({
+  icon: props.playing ? "pause" : "play",
+  label: props.playing ? "Pause" : "Play",
+  title: props.playing ? "Pause (Space)" : "Play (Space)",
+}));
+
+// ---- right: the D10 canvas badge --------------------------------------------
+
+const showBadge = computed(() => workspace.viewportWidth > TRANSPORT_BADGE_MIN_WIDTH);
+const badgeText = computed(() => {
+  const c = props.canvas;
+  return c ? `${c.width} × ${c.height} · ${c.fps} fps · PREVIEW` : "PREVIEW";
+});
+
+const rowHeightClass = computed(() => (workspace.shortWindow ? "h-10" : "h-[46px]"));
 </script>
 
 <template>
   <div
     :ref="transportTarget"
     data-testid="transport-bar"
-    class="flex shrink-0 items-center gap-2 overflow-hidden border-t border-line bg-app px-[15px] text-micro text-fg-muted"
-    :class="workspace.shortWindow ? 'h-10' : 'h-[46px]'"
+    class="flex shrink-0 items-center justify-between gap-2 overflow-hidden border-t border-line bg-app px-[15px] text-micro text-fg-muted"
+    :class="rowHeightClass"
   >
-    <button
-      type="button"
-      data-testid="transport-play"
-      class="rounded-control border border-line bg-raised px-2 py-0.5 text-fg hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      :aria-label="playing ? 'Pause' : 'Play'"
-      :title="playing ? 'Pause (Space)' : 'Play (Space)'"
-      @click="emit('toggle-play')"
-    >
-      {{ playing ? "❚❚" : "▶" }}
-    </button>
-    <span class="tabular-nums">
-      <span data-testid="transport-current">{{ formatDuration(currentMs) }}</span>
-      /
-      <span data-testid="transport-total">{{ formatDuration(durationMs) }}</span>
-    </span>
-    <span class="ml-auto flex items-center gap-2">
-      <MixerPopover :read-peak="readPeak" />
+    <div class="flex shrink-0 items-center gap-1.5">
       <button
         type="button"
         data-testid="transport-mute"
-        class="rounded-control border border-line px-2 py-0.5 hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-        :class="workspace.monitorMuted ? 'bg-raised text-fg' : 'text-fg-muted'"
-        :aria-pressed="workspace.monitorMuted ? 'true' : 'false'"
-        aria-label="Mute preview monitoring"
-        title="Mutes what you hear while previewing; the project's own mix is unchanged"
+        class="flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-fg-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        :aria-pressed="workspace.monitorMuted"
+        :aria-label="monitorLabel"
+        :title="monitorLabel"
         @click="workspace.toggleMonitorMute()"
       >
-        {{ workspace.monitorMuted ? "Muted" : "Sound" }}
+        <EditorIcon :name="monitorIcon" />
       </button>
-      <input
-        data-testid="transport-volume"
-        type="range"
-        min="0"
-        max="1"
-        step="0.05"
-        class="w-20 accent-violet-500"
-        aria-label="Preview monitoring volume"
-        :value="volume"
-        @input="onVolume"
+      <span
+        data-testid="transport-peak"
+        role="meter"
+        aria-label="Live master sample peak, not loudness"
+        aria-valuemin="0"
+        aria-valuemax="1"
+        :aria-valuenow="peakFraction"
+        title="Live master sample peak, not loudness"
+        class="inline-flex h-2 w-12 shrink-0 overflow-hidden rounded-[3px] bg-line"
       >
+        <span
+          class="h-full"
+          :class="peakFillClass"
+          :style="{ width: `${peakFraction * 100}%` }"
+        />
+      </span>
+      <MixerPopover :read-peak="readPeak" />
       <select
         data-testid="transport-rate"
-        class="rounded-control border border-line bg-raised px-1 py-0.5 text-fg"
-        aria-label="Playback rate"
+        class="h-[30px] shrink-0 border-0 bg-transparent px-0.5 text-[11px] text-fg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        aria-label="Preview playback speed"
         :value="String(workspace.playbackRate)"
         @change="onRate"
       >
@@ -146,6 +226,55 @@ function onVolume(event: Event) {
           {{ r }}×
         </option>
       </select>
-    </span>
+    </div>
+
+    <div class="flex shrink-0 items-center gap-2">
+      <button
+        type="button"
+        data-testid="transport-start"
+        class="flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-fg-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        aria-label="Go to start"
+        title="Go to start (Home)"
+        @click="goToStart"
+      >
+        <EditorIcon name="skipBack" />
+      </button>
+      <button
+        type="button"
+        data-testid="transport-play"
+        class="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full border border-line bg-accent-bg text-accent-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        :aria-label="playState.label"
+        :title="playState.title"
+        @click="emit('toggle-play')"
+      >
+        <EditorIcon :name="playState.icon" />
+      </button>
+      <button
+        type="button"
+        data-testid="transport-end"
+        class="flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-fg-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        aria-label="Go to end"
+        title="Go to end (End)"
+        @click="goToEnd"
+      >
+        <EditorIcon name="skipForward" />
+      </button>
+      <span class="vb-mono min-w-[137px] shrink-0 text-[11px]">
+        <span
+          data-testid="transport-current"
+          class="text-fg"
+        >{{ timecodeCurrent }}</span>
+        <span class="text-fg-muted"> / <span data-testid="transport-total">{{ timecodeTotal }}</span></span>
+      </span>
+    </div>
+
+    <div
+      v-if="showBadge"
+      data-testid="transport-badge"
+      class="max-w-[160px] shrink-0 truncate text-right text-[9px] uppercase tracking-[0.1px] text-fg-muted"
+      title="Preview label only. This label is not included in rendered video."
+    >
+      {{ badgeText }}
+    </div>
   </div>
 </template>

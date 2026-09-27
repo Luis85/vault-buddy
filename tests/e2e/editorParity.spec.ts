@@ -338,6 +338,79 @@ test.describe("parity 1600x1000: the preview header and stage (screen 02)", () =
   });
 });
 
+// Task 12 (screen 02, concept spec §4.3; design D10): the transport row —
+// monitor mute, peak meter and rate left; seek/Play/timecode centred; the
+// D10 canvas badge right. "Audio mixer" and "Sound" (Task 27's own labelled
+// controls) leave this row; the mixer's own icon-only trigger stays in it
+// only until Task 20's timeline footer gives it a real home (TransportBar's
+// own module doc says why).
+test.describe("parity 1600x1000: the transport (screen 02, §4.3)", () => {
+  test("46px row; left mute/meter/rate, centre seek/Play/timecode, right the D10 badge", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.screenshot({ path: "test-results/parity/built-02-transport.png" });
+    await composite(page, "02-workspace.png", "test-results/parity/built-02-transport.png", "vs-02-transport");
+
+    const bar = await box(page, "transport-bar");
+    expect(bar.height).toBeCloseTo(46, 0);
+
+    // Left cluster: the mute icon-button, the 48x8 peak meter, the rate select.
+    const mute = await box(page, "transport-mute");
+    const meter = await box(page, "transport-peak");
+    expect(meter.width).toBeCloseTo(48, 0);
+    expect(meter.height).toBeCloseTo(8, 0);
+    expect(meter.x).toBeGreaterThan(mute.x + mute.width);
+
+    // Centre: skipBack, the 34px round Play, skipForward, then the timecode.
+    const start = await box(page, "transport-start");
+    const play = await box(page, "transport-play");
+    const end = await box(page, "transport-end");
+    expect(play.width).toBeCloseTo(34, 0);
+    expect(play.height).toBeCloseTo(34, 0);
+    expect(start.x).toBeLessThan(play.x);
+    expect(end.x).toBeGreaterThan(play.x + play.width);
+    await expect(page.getByTestId("transport-current")).toHaveText("00:00.0");
+    // The sample project's own duration (fixtures/parityProject.ts's `C3_END`).
+    await expect(page.getByTestId("transport-total")).toHaveText("00:33.5");
+
+    // Right: the D10 badge, from the project's own canvas.
+    await expect(page.getByTestId("transport-badge")).toHaveText("1280 × 720 · 30 fps · PREVIEW");
+  });
+
+  test("every control has an effect: seek, mute, rate and Play all change real state", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+
+    await page.getByTestId("transport-end").click();
+    await expect(page.getByTestId("transport-current")).toHaveText("00:33.5");
+    await page.getByTestId("transport-start").click();
+    await expect(page.getByTestId("transport-current")).toHaveText("00:00.0");
+
+    const mute = page.getByTestId("transport-mute");
+    await expect(mute).toHaveAttribute("aria-pressed", "false");
+    await mute.click();
+    await expect(mute).toHaveAttribute("aria-pressed", "true");
+
+    const rate = page.getByTestId("transport-rate");
+    await expect(rate).toHaveValue("1");
+    await rate.selectOption("1.5");
+    await expect(rate).toHaveValue("1.5");
+
+    const play = page.getByTestId("transport-play");
+    await expect(play).toHaveAttribute("aria-label", "Play");
+    await play.click();
+    await expect(play).toHaveAttribute("aria-label", "Pause");
+  });
+
+  // §1.4 "≤620w": the badge leaves first, before anything else in the row.
+  test("the D10 badge hides below the concept's 620px break", async ({ page }) => {
+    await openParity(page, { width: 700, height: 1000 }, { invitation: false });
+    await expect(page.getByTestId("transport-badge")).toBeVisible();
+    await page.setViewportSize({ width: 600, height: 1000 });
+    await expect(page.getByTestId("transport-badge")).toHaveCount(0);
+    // The rest of the row is still there.
+    await expect(page.getByTestId("transport-play")).toBeVisible();
+  });
+});
+
 test.describe("parity 960x640 (12-compact)", () => {
   test("frame: header 52, preview header 44, transport 40, timeline 270, status 23", async ({ page }) => {
     await openParity(page, { width: 960, height: 640 }, { invitation: false });

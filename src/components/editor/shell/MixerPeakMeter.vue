@@ -7,26 +7,20 @@
  * sample peak is not. `null` (no Web Audio, nothing playing yet) says so
  * rather than drawing an empty bar as if it had measured silence.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed } from "vue";
 
+import { usePolledValue } from "../../../composables/usePolledValue";
 import { formatDb } from "../../../editor/mixRules";
 
 const props = defineProps<{ readPeak: () => number | null }>();
 
 const POLL_MS = 100;
 
-const peak = ref<number | null>(null);
-let timer: ReturnType<typeof setInterval> | null = null;
-function sample(): void {
-  peak.value = props.readPeak();
-}
-onMounted(() => {
-  sample();
-  timer = setInterval(sample, POLL_MS);
-});
-onBeforeUnmount(() => {
-  if (timer) clearInterval(timer);
-});
+// The interval poll itself is `usePolledValue` (visual-parity Task 12): the
+// transport's own peak bar (`TransportBar.vue`) samples this same
+// `readPeak()` the same way, and a second hand-rolled mount/unmount timer
+// here would be exactly the clone the quality ratchet forbids.
+const peak = usePolledValue(() => props.readPeak(), POLL_MS);
 
 const text = computed(() => (peak.value === null ? "No preview audio" : `${formatDb(peak.value)}FS`));
 const fill = computed(() => `${Math.min(1, peak.value ?? 0) * 100}%`);

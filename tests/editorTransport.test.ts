@@ -1,13 +1,17 @@
 /**
- * The preview's transport and surface (Task 22; F-04, F-14, F-25):
- * `TransportBar.vue` (play/pause + Space, current/total time, monitoring
- * volume + mute, playback rate) and `PreviewSurface.vue` (the stage that
- * hosts the non-reactive `PreviewController`, asks Rust for every media
- * path through the port, and wires the workspace's monitoring state into
- * the controller).
+ * The preview's transport and surface (Task 22, restyled to the concept by
+ * visual-parity Task 12; F-04, F-14, F-25): `TransportBar.vue` (monitor
+ * mute + peak meter + playback rate on the left; go to start/end, Play/Pause
+ * and the mono timecode centred; the D10 canvas badge on the right) and
+ * `PreviewSurface.vue` (the stage that hosts the non-reactive
+ * `PreviewController`, asks Rust for every media path through the port, and
+ * wires the workspace's monitoring state into the controller).
  *
- * Monitoring is LOCAL: every mute/rate/volume test also asserts that no
- * editor command was sent — muting the preview is not an edit.
+ * Monitoring is LOCAL: every mute/rate test also asserts that no editor
+ * command was sent — muting the preview is not an edit. The concept's own
+ * transport carries no monitoring-volume slider (only a mute toggle), so
+ * Task 12 dropped the one this app had added — monitoring plays at full
+ * volume except when muted.
  */
 import { mockConvertFileSrc } from "@tauri-apps/api/mocks";
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
@@ -44,18 +48,29 @@ beforeEach(() => {
   useEditorWorkspaceStore().setPort(fakePort({ execute }));
 });
 
+const SAMPLE_CANVAS = { width: 1280, height: 720, fps: 30 };
+
 describe("TransportBar", () => {
-  function mountBar(props: Partial<{ playing: boolean; currentMs: number; durationMs: number; volume: number }> = {}) {
+  function mountBar(
+    props: Partial<{
+      playing: boolean;
+      currentMs: number;
+      durationMs: number;
+      canvas: typeof SAMPLE_CANVAS | null;
+      readPeak: () => number | null;
+    }> = {},
+  ) {
     return mount(TransportBar, {
-      props: { playing: false, currentMs: 65_000, durationMs: 125_000, volume: 1, ...props },
+      props: { playing: false, currentMs: 65_400, durationMs: 125_000, canvas: SAMPLE_CANVAS, ...props },
       attachTo: document.body,
     });
   }
 
-  it("shows the current and total time", () => {
+  // §4.3: `fmt(ms, true)` = `MM:SS.d`, both minutes and seconds padded.
+  it("shows the current and total time as MM:SS.d", () => {
     const w = mountBar();
-    expect(w.get('[data-testid="transport-current"]').text()).toBe("1:05");
-    expect(w.get('[data-testid="transport-total"]').text()).toBe("2:05");
+    expect(w.get('[data-testid="transport-current"]').text()).toBe("01:05.4");
+    expect(w.get('[data-testid="transport-total"]').text()).toBe("02:05.0");
   });
 
   it("the play button toggles and names its own action", async () => {
@@ -96,29 +111,86 @@ describe("TransportBar", () => {
     expect(w.emitted("toggle-play")).toBeUndefined();
   });
 
-  it("mute toggles the workspace's monitor mute and sends no editor command", async () => {
+  // `setPlayhead` itself clamps to `[0, editorProject.durationMs]` (0 with
+  // no project open here, as in this standalone mount) -- a spy proves what
+  // the buttons ask for regardless, leaving the clamp to the store's own
+  // suite and the wiring end to end to `PreviewSurface`'s seek test below.
+  it("Go to start and Go to end ask the workspace to seek to 0 and the duration", () => {
+    const workspace = useEditorWorkspaceStore();
+    const setPlayhead = vi.spyOn(workspace, "setPlayhead");
+    const w = mountBar();
+    w.get('[data-testid="transport-end"]').trigger("click");
+    expect(setPlayhead).toHaveBeenLastCalledWith(125_000);
+    w.get('[data-testid="transport-start"]').trigger("click");
+    expect(setPlayhead).toHaveBeenLastCalledWith(0);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("mute toggles the workspace's monitor mute, names the toggle and sends no editor command", async () => {
     const workspace = useEditorWorkspaceStore();
     const w = mountBar();
     const mute = w.get('[data-testid="transport-mute"]');
     expect(mute.attributes("aria-pressed")).toBe("false");
+    expect(mute.attributes("aria-label")).toBe("Mute monitoring");
     await mute.trigger("click");
     expect(workspace.monitorMuted).toBe(true);
-    expect(w.get('[data-testid="transport-mute"]').attributes("aria-pressed")).toBe("true");
+    const same = w.get('[data-testid="transport-mute"]');
+    expect(same.attributes("aria-pressed")).toBe("true");
+    expect(same.attributes("aria-label")).toBe("Unmute monitoring");
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("the rate control sets the workspace playback rate", async () => {
+  // §4.3: 0.5× / 1× / 1.5× / 2× only — the concept's own list.
+  it("the rate control offers exactly the concept's four speeds and sets the workspace rate", async () => {
     const workspace = useEditorWorkspaceStore();
     const w = mountBar();
+    const options = w.findAll('[data-testid="transport-rate"] option').map((o) => o.text());
+    expect(options).toEqual(["0.5×", "1×", "1.5×", "2×"]);
     await w.get('[data-testid="transport-rate"]').setValue("1.5");
     expect(workspace.playbackRate).toBe(1.5);
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("the volume slider reports a number between 0 and 1", async () => {
+  it("the peak meter is silent (0% and never hot) while paused, whatever the controller last read", () => {
+    const w = mountBar({ playing: false });
+    const fill = w.get('[data-testid="transport-peak"] > *');
+    expect(fill.attributes("style")).toContain("width: 0%");
+    expect(fill.classes()).toContain("bg-audio");
+  });
+
+  it("the peak meter fills from the live peak while playing, and turns danger when hot", async () => {
+    vi.useFakeTimers();
+    try {
+      let sample = 1; // 0 dBFS -> full width, and over the .98 hot threshold
+      const w = mountBar({ playing: true, readPeak: () => sample });
+      await vi.advanceTimersByTimeAsync(100);
+      let fill = w.get('[data-testid="transport-peak"] > *');
+      expect(fill.attributes("style")).toContain("width: 100%");
+      expect(fill.classes()).toContain("bg-danger");
+
+      sample = 0; // silence -> 0%, back to the ordinary audio colour
+      await vi.advanceTimersByTimeAsync(100);
+      fill = w.get('[data-testid="transport-peak"] > *');
+      expect(fill.attributes("style")).toContain("width: 0%");
+      expect(fill.classes()).toContain("bg-audio");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // D10 §4.3: "{W} × {H} · {fps} fps · PREVIEW" from the project's own canvas.
+  it("shows the D10 canvas badge, and hides it below the concept's 620px break", async () => {
     const w = mountBar();
-    await w.get('[data-testid="transport-volume"]').setValue("0.25");
-    expect(w.emitted("update:volume")).toEqual([[0.25]]);
+    expect(w.get('[data-testid="transport-badge"]').text()).toBe("1280 × 720 · 30 fps · PREVIEW");
+
+    useEditorWorkspaceStore().setViewport(600, 800);
+    await w.vm.$nextTick();
+    expect(w.find('[data-testid="transport-badge"]').exists()).toBe(false);
+  });
+
+  it("the badge reads PREVIEW alone when no project canvas is known yet", () => {
+    const w = mountBar({ canvas: null });
+    expect(w.get('[data-testid="transport-badge"]').text()).toBe("PREVIEW");
   });
 });
 
@@ -259,9 +331,8 @@ describe("PreviewSurface", () => {
     expect(gains[0].gain.value).toBe(1);
     await w.get('[data-testid="transport-mute"]').trigger("click");
     expect(gains[0].gain.value).toBe(0);
-    await w.get('[data-testid="transport-volume"]').setValue("0.5");
     await w.get('[data-testid="transport-mute"]').trigger("click");
-    expect(gains[0].gain.value).toBe(0.5);
+    expect(gains[0].gain.value).toBe(1);
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -403,6 +474,6 @@ describe("PreviewSurface", () => {
     await flushPromises();
     const video = w.get('[data-testid="preview-layers"] video').element as HTMLVideoElement;
     expect(video.currentTime).toBeCloseTo(3, 6);
-    expect(w.get('[data-testid="transport-current"]').text()).toBe("0:03");
+    expect(w.get('[data-testid="transport-current"]').text()).toBe("00:03.0");
   });
 });

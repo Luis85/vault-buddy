@@ -31,6 +31,9 @@ const LIBRARY_DRAWER_MAX_WIDTH = 860;
 export const HEADER_COMPACT_MAX_WIDTH = 1350;
 /** At or below this height the frame's bars shrink (§1.4, "≤760h"). */
 const SHORT_WINDOW_MAX_HEIGHT = 760;
+/** At or below this width the transport hides its right-hand badge (§4.3,
+ * "≤620w"). */
+export const TRANSPORT_BADGE_MIN_WIDTH = 620;
 
 /** The timeline's default height and its keyboard step (§1.3, §6.1). */
 export const TIMELINE_DEFAULT_HEIGHT = 400;

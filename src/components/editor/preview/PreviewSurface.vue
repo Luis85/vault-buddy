@@ -91,7 +91,6 @@ const layerHostRef = ref<HTMLElement | null>(null);
 const stageSize = ref({ width: 0, height: 0 });
 const playing = ref(false);
 const currentMs = ref(workspace.playheadMs);
-const volume = ref(1);
 /** Display names of layers whose media could not be resolved. */
 const unavailable = ref<string[]>([]);
 
@@ -104,6 +103,10 @@ let observer: ResizeObserver | null = null;
 
 const canvas = computed(() => editorProject.project?.canvas ?? { width: 16, height: 9 });
 const frame = computed(() => containRect(canvas.value, stageSize.value));
+/** The project's own canvas, for the transport's D10 badge — `null` (never
+ * `canvas`'s 16:9 fitting fallback, which carries no `fps`) before a
+ * project is known. */
+const projectCanvas = computed(() => editorProject.project?.canvas ?? null);
 
 /** A cue drag's transient copy of one effect (R14), or `null`. */
 const cueDraft = ref<Effect | null>(null);
@@ -166,7 +169,10 @@ function createController(): void {
     },
   });
   controller.setStage(stageSize.value);
-  controller.setMonitor({ muted: workspace.monitorMuted, volume: volume.value });
+  // The transport carries no monitoring-volume control (visual-parity Task
+  // 12: the concept's own transport has none, only the mute toggle) --
+  // monitoring plays at full volume except when muted.
+  controller.setMonitor({ muted: workspace.monitorMuted, volume: 1 });
   controller.setRate(workspace.playbackRate);
   if (editorProject.project) controller.layout(editorProject.project, workspace.playheadMs);
 }
@@ -214,8 +220,8 @@ watch(
   },
 );
 watch(
-  () => [workspace.monitorMuted, volume.value] as const,
-  ([muted, v]) => controller?.setMonitor({ muted, volume: v }),
+  () => workspace.monitorMuted,
+  (muted) => controller?.setMonitor({ muted, volume: 1 }),
 );
 watch(
   () => workspace.playbackRate,
@@ -334,10 +340,10 @@ function onPointerDown(event: PointerEvent): void {
       Not shown in the preview (media unavailable): {{ unavailable.join(", ") }}
     </p>
     <TransportBar
-      v-model:volume="volume"
       :playing="playing"
       :current-ms="currentMs"
       :duration-ms="editorProject.durationMs"
+      :canvas="projectCanvas"
       :read-peak="readPeak"
       @toggle-play="togglePlay"
     />

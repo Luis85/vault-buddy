@@ -25,6 +25,14 @@
  *
  * Split into `MixerTrackRow`/`MixerSlider`/`MixerPeakMeter` so no one
  * template carries every branch (the fallow template-complexity ratchet).
+ *
+ * **The trigger is icon-only** (visual-parity Task 12; concept spec §4.3):
+ * the concept's transport has no "Audio mixer" button at all — Task 20's
+ * `TimelineFooter` gives it a real, labelled home ("Audio mixer" + the
+ * audio-track-count pill). Until then this stays the guide's `[data-action=
+ * "mixer"]` target (`steps.json`'s "audio" lesson) needs a real, visible
+ * control to point at, so it keeps its place beside the transport's own
+ * controls rather than vanishing outright.
  */
 import type { ComponentPublicInstance } from "vue";
 import { computed, ref } from "vue";
@@ -34,6 +42,7 @@ import { useWindowDismiss } from "../../../composables/useWindowDismiss";
 import { onReveal } from "../../../editor/revealBus";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import EditorIcon from "../icons/EditorIcon.vue";
 import MixerPeakMeter from "./MixerPeakMeter.vue";
 import MixerSlider from "./MixerSlider.vue";
 import MixerTrackRow from "./MixerTrackRow.vue";
@@ -111,12 +120,14 @@ useWindowDismiss(onWindowPointerDown, onWindowKeydown);
       type="button"
       data-action="mixer"
       data-testid="mixer-toggle"
-      class="rounded-control border border-line px-2 py-0.5 hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-line text-fg-muted hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       :aria-expanded="open ? 'true' : 'false'"
       aria-controls="editor-mixer"
+      aria-label="Audio mixer"
+      title="Audio mixer"
       @click="open = !open"
     >
-      Audio mixer
+      <EditorIcon name="sliders" />
     </button>
     <div
       v-if="open"
