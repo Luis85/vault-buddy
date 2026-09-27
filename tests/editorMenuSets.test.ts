@@ -192,7 +192,7 @@ describe("clipMenu — the §8 single-clip items that have a native backend", ()
         "Go to this clip", "Fit this clip", "—", "Copy clip", "Cut clip", "Duplicate", "Rename…", "—",
         "Split at 00:08.5", "Trim to pointer", "Speed", "Transform", "Color treatment",
         "Cover private information", "Fades", "Audio", "Add caption here…", "—", "Clear selection",
-        "Delete · leave gap", "Delete · ripple this track",
+        "Delete · leave gap", "Delete · close gap",
       ].join(" | "),
     );
   });
@@ -215,14 +215,14 @@ describe("clipMenu — the §8 single-clip items that have a native backend", ()
     expect(ctx.fitRange).toHaveBeenCalledWith(6_000, 10_000);
     for (const [label, id] of [
       ["Copy clip", "copy"], ["Cut clip", "cut"], ["Duplicate", "duplicate"], ["Split at 00:08.5", "split"],
-      ["Delete · leave gap", "delete"], ["Delete · ripple this track", "deleteClose"],
+      ["Delete · leave gap", "delete"], ["Delete · close gap", "deleteClose"],
       ["Cover private information", "addMask"],
     ] as const) {
       run(find(items, label));
       expect(vi.mocked(ctx.activate).mock.lastCall?.[0]).toBe(id);
     }
     expect(find(items, "Delete · leave gap").danger).toBe(true);
-    expect(find(items, "Delete · ripple this track").danger).toBe(true);
+    expect(find(items, "Delete · close gap").danger).toBe(true);
     expect(find(items, "Copy clip").kbd).toBe("Ctrl+C");
     run(find(items, "Clear selection"));
     expect(ctx.clearSelection).toHaveBeenCalled();

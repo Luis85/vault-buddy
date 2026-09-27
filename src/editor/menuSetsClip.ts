@@ -415,7 +415,9 @@ export function clipMenu(ctx: MenuContext): MenuItem[] {
     SEPARATOR,
     clearSelectionItem(ctx),
     actionItem(ctx, "delete", { label: "Delete · leave gap", icon: "trash", danger: true }),
-    actionItem(ctx, "deleteClose", { label: "Delete · ripple this track", icon: "gap", danger: true }),
+    // The toolbar's and the `split` lesson's words ("Delete: close gap"),
+    // not the concept's "ripple this track" (final review; GAP-227).
+    actionItem(ctx, "deleteClose", { label: "Delete · close gap", icon: "gap", danger: true }),
   ];
 }
 
