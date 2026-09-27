@@ -8089,3 +8089,44 @@ at all when the source is missing or has no sound.
 (5) **Save a copy's "Include rendered videos" is a help line, not a
 checkbox** (ruling T21-1): the portable export writes no product files
 (GAP-188), so a checkbox would change nothing.
+(6) **The clip menu's close-gap delete reads "Delete · close gap"** (final
+whole-branch review): the concept's "Delete · ripple this track" named the
+same action differently from the timeline toolbar's "Delete: close gap"
+and the `split` lesson's "Close gap on this track"; the app uses the
+toolbar's words everywhere.
+
+### GAP-228 · Low · Opening another project from the Project menu skips the close guard
+`src/roots/EditorRoot.vue` (`openStoredProject`, visual-parity Task 8):
+**Project → Open project…** opens the picked project through
+`editorProject.openProject` without asking anything first. The window's ✕
+(`editor:closeRequested`) runs the close guard — a dirty session or a
+running render or publish gets `CloseGuardDialog` — but this path does not:
+the session on screen is simply replaced in the webview. **Nothing is
+lost**: the previous session stays live in Rust (it is never closed here),
+its unsaved edits keep being written to its `recovery.json` by the journal
+thread, a render or publish it started keeps running and lands in its own
+project's ledger, and reopening that project reuses the live session (or,
+after a restart, offers Resume). What the person does not get is the
+question — they may not know an unsaved edit or a render is still pending
+in the project they left, and a running render is no longer shown anywhere
+until that project is opened again. **Fix:** run the close guard's
+dirty/job check (`editorJobs` by kind, `snapshot.revision` vs
+`persistedRevision`) before `openProject`, offering Save project / Keep for
+later / Cancel, and keep the render's progress reachable (the status bar's
+products chip).
+
+### GAP-229 · Low · A title card's text, colours and length cannot be edited in the inspector
+The concept's Clip tab prepends a **Title card** block for a card clip
+(`docs/superpowers/specs/2026-09-26-tutorial-editor-visual-parity-concept-spec.md`
+§5: title/subtitle textareas, Background/Text colour inputs, Duration).
+The native inspector has no such block: `src/components/editor/inspector/ClipSection.vue`
+shows a card clip's placement and source range like any other clip, and
+nothing in the webview sends Rust's `updateCard` command
+(`src/editor/editorCommandTypes.ts`; `actionMeta.ts` records that no
+`ActionId` maps to it). A card's words and colours are therefore fixed at
+the moment it is added (the Titles cards, Insert intro) — changing them
+means deleting the card and adding another. Its length can still be
+trimmed on the timeline. **Fix:** a Title card block in `ClipSection` for a
+`card` asset, sending `updateCard` (one field per edit, the inspector
+drafts' `useInspectorDraft` pattern), with the locked-track reason like
+every other field.

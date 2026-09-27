@@ -2040,7 +2040,10 @@ tokens"; the refusal and inline-error rules are in "Frontend state".
   existing action, command or dialog through `menuContext.ts`; an item with
   no native backend is OMITTED, never shown disabled. Right-click, or
   Shift+F10 / the Menu key on a focused clip, track header or cue, opens it;
-  Escape closes the innermost surface and gives focus back to its opener.
+  Escape closes the innermost surface and gives focus back to its opener —
+  a dialog an item opened included: `MenuPanel` puts focus back on its
+  trigger BEFORE the item runs, so the dialog remembers the trigger
+  (`tests/e2e/editorMenuFocus.spec.ts`).
   **Help is on `MenuPanel` too** (ruling T8-1, landed in Task 23: its items
   come from `src/editor/helpMenu.ts`, testids `editor-help-menu-item-*`).
 - **The Teaching layers row and the Captions row** (D11; Task 19,
@@ -2074,8 +2077,10 @@ tokens"; the refusal and inline-error rules are in "Frontend state".
   effect; every refused command is visible (a toast, or the dialog's own
   inline line — never both, never neither); every disabled control carries
   its reason by pointer (`title`) and, where the control stays focusable,
-  by keyboard (the menu's hint line, or the toast a disabled shortcut
-  raises); a control with no backend is
+  by keyboard (the menu's hint line, or a toast: pressing any
+  `aria-disabled` control or a disabled shortcut goes through the one
+  `src/editor/disabledAnnouncer.ts`, once per 1.5 s per reason, so a held
+  key does not stack toasts); a control with no backend is
   removed, not left disabled "until later". Browser-only concept copy keeps
   its slot with native wording (D10). `tests/e2e/editorNoop.spec.ts` is the
   gate (see Testing conventions). Clicking the preview picture selects the
@@ -2085,7 +2090,9 @@ tokens"; the refusal and inline-error rules are in "Frontend state".
   all gaps, multi-clip Fades, the speed ripple, Save a copy's rename),
   GAP-226 (Matches this edit is session-local; Detach enabled for a silent
   video), GAP-227 (what the port omits or words differently from the
-  concept), GAP-188 (Save a copy's "Include rendered videos" is a help line).
+  concept), GAP-228 (Open project… from the Project menu skips the close
+  guard; nothing is lost), GAP-229 (no Title card block in the Clip tab),
+  GAP-188 (Save a copy's "Include rendered videos" is a help line).
   Checklist rows T74–T81 carry what only real WebView2 can show.
 
 **The shutdown gate after this domain** is four terms, composed once in
@@ -2116,7 +2123,7 @@ the ADR's residual gates (R-H1–R-H5, R-A1, R-A2, R-M1, R-P1, R-P2), all
 OPEN; the concept bundle's final representative journey is checklist row
 T64, unwalked. Known limits: docs/Gaps.md GAP-170 (the ACL never run in a
 live app), GAP-173 (the preview approximates the render) and GAP-172
-through GAP-227 in general (GAP-219 is filed beside GAP-197), each naming
+through GAP-229 in general (GAP-219 is filed beside GAP-197), each naming
 its task.
 
 ## The document-import domain (`core/src/document_import.rs` + `src-tauri/src/document_commands.rs` + `DocumentImportSettings.vue` / `ImportVaultPicker.vue`)
@@ -4143,11 +4150,11 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
 
 | Job | Runner | Gates |
 | --- | --- | --- |
-| `frontend` | Linux | ESLint, LOC guard (frontend + Rust files), fallow quality ratchet, version-file agreement, `vue-tsc` typecheck + build, the **Playwright suite** against the just-built `dist/` (`tests/e2e/`, chromium only: layout, keyboard and contrast, and since the visual-parity plan the concept-parity gate — see Testing conventions) minus the no-op sweep (`E2E_SKIP_NOOP_SWEEP=1`; it has its own job below), then the Vitest suite with coverage floors. The e2e step sits between the build and `test:coverage` because it needs `dist/` and must not disturb the coverage ordering. `timeout-minutes: 45` |
+| `frontend` | Linux | ESLint, LOC guard (frontend + Rust files), fallow quality ratchet, version-file agreement, `vue-tsc` typecheck + build, the **Playwright suite** against the just-built `dist/` (`tests/e2e/`, chromium only: layout, keyboard and contrast, and since the visual-parity plan the concept-parity gate — see Testing conventions) minus the no-op sweep (`E2E_SKIP_NOOP_SWEEP=1`; it has its own job below), then the Vitest suite with coverage floors. The e2e step sits between the build and `test:coverage` because it needs `dist/` and must not disturb the coverage ordering. On a failure it uploads the Playwright HTML report and `test-results/` (screenshots, traces) as an artifact, as `editor-noop-sweep` does. `timeout-minutes: 45` |
 | `editor-noop-sweep` | Linux (parallel to `frontend`) | The tutorial editor's no-op sweep alone (`npx playwright test tests/e2e/editorNoop.spec.ts`, design D14, Ruling T24-2): the same checkout / Node 22 / `npm ci` / `npm run build` / `playwright install --with-deps chromium` setup as `frontend`'s e2e step, then every scenario in `tests/e2e/noopScenarios.ts`. Its own job because on a 2-worker runner it outlasts the rest of the e2e suite together. `timeout-minutes: 60` |
 | `rust-core` | Linux | `cargo fmt --check` (whole workspace), clippy `-D warnings` + tests on `core`, `capture`, `transcribe`, `mcp`, `screen` — including `--features whisper` (the only place the whisper FFI tests execute) — plus `cargo machete` (unused deps), a `cargo llvm-cov` line-coverage floor (94) over `core`/`capture`/`transcribe`/`screen`, and `cargo deny check` (RustSec advisories + license policy, `src-tauri/deny.toml`). **It also installs ffmpeg**, explicitly rather than trusting the runner image, because the screen crate's render round-trip tests (`render_roundtrip.rs`, `render_graph_roundtrip.rs` — the retired `export_roundtrip.rs`'s successors, Task 59) SKIP when ffmpeg is absent — an image that quietly dropped it would turn the editor's only executable end-to-end render proof into a silent no-op with the job still green |
-| `linux-app` | Linux (after the two above) | `npx tauri build --no-bundle` — shell compile gate, never released — then **workspace clippy incl. the shell** and the **shell crate's unit tests** (`cargo test -p vault-buddy --lib`; both need the GUI libs + built `dist/` this job has) |
-| `windows-app` | Windows (after the two above) | Full `npx tauri build`, MSI/NSIS installers as artifacts; leaves updater artifacts unsigned on every PR event by design (the signing secrets are injected only on push to `main`, never on PRs — GAP-36); + `cargo test` for core/capture/transcribe/screen (incl. `--features whisper`, and `--features whisper-vulkan` for transcribe) after the build to exercise platform-sensitive code (process detection, GetKeyState, WASAPI gates, MoveFileExW fallback) |
+| `linux-app` | Linux (after `frontend` and `rust-core`) | `npx tauri build --no-bundle` — shell compile gate, never released — then **workspace clippy incl. the shell** and the **shell crate's unit tests** (`cargo test -p vault-buddy --lib`; both need the GUI libs + built `dist/` this job has) |
+| `windows-app` | Windows (after `frontend` and `rust-core`) | Full `npx tauri build`, MSI/NSIS installers as artifacts; leaves updater artifacts unsigned on every PR event by design (the signing secrets are injected only on push to `main`, never on PRs — GAP-36); + `cargo test` for core/capture/transcribe/screen (incl. `--features whisper`, and `--features whisper-vulkan` for transcribe) after the build to exercise platform-sensitive code (process detection, GetKeyState, WASAPI gates, MoveFileExW fallback) |
 
 ## Releases
 

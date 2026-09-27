@@ -64,6 +64,20 @@ jobs:
         env:
           E2E_SKIP_NOOP_SWEEP: "1"
       - run: npm run test:coverage
+      # A failed Playwright run keeps its evidence: the HTML report
+      # (playwright.config.ts adds it on CI) and each failed test's
+      # screenshot and trace under test-results/. `failure()` only, the
+      # installers' upload-artifact pin; nothing is kept for a green run.
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report-frontend-${{ github.sha }}
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
   editor-noop-sweep:
     # The tutorial editor's no-op sweep (tests/e2e/editorNoop.spec.ts,
@@ -85,6 +99,20 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npx playwright test tests/e2e/editorNoop.spec.ts
+      # A failed Playwright run keeps its evidence: the HTML report
+      # (playwright.config.ts adds it on CI) and each failed test's
+      # screenshot and trace under test-results/. `failure()` only, the
+      # installers' upload-artifact pin; nothing is kept for a green run.
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report-noop-sweep-${{ github.sha }}
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
   rust-core:
     name: Rust core (fmt, clippy, tests)

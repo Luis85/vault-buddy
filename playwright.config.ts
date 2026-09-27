@@ -24,7 +24,9 @@ export default defineConfig({
   // The suite measures geometry, so parallel workers sharing a display are
   // fine but a retry that masks a real layout regression is not.
   retries: 0,
-  reporter: process.env.CI ? [["list"]] : [["list"]],
+  // On CI an HTML report too, which the workflow uploads when a run fails
+  // (with test-results/, the screenshots and traces below).
+  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : [["list"]],
   use: {
     baseURL: "http://127.0.0.1:4173",
     // A failure here is a PICTURE problem, so keep the picture.
