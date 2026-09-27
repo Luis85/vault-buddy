@@ -1,26 +1,32 @@
 <script setup lang="ts">
 /**
- * The webcam dialog's camera half (Task 50; SCREENS 05): the live preview
- * with the 3-2-1 countdown and the recording badge over it, and the camera/
- * microphone choices. Presentational — the choices are `v-model`s, and a
- * change once the camera is live asks the parent to request it again
- * (`reselect`); nothing here touches a device.
+ * The webcam dialog's camera view (Task 50; SCREENS 05; visual-parity
+ * Task 22, concept spec §9.7): a 16:9 view — "Camera is off" until the
+ * camera is enabled, then the live preview with the 3-2-1 countdown and the
+ * recording chip over it — and under it the status row (a dot and "Camera
+ * off" / "Camera on" / "Recording", read from `webcamStatus`) and its help
+ * line. Presentational: nothing here touches a device; the parent hands in
+ * the recorder's stream.
+ *
+ * The concept's status-row right side names a "720p target"; the native
+ * recorder asks the camera for its own default, so it says where the take
+ * goes instead.
  */
 import { computed, nextTick, ref, watch } from "vue";
 
+import { webcamStatus } from "../../../editor/webcamPhase";
 import type { WebcamView } from "../../../editor/webcamRecorder";
+import EditorIcon from "../icons/EditorIcon.vue";
 
 const props = defineProps<{ view: WebcamView; stream: MediaStream | null }>();
-const emit = defineEmits<{ (e: "reselect"): void }>();
-const cameraId = defineModel<string>("cameraId", { required: true });
-const withMic = defineModel<boolean>("withMic", { required: true });
 
 const liveVideo = ref<HTMLVideoElement | null>(null);
 const live = computed(() => ["ready", "countdown", "recording"].includes(props.view.state));
 const recording = computed(() => props.view.state === "recording");
-/** A camera can be switched only while it is live and idle. */
-const canSwitch = computed(() => props.view.state === "ready");
-const canToggleMic = computed(() => props.view.state === "idle" || canSwitch.value);
+const status = computed(() => webcamStatus(props.view.state));
+
+const DOTS = { off: "bg-fg-muted", live: "bg-audio", recording: "bg-webcam-recording" } as const;
+const dot = computed(() => DOTS[status.value.tone]);
 
 /** Show the live stream once its element exists. */
 watch([() => props.stream, live, liveVideo], async () => {
@@ -30,72 +36,67 @@ watch([() => props.stream, live, liveVideo], async () => {
 </script>
 
 <template>
-  <div class="flex flex-col gap-2">
+  <div class="flex min-w-0 flex-col">
     <div
-      v-if="live"
-      class="relative"
+      data-testid="webcam-view"
+      class="relative aspect-video overflow-hidden rounded-[10px] border border-line bg-webcam-view"
     >
       <video
+        v-if="live"
         ref="liveVideo"
         data-testid="webcam-live"
         aria-label="Camera preview"
         autoplay
         muted
         playsinline
-        class="max-h-[40vh] w-full rounded-control bg-black"
+        class="absolute inset-0 h-full w-full object-cover"
       />
+      <div
+        v-else
+        data-testid="webcam-empty"
+        class="absolute inset-0 flex flex-col items-center justify-center gap-3.5 bg-[radial-gradient(ellipse_at_50%_60%,var(--color-webcam-glow),var(--color-webcam-view)_70%)] text-center"
+      >
+        <EditorIcon
+          name="webcam"
+          :size="38"
+          class="text-webcam-icon"
+        />
+        <b class="text-[15px] font-semibold text-webcam-ink">Camera is off</b>
+        <p class="text-[11px] leading-[1.7] text-webcam-sub">
+          Enable your camera when you are ready.<br>Nothing is accessed until you do.
+        </p>
+      </div>
       <p
         v-if="view.count !== null"
         data-testid="webcam-countdown"
         aria-live="assertive"
-        class="absolute inset-0 flex items-center justify-center text-5xl font-semibold text-white"
+        class="absolute inset-0 flex items-center justify-center bg-webcam-scrim text-[80px] font-bold text-white"
       >
         {{ view.count }}
       </p>
       <p
         v-if="recording"
         role="status"
-        class="absolute left-2 top-2 rounded bg-black/60 px-1 text-danger-fg"
+        class="absolute right-3 top-3 rounded-[5px] bg-webcam-chip px-2.5 py-1.5 text-xs text-white"
       >
         Recording
       </p>
     </div>
-    <div class="flex flex-wrap items-center gap-2">
-      <label
-        v-if="view.cameras.length > 0"
-        class="flex items-center gap-1"
-      >
-        Camera
-        <select
-          v-model="cameraId"
-          data-testid="webcam-device"
-          :disabled="!canSwitch"
-          class="rounded border border-line bg-stage px-1 py-0.5 text-fg"
-          @change="emit('reselect')"
-        >
-          <option value="">
-            Default camera
-          </option>
-          <option
-            v-for="camera in view.cameras"
-            :key="camera.deviceId"
-            :value="camera.deviceId"
-          >
-            {{ camera.label }}
-          </option>
-        </select>
-      </label>
-      <label class="flex items-center gap-1">
-        <input
-          v-model="withMic"
-          data-testid="webcam-mic"
-          type="checkbox"
-          :disabled="!canToggleMic"
-          class="accent-violet-500"
-          @change="emit('reselect')"
-        >
-        Record microphone too
-      </label>
+    <div
+      data-testid="webcam-status"
+      class="flex justify-between gap-3 py-[11px] text-[11px] text-fg-muted"
+    >
+      <span class="flex items-center gap-2">
+        <span
+          class="h-1.5 w-1.5 shrink-0 rounded-full"
+          :class="dot"
+        />
+        {{ status.label }}
+      </span>
+      <span>Local recording · saved into this project</span>
     </div>
+    <p class="text-[11px] leading-[1.6] text-fg-muted">
+      {{ status.message }}
+    </p>
   </div>
 </template>

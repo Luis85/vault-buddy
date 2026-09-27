@@ -21,14 +21,23 @@
  *
  * Escape and the backdrop close it except while a reconnect is pending.
  * Every Rust message renders as text (mustache), never as markup.
+ *
+ * Visual-parity Task 22 (concept spec §9.10, "Reconnect original media",
+ * `.source-row`): each original is a bordered row on the app background
+ * (`ReconnectRow`), the footer is `DialogButton`s — Close · Find all… —
+ * and why Find all… waits is said on screen (`FooterReason`, D14). A
+ * reconnect's refusal is its own status line: `useMediaReconnect` never
+ * routes one through `editorProject.lastError`, so the shell never toasts
+ * it and there is nothing for this dialog to claim (ruling T7-1).
  */
 import { computed, ref, watch } from "vue";
 
 import { useMediaReconnect } from "../../../composables/useMediaReconnect";
 import type { MissingMedia } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
-import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
+import DialogButton from "./DialogButton.vue";
+import FooterReason from "./FooterReason.vue";
 import ReconnectRow from "./ReconnectRow.vue";
 
 const props = defineProps<{ open: boolean }>();
@@ -59,10 +68,17 @@ const findAllIds = computed(() =>
     .filter((id) => stillMissing.value.has(id) && outcomes.value[id]?.kind !== "excluded"),
 );
 
-const statusText = computed(() => (busy.value ? "Checking the chosen files…" : (status.value?.text ?? "")));
+const BUSY = "Checking the chosen files…";
+const statusText = computed(() => (busy.value ? BUSY : (status.value?.text ?? "")));
 const statusRole = computed(() => (status.value?.alert ? "alert" : "status"));
 const statusClass = computed(() => (status.value?.alert ? "text-danger-fg" : "text-fg-secondary"));
-const findAllDisabled = computed(() => busy.value || findAllIds.value.length === 0);
+/** Why Close waits, or `null`. */
+const closeReason = computed(() => (busy.value ? BUSY : null));
+/** Why Find all… cannot act, or `null`. */
+const findAllReason = computed(() => {
+  if (busy.value) return BUSY;
+  return findAllIds.value.length === 0 ? "Nothing is left to find." : null;
+});
 
 function close(): void {
   if (!busy.value) emit("close");
@@ -74,7 +90,7 @@ function close(): void {
     :open="open"
     label="Reconnect missing media"
     :closable="!busy"
-    :close-reason="busy ? 'Checking the chosen files…' : null"
+    :close-reason="closeReason"
     @close="close"
   >
     <template #title>
@@ -136,20 +152,24 @@ function close(): void {
     </div>
 
     <template #footer>
-      <AppButton
-        variant="ghost"
-        :disabled="busy"
+      <FooterReason
+        data-testid="reconnect-find-all-reason"
+        :text="findAllReason"
+      />
+      <DialogButton
+        :reason="closeReason"
         @click="close"
       >
         Close
-      </AppButton>
-      <AppButton
+      </DialogButton>
+      <DialogButton
+        variant="primary"
         data-testid="reconnect-find-all"
-        :disabled="findAllDisabled"
+        :reason="findAllReason"
         @click="reconnect.run(findAllIds, false)"
       >
         Find all…
-      </AppButton>
+      </DialogButton>
     </template>
   </DialogHost>
 </template>

@@ -7,7 +7,9 @@
  * `--color-primary`). 34px tall, 12px, an optional icon before the label.
  * Hover and the disabled look come from the editor's base button rules
  * (`style.css`, `.vb-editor`); the primary fill keeps its own hover, only
- * while enabled.
+ * while enabled. `danger` (visual-parity Task 22) is the concept's
+ * `.btn.danger`: bordered, its label in the danger ink (Discard, Discard &
+ * close).
  *
  * Listeners, `data-testid` and `aria-*` fall through to the `<button>`.
  * `reason` is why it cannot act right now: set, the button is disabled and
@@ -19,7 +21,7 @@ import EditorIcon from "../icons/EditorIcon.vue";
 
 withDefaults(
   defineProps<{
-    variant?: "bordered" | "primary";
+    variant?: "bordered" | "primary" | "danger";
     icon?: EditorIconName | null;
     /** Why the button cannot act; `null` = it can. */
     reason?: string | null;
@@ -29,6 +31,7 @@ withDefaults(
 
 const VARIANTS: Record<string, string> = {
   bordered: "border-line bg-panel text-fg",
+  danger: "border-line bg-panel text-danger-fg",
   primary: "border-transparent bg-primary font-semibold text-white enabled:hover:bg-primary-hover",
 };
 </script>

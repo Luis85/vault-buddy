@@ -8,12 +8,21 @@
  * Not closable by Escape or the backdrop: until the user chooses, any new
  * edit would journal over the changes this dialog is offering back.
  * Every Rust message is rendered as text (mustache), never as markup.
+ *
+ * Visual-parity Task 22 (concept spec §9.9): the session dialogs' lead row
+ * (`SessionLead`), `DialogButton`s — Discard in the danger ink, Resume (or
+ * Open saved project) primary — and, while a choice runs, the reason both
+ * wait on screen (`FooterReason`, D14). A refusal is the dialog's own
+ * (`useEditorRecovery` tracks each choice, ruling T7-1), never also a
+ * toast.
  */
 import { computed } from "vue";
 
 import { useEditorRecovery } from "../../../composables/useEditorRecovery";
-import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
+import DialogButton from "./DialogButton.vue";
+import FooterReason from "./FooterReason.vue";
+import SessionLead from "./SessionLead.vue";
 
 const props = defineProps<{
   /** Reopen `projectId` after a refused Discard (`EditorRoot`'s own);
@@ -36,6 +45,9 @@ const savedAt = computed(() => {
   return Number.isNaN(when.getTime()) ? raw : when.toLocaleString();
 });
 
+/** Why the footer's buttons wait, or `null`. */
+const reason = computed(() => (busy.value ? "Opening the project…" : null));
+
 defineExpose({ check: recovery.check });
 </script>
 
@@ -50,20 +62,27 @@ defineExpose({ check: recovery.check });
     <template #title>
       Unsaved changes from last time
     </template>
+    <template #subtitle>
+      Your editable source. Nothing is lost until you choose.
+    </template>
 
     <div
       v-if="offer"
       data-testid="recovery-dialog"
-      class="flex flex-col gap-3"
+      class="flex flex-col gap-4"
     >
-      <p class="text-sm text-fg-secondary">
+      <SessionLead
+        data-testid="recovery-lead"
+        icon="shield"
+        title="Your unsaved changes are waiting"
+      >
         “{{ offer.title }}” (last saved {{ savedAt }}) has changes that were never
         saved. Resume them, or discard them and continue from the saved project.
-      </p>
+      </SessionLead>
       <div
         v-if="failure"
         role="alert"
-        class="flex flex-col gap-1 text-xs text-danger-fg"
+        class="flex flex-col gap-1 rounded-[7px] border border-line bg-app p-3 text-xs text-danger-fg"
       >
         <template v-if="resumeFailed">
           <p>The unsaved changes could not be opened. Your saved project was not changed.</p>
@@ -79,27 +98,33 @@ defineExpose({ check: recovery.check });
       v-if="offer"
       #footer
     >
-      <AppButton
+      <FooterReason
+        data-testid="recovery-reason"
+        :text="reason"
+      />
+      <DialogButton
         variant="danger"
-        :disabled="busy"
+        :reason="reason"
         @click="recovery.discard"
       >
         Discard
-      </AppButton>
-      <AppButton
+      </DialogButton>
+      <DialogButton
         v-if="resumeFailed"
-        :disabled="busy"
+        variant="primary"
+        :reason="reason"
         @click="recovery.openSaved"
       >
         Open saved project
-      </AppButton>
-      <AppButton
+      </DialogButton>
+      <DialogButton
         v-else
-        :disabled="busy"
+        variant="primary"
+        :reason="reason"
         @click="recovery.resume"
       >
         Resume
-      </AppButton>
+      </DialogButton>
     </template>
   </DialogHost>
 </template>

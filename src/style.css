@@ -111,6 +111,17 @@
      `.canvas-wrap{background:#17151f}`): the same in both themes, like the
      card canvases above — it stands for the rendered video's own black. */
   --color-canvas: #17151f;
+  /* The webcam dialog's camera view (§9.7, `.webcam-view`, `.webcam-empty`,
+     `.webcam-countdown`, `.webcam-timer`, the recording dot): a picture of
+     a camera, the same in both themes like the canvas above. */
+  --color-webcam-view: #18161d;
+  --color-webcam-glow: #292137;
+  --color-webcam-icon: #b7a0df;
+  --color-webcam-ink: #eee7f7;
+  --color-webcam-sub: #a89cb7;
+  --color-webcam-scrim: #0005;
+  --color-webcam-chip: #17121fce;
+  --color-webcam-recording: #f48796;
   /* A locked lane's hatch (§6.4, `#8888880b`): neutral grey at 4 %, the
      same in both themes. */
   --color-lock-hatch: #8888880b;

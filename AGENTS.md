@@ -3424,7 +3424,9 @@ says a matched-but-disabled shortcut's registry reason, at most once per
 control claims `lastError` for that request's round trip only
 (`useInlineLastError(...).track`, ruling T7-1 — the Checks dialog's
 destination picker, the Save a copy dialog's rename, both through the one
-rename path `src/editor/renameTutorial.ts`): that refusal is shown there
+rename path `src/editor/renameTutorial.ts`; since visual-parity Task 22 also
+the webcam dialog's Add to timeline, the recovery offer's and the close
+guard's choices, and Discard project with its reattach): that refusal is shown there
 and not toasted, while anything else raised meanwhile still toasts — one
 surface, never two and never none. Every insert at the playhead (the media "+", the Titles
 cards, the asset menu) goes through `placeOnFreeTrack`: a free track of the

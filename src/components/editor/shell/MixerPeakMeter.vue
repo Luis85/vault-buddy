@@ -29,11 +29,11 @@ const fill = computed(() => `${Math.min(1, peak.value ?? 0) * 100}%`);
 <template>
   <div
     data-testid="mixer-peak"
-    class="flex flex-col gap-0.5"
+    class="flex flex-col gap-1 text-[11px] text-fg-muted"
   >
     <span class="flex justify-between">
       Preview peak
-      <span class="tabular-nums">{{ text }}</span>
+      <span class="font-mono tabular-nums">{{ text }}</span>
     </span>
     <div
       role="meter"

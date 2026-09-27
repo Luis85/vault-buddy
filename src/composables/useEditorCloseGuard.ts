@@ -24,6 +24,12 @@
  * kind — the authoritative record, never a local guess — so the render and
  * publish jobs Tasks 46/48 add are covered the day they land. Imports and
  * waveform decodes never change the close copy.
+ *
+ * A choice's refusal is said in the dialog (`error`), so Save, Keep and
+ * Discard changes run as the dialog's own request
+ * (`useInlineLastError().track`, ruling T7-1): the shell does not toast it
+ * as well. An error from anything else while the dialog is open still
+ * toasts.
  */
 import { ref } from "vue";
 
@@ -32,6 +38,7 @@ import type { JobPhase, JobRecordDto } from "../editorTypes";
 import { logWarning } from "../logging";
 import { useEditorOnboardingStore } from "../stores/editorOnboarding";
 import { toEditorError, useEditorProjectStore } from "../stores/editorProject";
+import { useInlineLastError } from "./useInlineLastError";
 
 type CloseGuardMode = "dirty" | "render" | "take";
 
@@ -47,6 +54,7 @@ function liveRenderJobIds(records: JobRecordDto[]): string[] {
 
 export function useEditorCloseGuard(reattach: (projectId: string) => Promise<boolean>) {
   const project = useEditorProjectStore();
+  const inline = useInlineLastError();
   const mode = ref<CloseGuardMode | null>(null);
   const busy = ref(false);
   const error = ref<string | null>(null);
@@ -116,7 +124,7 @@ export function useEditorCloseGuard(reattach: (projectId: string) => Promise<boo
     busy.value = true;
     error.value = null;
     try {
-      if (await step()) await hide();
+      if (await inline.track(step)) await hide();
     } finally {
       busy.value = false;
     }

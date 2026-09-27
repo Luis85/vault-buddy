@@ -7,6 +7,11 @@
  * batch as not reconnectable here — offers nothing more; a mismatched one
  * also offers **Replace…**; everything else (untried, ambiguous,
  * unmatched, a failed copy) only **Choose file…**, for this asset alone.
+ *
+ * Visual-parity Task 22 (concept spec §9.10, `.source-row`): a bordered
+ * row on the app background (padding 11, radius 8) — the name bold 12px,
+ * its facts and the outcome 10px under it, the buttons at the right —
+ * with `DialogButton`s that say why they wait while a reconnect runs.
  */
 import { computed } from "vue";
 
@@ -15,7 +20,7 @@ import { describeOutcome } from "../../../editor/reconnectText";
 import type { MissingMedia } from "../../../editorTypes";
 import { formatBytes } from "../../../utils/formatBytes";
 import { formatDuration } from "../../../utils/formatDuration";
-import AppButton from "../../ui/AppButton.vue";
+import DialogButton from "./DialogButton.vue";
 
 const props = defineProps<{ item: MissingMedia; outcome: ReconnectOutcome | undefined; busy: boolean }>();
 const emit = defineEmits<{ (e: "choose"): void; (e: "replace"): void }>();
@@ -30,37 +35,41 @@ const replaceable = computed(() => props.outcome?.kind === "mismatched");
 /** Rust left it out of a batch: no file choice would be accepted. */
 const actionable = computed(() => !done.value && props.outcome?.kind !== "excluded");
 const text = computed(() => describeOutcome(props.outcome));
+const reason = computed(() => (props.busy ? "Checking the chosen files…" : null));
 </script>
 
 <template>
   <li
     :data-testid="`reconnect-row-${item.assetId}`"
-    class="flex flex-col gap-1 rounded-control border border-line p-2 text-xs"
+    class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-app p-[11px]"
   >
-    <span class="font-medium text-fg">{{ item.name }}</span>
-    <span class="text-fg-muted">{{ facts }}</span>
-    <span :class="done ? 'text-success' : 'text-fg-secondary'">{{ text }}</span>
+    <span class="flex min-w-0 flex-col gap-1.5">
+      <b class="text-xs font-semibold [overflow-wrap:anywhere] text-fg">{{ item.name }}</b>
+      <span class="text-[10px] text-fg-muted">{{ facts }}</span>
+      <span
+        class="text-[10px]"
+        :class="done ? 'text-audio' : 'text-fg-secondary'"
+      >{{ text }}</span>
+    </span>
     <span
       v-if="actionable"
-      class="flex flex-wrap gap-2"
+      class="flex shrink-0 flex-wrap gap-2"
     >
-      <AppButton
-        variant="secondary"
+      <DialogButton
         data-testid="reconnect-choose"
-        :disabled="busy"
+        :reason="reason"
         @click="emit('choose')"
       >
         Choose file…
-      </AppButton>
-      <AppButton
+      </DialogButton>
+      <DialogButton
         v-if="replaceable"
-        variant="secondary"
         data-testid="reconnect-replace"
-        :disabled="busy"
+        :reason="reason"
         @click="emit('replace')"
       >
         Replace…
-      </AppButton>
+      </DialogButton>
     </span>
   </li>
 </template>

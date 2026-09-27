@@ -28,6 +28,7 @@ import type { EditorOpenResult, MissingMedia, Project, RelinkReport } from "../s
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
+import { errorToasts, mountFeedback } from "./helpers/feedbackHost";
 
 enableAutoUnmount(afterEach);
 
@@ -450,5 +451,68 @@ describe("the preview after a reconnect", () => {
     expect(mediaUrl).toHaveBeenCalledTimes(2);
     expect(w.get("video").attributes("src")).toContain("a-talk.mp4");
     expect(w.text()).not.toContain("talk.mp4");
+  });
+});
+
+// Visual-parity Task 22 (concept spec §9.10, `.source-row`): each missing
+// original is a bordered row on the app background, `DialogButton`s act,
+// and the reason Find all… waits is on screen (D14).
+describe("ReconnectDialog — the concept chrome", () => {
+  it("rows are source rows with DialogButtons; the footer is Close · Find all…", async () => {
+    await openStore(() => Promise.resolve(null));
+    const w = mountDialog();
+    await flushPromises();
+    expect(row(w, "a-talk").classes()).toEqual(expect.arrayContaining(["bg-app", "border-line", "rounded-lg"]));
+    expect(row(w, "a-talk").get("b").text()).toBe("talk.mp4");
+    expect(row(w, "a-talk").get('[data-testid="reconnect-choose"]').classes()).toContain("min-h-[34px]");
+    expect(w.findAll("footer button").map((b) => b.text())).toEqual(["Close", "Find all…"]);
+    expect(w.get('[data-testid="reconnect-find-all"]').classes()).toContain("bg-primary");
+  });
+
+  it("while a reconnect runs, the buttons wait and say why on screen", async () => {
+    await openStore(() => new Promise(() => {}));
+    const w = mountDialog();
+    await flushPromises();
+    await w.get('[data-testid="reconnect-find-all"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="reconnect-find-all-reason"]').text()).toBe("Checking the chosen files…");
+    expect(w.get('[data-testid="reconnect-choose"]').attributes("title")).toBe("Checking the chosen files…");
+  });
+
+  it("with nothing left to find, Find all… says so on screen", async () => {
+    await openStore(() => Promise.resolve(null), []);
+    const w = mountDialog();
+    await flushPromises();
+    expect(w.get('[data-testid="reconnect-find-all"]').attributes("title")).toBe("Nothing is left to find.");
+    expect(w.get('[data-testid="reconnect-find-all-reason"]').text()).toBe("Nothing is left to find.");
+  });
+});
+
+// Ruling T7-1: a reconnect's refusal is the dialog's own status line — it
+// never passes through `lastError`, so it is never toasted — while an
+// unrelated refusal with the dialog open still toasts.
+describe("ReconnectDialog — its own refusal is inline", () => {
+  const refusal = () =>
+    Promise.reject(new EditorPortError({ code: "internal", message: "The file dialog failed.", retryable: true, operationId: "o" }));
+
+  it("a refused reconnect is the status line, not a toast", async () => {
+    await openStore(refusal);
+    mountFeedback();
+    const w = mountDialog();
+    await flushPromises();
+    await w.get('[data-testid="reconnect-find-all"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="reconnect-status"]').text()).toBe("The file dialog failed.");
+    expect(errorToasts()).toEqual([]);
+  });
+
+  it("an unrelated refusal while the dialog is open still toasts", async () => {
+    const store = await openStore(() => Promise.resolve(null), [TALK, LOGO], { execute: refusal });
+    mountFeedback();
+    mountDialog();
+    await flushPromises();
+    await store.execute({ kind: "rename", title: "x" });
+    await flushPromises();
+    expect(errorToasts()).toEqual(["The file dialog failed."]);
   });
 });

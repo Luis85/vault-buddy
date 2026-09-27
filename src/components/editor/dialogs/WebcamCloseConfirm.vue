@@ -9,13 +9,24 @@
  * - a FINISHED take not yet on the timeline: nothing can delete it (a
  *   registered asset, GAP-195), so the choice is Back to the take, or Keep
  *   in library and close — never a "Discard" that would not discard.
+ *
+ * Visual-parity Task 22 (concept spec §9.7's close guard during review):
+ * it sits in the dialog's footer — the question left, its two answers
+ * right — and takes focus when it appears, on its safe answer (back), so
+ * the keyboard is where the question is.
  */
-import { computed } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 
-import AppButton from "../../ui/AppButton.vue";
+import DialogButton from "./DialogButton.vue";
 
 const props = defineProps<{ recording: boolean }>();
 const emit = defineEmits<{ (e: "back"): void; (e: "confirm"): void }>();
+
+const back = ref<InstanceType<typeof DialogButton> | null>(null);
+onMounted(async () => {
+  await nextTick();
+  (back.value?.$el as HTMLElement | undefined)?.focus();
+});
 
 const copy = computed(() =>
   props.recording
@@ -39,26 +50,24 @@ const copy = computed(() =>
     data-testid="webcam-confirm"
     role="alertdialog"
     aria-label="Close the webcam dialog?"
-    class="flex flex-col gap-2 rounded border border-line p-2"
+    class="flex min-w-0 flex-1 items-center justify-end gap-2"
   >
-    <p>{{ copy.text }}</p>
-    <div class="flex justify-end gap-2">
-      <AppButton
-        variant="secondary"
-        size="sm"
-        data-testid="webcam-confirm-back"
-        @click="emit('back')"
-      >
-        {{ copy.back }}
-      </AppButton>
-      <AppButton
-        :variant="copy.variant"
-        size="sm"
-        data-testid="webcam-confirm-keep"
-        @click="emit('confirm')"
-      >
-        {{ copy.confirm }}
-      </AppButton>
-    </div>
+    <p class="mr-auto min-w-0 text-[11px] leading-[1.5] text-fg-secondary">
+      {{ copy.text }}
+    </p>
+    <DialogButton
+      ref="back"
+      data-testid="webcam-confirm-back"
+      @click="emit('back')"
+    >
+      {{ copy.back }}
+    </DialogButton>
+    <DialogButton
+      :variant="copy.variant"
+      data-testid="webcam-confirm-keep"
+      @click="emit('confirm')"
+    >
+      {{ copy.confirm }}
+    </DialogButton>
   </div>
 </template>

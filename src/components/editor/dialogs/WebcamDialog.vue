@@ -31,10 +31,21 @@
  * probe before the countdown (fix round 1), so a KNOWN-missing ffmpeg is
  * reported at once. An unknown status (a failed probe) blocks nothing:
  * `editor_webcam_begin`'s own `encoderUnavailable` stays the authority.
+ *
+ * **Visual-parity Task 22** (concept spec §9.7, screen 05): 960 wide; the
+ * 16:9 camera view and its status row left (`WebcamLive`, or the finished
+ * take in `WebcamReview`), "Set up your take" right (`WebcamSettings`), the
+ * privacy strip under both, and a footer per phase (`WebcamControls`, or the
+ * close question, `WebcamCloseConfirm`). No "Try demo overlay" (D10). A
+ * refused Add to timeline is claimed for this dialog while its own request
+ * is in flight (`useInlineLastError().track`, ruling T7-1): said here, not
+ * toasted as well; anything else still toasts.
  */
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 
+import { useInlineLastError } from "../../../composables/useInlineLastError";
 import { placePresenterTake } from "../../../editor/placeTake";
+import type { WebcamAction } from "../../../editor/webcamPhase";
 import {
   ENCODER_UNAVAILABLE_TEXT,
   type RecorderConstructor,
@@ -45,11 +56,13 @@ import {
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import { useFfmpegStore } from "../../../stores/ffmpeg";
+import EditorIcon from "../icons/EditorIcon.vue";
 import DialogHost from "../shell/DialogHost.vue";
 import WebcamCloseConfirm from "./WebcamCloseConfirm.vue";
 import WebcamControls from "./WebcamControls.vue";
 import WebcamLive from "./WebcamLive.vue";
 import WebcamReview from "./WebcamReview.vue";
+import WebcamSettings from "./WebcamSettings.vue";
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ (e: "close"): void }>();
@@ -57,6 +70,7 @@ const emit = defineEmits<{ (e: "close"): void }>();
 const project = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
 const ffmpeg = useFfmpegStore();
+const inline = useInlineLastError();
 
 const IDLE: WebcamView = { state: "idle", count: null, cameras: [], take: null, problem: null };
 const view = shallowRef<WebcamView>(IDLE);
@@ -93,7 +107,6 @@ const reviewing = computed(() => state.value === "review" || state.value === "co
 const finishing = computed(() => state.value === "review" && view.value.take === null);
 const busy = computed(() => state.value === "requesting" || state.value === "committing" || finishing.value);
 const recording = computed(() => state.value === "recording");
-const introducing = computed(() => state.value === "idle" || state.value === "requesting");
 /** Re-read whenever the view changes (the recorder itself is not reactive). */
 const stream = computed(() => (view.value && recorder ? recorder.stream : null));
 
@@ -127,9 +140,17 @@ async function stop(): Promise<void> {
 async function add(): Promise<void> {
   if (!recorder) return;
   placeError.value = null;
-  const placed = await recorder.commit((take) => placePresenterTake(project, take, workspace.playheadMs));
+  const active = recorder;
+  const placed = await inline.track(() =>
+    active.commit((take) => placePresenterTake(project, take, workspace.playheadMs)),
+  );
   if (placed) finishClose();
-  else placeError.value = project.lastError?.message ?? "";
+  else placeError.value = inline.error.value?.message ?? "";
+}
+
+const ACTIONS: Record<WebcamAction, () => unknown> = { enable, record, cancel, stop, retake, add };
+function act(action: WebcamAction): void {
+  void ACTIONS[action]();
 }
 
 /** Close now, or ask first when a take would be left behind. */
@@ -137,6 +158,16 @@ function requestClose(): void {
   if (busy.value) return;
   if (recording.value || view.value.take) asking.value = true;
   else finishClose();
+}
+
+const body = ref<HTMLElement | null>(null);
+
+/** Leave the close question. Its buttons go with it, so focus moves to the
+ * footer's first live button rather than falling to the page. */
+async function backToTake(): Promise<void> {
+  asking.value = false;
+  await nextTick();
+  body.value?.closest('[role="dialog"]')?.querySelector<HTMLElement>("footer button:not([disabled])")?.focus();
 }
 
 function release(): void {
@@ -177,7 +208,7 @@ onBeforeUnmount(() => {
 <template>
   <DialogHost
     :open="open"
-    label="Webcam"
+    label="Bring yourself into the tutorial"
     :width="960"
     :closable="!busy"
     close-testid="webcam-close"
@@ -185,58 +216,74 @@ onBeforeUnmount(() => {
     @close="requestClose"
   >
     <template #title>
-      Webcam
+      Bring yourself into the tutorial
     </template>
     <template #subtitle>
-      Record yourself as a presenter over your screen. The take becomes its own clip you can move and resize.
+      Your camera. A separate, editable layer.
     </template>
 
     <div
+      ref="body"
       data-testid="webcam-dialog"
-      class="flex flex-col gap-3 text-xs text-fg-secondary"
+      class="flex flex-col gap-5 text-xs text-fg-secondary"
     >
       <p
         v-if="view.problem"
         role="alert"
         data-testid="webcam-problem"
-        class="rounded border border-danger/40 px-2 py-1 text-danger-fg"
+        class="rounded-[7px] border border-danger/40 px-3 py-2 text-danger-fg"
       >
         {{ view.problem.message }}
       </p>
-      <WebcamReview
-        v-if="reviewing"
-        :view="view"
-        :place-error="placeError"
-        @retake="retake"
-        @add="add"
-      />
-      <WebcamLive
-        v-else
-        v-model:camera-id="cameraId"
-        v-model:with-mic="withMic"
-        :view="view"
-        :stream="stream"
-        @reselect="reselect"
-      />
+      <div
+        data-testid="webcam-body"
+        class="grid grid-cols-[minmax(0,1fr)_230px] gap-6 max-[760px]:grid-cols-1"
+      >
+        <WebcamReview
+          v-if="reviewing"
+          :view="view"
+          :place-error="placeError"
+        />
+        <WebcamLive
+          v-else
+          :view="view"
+          :stream="stream"
+        />
+        <WebcamSettings
+          v-model:camera-id="cameraId"
+          v-model:with-mic="withMic"
+          :view="view"
+          :playhead-ms="workspace.playheadMs"
+          @reselect="reselect"
+        />
+      </div>
+      <p
+        data-testid="webcam-privacy"
+        class="flex items-start gap-2.5 rounded-[7px] border border-line bg-app px-[15px] py-[13px] text-[11px] leading-[1.7] text-fg-muted"
+      >
+        <EditorIcon
+          name="shield"
+          :size="16"
+          class="mt-0.5 shrink-0 text-audio"
+        />
+        Permission is explicit. Camera and microphone stop after recording or closing. The take is kept in this project
+        as soon as you stop; rendering is optional.
+      </p>
+    </div>
+
+    <template #footer>
       <WebcamCloseConfirm
         v-if="asking"
         :recording="recording"
-        @back="asking = false"
+        @back="backToTake"
         @confirm="finishClose"
       />
-      <template v-else-if="!reviewing">
-        <p v-if="introducing">
-          Nothing is accessed until you press Enable camera. Windows may ask you to allow the camera (and the
-          microphone, if you choose it).
-        </p>
-        <WebcamControls
-          :state="state"
-          @enable="enable"
-          @record="record"
-          @cancel="cancel"
-          @stop="stop"
-        />
-      </template>
-    </div>
+      <WebcamControls
+        v-else
+        :state="state"
+        :has-take="view.take !== null"
+        @act="act"
+      />
+    </template>
   </DialogHost>
 </template>

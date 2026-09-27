@@ -22,6 +22,7 @@ import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
 import placement from "./fixtures/editor-presenter-placement.json";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
 import { type FakeDevices, fakeMediaDevices, FakeRecorder, resetFakeRecorder } from "./helpers/fakeWebcam";
+import { errorToasts, mountFeedback } from "./helpers/feedbackHost";
 
 enableAutoUnmount(afterEach);
 
@@ -391,5 +392,153 @@ describe("the presenter placement matches core::editor::migrate's", () => {
       const box = presenterBox({ width: canvas[0], height: canvas[1] });
       expect({ canvas, box }).toEqual({ canvas, box: { x, y, w, h } });
     }
+  });
+});
+
+/** The dialog footer's buttons, in order. */
+function footer(w: VueWrapper): string[] {
+  return w.findAll("footer button").map((b) => b.text());
+}
+
+// Visual-parity Task 22 (concept spec §9.7, screen 05): the concept's
+// anatomy — 960 wide, the 16:9 view with its "Camera is off" empty state
+// and a status row on the left, "Set up your take" on the right, the
+// privacy strip, and a footer per phase. No "Try demo overlay" (D10).
+describe("WebcamDialog — the concept anatomy (§9.7)", () => {
+  it("is 960 wide with the concept's title and subtitle", async () => {
+    await openStore();
+    const w = mountDialog();
+    await flushPromises();
+    expect(w.get('[data-testid="dialog-host-content"]').attributes("style")).toContain("width: 960px");
+    expect(w.get("h2").text()).toBe("Bring yourself into the tutorial");
+    expect(w.get('[data-testid="dialog-host-content"] header p').text()).toBe("Your camera. A separate, editable layer.");
+  });
+
+  it("idle: the view says the camera is off, the settings column and the privacy strip sit beside it", async () => {
+    await openStore();
+    const w = mountDialog();
+    await flushPromises();
+    expect(w.get('[data-testid="webcam-body"]').classes()).toContain("grid-cols-[minmax(0,1fr)_230px]");
+    const view = w.get('[data-testid="webcam-view"]');
+    expect(view.classes()).toContain("aspect-video");
+    const empty = w.get('[data-testid="webcam-empty"]');
+    expect(empty.get("b").text()).toBe("Camera is off");
+    expect(empty.text()).toContain("Nothing is accessed until you do.");
+    expect(w.get('[data-testid="webcam-status"]').text()).toContain("Camera off");
+    expect(w.get('[data-testid="webcam-status"]').text()).toContain("Local recording · saved into this project");
+    const settings = w.get('[data-testid="webcam-settings"]');
+    expect(settings.get("h3").text()).toBe("Set up your take");
+    expect(settings.text()).toContain("Include microphone");
+    expect(w.get('[data-testid="webcam-privacy"]').text()).toMatch(/^Permission is explicit\./);
+    expect(w.get('[data-testid="webcam-dialog"]').text()).not.toMatch(/demo/i);
+    expect(footer(w)).toEqual(["Enable camera"]);
+    expect(devices.requests).toEqual([]);
+  });
+
+  it("the camera choice waits for the camera and says so on screen", async () => {
+    await openStore();
+    const w = mountDialog();
+    await flushPromises();
+    const select = w.get('[data-testid="webcam-device"]');
+    expect((select.element as HTMLSelectElement).disabled).toBe(true);
+    expect(select.text()).toContain("System default");
+    expect(w.get('[data-testid="webcam-device-reason"]').text()).toBe("Choose a camera once it is on.");
+    await click(w, "webcam-enable");
+    expect((w.get('[data-testid="webcam-device"]').element as HTMLSelectElement).disabled).toBe(false);
+    expect(w.get('[data-testid="webcam-device-reason"]').text()).toBe("");
+  });
+
+  it("says where the take will land: at the playhead, above the other video tracks", async () => {
+    await openStore();
+    const w = mountDialog();
+    await flushPromises();
+    expect(w.get('[data-testid="webcam-placement"]').text()).toContain("0:04.2");
+  });
+
+  it("while the camera is being asked for, Enable camera is disabled with its reason on screen", async () => {
+    await openStore();
+    const pending = {
+      getUserMedia: () => new Promise<MediaStream>(() => {}),
+      enumerateDevices: () => Promise.resolve([]),
+    } as unknown as MediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", { value: pending, configurable: true });
+    const w = mountDialog();
+    await click(w, "webcam-enable");
+    const enable = w.get('[data-testid="webcam-enable"]');
+    expect((enable.element as HTMLButtonElement).disabled).toBe(true);
+    expect(enable.attributes("title")).toBe("Waiting for the camera…");
+    expect(w.get('[data-testid="webcam-footer-reason"]').text()).toBe("Waiting for the camera…");
+    expect(w.get('[data-testid="webcam-footer-reason"]').attributes("aria-live")).toBe("polite");
+  });
+
+  it("each phase has its own footer, and the status row follows", async () => {
+    await openStore();
+    const w = mountDialog();
+    await click(w, "webcam-enable");
+    expect(footer(w)).toEqual(["Start recording"]);
+    expect(w.get('[data-testid="webcam-status"]').text()).toContain("Camera on");
+    await click(w, "webcam-record");
+    expect(footer(w)).toEqual(["Cancel countdown"]);
+    await vi.advanceTimersByTimeAsync(3_000);
+    await flushPromises();
+    expect(footer(w)).toEqual(["Discard recording", "Stop & review"]);
+    expect(w.get('[data-testid="webcam-status"]').text()).toContain("Recording");
+    FakeRecorder.instances[0].emit([1, 2, 3]);
+    await click(w, "webcam-stop");
+    expect(footer(w)).toEqual(["Retake", "Add to timeline"]);
+  });
+
+  it("the close question sits in the footer", async () => {
+    await openStore();
+    const w = mountDialog();
+    await recordTake(w);
+    await click(w, "webcam-close");
+    expect(footer(w)).toEqual(["Back to the take", "Keep in library and close"]);
+    expect(w.get('footer [data-testid="webcam-confirm"]').text()).toMatch(/not on the timeline/i);
+  });
+});
+
+// Ruling T7-1: a refused Add to timeline is said in the dialog, not toasted
+// as well; an error from anything else while the dialog sits open still
+// toasts.
+describe("WebcamDialog — its own refusal is inline", () => {
+  const refusal = () =>
+    Promise.reject(new EditorPortError({ code: "invalidRequest", message: "Too many tracks.", retryable: false, operationId: "o" }));
+
+  it("a refused placement is shown in the dialog and not toasted", async () => {
+    await openStore({ execute: refusal });
+    mountFeedback();
+    const w = mountDialog();
+    await recordTake(w);
+    await click(w, "webcam-add");
+    expect(w.get('[data-testid="webcam-place-error"]').text()).toBe(
+      "The take could not be added to the timeline. Too many tracks.",
+    );
+    expect(errorToasts()).toEqual([]);
+  });
+
+  it("an unrelated refusal while the dialog is open still toasts", async () => {
+    const store = await openStore({ execute: refusal });
+    mountFeedback();
+    const w = mountDialog();
+    await flushPromises();
+    await store.execute({ kind: "rename", title: "elsewhere" });
+    await flushPromises();
+    expect(errorToasts()).toEqual(["Too many tracks."]);
+    expect(w.find('[data-testid="webcam-place-error"]').exists()).toBe(false);
+  });
+});
+
+// D16: the close question takes focus on its safe answer, and leaving it
+// puts focus on the footer's first live button, never on the page.
+describe("WebcamDialog — focus around the close question", () => {
+  it("focus moves to Back to the take, then to the footer when it goes", async () => {
+    await openStore();
+    const w = mountDialog();
+    await recordTake(w);
+    await click(w, "webcam-close");
+    expect(document.activeElement?.getAttribute("data-testid")).toBe("webcam-confirm-back");
+    await click(w, "webcam-confirm-back");
+    expect(document.activeElement?.getAttribute("data-testid")).toBe("webcam-retake");
   });
 });

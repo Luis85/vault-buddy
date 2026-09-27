@@ -45,6 +45,14 @@
  * "Open audio mixer"). By then the opener is gone (the View menu and the
  * Checks dialog have closed) or is not the mixer's home, and the trigger is
  * the control that opens the panel again, so it is where focus belongs.
+ *
+ * **Visual-parity Task 22** (concept spec §9.8, `shell.html:
+ * id="mixerDialog"`): the concept mixer's look inside the same popover —
+ * a header with "Audio mixer", its subtitle and a ✕, one `125px 1fr 52px`
+ * row per track (`MixerTrackRow`), and "Master output" with its level as a
+ * mono percent. Its "Play / pause preview" button is left out: the
+ * transport's Play (and Space) already does exactly that, and the popover
+ * sits over the timeline, not the preview.
  */
 import type { ComponentPublicInstance } from "vue";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
@@ -54,6 +62,7 @@ import { useWindowDismiss } from "../../../composables/useWindowDismiss";
 import { onReveal } from "../../../editor/revealBus";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import IconButton from "../../ui/IconButton.vue";
 import EditorIcon from "../icons/EditorIcon.vue";
 import MixerPeakMeter from "./MixerPeakMeter.vue";
 import MixerSlider from "./MixerSlider.vue";
@@ -90,6 +99,10 @@ const triggerLabel = computed(() => {
   return `Audio mixer, ${n} audio ${n === 1 ? "track" : "tracks"}`;
 });
 const masterGain = computed(() => editorProject.project?.master_gain ?? 1);
+
+function percent(gain: number): string {
+  return `${Math.round(gain * 100)}%`;
+}
 
 function commitMaster(gain: number): Promise<boolean> {
   return editorProject.execute({ kind: "setMasterGain", gain });
@@ -192,50 +205,68 @@ useWindowDismiss(onWindowPointerDown, onWindowKeydown);
       role="dialog"
       aria-label="Audio mixer"
       data-testid="mixer-popover"
-      class="fixed z-30 flex w-72 max-w-[calc(100vw-16px)] flex-col gap-2 overflow-y-auto rounded-control border border-line bg-panel p-2 text-micro text-fg-muted shadow-lg"
+      class="fixed z-30 flex w-[420px] max-w-[calc(100vw-16px)] flex-col overflow-hidden rounded-[13px] border border-line bg-panel text-fg shadow-[var(--editor-shadow)]"
       :style="panelStyle"
     >
-      <p class="text-fg-subtle">
-        Track and master levels change the rendered video.
-      </p>
-      <MixerTrackRow
-        v-for="track in tracks"
-        :key="track.id"
-        :track="track"
-        :tracks="tracks"
-      />
-      <div class="border-t border-line pt-2">
-        <MixerSlider
-          label="Master"
-          slider-label="Master gain"
-          testid="mixer-master"
-          :value="masterGain"
-          :max="MASTER_MAX"
-          :commit="commitMaster"
-        />
-      </div>
-      <label class="flex items-center gap-1 border-t border-line pt-2">
-        <input
-          data-testid="mixer-monitor-mute"
-          type="checkbox"
-          class="accent-violet-500"
-          :checked="workspace.monitorMuted"
-          @change="workspace.toggleMonitorMute()"
+      <header class="flex shrink-0 items-start justify-between gap-3 border-b border-line px-4 pb-2.5 pt-3">
+        <div class="min-w-0">
+          <h2 class="text-sm font-semibold leading-[1.4]">
+            Audio mixer
+          </h2>
+          <p class="text-[11px] text-fg-muted">
+            Track levels change both the preview and the rendered video.
+          </p>
+        </div>
+        <IconButton
+          label="Close audio mixer"
+          data-testid="mixer-close"
+          class="h-8 w-8 shrink-0"
+          @click="close"
         >
-        Mute preview (does not affect the video)
-      </label>
-      <MixerPeakMeter
-        v-if="readPeak"
-        :read-peak="readPeak"
-      />
-      <button
-        type="button"
-        data-testid="mixer-close"
-        class="self-end rounded px-1.5 py-0.5 hover:bg-hover"
-        @click="close"
-      >
-        Close
-      </button>
+          <EditorIcon name="x" />
+        </IconButton>
+      </header>
+      <div class="flex min-h-0 flex-col gap-3 overflow-y-auto px-4 pb-4">
+        <div>
+          <MixerTrackRow
+            v-for="track in tracks"
+            :key="track.id"
+            :track="track"
+            :tracks="tracks"
+          />
+          <div
+            data-testid="mixer-master-row"
+            class="grid grid-cols-[125px_1fr_52px] items-center gap-2.5 py-3"
+          >
+            <b class="text-[11px] font-semibold">Master output</b>
+            <MixerSlider
+              slider-label="Master output"
+              testid="mixer-master"
+              readout-testid="mixer-master-readout"
+              :value="masterGain"
+              :max="MASTER_MAX"
+              :format="percent"
+              :commit="commitMaster"
+            />
+          </div>
+        </div>
+        <label class="flex items-center gap-2 text-[11px] text-fg-secondary">
+          <input
+            data-testid="mixer-monitor-mute"
+            type="checkbox"
+            :checked="workspace.monitorMuted"
+            @change="workspace.toggleMonitorMute()"
+          >
+          Mute preview (does not affect the video)
+        </label>
+        <MixerPeakMeter
+          v-if="readPeak"
+          :read-peak="readPeak"
+        />
+        <p class="text-[10px] leading-[1.6] text-fg-muted">
+          M = mute. S = solo. Track and master levels are part of the edit; Mute preview changes only what you hear.
+        </p>
+      </div>
     </div>
   </span>
 </template>

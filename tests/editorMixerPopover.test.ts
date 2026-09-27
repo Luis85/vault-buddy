@@ -249,3 +249,55 @@ describe("MixerPopover", () => {
     expect(w.find('[data-testid="mixer-popover"]').exists()).toBe(true);
   });
 });
+
+// Visual-parity Task 22 (concept spec §9.8, `shell.html: id="mixerDialog"`):
+// the concept's look — a header with the title and a ✕, one
+// `125px 1fr 52px` row per track (name, M/S gold when on, the kind; the
+// range; a mono dB readout), and "Master output" with a mono percent.
+describe("MixerPopover — the concept look (§9.8)", () => {
+  it("has the concept's header and a labelled close", async () => {
+    const { w } = await mountMixer([track("t1")]);
+    const popover = w.get('[data-testid="mixer-popover"]');
+    expect(popover.get("h2").text()).toBe("Audio mixer");
+    expect(popover.get("header p").text()).toBe("Track levels change both the preview and the rendered video.");
+    expect(w.get('[data-testid="mixer-close"]').attributes("aria-label")).toBe("Close audio mixer");
+    await w.get('[data-testid="mixer-close"]').trigger("click");
+    expect(w.find('[data-testid="mixer-popover"]').exists()).toBe(false);
+  });
+
+  it("lays each track out as name + M/S, range, mono dB", async () => {
+    const { w } = await mountMixer([track("t1", { volume: 0.5 })]);
+    const row = w.get('[data-testid="mixer-track-t1"]');
+    expect(row.classes()).toEqual(expect.arrayContaining(["grid", "grid-cols-[125px_1fr_52px]"]));
+    expect(row.get("b").text()).toBe("Track t1");
+    const mute = w.get('[data-testid="mixer-muted-t1"]');
+    expect(mute.text()).toBe("M");
+    expect(mute.attributes("aria-label")).toBe("Mute Track t1");
+    expect(w.get('[data-testid="mixer-solo-t1"]').attributes("aria-label")).toBe("Solo Track t1");
+    expect(row.text()).toContain("audio");
+    const readout = w.get('[data-testid="mixer-readout-t1"]');
+    expect(readout.text()).toBe("−6.0 dB");
+    expect(readout.classes()).toContain("font-mono");
+  });
+
+  it("an active M or S is gold", async () => {
+    const { w } = await mountMixer([track("t1", { muted: true }), track("t2", { solo: true })]);
+    for (const id of ["mixer-muted-t1", "mixer-solo-t2"]) {
+      expect(w.get(`[data-testid="${id}"]`).classes()).toEqual(expect.arrayContaining(["bg-gold-bg", "text-gold"]));
+    }
+    expect(w.get('[data-testid="mixer-solo-t1"]').classes()).not.toContain("text-gold");
+  });
+
+  it("Master output reads its level as a mono percent", async () => {
+    const { w } = await mountMixer([track("t1")]);
+    const master = w.get('[data-testid="mixer-master-row"]');
+    expect(master.get("b").text()).toBe("Master output");
+    expect(w.get('[data-testid="mixer-master-readout"]').text()).toBe("70%");
+  });
+
+  // D14: a locked track's controls say why on screen, not only in a title.
+  it("a locked track says so in its row", async () => {
+    const { w } = await mountMixer([track("t1", { locked: true })]);
+    expect(w.get('[data-testid="mixer-status-t1"]').text()).toBe("Track Track t1 is locked");
+  });
+});

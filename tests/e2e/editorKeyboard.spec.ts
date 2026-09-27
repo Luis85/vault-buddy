@@ -557,6 +557,24 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
+// Visual-parity Task 22 (concept spec §9.7, §9.8; D16): the webcam dialog
+// (camera off — nothing asks for it) and the audio mixer read 4.5:1 in both
+// themes. The camera view keeps its own dark picture in light too.
+for (const theme of ["light", "dark"] as const) {
+  test(`${theme} theme text meets 4.5:1 in the webcam dialog and the mixer`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    await openEditor(page, theme);
+    await page.getByTestId("library-webcam").click();
+    await expect(page.getByTestId("webcam-empty")).toBeVisible();
+    expect(await lowContrast(page), "Webcam").toEqual([]);
+    await page.getByTestId("webcam-close").click();
+
+    await page.getByTestId("mixer-toggle").click();
+    await expect(page.getByTestId("mixer-popover")).toBeVisible();
+    expect(await lowContrast(page), "Mixer").toEqual([]);
+  });
+}
+
 test("reduced motion keeps the guide ring still", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await openEditor(page, "dark");

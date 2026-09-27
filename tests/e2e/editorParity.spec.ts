@@ -1111,6 +1111,67 @@ test.describe("parity 1600x1000: the share dialogs (screens 07–09, §9.4–9.6
   });
 });
 
+// Visual-parity Task 22 (concept spec §9.7, screen 05): the webcam dialog,
+// opened with the camera OFF — `getUserMedia` is replaced by a counter so
+// the test proves nothing asked for the camera (checklist T32's premise).
+test.describe("parity 1600x1000: the webcam dialog (screen 05, §9.7)", () => {
+  test("960 wide: the 16:9 view, Set up your take, the privacy strip, Enable camera alone", async ({ page }) => {
+    await page.addInitScript(() => {
+      const w = window as unknown as { __cameraAsks: number };
+      w.__cameraAsks = 0;
+      if (navigator.mediaDevices) {
+        navigator.mediaDevices.getUserMedia = () => {
+          w.__cameraAsks += 1;
+          return new Promise(() => {});
+        };
+      }
+    });
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("library-webcam").click();
+    await expect(page.getByTestId("webcam-empty")).toBeVisible();
+    await page.screenshot({ path: "test-results/parity/built-05-webcam.png" });
+    await composite(page, "05-webcam.png", "test-results/parity/built-05-webcam.png", "vs-05-webcam");
+
+    expect((await box(page, "dialog-host-content")).width).toBeCloseTo(960, 0);
+    const view = await box(page, "webcam-view");
+    expect(view.width / view.height).toBeCloseTo(16 / 9, 1);
+    expect((await box(page, "webcam-settings")).width).toBeCloseTo(230, 0);
+    await expect(page.getByTestId("webcam-empty").locator("b")).toHaveText("Camera is off");
+    await expect(page.getByTestId("webcam-settings").locator("h3")).toHaveText("Set up your take");
+    const privacy = await box(page, "webcam-privacy");
+    expect(privacy.y).toBeGreaterThan(view.y + view.height);
+    expect(await footerLabels(page)).toEqual(["Enable camera"]);
+    await expect(page.getByTestId("dialog-host-content")).not.toContainText(/demo/i);
+    expect(await page.evaluate(() => (window as unknown as { __cameraAsks: number }).__cameraAsks)).toBe(0);
+  });
+
+  test("the webcam dialog fits 960x640 with Enable camera on screen", async ({ page }) => {
+    await openParity(page, { width: 960, height: 640 }, { invitation: false });
+    await page.getByTestId("library-webcam").click();
+    await expect(page.getByTestId("webcam-dialog")).toBeVisible();
+    const host = await box(page, "dialog-host-content");
+    expect(host.x).toBeGreaterThanOrEqual(0);
+    expect(host.y).toBeGreaterThanOrEqual(0);
+    expect(host.x + host.width).toBeLessThanOrEqual(960);
+    expect(host.y + host.height).toBeLessThanOrEqual(640);
+    const enable = await box(page, "webcam-enable");
+    expect(enable.y + enable.height).toBeLessThanOrEqual(640);
+  });
+});
+
+// Visual-parity Task 22 (concept spec §9.8): the mixer's rows are the
+// concept's `125px 1fr 52px` grid, with Master output under them.
+test("the audio mixer's rows are 125 | range | 52, Master output last", async ({ page }) => {
+  await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+  await page.getByTestId("mixer-toggle").click();
+  const row = page.getByTestId("mixer-popover").locator('[data-testid^="mixer-track-"]').first();
+  const columns = await row.evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(" ").map(parseFloat));
+  expect(columns[0]).toBeCloseTo(125, 0);
+  expect(columns[2]).toBeCloseTo(52, 0);
+  await expect(page.getByTestId("mixer-master-row").locator("b")).toHaveText("Master output");
+  await expect(page.getByTestId("mixer-master-readout")).toHaveText(/^\d+%$/);
+});
+
 // D16 / the 960×640 floor: each share dialog fits the window, its primary
 // action on screen without scrolling the page.
 for (const [open, dialog, primary] of [

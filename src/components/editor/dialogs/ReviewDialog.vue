@@ -18,6 +18,11 @@
  * that moment until Rust answers with the job the dialog cannot be closed
  * either (Task 47's carry): `running` is false until `jobId` is set, and a
  * close then would leave a review render nobody is following.
+ *
+ * Visual-parity Task 22 (concept spec §9.10): the footer is a
+ * `DialogButton` — Cancel review while it runs, Close once it has ended —
+ * and why the dialog cannot close yet is said there on screen
+ * (`FooterReason`, D14), not only in the ✕'s tooltip.
  */
 import { computed, ref, watch } from "vue";
 
@@ -25,10 +30,11 @@ import { useRenderJob } from "../../../composables/useRenderJob";
 import { isComplete } from "../../../editor/renderProgress";
 import type { RenderRange } from "../../../editorTypes";
 import { useEditorJobsStore } from "../../../stores/editorJobs";
-import AppButton from "../../ui/AppButton.vue";
 import ProductPlayer from "../preview/ProductPlayer.vue";
 import RenderProgress from "../preview/RenderProgress.vue";
 import DialogHost from "../shell/DialogHost.vue";
+import DialogButton from "./DialogButton.vue";
+import FooterReason from "./FooterReason.vue";
 
 const props = defineProps<{ open: boolean; range: RenderRange | null }>();
 const emit = defineEmits<{ (e: "close"): void }>();
@@ -132,19 +138,27 @@ const closeReason = computed<string | null>(() => {
       >
         Review cancelled.
       </p>
-      <div
-        v-if="running"
-        class="flex justify-end"
-      >
-        <AppButton
-          variant="secondary"
-          size="sm"
-          data-testid="review-dialog-cancel"
-          @click="jobId && jobs.cancel(jobId)"
-        >
-          Cancel review
-        </AppButton>
-      </div>
     </div>
+
+    <template #footer>
+      <FooterReason
+        data-testid="review-dialog-reason"
+        :text="closeReason"
+      />
+      <DialogButton
+        v-if="running"
+        data-testid="review-dialog-cancel"
+        @click="jobId && jobs.cancel(jobId)"
+      >
+        Cancel review
+      </DialogButton>
+      <DialogButton
+        v-else-if="!busy"
+        data-testid="review-dialog-done"
+        @click="close"
+      >
+        Close
+      </DialogButton>
+    </template>
   </DialogHost>
 </template>

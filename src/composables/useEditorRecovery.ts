@@ -32,18 +32,25 @@
  *   forgotten it, so the project is reattached (`reattach`, `EditorRoot`'s
  *   own): the editor stays usable behind the dialog and a retry reaches
  *   Rust (final review I-1).
+ *
+ * Every choice's refusal is said in the dialog (`failure`), so each choice
+ * runs as the dialog's own request (`useInlineLastError().track`, ruling
+ * T7-1): the shell does not toast it as well. An error from anything else
+ * while the offer is open still toasts.
  */
 import { ref } from "vue";
 
 import type { ProjectSummaryDto } from "../editorTypes";
 import { logWarning } from "../logging";
 import { toEditorError, useEditorProjectStore } from "../stores/editorProject";
+import { useInlineLastError } from "./useInlineLastError";
 
 export function useEditorRecovery(
   onSessionChanged: () => void,
   reattach: (projectId: string) => Promise<boolean>,
 ) {
   const project = useEditorProjectStore();
+  const inline = useInlineLastError();
   const offer = ref<ProjectSummaryDto | null>(null);
   const failure = ref<string | null>(null);
   /** Whether a Resume failed: the dialog then says the journal's file is
@@ -93,7 +100,7 @@ export function useEditorRecovery(
   async function run(step: () => Promise<boolean>): Promise<void> {
     busy.value = true;
     try {
-      if (await step()) {
+      if (await inline.track(step)) {
         offer.value = null;
         failure.value = null;
         resumeFailed.value = false;
@@ -120,8 +127,11 @@ export function useEditorRecovery(
       const projectId = project.snapshot?.projectId ?? null;
       await project.close("discardRecovery");
       if (project.lastError) {
-        failure.value = project.lastError.message;
-        if (projectId !== null) await reattach(projectId);
+        const refusal = project.lastError.message;
+        // The reattach's own refusal is claimed with this choice, so say it
+        // here — it is not toasted either.
+        const back = projectId !== null && (await reattach(projectId));
+        failure.value = back ? refusal : `${refusal} The project could not be reopened here. Open it again from the panel.`;
         return false;
       }
       return reopen(false);

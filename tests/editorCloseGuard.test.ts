@@ -40,6 +40,7 @@ import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
 import { mockEditor } from "./helpers/editorMount";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
+import { errorToasts, mountFeedback } from "./helpers/feedbackHost";
 
 enableAutoUnmount(afterEach);
 
@@ -608,5 +609,65 @@ describe("EditorRoot close and recovery wiring", () => {
       ["ses-7", "discardRecovery"],
     ]);
     expect(w.find('[data-testid="recovery-dialog"]').exists()).toBe(false);
+  });
+});
+
+/** The dialog footer's buttons, in order. */
+function footer(w: ReturnType<typeof mount>): string[] {
+  return w.findAll("footer button").map((b) => b.text());
+}
+
+const diskFull = () =>
+  new EditorPortError({ code: "diskFull", message: "Not enough disk space to save the project", retryable: true, operationId: "op-1" });
+
+// Visual-parity Task 22 (concept spec §9.9, §9.10): the session lead row,
+// `DialogButton`s with the destructive choice in the danger ink and the
+// safe one primary, and the reason they wait on screen (D14).
+describe("CloseGuardDialog — the concept chrome", () => {
+  it("unsaved changes: the lead row, then Cancel · Discard changes · Keep for later · Save project", async () => {
+    const { w } = await setup({ revision: 3, persisted: 2 });
+    expect(w.get('[data-testid="close-guard-lead"] h3').text()).toBe("Unsaved changes");
+    expect(footer(w)).toEqual(["Cancel", "Discard changes", "Keep for later", "Save project"]);
+    expect(button(w, "Save project").classes()).toContain("bg-primary");
+    expect(button(w, "Discard changes").classes()).toContain("text-danger-fg");
+  });
+
+  it("a running render keeps its cancel explicit: Cancel · Cancel the render · Keep it running", async () => {
+    const { w } = await setup({ jobs: [job("render", "rendering")] });
+    expect(w.get('[data-testid="close-guard-lead"] h3').text()).toBe("A render is running");
+    expect(footer(w)).toEqual(["Cancel", "Cancel the render", "Keep it running"]);
+    expect(button(w, "Cancel the render").classes()).toContain("text-danger-fg");
+  });
+
+  it("while a choice runs, the buttons wait and say why on screen", async () => {
+    const { w } = await setup({ revision: 3, persisted: 2, overrides: { save: () => new Promise(() => {}) } });
+    await button(w, "Save project").trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="close-guard-reason"]').text()).toBe("Finishing your choice…");
+    expect(button(w, "Keep for later").attributes("title")).toBe("Finishing your choice…");
+  });
+});
+
+// Ruling T7-1.
+describe("CloseGuardDialog — its own refusal is inline", () => {
+  it("a failed save is shown in the dialog and not toasted", async () => {
+    const { w } = await setup({ revision: 3, persisted: 2, overrides: { save: () => Promise.reject(diskFull()) } });
+    mountFeedback();
+    await button(w, "Save project").trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="close-guard"] [role="alert"]').text()).toContain("Not enough disk space");
+    expect(errorToasts()).toEqual([]);
+  });
+
+  it("an unrelated refusal while the dialog is open still toasts", async () => {
+    await setup({
+      revision: 3,
+      persisted: 2,
+      overrides: { execute: () => Promise.reject(diskFull()) },
+    });
+    mountFeedback();
+    await useEditorProjectStore().execute({ kind: "rename", title: "x" });
+    await flushPromises();
+    expect(errorToasts()).toEqual(["Not enough disk space to save the project"]);
   });
 });

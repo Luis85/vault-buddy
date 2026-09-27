@@ -27,12 +27,22 @@
  * this dialog. The refusal is said in the role wording Rust gives it (the
  * store has already taken the `<path:#hash8>` handle out,
  * `src/editor/errorCopy.ts`), and Discard stays enabled for a retry.
+ *
+ * Visual-parity Task 22 (concept spec §9.9–9.10): the session dialogs'
+ * lead row (`SessionLead`) says first that the recording stays, the footer
+ * is `DialogButton`s — Discard project in the danger ink — and why it waits
+ * is on screen (`FooterReason`, D14). The discard and its reattach run as
+ * this dialog's own request (`useInlineLastError().track`, ruling T7-1):
+ * their refusals are said here, never also toasted.
  */
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 
+import { useInlineLastError } from "../../../composables/useInlineLastError";
 import { useEditorProjectStore } from "../../../stores/editorProject";
-import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
+import DialogButton from "./DialogButton.vue";
+import FooterReason from "./FooterReason.vue";
+import SessionLead from "./SessionLead.vue";
 
 const props = defineProps<{
   open: boolean;
@@ -43,6 +53,7 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: "close"): void; (e: "discarded"): void }>();
 
 const project = useEditorProjectStore();
+const inline = useInlineLastError();
 const busy = ref(false);
 const error = ref<string | null>(null);
 
@@ -59,25 +70,33 @@ function dismiss(): void {
   emit("close");
 }
 
+/** Discard, or say why not — `null` once the project is gone. */
+async function discard(projectId: string | null): Promise<string | null> {
+  await project.close("discardProject");
+  if (!project.lastError) return null;
+  const refusal = project.lastError.message;
+  const back = projectId !== null && (await props.reattach(projectId));
+  return back
+    ? `The project could not be discarded. ${refusal}`
+    : `The project could not be discarded, and it could not be reopened here. ${refusal} Open it again from the panel.`;
+}
+
 async function confirm(): Promise<void> {
   const projectId = project.snapshot?.projectId ?? null;
   busy.value = true;
   error.value = null;
   try {
-    await project.close("discardProject");
-    if (!project.lastError) {
-      emit("discarded");
-      return;
-    }
-    const refusal = project.lastError.message;
-    const back = projectId !== null && (await props.reattach(projectId));
-    error.value = back
-      ? `The project could not be discarded. ${refusal}`
-      : `The project could not be discarded, and it could not be reopened here. ${refusal} Open it again from the panel.`;
+    error.value = await inline.track(() => discard(projectId));
+    if (error.value === null) emit("discarded");
   } finally {
     busy.value = false;
   }
 }
+
+/** Why Cancel (and the ✕) waits, or `null`. */
+const waitReason = computed(() => (busy.value ? "Discarding the project…" : null));
+/** Why Discard project cannot act, or `null`. */
+const confirmReason = computed(() => waitReason.value ?? (project.sessionId ? null : "No project is open."));
 </script>
 
 <template>
@@ -85,22 +104,29 @@ async function confirm(): Promise<void> {
     :open="props.open"
     label="Discard project"
     :closable="!busy"
-    :close-reason="busy ? 'Discarding the project…' : null"
+    :close-reason="waitReason"
     @close="dismiss"
   >
     <template #title>
       Discard this project?
     </template>
+    <template #subtitle>
+      Its edits and rendered videos go. Your recording does not.
+    </template>
 
     <div
       data-testid="discard-project-dialog"
-      class="flex flex-col gap-3"
+      class="flex flex-col gap-4"
     >
-      <p class="text-sm text-fg-secondary">
+      <SessionLead
+        data-testid="discard-project-lead"
+        icon="trash"
+        title="The recording stays"
+      >
         Its edits, rendered videos and review files are deleted from this computer.
         Videos you published into a vault stay there, and the recording stays in
         your staged captures, where you can discard it too.
-      </p>
+      </SessionLead>
       <p
         v-if="error"
         role="alert"
@@ -111,22 +137,25 @@ async function confirm(): Promise<void> {
     </div>
 
     <template #footer>
-      <AppButton
-        variant="ghost"
+      <FooterReason
+        data-testid="discard-project-reason"
+        :text="confirmReason"
+      />
+      <DialogButton
         data-testid="discard-project-cancel"
-        :disabled="busy"
+        :reason="waitReason"
         @click="dismiss"
       >
         Cancel
-      </AppButton>
-      <AppButton
+      </DialogButton>
+      <DialogButton
         variant="danger"
         data-testid="discard-project-confirm"
-        :disabled="busy || !project.sessionId"
+        :reason="confirmReason"
         @click="confirm"
       >
         Discard project
-      </AppButton>
+      </DialogButton>
     </template>
   </DialogHost>
 </template>

@@ -18,6 +18,7 @@ import type { EditorOpenResult, EditorSnapshot, ProjectSummaryDto } from "../src
 import { logWarning } from "../src/logging";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
+import { errorToasts, mountFeedback } from "./helpers/feedbackHost";
 
 enableAutoUnmount(afterEach);
 
@@ -257,4 +258,87 @@ describe("RecoveryDialog", () => {
     expect(closeSession).toHaveBeenLastCalledWith("ses-12", "discardRecovery");
     expect(openProject).toHaveBeenLastCalledWith("proj-3", false);
   });
+});
+
+/** The dialog footer's buttons, in order. */
+function footer(w: ReturnType<typeof mount>): string[] {
+  return w.findAll("footer button").map((b) => b.text());
+}
+
+const refused = (message: string) =>
+  new EditorPortError({ code: "invalidProject", message, retryable: false, operationId: "op" });
+
+// Visual-parity Task 22 (concept spec §9.9, `.session-lead`): the session
+// dialogs' lead row, `DialogButton`s in the footer, and the reason the
+// buttons wait on screen (D14).
+describe("RecoveryDialog — the concept chrome (§9.9)", () => {
+  it("leads with the shield tile and ends with Discard · Resume", async () => {
+    const { w } = await setup({});
+    const lead = w.get('[data-testid="recovery-lead"]');
+    expect(lead.find("svg").exists()).toBe(true);
+    expect(lead.get("h3").text()).toBe("Your unsaved changes are waiting");
+    expect(footer(w)).toEqual(["Discard", "Resume"]);
+    expect(button(w, "Resume").classes()).toContain("bg-primary");
+    expect(button(w, "Discard").classes()).toContain("text-danger-fg");
+    const reason = w.get('[data-testid="recovery-reason"]');
+    expect(reason.attributes("aria-live")).toBe("polite");
+    expect(reason.text()).toBe("");
+  });
+
+  it("while a choice is running, both buttons wait and say why on screen", async () => {
+    const { w } = await setup({ overrides: { openProject: () => new Promise(() => {}) } });
+    await button(w, "Resume").trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="recovery-reason"]').text()).toBe("Opening the project…");
+    for (const label of ["Discard", "Resume"]) {
+      expect((button(w, label).element as HTMLButtonElement).disabled).toBe(true);
+      expect(button(w, label).attributes("title")).toBe("Opening the project…");
+    }
+  });
+});
+
+// Ruling T7-1: the dialog's own refusal is said in it and not toasted; an
+// unrelated one while it is open still toasts.
+describe("RecoveryDialog — its own refusal is inline", () => {
+  it("a failed Resume is shown in the dialog and not toasted", async () => {
+    const openProject = vi.fn(async (_id: string, useRecovery: boolean) => {
+      if (useRecovery) throw refused("The unsaved changes could not be read.");
+      return openResult(snapshot({ sessionId: "ses-3" }), false);
+    });
+    const { w } = await setup({ overrides: { openProject } });
+    mountFeedback();
+    await button(w, "Resume").trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="recovery-dialog"] [role="alert"]').text()).toContain(
+      "The unsaved changes could not be read.",
+    );
+    expect(errorToasts()).toEqual([]);
+  });
+
+  it("an unrelated refusal while the dialog is open still toasts", async () => {
+    const { store } = await setup({ overrides: { execute: () => Promise.reject(refused("Elsewhere.")) } });
+    mountFeedback();
+    await store.execute({ kind: "rename", title: "x" });
+    await flushPromises();
+    expect(errorToasts()).toEqual(["Elsewhere."]);
+  });
+});
+
+// The reattach after a refused Discard is part of the same choice: when it
+// fails too, the dialog says the project could not be reopened (and the
+// shell does not toast that as well).
+it("a refused Discard whose reattach fails says so in the dialog, not in a toast", async () => {
+  const { w } = await setup({
+    overrides: {
+      closeSession: () => Promise.reject(refused("The unsaved changes could not be discarded right now.")),
+      openProject: () => Promise.reject(refused("The project could not be opened.")),
+    },
+  });
+  mountFeedback();
+  await button(w, "Discard").trigger("click");
+  await flushPromises();
+  const alert = w.get('[data-testid="recovery-dialog"] [role="alert"]').text();
+  expect(alert).toContain("The unsaved changes could not be discarded right now.");
+  expect(alert).toContain("The project could not be reopened here. Open it again from the panel.");
+  expect(errorToasts()).toEqual([]);
 });
