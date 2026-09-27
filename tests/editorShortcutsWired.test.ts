@@ -151,6 +151,8 @@ const EFFECTS: Record<string, Effect> = {
   goToStart: { check: () => expect(useEditorWorkspaceStore().playheadMs).toBe(0) },
   // `opened()`'s snapshot carries durationMs: 7_000 (this file's own fixture).
   goToEnd: { check: () => expect(useEditorWorkspaceStore().playheadMs).toBe(7_000) },
+  // Visual-parity Task 16: the timeline toolbar's bookmark says "(M)".
+  addMarker: sends("addMarker"),
 };
 
 beforeEach(async () => {

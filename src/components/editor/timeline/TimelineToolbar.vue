@@ -1,95 +1,83 @@
 <script setup lang="ts">
 /**
- * The timeline's own control row (Task 20; F-14; brief's own Behavior
- * section: "split/delete/undo/redo/snap/zoom/fit buttons from the action
- * registry"). Split/delete/undo/redo read `resolveActions`/`commandFor` from
- * the SAME `actions.ts` registry the preview header's `Toolstrip.vue` and
- * `ContextMenu.vue`
- * already read (`baseActionContext`, Task 20's own shared builder) — so a
- * disabled reason here can never disagree with the other two surfaces.
+ * The timeline's toolbar (Task 20; visual-parity Task 16, concept spec
+ * §6.2): 44px, left to right — "Timeline", Undo and Redo, Split, Delete,
+ * the Delete-mode select, Add chapter marker, **Edit actions**, Snap, and
+ * the zoom group (`TimelineZoom`) at the right.
  *
- * Snap/zoom/fit have no `ActionId` at all (`actions.ts`'s own module doc:
- * "Actions with no wire command" — zoom/snap/fit aren't even in that list,
- * they are pure `editorWorkspace` view state) and are wired directly against
- * that store — EXCEPT fit, which `editorWorkspace.fit()`'s own doc admits is
- * an "honest, minimal" placeholder because the store layer knows no pixel
- * viewport width. This toolbar doesn't know one either (it isn't the
- * scrolling element) — `TimelineView.vue` is, so `fit` is emitted upward for
- * `TimelineView` to compute a REAL fit and apply it directly, rather than
- * calling `editorWorkspace.fit()`.
+ * Undo, Redo, Split, Delete and the marker read the ONE action registry
+ * (`resolveActions`/`commandFor` over `baseActionContext`), so a disabled
+ * reason here can never disagree with the preview header, a menu or a
+ * shortcut. A disabled control keeps its place and its focus, carries its
+ * reason as its title, and says it in a toast when pressed (D14; the
+ * `Toolstrip` precedent).
  *
- * **Delete mode (Task 21)**: `editorWorkspace.deleteMode` ("gap"|"close")
- * finally has a control — the two-button toggle below the zoom group,
- * `TimelineToolbar`'s own Snap toggle precedent. It decides which of the
- * two delete-shaped `ActionId`s (`delete` = leave a gap, `deleteClose` =
- * ripple the gap shut) THIS toolbar's own Delete button sends; it does NOT
- * touch `SHORTCUTS`' existing Delete/Shift+Delete split (`shortcuts.ts`),
- * which stays an explicit per-keypress choice independent of the persisted
- * default. The close-gap button's visible label says "on this track" because that
- * is exactly the scope `deleteClips{closeGap:true}` ripples (Rust's own
- * `delete_close_gap_ripples_only_its_track`, `clips.rs`) — a user picking
- * this mode must not read it as "closes every track's gap".
+ * **Delete mode**: `editorWorkspace.deleteMode` decides which of the two
+ * delete actions THIS toolbar's trash sends — `delete` (leave a gap) or
+ * `deleteClose` (close the gap, on the deleted clip's own track only: Rust's
+ * `delete_close_gap_ripples_only_its_track`). The Delete / Shift+Delete
+ * shortcuts stay an explicit per-keypress choice.
  *
- * **Edit actions (Task 55)** opens the timeline's own action menu — the one
- * a right-click on a clip opens — without a right click, for the SELECTION
- * (onboarding lesson 9: "Edit actions in the timeline opens the same kind
- * of menu"). `TimelineView` owns that menu, so this only reports where the
- * button is. It, the row itself, Split and Undo are the guide's
- * `timeline.more`/`timeline.toolbar`/`timeline.split`/`timeline.undo`.
+ * **Edit actions** opens the timeline's own action menu — the one a
+ * right-click on a clip opens — for the SELECTION (onboarding lesson 9).
+ * `TimelineView` owns that menu, so this only reports where the button is.
+ * It, the row itself, Split and Undo are the guide's `timeline.more` /
+ * `timeline.toolbar` / `timeline.split` / `timeline.undo`.
  */
 import { computed } from "vue";
 
+import { useActionRegistry, useBaseActionContext } from "../../../composables/useActionRegistry";
 import type { GuideRef } from "../../../composables/useGuideTarget";
 import { useGuideTarget } from "../../../composables/useGuideTarget";
-import { baseActionContext } from "../../../editor/actionContext";
 import type { ActionId } from "../../../editor/actionMeta";
-import { commandFor, resolveActions } from "../../../editor/actions";
+import type { DeleteMode } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import EditorIcon from "../icons/EditorIcon.vue";
+import TimelineZoom from "./TimelineZoom.vue";
 
-/** `moreOpen`: the menu Edit actions opened is showing (Task 56 —
- * `aria-expanded`; a clip's right-click menu is not this button's). */
+/** `moreOpen`: the menu Edit actions opened is showing (`aria-expanded`;
+ * a clip's right-click menu is not this button's). */
 defineProps<{ moreOpen?: boolean }>();
 const emit = defineEmits<{ (e: "fit"): void; (e: "more", at: { x: number; y: number }): void }>();
 
 const editorProject = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
 
-const TOOLBAR_ACTIONS = ["split", "undo", "redo"] as const;
+const context = useBaseActionContext();
+const { resolved, enabledCommand } = useActionRegistry(() => context.value);
 
-/** Which `ActionId` the toolbar's own Delete button sends this render —
- * follows `editorWorkspace.deleteMode`, unlike the keyboard shortcuts. */
+/** Which delete action the trash sends — follows the Delete-mode select. */
 const deleteActionId = computed<ActionId>(() => (workspace.deleteMode === "close" ? "deleteClose" : "delete"));
 
-const context = computed(() =>
-  baseActionContext(editorProject.project, editorProject.snapshot, workspace.playheadMs, workspace.selectionClipIds),
-);
-const resolved = computed(() => resolveActions(context.value));
-
-function onAction(id: ActionId) {
-  if (!resolved.value[id].enabled) return;
-  const command = commandFor(id, context.value);
+function activate(id: ActionId): void {
+  const command = enabledCommand(id);
   if (command) void editorProject.execute(command);
 }
-function onDelete() {
-  onAction(deleteActionId.value);
+
+const HISTORY = ["undo", "redo"] as const;
+
+/** A registry control's title: its reason while disabled, else what it
+ * does and its shortcut. */
+function titleFor(id: ActionId, hint: string): string {
+  const verdict = resolved.value[id];
+  if (!verdict.enabled) return verdict.reason ?? hint;
+  return verdict.shortcut ? `${hint} (${verdict.shortcut})` : hint;
+}
+const deleteHint = computed(() =>
+  workspace.deleteMode === "close" ? "Delete selection and close the gap on its track" : "Delete selection, leaving a gap",
+);
+function stateClass(id: ActionId): string {
+  return resolved.value[id].enabled ? "" : "cursor-not-allowed opacity-40";
 }
 
-/** Multiplicative per-click step, applied through `editorWorkspace.setZoom`
- * (which already clamps to its own `[0.1, 20]` range) -- deliberately
- * multiplicative rather than additive so a click feels proportional at both
- * ends of that range. */
-const ZOOM_STEP = 1.25;
-function zoomIn() {
-  workspace.setZoom(workspace.timelineZoom * ZOOM_STEP);
-}
-function zoomOut() {
-  workspace.setZoom(workspace.timelineZoom / ZOOM_STEP);
+function onDeleteMode(event: Event): void {
+  workspace.setDeleteMode((event.target as HTMLSelectElement).value as DeleteMode);
 }
 
 const toolbarTarget = useGuideTarget("timeline.toolbar");
 const moreTarget = useGuideTarget("timeline.more");
-const actionTargets: Partial<Record<ActionId, GuideRef>> = {
+const actionTargets: Partial<Record<string, GuideRef>> = {
   split: useGuideTarget("timeline.split"),
   undo: useGuideTarget("timeline.undo"),
 };
@@ -100,12 +88,8 @@ function onMore(event: MouseEvent): void {
   emit("more", { x: rect.left, y: rect.bottom });
 }
 
-function itemTitle(id: ActionId): string {
-  return resolved.value[id].reason ?? resolved.value[id].label;
-}
-function itemClass(id: ActionId): string {
-  return resolved.value[id].enabled ? "text-fg-secondary" : "cursor-default opacity-50";
-}
+const ICON_BUTTON = "inline-flex h-8 w-8 shrink-0 items-center justify-center p-1.5 text-fg-muted";
+const LABELLED = "inline-flex min-h-[30px] shrink-0 items-center gap-[7px] px-2.5 text-[11px]";
 </script>
 
 <template>
@@ -114,33 +98,74 @@ function itemClass(id: ActionId): string {
     data-testid="timeline-toolbar"
     role="toolbar"
     aria-label="Timeline tools"
-    class="flex h-7 shrink-0 items-center gap-1 rounded-control border border-line bg-raised px-2 text-micro text-fg-subtle"
+    class="flex h-11 shrink-0 items-center gap-1.5 border-b border-line bg-panel px-3 max-[1200px]:gap-0.5"
   >
+    <span class="mr-[5px] shrink-0 text-[10px] text-fg-muted">Timeline</span>
     <button
-      v-for="id in TOOLBAR_ACTIONS"
+      v-for="id in HISTORY"
       :key="id"
       :ref="actionTargets[id]"
       type="button"
       :data-testid="`timeline-toolbar-${id}`"
+      :aria-label="resolved[id].label"
       :aria-disabled="!resolved[id].enabled"
-      :title="itemTitle(id)"
-      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      :class="itemClass(id)"
-      @click="onAction(id)"
+      :title="titleFor(id, resolved[id].label)"
+      :class="[ICON_BUTTON, stateClass(id)]"
+      @click="activate(id)"
     >
-      {{ resolved[id].label }}
+      <EditorIcon :name="id" />
     </button>
 
+    <span class="mx-[3px] h-5 w-px shrink-0 bg-line" />
+
+    <button
+      :ref="actionTargets.split"
+      type="button"
+      data-testid="timeline-toolbar-split"
+      :aria-disabled="!resolved.split.enabled"
+      :title="titleFor('split', 'Split selected clip at playhead')"
+      :class="[LABELLED, 'text-fg-secondary', stateClass('split')]"
+      @click="activate('split')"
+    >
+      <EditorIcon name="scissors" />
+      Split
+    </button>
     <button
       type="button"
       data-testid="timeline-toolbar-delete"
+      aria-label="Delete selection"
       :aria-disabled="!resolved[deleteActionId].enabled"
-      :title="itemTitle(deleteActionId)"
-      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      :class="itemClass(deleteActionId)"
-      @click="onDelete"
+      :title="titleFor(deleteActionId, deleteHint)"
+      :class="[ICON_BUTTON, stateClass(deleteActionId)]"
+      @click="activate(deleteActionId)"
     >
-      {{ resolved[deleteActionId].label }}
+      <EditorIcon name="trash" />
+    </button>
+    <select
+      data-testid="timeline-toolbar-delete-mode"
+      aria-label="Delete behavior"
+      title="Choose what Delete does: leave a gap, or close the gap on the clip's own track"
+      class="min-h-[30px] w-[136px] shrink-0 bg-panel p-1 text-[10px]"
+      :value="workspace.deleteMode"
+      @change="onDeleteMode"
+    >
+      <option value="gap">
+        Delete: leave gap
+      </option>
+      <option value="close">
+        Delete: close gap
+      </option>
+    </select>
+    <button
+      type="button"
+      data-testid="timeline-toolbar-marker"
+      aria-label="Add chapter marker"
+      :aria-disabled="!resolved.addMarker.enabled"
+      :title="titleFor('addMarker', 'Add chapter marker at the playhead')"
+      :class="[ICON_BUTTON, stateClass('addMarker')]"
+      @click="activate('addMarker')"
+    >
+      <EditorIcon name="bookmark" />
     </button>
     <button
       :ref="moreTarget"
@@ -148,82 +173,28 @@ function itemClass(id: ActionId): string {
       data-testid="timeline-toolbar-more"
       aria-haspopup="menu"
       :aria-expanded="moreOpen ? 'true' : 'false'"
-      title="Actions for the selected clips (right-click a clip for its own)"
-      class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      title="Edit actions for the current selection (Shift+F10)"
+      class="ml-[3px] inline-flex min-h-8 shrink-0 items-center gap-[7px] rounded-l-none rounded-r-[6px] border-y-0 border-r-0 border-l border-line px-2.5 text-[11px] text-fg-secondary"
       @click="onMore"
     >
+      <EditorIcon name="more" />
       Edit actions
     </button>
 
-    <span class="mx-1 h-4 w-px bg-line" />
-
-    <button
-      type="button"
-      data-testid="timeline-toolbar-delete-mode-gap"
-      :aria-pressed="workspace.deleteMode === 'gap'"
-      title="Leave a gap when deleting"
-      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      :class="workspace.deleteMode === 'gap' ? 'bg-accent/20 text-accent-fg' : 'text-fg-secondary'"
-      @click="workspace.setDeleteMode('gap')"
-    >
-      Leave gap
-    </button>
-    <button
-      type="button"
-      data-testid="timeline-toolbar-delete-mode-close"
-      :aria-pressed="workspace.deleteMode === 'close'"
-      title="Close the gap on this track when deleting"
-      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      :class="workspace.deleteMode === 'close' ? 'bg-accent/20 text-accent-fg' : 'text-fg-secondary'"
-      @click="workspace.setDeleteMode('close')"
-    >
-      Close gap on this track
-    </button>
-
-    <span class="mx-1 h-4 w-px bg-line" />
+    <span class="mx-[3px] h-5 w-px shrink-0 bg-line" />
 
     <button
       type="button"
       data-testid="timeline-toolbar-snap"
       :aria-pressed="workspace.snap"
       title="Snap to clip edges, markers and the playhead"
-      class="cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      :class="workspace.snap ? 'bg-accent/20 text-accent-fg' : 'text-fg-secondary'"
+      :class="[LABELLED, 'border-0', workspace.snap ? 'bg-accent-bg text-accent' : 'bg-transparent text-fg-secondary']"
       @click="workspace.toggleSnap()"
     >
+      <EditorIcon name="magnet" />
       Snap
     </button>
 
-    <span class="mx-1 h-4 w-px bg-line" />
-
-    <button
-      type="button"
-      data-testid="timeline-toolbar-zoom-out"
-      title="Zoom out"
-      aria-label="Zoom out"
-      class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      @click="zoomOut"
-    >
-      &minus;
-    </button>
-    <button
-      type="button"
-      data-testid="timeline-toolbar-zoom-in"
-      title="Zoom in"
-      aria-label="Zoom in"
-      class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      @click="zoomIn"
-    >
-      +
-    </button>
-    <button
-      type="button"
-      data-testid="timeline-toolbar-fit"
-      title="Fit the whole edit"
-      class="cursor-pointer rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      @click="emit('fit')"
-    >
-      Fit
-    </button>
+    <TimelineZoom @fit="emit('fit')" />
   </div>
 </template>

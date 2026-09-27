@@ -79,6 +79,8 @@ export const SHORTCUTS: ReadonlyMap<string, ActionId> = new Map<string, ActionId
   ["f6", "guideFocus"],
   ["home", "goToStart"],
   ["end", "goToEnd"],
+  // Visual-parity Task 16: the timeline toolbar's Add chapter marker.
+  ["m", "addMarker"],
 ]);
 
 /**

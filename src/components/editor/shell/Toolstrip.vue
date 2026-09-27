@@ -23,16 +23,16 @@
 import type { ComponentPublicInstance } from "vue";
 import { computed, ref, watch } from "vue";
 
+import { useActionRegistry } from "../../../composables/useActionRegistry";
 import { useGuideOverflow, useGuideTarget } from "../../../composables/useGuideTarget";
 import { useRovingTablist } from "../../../composables/useRovingTablist";
 import type { ActionContext, ActionId } from "../../../editor/actions";
-import { commandFor, resolveActions } from "../../../editor/actions";
+import type { commandFor } from "../../../editor/actions";
 import { addedEffectId } from "../../../editor/cueActions";
 import type { PreviewDensity, TeachingTool } from "../../../editor/previewHeader";
 import { MORE_TOOLS_HEADING, MORE_TOOLS_SUBTITLE, moreToolsItems, stripTools } from "../../../editor/previewHeader";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
-import { useNotificationsStore } from "../../../stores/notifications";
 import EditorIcon from "../icons/EditorIcon.vue";
 import MenuPanel from "../menus/MenuPanel.vue";
 
@@ -40,9 +40,8 @@ const props = defineProps<{ density: PreviewDensity; context: ActionContext }>()
 
 const editorProject = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
-const notifications = useNotificationsStore();
 
-const resolved = computed(() => resolveActions(props.context));
+const { resolved, enabledCommand } = useActionRegistry(() => props.context);
 const tools = computed(() => stripTools(props.density));
 const moreLabel = computed(() => (props.density === "wide" ? "More tools" : "More"));
 
@@ -62,12 +61,7 @@ async function addCue(command: AddCueCommand): Promise<void> {
 }
 
 function activate(id: ActionId): void {
-  const verdict = resolved.value[id];
-  if (!verdict.enabled) {
-    if (verdict.reason) notifications.info(verdict.reason);
-    return;
-  }
-  const command = commandFor(id, props.context);
+  const command = enabledCommand(id);
   if (command?.kind === "addEffect") void addCue(command);
 }
 

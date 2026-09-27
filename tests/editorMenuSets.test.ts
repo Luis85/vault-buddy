@@ -149,7 +149,6 @@ function menuCtx(action: Partial<MenuContext["action"]> = {}, extra: Partial<Men
     fitRange: vi.fn(),
     fitTimeline: vi.fn(),
     toggleSnap: vi.fn(),
-    addTrack: vi.fn(),
     addAssetOnFreeTrack: vi.fn(),
     addAssetOnNewTrack: vi.fn(),
     renameTrack: vi.fn(),
@@ -507,9 +506,12 @@ describe("laneMenu", () => {
       { kind: "addCard", preset: "chapter", trackId: "v1", startMs: 5_500, durationMs: 3_000, title: "Chapter", subtitle: "" },
       { kind: "insertIntro", durationMs: 3_000, title: "Intro", subtitle: "" },
     ]);
+    // Visual-parity Task 16 (ruling P3): the registry's own actions, the
+    // path the timeline's Add track menu takes too.
     run(find(items, "Add video track"));
     run(find(items, "Add audio track"));
-    expect(vi.mocked(ctx.addTrack).mock.calls).toEqual([["video"], ["audio"]]);
+    expect(vi.mocked(ctx.activate).mock.calls.slice(-2).map(([id]) => id)).toEqual(["addTrackVideo", "addTrackAudio"]);
+    expect(find(items, "Add video track").disabledReason).toBeNull();
     run(find(items, "Fit timeline"));
     expect(ctx.fitTimeline).toHaveBeenCalled();
     const snap = find(items, "Snapping");

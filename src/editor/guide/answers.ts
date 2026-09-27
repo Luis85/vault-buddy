@@ -76,6 +76,7 @@ const PURPOSE: Partial<Record<ActionId, string>> = {
   help: "Start or resume the guided walkthrough",
   guideFocus: "Switch between the guide and its highlighted control",
   render: "Review part of the video as a real render",
+  addMarker: "Add a chapter marker at the playhead",
 };
 
 /** `ctrl+shift+z` → `Ctrl+Shift+Z`, `?` → `?`, `f1` → `F1`. */

@@ -16,6 +16,7 @@
  * refused `addTrack` inserts nothing.
  */
 import type { Asset, Project, Track, TrackKind } from "../editorTypes";
+import { NO_PROJECT } from "./actionMeta";
 import { clipSpanOf } from "./actionTargets";
 import type { EditorCommand } from "./editorCommandTypes";
 import { clipOutputEnd } from "./timeMap";
@@ -58,10 +59,32 @@ export function closeAllGapsCommands(project: Project, trackId: string): EditorC
 
 type Execute = (command: EditorCommand) => Promise<boolean>;
 
+/** `core::editor::limits::MAX_TRACKS`: Rust refuses a 33rd track. */
+const MAX_TRACKS = 32;
+
+/** Why no track can be added, or `null` when one can. */
+export function addTrackRefusal(project: Project | null): string | null {
+  if (!project) return NO_PROJECT;
+  return project.tracks.length >= MAX_TRACKS ? `This project already has the maximum of ${MAX_TRACKS} tracks` : null;
+}
+
 /** "Video N"/"Audio N", N one past how many tracks of that kind exist. */
 function nextTrackName(project: Project | null, kind: TrackKind): string {
   const count = (project?.tracks ?? []).filter((t) => t.kind === kind).length + 1;
   return kind === "audio" ? `Audio ${count}` : `Video ${count}`;
+}
+
+/**
+ * The ONE `addTrack` every surface sends (visual-parity Task 16, ruling
+ * P3): the registry's Add video/audio track (the timeline's Add track menu
+ * and the empty-lane menu), a drop below the last lane, a free-track
+ * placement and the webcam presenter. Without `index` a video track goes
+ * on top — index 0, the frontmost layer — and an audio track at the
+ * bottom, the concept's `addTrack` (`unshift` / `push`).
+ */
+export function addTrackCommand(project: Project | null, kind: TrackKind, index?: number, name?: string): EditorCommand {
+  const at = index ?? (kind === "video" ? 0 : (project?.tracks.length ?? 0));
+  return { kind: "addTrack", trackKind: kind, name: name ?? nextTrackName(project, kind), index: at };
 }
 
 /** Adds a track of `kind` at `index` (below the others by default);
@@ -75,8 +98,7 @@ export async function addTrackOfKind(
 ): Promise<Track | null> {
   const project = getProject();
   const before = new Set((project?.tracks ?? []).map((t) => t.id));
-  const index = at ?? project?.tracks.length ?? 0;
-  const added = await execute({ kind: "addTrack", trackKind: kind, name: nextTrackName(project, kind), index });
+  const added = await execute(addTrackCommand(project, kind, at ?? project?.tracks.length ?? 0));
   if (!added) return null;
   return getProject()?.tracks.find((t) => !before.has(t.id)) ?? null;
 }

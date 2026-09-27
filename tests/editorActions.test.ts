@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { unavailableReason } from "../src/editor/actionMeta";
 import {
   ACTION_IDS,
   type ActionContext,
@@ -187,27 +188,6 @@ describe("resolveActions — disabled actions carry a reason", () => {
     expect(Object.keys(resolveActions(ctx())).length).toBe(41);
   });
 
-  it("still-unimplemented wire kinds are gated regardless of selection", () => {
-    const proj = project({
-      tracks: [track("v1")],
-      clips: [clip("c1", "v1")],
-    });
-    const context = ctx({ project: proj, snapshot: snapshot(), selectedClipIds: ["c1"] });
-    const resolved = resolveActions(context);
-    // Task 32: `ratio` left this list -- it is no longer gated by an
-    // unimplemented wire kind (`setCanvas` shipped), so with a project open
-    // it is now enabled; see "sends setCanvas..." below for its own coverage.
-    // Task 35: `addText` left it too -- the teaching tools are real now
-    // (`cueActions.ts`, covered in tests/editorCueOverlay.test.ts).
-    // Task 36: `addCaption`/`addMarker` left it -- real resolvers now
-    // (`captionRules.ts`), covered in "addCaption/addMarker target the
-    // clip under the playhead" below.
-    for (const id of ["addTrackVideo"] as const) {
-      expect(resolved[id].enabled).toBe(false);
-      expect(commandFor(id, context)).toBeNull();
-    }
-  });
-
   // Task 27: `detachAudio` left UNIMPLEMENTED_KINDS with a real resolver and
   // builder. The detached clip lands on the first FREE unlocked audio track
   // (a busy or locked one is skipped), or asks Rust for a new one.
@@ -303,49 +283,51 @@ describe("resolveActions — disabled actions carry a reason", () => {
     // A button labelled "Text" must never show the literal string
     // "addEffect" -- that is Rust's own error vocabulary
     // (core::editor::commands::mod.rs), not a word the person reading a
-    // teaching-tool button typed or clicked. The expected sentence is
-    // built from each action's OWN label, in the same register as
-    // EditorHeader's "Rendering a video arrives in a later update."
-    const context = ctx({ project: project(), snapshot: snapshot() });
-    const resolved = resolveActions(context);
-    // Task 32: `ratio` left this map too -- with a project open (as this
-    // context has) it is now enabled and carries no reason at all.
-    // Task 35: `addText`/`addArrow` left this map -- the teaching tools
-    // have real resolvers now, whose reasons are their own (e.g. "No
-    // visible clip at the playhead to add a cue to").
-    // Task 36: `addCaption`/`addMarker` left too -- their reasons are
-    // their own now ("No clip at the playhead to add a caption to").
-    const expectedReasons: Partial<Record<string, string>> = {
-      addTrackVideo: "Add video track arrives in a later update.",
-    };
-    for (const [id, expected] of Object.entries(expectedReasons)) {
-      expect(resolved[id as keyof typeof resolved].reason).toBe(expected);
-      // The raw wire kind never leaks into the sentence at all.
-      expect(resolved[id as keyof typeof resolved].reason).not.toMatch(
-        /addEffect|addCaption|addMarker|addTrack\b|setFades|addTransition|is not available yet/,
-      );
-    }
+    // teaching-tool button typed or clicked. `UNIMPLEMENTED_KINDS` is empty
+    // today (Task 36), and visual-parity Task 16 gave the last two actions
+    // that borrowed this sentence (`addTrackVideo`/`addTrackAudio`) real
+    // resolvers -- so the sentence is checked where it is built, for the
+    // next kind that ships ahead of its Rust arm.
+    expect(unavailableReason("addText")).toBe("Text arrives in a later update.");
+    expect(unavailableReason("addTrackVideo")).not.toMatch(/addTrack\b|is not available yet/);
+    // No action resolves to it any more: nothing reads "later update".
+    const resolved = resolveActions(ctx({ project: project(), snapshot: snapshot() }));
+    for (const id of ACTION_IDS) expect(resolved[id].reason ?? "").not.toMatch(/later update/);
   });
 
-  // Task 26: `addTrack` is no longer in `UNIMPLEMENTED_KINDS` (dropping a
-  // media asset below the timeline's last lane sends it directly through
-  // `editorProject.execute`, the `TrackHeader.vue` direct-call precedent) --
-  // but `addTrackVideo`/`addTrackAudio`, the only `ActionId`s that map to
-  // it, still have no keyboard/menu/toolbar surface consuming them, so
-  // `actions.ts` now gives them their OWN `RESOLVERS` entry reproducing the
-  // exact same disabled-with-reason text `UNIMPLEMENTED_KINDS` used to
-  // supply, rather than silently reporting `enabled:false, reason:null`
-  // (which the "every disabled action carries a reason" invariant below
-  // would catch).
-  it("addTrackVideo/addTrackAudio stay disabled with the same reason even though addTrack itself is ungated", () => {
-    const context = ctx({ project: project(), snapshot: snapshot() });
-    const resolved = resolveActions(context);
-    expect(resolved.addTrackVideo.enabled).toBe(false);
-    expect(resolved.addTrackVideo.reason).toBe("Add video track arrives in a later update.");
-    expect(resolved.addTrackAudio.enabled).toBe(false);
-    expect(resolved.addTrackAudio.reason).toBe("Add audio track arrives in a later update.");
-    expect(commandFor("addTrackVideo", context)).toBeNull();
-    expect(commandFor("addTrackAudio", context)).toBeNull();
+  // Visual-parity Task 16 (ruling P3; design D14): the timeline's Add track
+  // menu, the empty-lane menu and the registry share ONE path. A video
+  // track goes on top (index 0, the frontmost layer) and an audio track at
+  // the bottom -- the concept's `addTrack` (`unshift` / `push`) -- each
+  // named one past how many of its kind exist.
+  describe("addTrackVideo / addTrackAudio", () => {
+    const tracks = [track("v1"), track("v2"), track("a1", { kind: "audio" })];
+
+    it("are enabled with a project open and build the concept's addTrack", () => {
+      const context = ctx({ project: project({ tracks }), snapshot: snapshot() });
+      const resolved = resolveActions(context);
+      expect(resolved.addTrackVideo).toMatchObject({ enabled: true, reason: null, label: "Add video track" });
+      expect(resolved.addTrackAudio).toMatchObject({ enabled: true, reason: null, label: "Add audio track" });
+      expect(commandFor("addTrackVideo", context)).toEqual({ kind: "addTrack", trackKind: "video", name: "Video 3", index: 0 });
+      expect(commandFor("addTrackAudio", context)).toEqual({ kind: "addTrack", trackKind: "audio", name: "Audio 2", index: 3 });
+    });
+
+    it("say why not with no project, or at Rust's 32-track limit", () => {
+      const none = resolveActions(ctx());
+      expect(none.addTrackVideo).toMatchObject({ enabled: false, reason: "No project is open." });
+      const full = ctx({
+        project: project({ tracks: Array.from({ length: 32 }, (_, i) => track(`t${i}`)) }),
+        snapshot: snapshot(),
+      });
+      expect(resolveActions(full).addTrackAudio).toMatchObject({
+        enabled: false,
+        reason: "This project already has the maximum of 32 tracks",
+      });
+      expect(commandFor("addTrackAudio", full)).toBeNull();
+      // One under the limit is still allowed.
+      const room = ctx({ project: project({ tracks: Array.from({ length: 31 }, (_, i) => track(`t${i}`)) }), snapshot: snapshot() });
+      expect(resolveActions(room).addTrackVideo.enabled).toBe(true);
+    });
   });
 });
 
@@ -680,13 +662,8 @@ describe("UNIMPLEMENTED_KINDS", () => {
     ]) {
       expect(UNIMPLEMENTED_KINDS.has(implemented)).toBe(false);
     }
-    // Task 26: `addTrack` is no longer gated -- dropping a media asset
-    // below the timeline's last lane sends it directly
-    // (`TimelineView.vue`'s `editorProject.execute`, the `TrackHeader.vue`
-    // direct-call precedent), which is a real UI consumer even though
-    // `addTrackVideo`/`addTrackAudio` (the only ActionIds that map to it)
-    // still have no RESOLVERS/BUILDERS entry of their own -- see
-    // actionMeta.ts's own doc on this constant.
+    // Task 26 ungated `addTrack`; visual-parity Task 16 gave
+    // `addTrackVideo`/`addTrackAudio` their own resolver and builder.
     expect(UNIMPLEMENTED_KINDS.has("addTrack")).toBe(false);
   });
 });
@@ -776,6 +753,11 @@ describe("matchShortcut / shortcutKey", () => {
     expect(matchShortcut(new KeyboardEvent("keydown", { key: "End" }))).toBe("goToEnd");
     expect(SHORTCUT_DISPLAY.goToStart).toBe("Home");
     expect(SHORTCUT_DISPLAY.goToEnd).toBe("End");
+    // Visual-parity Task 16: the timeline toolbar's bookmark says "(M)"
+    // (the concept's `title="Add chapter (M)"`), so M is bound.
+    expect(matchShortcut(new KeyboardEvent("keydown", { key: "m" }))).toBe("addMarker");
+    expect(matchShortcut(new KeyboardEvent("keydown", { key: "m", ctrlKey: true }))).toBeNull();
+    expect(SHORTCUT_DISPLAY.addMarker).toBe("M");
   });
 
   it("does not double-apply shift for an already-shifted punctuation character", () => {

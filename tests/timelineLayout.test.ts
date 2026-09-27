@@ -15,7 +15,6 @@ import {
   pxPerMs,
   snap,
   snapTargets,
-  tickIntervalMs,
   visibleClips,
   xToMs,
 } from "../src/editor/timelineLayout";
@@ -261,31 +260,5 @@ describe("visibleClips (virtualization)", () => {
     });
     const result = visibleClips([straddling], scrollLeft, width, zoom);
     expect(result.map((c) => c.id)).toContain("straddle");
-  });
-});
-
-describe("tickIntervalMs", () => {
-  it("returns a nice interval whose pixel spacing meets the minimum at a given zoom", () => {
-    const zoom = 1;
-    const interval = tickIntervalMs(zoom);
-    expect(interval * pxPerMs(zoom)).toBeGreaterThanOrEqual(60 - 1e-6);
-  });
-
-  it("shrinks (or holds) as zoom increases -- more pixels per ms needs fewer ms per tick", () => {
-    const low = tickIntervalMs(0.5);
-    const high = tickIntervalMs(8);
-    expect(high).toBeLessThanOrEqual(low);
-  });
-
-  it("falls back to the largest nice interval for a non-positive zoom", () => {
-    expect(tickIntervalMs(0)).toBe(3_600_000);
-  });
-
-  it("falls back to the largest nice interval when even THAT can't clear MIN_TICK_PX", () => {
-    // At a vanishingly small positive zoom, no interval in the table --
-    // not even the largest (1 hour) -- reaches the 60px minimum spacing;
-    // the loop must exhaust and fall through to the same largest-interval
-    // fallback the non-positive-zoom case above returns directly.
-    expect(tickIntervalMs(0.0000001)).toBe(3_600_000);
   });
 });

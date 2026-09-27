@@ -219,18 +219,10 @@ function laneAddItems(ctx: MenuContext, track: Track | undefined, atMs: number):
       icon: "layers",
       run: sendCommand(ctx, { kind: "insertIntro", durationMs: CARD_MS, title: "Intro", subtitle: "" }),
     },
-    {
-      id: "lane-add-video",
-      label: "Add video track",
-      icon: "video",
-      run: () => ctx.addTrack("video"),
-    },
-    {
-      id: "lane-add-audio",
-      label: "Add audio track",
-      icon: "music",
-      run: () => ctx.addTrack("audio"),
-    },
+    // The registry's own actions (visual-parity Task 16, ruling P3): the
+    // path the timeline's Add track menu takes too.
+    actionItem(ctx, "addTrackVideo", { id: "lane-add-video", label: "Add video track", icon: "video" }),
+    actionItem(ctx, "addTrackAudio", { id: "lane-add-audio", label: "Add audio track", icon: "music" }),
   ];
 }
 

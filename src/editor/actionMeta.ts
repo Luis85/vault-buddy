@@ -143,7 +143,7 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
   undo: "Ctrl+Z", redo: "Ctrl+Shift+Z", copy: "Ctrl+C", cut: "Ctrl+X",
   paste: "Ctrl+V", duplicate: "Ctrl+D", group: "Ctrl+G", ungroup: "Ctrl+Shift+G",
   save: "Ctrl+S", render: "Ctrl+E", help: "F1", guideFocus: "F6",
-  goToStart: "Home", goToEnd: "End",
+  goToStart: "Home", goToEnd: "End", addMarker: "M",
 };
 
 /**
@@ -178,12 +178,10 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * above, never through this registry) — so the "no consuming UI yet"
  * condition no longer holds for `addTrack` ITSELF, and it is removed from
  * the set below in the same commit, per `mod.rs`'s own rule.
- * `addTrackVideo`/`addTrackAudio` still have no keyboard/menu/toolbar
- * surface of their own (a future one is still a later task's), so
- * `actions.ts` gives them their own permanent `RESOLVERS` entry
- * (`resolveNoTrackSurfaceYet`) reproducing the exact disabled-with-reason
- * text this gate used to supply — never `BUILDERS`, since there is still
- * nothing for either to build a command FOR. **Task 29 removed
+ * `addTrackVideo`/`addTrackAudio` got their own surfaces in visual-parity
+ * Task 16 — the timeline's Add track menu and the empty-lane menu — and a
+ * real resolver/builder pair in `actions.ts` over `trackEdits.ts`'
+ * `addTrackCommand`, the one `addTrack` every caller sends. **Task 29 removed
  * `setFades` the same way, WITH a consumer**: `resolveFade`/`buildFade`
  * (`actions.ts`) give `fadeIn`/`fadeOut` their own quick-toggle command
  * (0 <-> a default duration), independent of `FadesSection`/`ClipItem`'s

@@ -592,6 +592,66 @@ test.describe("parity 1600x1000: the inspector frame (screens 02, 04)", () => {
   });
 });
 
+// Task 16 (screen 02, concept spec §6.2–6.3; design D12, D14): the timeline
+// toolbar, the header row with its sticky label cell, the ruler's ticks and
+// the gold chapter markers.
+test.describe("parity 1600x1000: the timeline toolbar and ruler (screen 02, §6.2–6.3)", () => {
+  test("toolbar 44, ruler row 32, label cell 196; 2 s ticks; the label cell stays put when the lanes scroll", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.screenshot({ path: "test-results/parity/built-02-timeline-toolbar.png" });
+    await composite(page, "02-workspace.png", "test-results/parity/built-02-timeline-toolbar.png", "vs-02-timeline-toolbar");
+
+    expect((await box(page, "timeline-toolbar")).height).toBeCloseTo(44, 0);
+    expect((await box(page, "timeline-ruler")).height).toBeCloseTo(32, 0);
+    const label = await box(page, "timeline-ruler-label");
+    expect(label.width).toBeCloseTo(196, 0);
+
+    // §6.2's order, left to right, with the zoom group pushed right.
+    const xs: number[] = [];
+    for (const id of ["undo", "redo", "split", "delete", "delete-mode", "marker", "more", "snap", "zoom-out", "zoom-range", "zoom-in", "fit"]) {
+      xs.push((await box(page, `timeline-toolbar-${id}`)).x);
+    }
+    expect([...xs].sort((a, b) => a - b)).toEqual(xs);
+    expect((await box(page, "timeline-toolbar-zoom-range")).width).toBeCloseTo(66, 0);
+    const fit = await box(page, "timeline-toolbar-fit");
+    const bar = await box(page, "timeline-toolbar");
+    expect(bar.x + bar.width - (fit.x + fit.width)).toBeLessThanOrEqual(13);
+
+    // 50 px/s at the default zoom: a 2 s step, 100px apart, 9px mono.
+    const ticks = page.getByTestId("timeline-ruler-tick");
+    await expect(ticks.nth(0)).toHaveText("00:00");
+    await expect(ticks.nth(1)).toHaveText("00:02");
+    expect((await ticks.nth(1).boundingBox())!.x - (await ticks.nth(0).boundingBox())!.x).toBeCloseTo(100, 0);
+    expect(await ticks.nth(1).evaluate((el) => getComputedStyle(el).fontSize)).toBe("9px");
+
+    // D12: scrolled sideways, the label cell keeps its place.
+    await page.getByTestId("timeline-scroll").evaluate((el) => (el.scrollLeft = 300));
+    await expect.poll(async () => (await box(page, "timeline-ruler-label")).x).toBeCloseTo(label.x, 0);
+    await page.getByTestId("timeline-scroll").evaluate((el) => (el.scrollLeft = 0));
+  });
+
+  test("a chapter marker seeks; Add track sends the registry's addTrack", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    const marker = page.getByTestId("timeline-marker-m1");
+    const hit = await box(page, "timeline-marker-m1");
+    expect(hit.width).toBeCloseTo(24, 0);
+    expect(hit.height).toBeCloseTo(24, 0);
+    // The concept's gold (#ebc582) on the dark theme.
+    expect(await marker.evaluate((el) => getComputedStyle(el).color)).toBe("rgb(235, 197, 130)");
+    await marker.click();
+    await expect(page.getByTestId("transport-current")).toHaveText("00:09.5");
+
+    await page.getByTestId("timeline-add-track").click();
+    await page.getByTestId("timeline-add-track-panel-item-addTrackVideo").click();
+    const sent = await page.evaluate(() =>
+      (window as unknown as { __calls: { cmd: string; args: { request?: { command?: { kind?: string } } } | null }[] }).__calls
+        .filter((c) => c.cmd === "editor_execute")
+        .map((c) => c.args?.request?.command),
+    );
+    expect(sent).toContainEqual(expect.objectContaining({ kind: "addTrack", trackKind: "video", index: 0 }));
+  });
+});
+
 test.describe("parity 960x640 (12-compact)", () => {
   test("frame: header 52, preview header 44, transport 40, timeline 270, status 23", async ({ page }) => {
     await openParity(page, { width: 960, height: 640 }, { invitation: false });
@@ -609,6 +669,16 @@ test.describe("parity 960x640 (12-compact)", () => {
     // closed drawer.
     expect((await box(page, "editor-shell-library")).width).toBeCloseTo(232, 0);
     await expect(page.getByTestId("editor-shell-inspector")).toBeHidden();
+  });
+
+  // Task 16: the whole toolbar fits the 960px floor, Fit included.
+  test("the timeline toolbar fits without overflowing", async ({ page }) => {
+    await openParity(page, { width: 960, height: 640 }, { invitation: false });
+    const bar = page.getByTestId("timeline-toolbar");
+    expect(await bar.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0);
+    const fit = await box(page, "timeline-toolbar-fit");
+    expect(fit.x + fit.width).toBeLessThanOrEqual(960);
+    expect((await box(page, "timeline-toolbar-zoom-range")).width).toBeCloseTo(48, 0);
   });
 
   // The track label column is 174 at this width (§1.4); Task 17 builds it.

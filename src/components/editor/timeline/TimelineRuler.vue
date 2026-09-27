@@ -1,33 +1,37 @@
 <script setup lang="ts">
 /**
- * The timeline's time ruler (Task 20; F-14). Click/drag seeks the playhead
- * — and ONLY the playhead: it never touches `editorWorkspace.selection*`,
- * this task's own named test ("ruler click moves the playhead, not the
- * selection"). Ticks use `timelineLayout.tickIntervalMs` so their spacing
- * stays legible at every zoom rather than a fixed, arbitrary step.
+ * The timeline's header row (Task 20; visual-parity Task 16, concept spec
+ * §6.3): 32px, sticky at the top of the one scroll container. Its label
+ * cell is sticky at the left too (design D12) and holds **Add track** (the
+ * registry's add-track menu) and the "Layers ↓" hint; the ruler beside it
+ * carries the ticks and the chapter markers.
  *
- * Drag (fix round 1, finding 2): `pointerdown` seeks once and arms
- * `dragging`; `pointermove` re-seeks only while `dragging` is true, so an
- * ordinary hover (no button ever pressed) never moves the playhead — the
- * `CompanionCharacter.vue`/`useTaskReorder.ts` precedent for this repo's
- * `setPointerCapture`/`?.()` idiom. Capturing the pointer on `pointerdown`
- * (rather than window-level listeners, `TimelineView`'s own resize-handle
- * pattern) keeps drag and click on the exact same `localX -> ms` path with
- * no second implementation to drift from: capture redirects `pointermove`/
- * `pointerup` to THIS element even once the cursor leaves the ruler's own
- * bounds, so a fast drag past either edge keeps seeking instead of going
- * silent.
+ * **Ticks** are `rulerTicks.ts`' (the first step whose spacing reaches
+ * 70px, `MM:SS` or `MM:SS.d` labels), 9px mono with a 7px line below.
  *
- * Row shape mirrors `TrackLane.vue`'s label-column-then-content-track split
- * (`TRACK_LABEL_WIDTH_PX`) so its ticks line up visually with the clips
- * below — see that component's own doc for why the label column is not
- * pinned via `position: sticky` this task.
+ * **Seeking.** The ruler is the playhead's slider (`role="slider"`): a
+ * press seeks and a drag keeps seeking — and ONLY the playhead: it never
+ * touches the selection. Capturing the pointer on `pointerdown` keeps a
+ * drag past either edge on the same `localX -> ms` path as the click. From
+ * the keyboard, ←/↓ and →/↑ step one frame (33 ms, a clip nudge's step)
+ * and Page Up/Down one second; Home/End reach the editor's own Go to start
+ * / Go to end.
+ *
+ * **Chapter markers** are gold ◆ buttons with a 24px hit area, centred on
+ * their OUTPUT time (`captionRules.chapterRows`: a marker is stored in its
+ * clip's source time), named "Go to <title>"; a click seeks there. Their
+ * `pointerdown` stops here, or the ruler under them would capture the
+ * pointer and seek to the press instead.
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 
-import { msToX, pxPerMs, tickIntervalMs, TRACK_LABEL_WIDTH_PX, xToMs } from "../../../editor/timelineLayout";
+import { chapterRows } from "../../../editor/captionRules";
+import { rulerTicks } from "../../../editor/rulerTicks";
+import { msToX, pxPerMs, TRACK_LABEL_WIDTH_PX } from "../../../editor/timelineLayout";
+import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
-import { formatDuration } from "../../../utils/formatDuration";
+import { formatMenuTime } from "../menus/menuModel";
+import AddTrackButton from "./AddTrackButton.vue";
 
 const props = defineProps<{
   zoom: number;
@@ -35,39 +39,28 @@ const props = defineProps<{
 }>();
 
 const workspace = useEditorWorkspaceStore();
+const editorProject = useEditorProjectStore();
+const addTrackOpen = ref(false);
 
-/** A hard ceiling on how many ticks one ruler ever renders — a pathological
- * `zoom`/`widthPx` combination (e.g. a huge content width at a low zoom)
- * must degrade to sparse ticks, never a runaway loop. */
-const MAX_TICKS = 2000;
+const ticks = computed(() => rulerTicks(pxPerMs(props.zoom) * 1000, props.widthPx));
+const markers = computed(() =>
+  chapterRows(editorProject.project).map((row) => ({
+    id: row.marker.id,
+    title: row.marker.title,
+    ms: row.outputMs,
+    x: msToX(row.outputMs, props.zoom),
+  })),
+);
 
-const ticks = computed(() => {
-  const interval = tickIntervalMs(props.zoom);
-  const rangeMs = xToMs(props.widthPx, props.zoom);
-  const count = Math.min(MAX_TICKS, Math.floor(rangeMs / interval) + 1);
-  const out: { ms: number; x: number }[] = [];
-  for (let i = 0; i < count; i += 1) {
-    const ms = i * interval;
-    out.push({ ms, x: msToX(ms, props.zoom) });
-  }
-  return out;
-});
-
-/** The one `localX -> ms` path both a click and every drag step share,
- * in whole milliseconds: the playhead becomes a command's time (Split at
- * the playhead), and Rust takes every time as a `u64`. */
+/** Whole milliseconds: the playhead becomes a command's time (Split at the
+ * playhead), and Rust takes every time as a `u64`. */
 function msFromClientX(el: HTMLElement, clientX: number): number {
-  const rect = el.getBoundingClientRect();
-  const localX = clientX - rect.left;
   const ppm = pxPerMs(props.zoom);
-  const ms = ppm > 0 ? localX / ppm : 0;
-  return Math.max(0, Math.round(ms));
+  const localX = clientX - el.getBoundingClientRect().left;
+  return Math.max(0, Math.round(ppm > 0 ? localX / ppm : 0));
 }
 
-/** Not a `ref` -- nothing in the template reads it, so making it reactive
- * would only cost an extra Vue dependency-tracking wrapper for no
- * observable effect (the same reasoning `CompanionCharacter.vue`'s
- * `pressedAt`/`dragged` module-scope variables already use). */
+/** Not a `ref`: nothing in the template reads it. */
 let dragging = false;
 
 function onPointerDown(event: PointerEvent) {
@@ -79,8 +72,7 @@ function onPointerDown(event: PointerEvent) {
 
 function onPointerMove(event: PointerEvent) {
   if (!dragging) return;
-  const el = event.currentTarget as HTMLElement;
-  workspace.setPlayhead(msFromClientX(el, event.clientX));
+  workspace.setPlayhead(msFromClientX(event.currentTarget as HTMLElement, event.clientX));
 }
 
 function onPointerUp(event: PointerEvent) {
@@ -88,33 +80,81 @@ function onPointerUp(event: PointerEvent) {
   const el = event.currentTarget as HTMLElement;
   if (el.hasPointerCapture?.(event.pointerId)) el.releasePointerCapture?.(event.pointerId);
 }
+
+const FRAME_MS = 33;
+const KEY_STEPS_MS: Record<string, number> = {
+  ArrowLeft: -FRAME_MS,
+  ArrowDown: -FRAME_MS,
+  ArrowRight: FRAME_MS,
+  ArrowUp: FRAME_MS,
+  PageDown: -1_000,
+  PageUp: 1_000,
+};
+
+function onKeydown(event: KeyboardEvent) {
+  // A focused marker's own keys are its own (Enter seeks to it).
+  if (event.target !== event.currentTarget) return;
+  const step = KEY_STEPS_MS[event.key];
+  if (step === undefined || event.ctrlKey || event.altKey || event.metaKey) return;
+  event.preventDefault();
+  workspace.setPlayhead(Math.max(0, workspace.playheadMs + step));
+}
 </script>
 
 <template>
   <div
     data-testid="timeline-ruler"
-    class="sticky top-0 z-20 flex bg-panel"
+    class="sticky top-0 flex h-8 w-max min-w-full border-b border-line bg-panel"
+    :class="addTrackOpen ? 'z-40' : 'z-20'"
   >
     <div
-      class="shrink-0 border-r border-line"
+      data-testid="timeline-ruler-label"
+      class="sticky left-0 z-[3] flex shrink-0 items-center justify-between border-r border-line bg-panel px-3"
       :style="{ width: `${TRACK_LABEL_WIDTH_PX}px` }"
-    />
+    >
+      <AddTrackButton v-model:open="addTrackOpen" />
+      <span
+        class="text-[10px] text-fg-muted"
+        title="Tracks higher up sit in front of the ones below"
+      >Layers ↓</span>
+    </div>
     <div
       data-testid="timeline-ruler-ticks"
-      class="relative h-6 cursor-pointer select-none"
+      role="slider"
+      tabindex="0"
+      aria-label="Timeline playhead"
+      aria-valuemin="0"
+      :aria-valuemax="editorProject.durationMs / 1000"
+      :aria-valuenow="(workspace.playheadMs / 1000).toFixed(2)"
+      :aria-valuetext="formatMenuTime(workspace.playheadMs)"
+      class="relative h-full cursor-ew-resize touch-none select-none focus:outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
       :style="{ width: `${widthPx}px` }"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
+      @keydown="onKeydown"
     >
-      <div
+      <span
         v-for="t in ticks"
         :key="t.ms"
-        class="pointer-events-none absolute top-0 h-full border-l border-line text-micro text-fg-subtle"
+        data-testid="timeline-ruler-tick"
+        class="pointer-events-none absolute top-[3px] font-mono text-[9px] text-fg-muted after:mt-[5px] after:block after:h-[7px] after:border-l after:border-line after:content-['']"
         :style="{ left: `${t.x}px` }"
+      >{{ t.label }}</span>
+      <button
+        v-for="m in markers"
+        :key="m.id"
+        type="button"
+        :data-testid="`timeline-marker-${m.id}`"
+        :title="m.title"
+        :aria-label="`Go to ${m.title}`"
+        class="absolute top-3 z-[2] flex h-6 min-h-6 w-6 min-w-6 -translate-x-1/2 items-center justify-center p-0 text-[11px] leading-6 text-gold focus-visible:bg-panel"
+        :style="{ left: `${m.x}px` }"
+        @pointerdown.stop
+        @click="workspace.setPlayhead(m.ms)"
       >
-        <span class="ml-0.5">{{ formatDuration(t.ms) }}</span>
-      </div>
+        ◆
+      </button>
     </div>
   </div>
 </template>

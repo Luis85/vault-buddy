@@ -31,7 +31,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
-import { baseActionContext } from "../../../editor/actionContext";
+import { useBaseActionContext } from "../../../composables/useActionRegistry";
 import { resolveActions } from "../../../editor/actions";
 import { panelToggleTitle, previewDensity, PROPERTIES_TOGGLE_ID } from "../../../editor/previewHeader";
 import { reviewRange } from "../../../editor/renderRanges";
@@ -53,9 +53,7 @@ const notifications = useNotificationsStore();
 
 /** The registry's context, shared with the tool strip, and its verdicts
  * on the header's own two actions: the ratio button and Review. */
-const context = computed(() =>
-  baseActionContext(editorProject.project, editorProject.snapshot, workspace.playheadMs, workspace.selectionClipIds),
-);
+const context = useBaseActionContext();
 const verdicts = computed(() => {
   const all = resolveActions(context.value);
   return { ratio: all.ratio, review: all.render };

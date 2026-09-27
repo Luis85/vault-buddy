@@ -103,6 +103,7 @@ import { buildCue, resolveCue } from "./cueActions";
 import type { EditorCommand } from "./editorCommandTypes";
 import { detachRefusal, freeAudioTrackFor } from "./mixRules";
 import { clipOutputEnd } from "./timeMap";
+import { addTrackCommand, addTrackRefusal } from "./trackEdits";
 import { addTransitionCommand, transitionRefusal } from "./transitionRules";
 
 export type { ActionId } from "./actionMeta";
@@ -233,23 +234,11 @@ function resolveRender(ctx: ActionContext): Verdict {
   return ctx.snapshot.durationMs > 0 ? OK : { enabled: false, reason: NOTHING_TO_REVIEW };
 }
 
-/**
- * `addTrackVideo`/`addTrackAudio` (Task 26): each maps to a wire kind
- * (`addTrack`) Rust NOW accepts (a real caller sends it --
- * `TimelineView.vue`'s below-the-last-lane asset drop, `editorProject.
- * execute` directly, the `TrackHeader.vue` precedent, never through this
- * registry), but neither `ActionId` has a keyboard/menu/toolbar surface of
- * its own yet. Without an explicit resolver they would fall through
- * `RESOLVERS[actionId]?.(ctx) ?? {enabled:false, reason:null}` in
- * `resolveActions` below -- disabled with NO reason, which
- * `editorActions.test.ts`'s "every disabled action carries a reason"
- * invariant exists precisely to catch. Reusing `unavailableReason` keeps
- * the user-facing text identical to what `UNIMPLEMENTED_KINDS`'s gate
- * showed before. (Task 34 parked the seven teaching-cue actions here too;
- * Task 35 replaced them with the real `cueActions.ts` pair below.)
- */
-function resolveNoSurfaceYet(actionId: ActionId): Verdict {
-  return { enabled: false, reason: unavailableReason(actionId) };
+/** `addTrackVideo`/`addTrackAudio` (visual-parity Task 16): a project with
+ * room for another track (`trackEdits.addTrackRefusal`). */
+function resolveAddTrack(ctx: ActionContext): Verdict {
+  const reason = addTrackRefusal(ctx.project);
+  return reason ? { enabled: false, reason } : OK;
 }
 
 const RESOLVERS: Partial<Record<ActionId, (ctx: ActionContext) => Verdict>> = {
@@ -289,8 +278,8 @@ const RESOLVERS: Partial<Record<ActionId, (ctx: ActionContext) => Verdict>> = {
   // project) -- the `toggleLibrary`/`guideFocus` precedent.
   goToStart: resolveAlways,
   goToEnd: resolveAlways,
-  addTrackVideo: () => resolveNoSurfaceYet("addTrackVideo"),
-  addTrackAudio: () => resolveNoSurfaceYet("addTrackAudio"),
+  addTrackVideo: resolveAddTrack,
+  addTrackAudio: resolveAddTrack,
   // Task 35: the teaching tools (`cueActions.ts` -- which clip, which
   // source span, the default length).
   addText: resolveCue,
@@ -491,6 +480,8 @@ const BUILDERS: Partial<Record<ActionId, Builder>> = {
   addMask: buildCue,
   addCaption: buildAddCaption,
   addMarker: buildAddMarker,
+  addTrackVideo: (ctx) => addTrackCommand(ctx.project, "video"),
+  addTrackAudio: (ctx) => addTrackCommand(ctx.project, "audio"),
 };
 
 /**

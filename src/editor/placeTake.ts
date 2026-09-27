@@ -15,6 +15,7 @@
  */
 import type { EditorCommand, Project, TakeDto } from "../editorTypes";
 import { PRESENTER_CORNER, presenterBox } from "./layoutGeometry";
+import { addTrackCommand } from "./trackEdits";
 
 /** The slice of the project store this needs. */
 export interface PlacementTarget {
@@ -36,7 +37,7 @@ export async function placePresenterTake(target: PlacementTarget, take: TakeDto,
   if (!before) return false;
   const known = new Set(before.tracks.map((t) => t.id));
   const name = presenterTrackName(before);
-  if (!(await target.execute({ kind: "addTrack", trackKind: "video", name, index: 0 }))) return false;
+  if (!(await target.execute(addTrackCommand(before, "video", 0, name)))) return false;
   const track = target.project?.tracks.find((t) => !known.has(t.id));
   if (!track) return false;
   const inserted = await target.execute({

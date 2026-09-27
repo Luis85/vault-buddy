@@ -7,7 +7,7 @@
  * real one from the editor stores.
  */
 import type { MenuAction } from "../components/editor/menus/menuModel";
-import type { Asset, Effect, Project, Track, TrackKind } from "../editorTypes";
+import type { Asset, Effect, Project, Track } from "../editorTypes";
 import type { ActionId } from "./actionMeta";
 import { lockedReason } from "./actionMeta";
 import type { ActionContext } from "./actions";
@@ -38,7 +38,6 @@ export interface MenuContext {
   fitRange(startMs: number, endMs: number): void;
   fitTimeline(): void;
   toggleSnap(): void;
-  addTrack(kind: TrackKind): void;
   /** At `startMs` on a free track of its kind, else a new one (`placeOnFreeTrack`). */
   addAssetOnFreeTrack(asset: Asset, startMs: number): void;
   addAssetOnNewTrack(asset: Asset, startMs: number): void;

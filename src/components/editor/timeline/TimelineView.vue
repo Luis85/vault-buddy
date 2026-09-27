@@ -303,7 +303,7 @@ async function onBelowLanesDrop(event: DragEvent) {
 <template>
   <div
     data-testid="timeline-view"
-    class="flex h-full min-h-0 flex-col gap-1"
+    class="flex h-full min-h-0 flex-col"
   >
     <TimelineToolbar
       :more-open="menuOpen && menuFromToolbar"

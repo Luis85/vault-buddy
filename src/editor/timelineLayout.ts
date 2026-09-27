@@ -5,7 +5,8 @@
  * constraints' contract reference) cannot afford this logic hiding inside a
  * `computed()` where a mutation slips past the one place performance and
  * correctness both live. `TimelineView.vue`/`TrackLane.vue`/`ClipItem.vue`/
- * `TimelineRuler.vue` consume this module; none of them re-derive any of it.
+ * `TimelineRuler.vue` consume this module (the ruler's ticks are
+ * `rulerTicks.ts`'); none of them re-derive any of it.
  *
  * All px values here are CONTENT-space unless a function explicitly takes a
  * `scrollLeft` — `msToX`/`xToMs` default `scrollLeft` to 0 for exactly that
@@ -158,32 +159,6 @@ export function visibleClips(
   const loMs = (scrollLeft - pad) / ppm;
   const hiMs = (scrollLeft + width + pad) / ppm;
   return clips.filter((c) => clipOutputEnd(clipSpanOf(c)) > loMs && c.start_ms < hiMs);
-}
-
-// ---- ruler tick spacing -----------------------------------------------------
-
-/** "Nice" tick intervals a ruler can fall back through as zoom shrinks —
- * whole seconds/minutes/quarter-hours a human reads at a glance, never an
- * arbitrary computed number like "847ms". */
-const NICE_TICK_INTERVALS_MS: readonly number[] = [
-  100, 200, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000,
-  1_800_000, 3_600_000,
-];
-
-/** The minimum pixel gap between two adjacent ticks — below this, tick
- * labels overlap and the ruler reads as a smear rather than a scale. */
-const MIN_TICK_PX = 60;
-
-/** The smallest "nice" interval whose pixel width at `zoom` still clears
- * `MIN_TICK_PX` — the largest available interval when even the biggest nice
- * step (1 hour) can't reach it at an extremely zoomed-out view. */
-export function tickIntervalMs(zoom: number): number {
-  const ppm = pxPerMs(zoom);
-  if (ppm <= 0) return NICE_TICK_INTERVALS_MS[NICE_TICK_INTERVALS_MS.length - 1];
-  for (const interval of NICE_TICK_INTERVALS_MS) {
-    if (interval * ppm >= MIN_TICK_PX) return interval;
-  }
-  return NICE_TICK_INTERVALS_MS[NICE_TICK_INTERVALS_MS.length - 1];
 }
 
 /**

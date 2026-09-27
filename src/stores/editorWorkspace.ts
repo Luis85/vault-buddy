@@ -56,7 +56,7 @@ const PERSIST_DEBOUNCE_MS = 750;
 // different number only once the round trip through Rust completes. The
 // timeline height's own, tighter range follows the window (visual-parity
 // Task 4, `panelLayout.ts`), always inside Rust's 160–900.
-const ZOOM_RANGE = [0.1, 20.0] as const;
+export const ZOOM_RANGE = [0.1, 20.0] as const;
 const PLAYBACK_RATE_RANGE = [0.25, 2.0] as const;
 
 function clamp(n: number, [lo, hi]: readonly [number, number]): number {
