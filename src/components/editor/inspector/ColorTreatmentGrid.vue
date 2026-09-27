@@ -10,13 +10,20 @@
  * so each names its tiles with its own `prefix`.
  */
 import { adjustmentsFilter, COLOR_TREATMENTS } from "../../../editor/colorPresets";
+import { announceDisabled } from "../../../editor/disabledAnnouncer";
 
 type Treatment = (typeof COLOR_TREATMENTS)[number];
 
-withDefaults(defineProps<{ activeId: string | null; reason: string | null; prefix?: string }>(), {
+const props = withDefaults(defineProps<{ activeId: string | null; reason: string | null; prefix?: string }>(), {
   prefix: "color-treatment",
 });
 const emit = defineEmits<(e: "pick", treatment: Treatment) => void>();
+
+/** A refused tile says why (`announceDisabled`); an allowed one picks. */
+function pick(t: Treatment): void {
+  if (props.reason) announceDisabled(props.reason);
+  else emit("pick", t);
+}
 </script>
 
 <template>
@@ -38,7 +45,7 @@ const emit = defineEmits<(e: "pick", treatment: Treatment) => void>();
         t.id === activeId ? 'active border-accent bg-accent-bg text-accent-ink' : 'border-line text-fg-secondary',
         reason ? 'cursor-not-allowed opacity-45' : 'cursor-pointer hover:bg-hover',
       ]"
-      @click="reason || emit('pick', t)"
+      @click="pick(t)"
     >
       <span
         class="relative block aspect-[1.25] overflow-hidden rounded bg-linear-135 from-swatch-from to-swatch-to"

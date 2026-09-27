@@ -33,13 +33,13 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import { useBaseActionContext } from "../../../composables/useActionRegistry";
 import { resolveActions } from "../../../editor/actions";
+import { announceDisabled } from "../../../editor/disabledAnnouncer";
 import { panelToggleTitle, previewDensity, PROPERTIES_TOGGLE_ID } from "../../../editor/previewHeader";
 import { reviewRange } from "../../../editor/renderRanges";
 import { onReveal } from "../../../editor/revealBus";
 import type { RenderRange } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
-import { useNotificationsStore } from "../../../stores/notifications";
 import ReviewDialog from "../dialogs/ReviewDialog.vue";
 import EditorIcon from "../icons/EditorIcon.vue";
 import PanelToggleButton from "./PanelToggleButton.vue";
@@ -49,7 +49,6 @@ import ViewMenuButton from "./ViewMenuButton.vue";
 
 const editorProject = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
-const notifications = useNotificationsStore();
 
 /** The registry's context, shared with the tool strip, and its verdicts
  * on the header's own two actions: the ratio button and Review. */
@@ -101,7 +100,7 @@ function openReview(): void {
 function onReview(): void {
   const verdict = verdicts.value.review;
   if (verdict.enabled) openReview();
-  else if (verdict.reason) notifications.info(verdict.reason);
+  else announceDisabled(verdict.reason);
 }
 onReveal("review", () => {
   if (verdicts.value.review.enabled) openReview();

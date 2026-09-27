@@ -22,6 +22,7 @@ import CueOverlay from "../src/components/editor/preview/CueOverlay.vue";
 import PreviewSurface from "../src/components/editor/preview/PreviewSurface.vue";
 import PreviewHeader from "../src/components/editor/shell/PreviewHeader.vue";
 import { baseActionContext } from "../src/editor/actionContext";
+import { lockedReason } from "../src/editor/actionMeta";
 import { commandFor, resolveActions } from "../src/editor/actions";
 import { arrowPath, IDENTITY_ZOOM } from "../src/editor/cueGeometry";
 import type { EditorCommand } from "../src/editor/editorCommandTypes";
@@ -30,6 +31,7 @@ import { containRect } from "../src/editor/previewGeometry";
 import type { Clip, EditorOpenResult, Effect, Project, Track } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
+import { useNotificationsStore } from "../src/stores/notifications";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
 
 enableAutoUnmount(afterEach);
@@ -675,6 +677,24 @@ describe("InspectorPanel with a selected cue", () => {
 // ---- edges: locked tracks, stray input, refusals ---------------------------------------
 
 describe("teaching cues — edges", () => {
+  // Final review, minor 7: a refused swatch said nothing when pressed; it
+  // now says the lock, once per 1.5 s however long a key is held.
+  it("a locked swatch pressed says the lock, and a held key does not stack it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(10_000);
+    await openProject(project({ tracks: [track("v1", { locked: true, name: "Screen" })] }));
+    const w = mount(EffectSection, { props: { effectId: "arr" } });
+    const swatch = w.get('[data-testid="effect-swatch-ffd279"]');
+    await swatch.trigger("click");
+    const said = () => useNotificationsStore().items.map((i) => i.message);
+    expect(said()).toEqual([lockedReason("Screen")]);
+    useNotificationsStore().clear();
+    for (let i = 0; i < 5; i += 1) await swatch.trigger("click");
+    expect(said()).toEqual([]);
+    expect(executed).toEqual([]);
+    vi.useRealTimers();
+  });
+
   it("EffectSection on a locked track: every control disabled, nothing sent", async () => {
     await openProject(project({ tracks: [track("v1", { locked: true, name: "Screen" })] }));
     const w = mount(EffectSection, { props: { effectId: "arr" } });

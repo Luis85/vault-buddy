@@ -10,6 +10,8 @@
  * code, and keeps its fill in forced colours (`vb-swatch-fill`, the
  * forced-colours block in `style.css`), where the chosen one is outlined.
  */
+import { announceDisabled } from "../../../editor/disabledAnnouncer";
+
 const SWATCHES = [
   { color: "#ffd279", name: "gold" },
   { color: "#ffffff", name: "white" },
@@ -22,7 +24,8 @@ const props = defineProps<{ color: string; reason: string | null }>();
 const emit = defineEmits<(e: "pick", color: string) => void>();
 
 function pick(color: string): void {
-  if (!props.reason && color !== props.color.toLowerCase()) emit("pick", color);
+  if (props.reason) announceDisabled(props.reason);
+  else if (color !== props.color.toLowerCase()) emit("pick", color);
 }
 </script>
 

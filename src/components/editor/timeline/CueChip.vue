@@ -36,6 +36,7 @@ import { usePointerPress } from "../../../composables/usePointerPress";
 import { clipSpanOf } from "../../../editor/actionTargets";
 import type { TeachingCue } from "../../../editor/cueLanes";
 import { cueTop } from "../../../editor/cueLanes";
+import { announceDisabled } from "../../../editor/disabledAnnouncer";
 import { cueDragHint, useDragHintReport } from "../../../editor/dragHint";
 import { EFFECT_NAMES } from "../../../editor/effectFields";
 import { isContextMenuShortcut } from "../../../editor/shortcuts";
@@ -44,7 +45,6 @@ import { msToX, snapTargets } from "../../../editor/timelineLayout";
 import { cueOutputSpan } from "../../../editor/timeMap";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
-import { useNotificationsStore } from "../../../stores/notifications";
 
 const props = defineProps<{
   cue: TeachingCue;
@@ -59,7 +59,6 @@ const emit = defineEmits<{
 
 const editorProject = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
-const notifications = useNotificationsStore();
 
 const drag = useCueDrag({
   effect: () => props.cue.effect,
@@ -148,7 +147,7 @@ const frameMs = computed(() => Math.round(1_000 / (editorProject.project?.canvas
 
 /** Says why a key did nothing to this cue (D14). */
 function refuse(reason: string): void {
-  notifications.info(reason);
+  announceDisabled(reason);
 }
 
 async function nudge(event: KeyboardEvent): Promise<void> {

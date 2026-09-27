@@ -58,6 +58,7 @@ import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useMediaImport } from "../../../composables/useMediaImport";
 import { baseActionContext } from "../../../editor/actionContext";
 import type { PointerTarget } from "../../../editor/actions";
+import { announceDisabled } from "../../../editor/disabledAnnouncer";
 import { insertAssetOnFreeTrack, placementLabel, placeOnFreeTrack } from "../../../editor/placeOnFreeTrack";
 import { onReveal } from "../../../editor/revealBus";
 import type { Asset } from "../../../editorTypes";
@@ -157,6 +158,10 @@ const webcamTitle = computed(() => webcamRefusal.value ?? "Record a webcam take"
 
 function openWebcam(): void {
   if (webcamRefusal.value === null) webcamOpen.value = true;
+  else announceDisabled(webcamRefusal.value);
+}
+function onImport(): void {
+  if (!startImport()) announceDisabled(importRefusal.value);
 }
 
 // ---- the one asset context menu (visual-parity Task 9, concept spec §8) ---
@@ -203,7 +208,7 @@ onReveal("webcam", openWebcam);
         :aria-disabled="importRefusal !== null"
         :title="importTitle"
         class="flex h-10 flex-1 items-center justify-center gap-[7px] rounded-[7px] border-0 bg-primary px-2 text-[11px] font-semibold text-white hover:bg-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
-        @click="startImport"
+        @click="onImport"
       >
         <EditorIcon
           name="upload"

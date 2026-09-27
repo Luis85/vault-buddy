@@ -34,6 +34,7 @@
 import { computed, nextTick, ref, watch } from "vue";
 
 import { lockedReason } from "../../../editor/actionMeta";
+import { announceDisabled } from "../../../editor/disabledAnnouncer";
 import { trackRenameRequest } from "../../../editor/revealBus";
 import type { Track } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
@@ -56,7 +57,7 @@ type Flag = "visible" | "muted" | "solo" | "locked";
 
 /** Flip one flag; everything but the padlock is refused while locked. */
 function toggle(flag: Flag) {
-  if (locked.value && flag !== "locked") return;
+  if (locked.value && flag !== "locked") return announceDisabled(reason.value);
   const change: Partial<Record<Flag, boolean>> = { [flag]: !props.track[flag] };
   void editorProject.execute({ kind: "setTrackFlags", trackId: props.track.id, ...change });
 }

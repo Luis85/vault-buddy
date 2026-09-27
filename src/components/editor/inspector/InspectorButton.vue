@@ -7,6 +7,7 @@
  * sends nothing — a click is only emitted while `reason` is empty. With
  * `pressed` it is a toggle (`aria-pressed`, the concept's `button.active`).
  */
+import { announceDisabled } from "../../../editor/disabledAnnouncer";
 import type { EditorIconName } from "../icons/conceptIcons";
 import EditorIcon from "../icons/EditorIcon.vue";
 
@@ -18,7 +19,8 @@ const props = withDefaults(
 const emit = defineEmits<(e: "click") => void>();
 
 function onClick(): void {
-  if (!props.reason) emit("click");
+  if (props.reason) announceDisabled(props.reason);
+  else emit("click");
 }
 </script>
 

@@ -57,6 +57,7 @@ import { computed, onBeforeUnmount, onMounted } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { usePolledValue } from "../../../composables/usePolledValue";
+import { announceDisabled } from "../../../editor/disabledAnnouncer";
 import { TRANSPORT_BADGE_MIN_WIDTH } from "../../../editor/panelLayout";
 import { shouldHandle } from "../../../editor/shortcuts";
 import type { Canvas } from "../../../editorTypes";
@@ -119,13 +120,17 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onWindowKeydown));
 /** At either end the matching button would move nothing, so it says so
  * (design D14) — `aria-disabled`, not `disabled`, so a keyboard user who
  * just pressed it keeps focus on it. */
+const START_REASON = "Already at the start.";
+const END_REASON = "Already at the end.";
 const atStart = computed(() => props.currentMs <= 0);
 const atEnd = computed(() => props.currentMs >= props.durationMs);
 function goToStart(): void {
-  if (!atStart.value) workspace.setPlayhead(0);
+  if (atStart.value) announceDisabled(START_REASON);
+  else workspace.setPlayhead(0);
 }
 function goToEnd(): void {
-  if (!atEnd.value) workspace.setPlayhead(props.durationMs);
+  if (atEnd.value) announceDisabled(END_REASON);
+  else workspace.setPlayhead(props.durationMs);
 }
 
 /** The concept's own `fmt(ms, decimal=true)`: `MM:SS.d`, both fields
@@ -244,7 +249,7 @@ const rowHeightClass = computed(() => (workspace.shortWindow ? "h-10" : "h-[46px
         class="flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-fg-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus aria-disabled:cursor-default aria-disabled:opacity-50 aria-disabled:hover:text-fg-muted"
         aria-label="Go to start"
         :aria-disabled="atStart"
-        :title="atStart ? 'Already at the start.' : 'Go to start (Home)'"
+        :title="atStart ? START_REASON : 'Go to start (Home)'"
         @click="goToStart"
       >
         <EditorIcon name="skipBack" />
@@ -265,7 +270,7 @@ const rowHeightClass = computed(() => (workspace.shortWindow ? "h-10" : "h-[46px
         class="flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-fg-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus aria-disabled:cursor-default aria-disabled:opacity-50 aria-disabled:hover:text-fg-muted"
         aria-label="Go to end"
         :aria-disabled="atEnd"
-        :title="atEnd ? 'Already at the end.' : 'Go to end (End)'"
+        :title="atEnd ? END_REASON : 'Go to end (End)'"
         @click="goToEnd"
       >
         <EditorIcon name="skipForward" />

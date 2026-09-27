@@ -14,6 +14,7 @@
 import { computed } from "vue";
 
 import { lockedReason } from "../../../editor/actionMeta";
+import { announceDisabled } from "../../../editor/disabledAnnouncer";
 import { isTrackAudible } from "../../../editor/mixRules";
 import type { Track } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
@@ -41,7 +42,7 @@ function commitVolume(volume: number): Promise<boolean> {
   return editorProject.execute({ kind: "setTrackFlags", trackId: props.track.id, volume });
 }
 function toggle(flag: "muted" | "solo"): void {
-  if (props.track.locked) return;
+  if (props.track.locked) return announceDisabled(reason.value);
   const patch = flag === "muted" ? { muted: !props.track.muted } : { solo: !props.track.solo };
   void editorProject.execute({ kind: "setTrackFlags", trackId: props.track.id, ...patch });
 }

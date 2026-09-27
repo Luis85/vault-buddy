@@ -9,7 +9,7 @@
  */
 import { enableAutoUnmount, flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import TimelineView from "../src/components/editor/timeline/TimelineView.vue";
 import { clearClipboardForTest } from "../src/editor/clipboard";
@@ -172,6 +172,23 @@ describe("the timeline toolbar (§6.2)", () => {
     await byId(w, "timeline-toolbar-delete").trigger("click");
     expect(executed).toEqual([]);
     expect(toasts()).toContain("Select a clip first");
+  });
+
+  // Final review, minor 7: the registry's refusal toast was not
+  // rate-limited the way a disabled shortcut's is; a held Enter stacked it.
+  it("a disabled control held down says its reason once per 1.5 s", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(10_000);
+    const w = await mountTimeline(); // nothing selected
+    const split = byId(w, "timeline-toolbar-split");
+    await split.trigger("click");
+    useNotificationsStore().clear();
+    for (let i = 0; i < 5; i += 1) await split.trigger("click");
+    expect(toasts()).toEqual([]);
+    vi.setSystemTime(11_600);
+    await split.trigger("click");
+    expect(toasts()).toEqual(["Select a clip first"]);
+    vi.useRealTimers();
   });
 
   it("Split and the trash send the registry's commands; the Delete-mode select picks the trash's shape", async () => {

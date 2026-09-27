@@ -27,6 +27,7 @@ import { requestPlaybackFrom, requestReveal } from "../src/editor/revealBus";
 import type { EditorOpenResult, MediaRef, Project } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
+import { useNotificationsStore } from "../src/stores/notifications";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
 
 enableAutoUnmount(afterEach);
@@ -150,6 +151,25 @@ describe("TransportBar", () => {
     expect(end.attributes("title")).toBe("Already at the end.");
     await end.trigger("click");
     expect(setPlayhead).not.toHaveBeenCalled();
+  });
+
+  // Final review, minor 7: Go to start/end were `aria-disabled` but said
+  // nothing when pressed; now they say their reason through the one
+  // rate-limited announcer, so a held Enter does not stack toasts.
+  it("a held Enter on Go to start at the start says why once, not once per repeat", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(10_000);
+    const w = mountBar({ currentMs: 0 });
+    const start = w.get('[data-testid="transport-start"]');
+    await start.trigger("click");
+    expect(useNotificationsStore().items.map((i) => i.message)).toEqual(["Already at the start."]);
+    useNotificationsStore().clear();
+    for (let i = 0; i < 5; i += 1) await start.trigger("click");
+    expect(useNotificationsStore().items).toEqual([]);
+    await w.setProps({ currentMs: 125_000 });
+    await w.get('[data-testid="transport-end"]').trigger("click");
+    expect(useNotificationsStore().items.map((i) => i.message)).toEqual(["Already at the end."]);
+    vi.useRealTimers();
   });
 
   it("mute toggles the workspace's monitor mute, names the toggle and sends no editor command", async () => {

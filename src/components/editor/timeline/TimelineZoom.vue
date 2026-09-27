@@ -15,14 +15,13 @@
 import { computed } from "vue";
 
 import { injectToolbarRoving } from "../../../composables/useToolbarRoving";
+import { announceDisabled } from "../../../editor/disabledAnnouncer";
 import { useEditorWorkspaceStore, ZOOM_RANGE } from "../../../stores/editorWorkspace";
-import { useNotificationsStore } from "../../../stores/notifications";
 import EditorIcon from "../icons/EditorIcon.vue";
 
 const emit = defineEmits<(e: "fit") => void>();
 
 const workspace = useEditorWorkspaceStore();
-const notifications = useNotificationsStore();
 /** Its buttons join the toolbar's roving set (the range stays its own stop). */
 const roving = injectToolbarRoving();
 
@@ -37,7 +36,7 @@ const inReason = computed(() => (workspace.timelineZoom >= MAX_ZOOM - EPSILON ? 
 
 function step(factor: number, reason: string | null): void {
   if (reason) {
-    notifications.info(reason);
+    announceDisabled(reason);
     return;
   }
   workspace.setZoom(workspace.timelineZoom * factor);

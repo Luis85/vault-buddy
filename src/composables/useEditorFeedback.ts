@@ -26,28 +26,27 @@
  *   (`retryConflict`). A later edit that lands clears `conflictIntent`, and
  *   the toast goes with it — a Retry that would do nothing is not offered.
  * - **A disabled shortcut** (S outside a clip, Ctrl+G with one clip) says
- *   the registry's reason, at most once every 1.5 s PER REASON so a held
- *   key does not stack toasts while a different refusal still speaks. The
- *   keydown itself stays inert and keeps bubbling.
+ *   the registry's reason through `disabledAnnouncer.ts` — the one rule
+ *   every disabled control's activation shares: at most once every 1.5 s
+ *   PER REASON, so a held key does not stack toasts while a different
+ *   refusal still speaks. The keydown itself stays inert and keeps
+ *   bubbling.
  *
  * Everything this raised is dismissed when the shell unmounts (the session
  * is gone with it).
  *
  * No timers here: the notifications store's own TTL expiry is a plain
- * function (AGENTS.md's Pinia-timer rule), and the rate limit compares
- * clock readings.
+ * function (AGENTS.md's Pinia-timer rule).
  */
 import { onScopeDispose, watch } from "vue";
 
+import { announceDisabled } from "../editor/disabledAnnouncer";
 import type { EditorError } from "../editorTypes";
 import { useEditorProjectStore } from "../stores/editorProject";
 import { useNotificationsStore } from "../stores/notifications";
 import { conflictOwnedInline, lastErrorShownInline } from "./useInlineLastError";
 
 const CONFLICT_MESSAGE = "Your edit wasn't applied because the project changed. Retry?";
-
-/** At most one disabled-shortcut toast per this many milliseconds. */
-const DISABLED_REASON_INTERVAL_MS = 1_500;
 
 export function useEditorFeedback() {
   const project = useEditorProjectStore();
@@ -98,17 +97,6 @@ export function useEditorFeedback() {
     if (conflictToast !== null) notifications.dismiss(conflictToast);
     conflictToast = null;
   });
-
-  /** When each reason was last said. */
-  const lastSaidAt = new Map<string, number>();
-  /** Say why a shortcut did nothing — each reason rate-limited on its own. */
-  function announceDisabled(reason: string | null): void {
-    if (!reason) return;
-    const now = Date.now();
-    if (now - (lastSaidAt.get(reason) ?? Number.NEGATIVE_INFINITY) < DISABLED_REASON_INTERVAL_MS) return;
-    lastSaidAt.set(reason, now);
-    notifications.info(reason);
-  }
 
   return { announceDisabled };
 }
