@@ -140,15 +140,26 @@ describe("TransportBar", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  // §4.3: 0.5× / 1× / 1.5× / 2× only — the concept's own list.
-  it("the rate control offers exactly the concept's four speeds and sets the workspace rate", async () => {
+  // §4.3's own four speeds, plus 0.25× (fix round 1, finding 2): the
+  // workspace's stored rate still clamps to [0.25, 2.0], so a project saved
+  // (or restored from a portable file) at 0.25x must find a matching option.
+  it("the rate control offers 0.25x through 2x and sets the workspace rate", async () => {
     const workspace = useEditorWorkspaceStore();
     const w = mountBar();
     const options = w.findAll('[data-testid="transport-rate"] option').map((o) => o.text());
-    expect(options).toEqual(["0.5×", "1×", "1.5×", "2×"]);
+    expect(options).toEqual(["0.25×", "0.5×", "1×", "1.5×", "2×"]);
     await w.get('[data-testid="transport-rate"]').setValue("1.5");
     expect(workspace.playbackRate).toBe(1.5);
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  // A rate the select has no matching option for renders as nothing
+  // selected -- the exact D14 failure mode finding 2 exists to prevent.
+  it("a stored 0.25x rate is a real, selected option, not a mismatch", () => {
+    useEditorWorkspaceStore().setPlaybackRate(0.25);
+    const w = mountBar();
+    const select = w.get('[data-testid="transport-rate"]').element as HTMLSelectElement;
+    expect(select.value).toBe("0.25");
   });
 
   it("the peak meter is silent (0% and never hot) while paused, whatever the controller last read", () => {

@@ -145,6 +145,12 @@ const EFFECTS: Record<string, Effect> = {
     },
     check: (w) => expect(w.get('[data-testid="guide-coach"]').element.contains(document.activeElement)).toBe(false),
   },
+  // Task 12 fix round 1 (Ruling T12-2): the loop's own per-key setup already
+  // seeks to 1_500 before pressing the key (below), so Home moving it back
+  // to 0 is a real, observable effect -- never a no-op it happened to start at.
+  goToStart: { check: () => expect(useEditorWorkspaceStore().playheadMs).toBe(0) },
+  // `opened()`'s snapshot carries durationMs: 7_000 (this file's own fixture).
+  goToEnd: { check: () => expect(useEditorWorkspaceStore().playheadMs).toBe(7_000) },
 };
 
 beforeEach(async () => {
@@ -272,5 +278,61 @@ describe("the two OTHER_KEYS rows with no ActionId", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(sent).toContain("moveClips");
+  });
+});
+
+// Task 12 fix round 1 (Ruling T12-2): Home/End are now real seek shortcuts,
+// but `useRovingTablist.ts` (the preview toolstrip, and the inspector/
+// library tab lists) already binds Home/End for its own first/last jump and
+// only calls `preventDefault()`, never `stopPropagation()` -- so without
+// `EditorShell`'s own `event.defaultPrevented` bail, jumping a tablist to
+// its first tab would ALSO seek the preview to 0 on the same keystroke.
+describe("Home/End inside a roving-tabindex widget is that widget's, not a seek", () => {
+  // Fake timers throughout: `setPlayhead` always schedules `editorWorkspace`'s
+  // 750ms debounced `saveWorkspace` persist (every mutator does), and this
+  // suite's real-timer default would otherwise leave that timer pending past
+  // the test -- exactly the cross-test leak AGENTS.md's Testing conventions
+  // warns about, which only `test:coverage`'s slower run actually surfaced
+  // (as an unrelated file's unstubbed `saveWorkspace`, once this describe
+  // block's two extra full-shell mounts shifted the timing). Never advanced,
+  // so the persist itself never fires here either way.
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("Home inside the preview toolstrip moves its own focus and does not seek", async () => {
+    const w = await mountEditor();
+    const workspace = useEditorWorkspaceStore();
+    workspace.setPlayhead(1_234);
+    const toolstrip = w.get('[data-testid="preview-toolstrip"]').element;
+    const moreTools = w.get('[data-testid="preview-more-tools"]').element as HTMLElement;
+
+    const event = new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true });
+    moreTools.dispatchEvent(event);
+    await flushPromises();
+
+    // Claimed by the toolstrip's own roving tabindex -- never reaches the
+    // shell's dispatcher as an unclaimed "Home" the walk above would expect.
+    expect(event.defaultPrevented).toBe(true);
+    expect(workspace.playheadMs).toBe(1_234);
+    expect(toolstrip.contains(document.activeElement)).toBe(true);
+  });
+
+  it("Home inside the inspector's tab list moves its own focus and does not seek", async () => {
+    const w = await mountEditor();
+    const workspace = useEditorWorkspaceStore();
+    workspace.select(["intro"]);
+    await flushPromises();
+    workspace.setPlayhead(2_345);
+    const tabs = w.get('[data-testid="inspector-tablist"]');
+    const tabEls = tabs.findAll('[role="tab"]');
+    const lastTab = tabEls[tabEls.length - 1].element as HTMLElement;
+
+    const event = new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true });
+    lastTab.dispatchEvent(event);
+    await flushPromises();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(workspace.playheadMs).toBe(2_345);
+    expect(tabs.element.contains(document.activeElement)).toBe(true);
   });
 });

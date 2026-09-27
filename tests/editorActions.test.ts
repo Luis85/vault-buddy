@@ -179,10 +179,12 @@ describe("resolveActions — disabled actions carry a reason", () => {
     expect(enabledReasons.every((reason) => reason === null)).toBe(true);
   });
 
-  it("resolves every one of the 39 declared action ids exactly once", () => {
-    expect(ACTION_IDS).toHaveLength(39);
-    expect(new Set(ACTION_IDS).size).toBe(39);
-    expect(Object.keys(resolveActions(ctx())).length).toBe(39);
+  // Task 12 fix round 1 (Ruling T12-2) added goToStart/goToEnd, 39 -> 41 --
+  // measured against ACTION_IDS itself, never incremented by hand.
+  it("resolves every one of the 41 declared action ids exactly once", () => {
+    expect(ACTION_IDS).toHaveLength(41);
+    expect(new Set(ACTION_IDS).size).toBe(41);
+    expect(Object.keys(resolveActions(ctx())).length).toBe(41);
   });
 
   it("still-unimplemented wire kinds are gated regardless of selection", () => {
@@ -597,7 +599,7 @@ describe("resolveActions/commandFor — the rest of the implemented commands", (
 
   it("actions with no wire command always build a null command", () => {
     const context = ctx({ project: project(), snapshot: snapshot() });
-    for (const id of ["copy", "save", "render", "checks", "help", "importMedia", "webcam", "toggleLibrary", "toggleInspector", "focusPreview", "guideFocus", "ratio"] as const) {
+    for (const id of ["copy", "save", "render", "checks", "help", "importMedia", "webcam", "toggleLibrary", "toggleInspector", "focusPreview", "guideFocus", "ratio", "goToStart", "goToEnd"] as const) {
       expect(commandFor(id, context)).toBeNull();
     }
   });
@@ -768,6 +770,12 @@ describe("matchShortcut / shortcutKey", () => {
     expect(matchShortcut(new KeyboardEvent("keydown", { key: "F6" }))).toBe("guideFocus");
     expect(SHORTCUT_DISPLAY.guideFocus).toBe("F6");
     expect(SHORTCUT_DISPLAY.focusPreview).toBeUndefined();
+    // Task 12 fix round 1 (Ruling T12-2): Home/End seek, unmodified only --
+    // this app binds no Shift/Ctrl variant of either.
+    expect(matchShortcut(new KeyboardEvent("keydown", { key: "Home" }))).toBe("goToStart");
+    expect(matchShortcut(new KeyboardEvent("keydown", { key: "End" }))).toBe("goToEnd");
+    expect(SHORTCUT_DISPLAY.goToStart).toBe("Home");
+    expect(SHORTCUT_DISPLAY.goToEnd).toBe("End");
   });
 
   it("does not double-apply shift for an already-shifted punctuation character", () => {

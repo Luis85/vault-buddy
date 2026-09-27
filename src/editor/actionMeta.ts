@@ -13,8 +13,11 @@
  * components, both test files) has to change which module it imports from.
  */
 
-/** Every action id a caller can resolve/execute (this task's own brief —
- * the exact 38-member list, in the order it lists them). */
+/** Every action id a caller can resolve/execute — the exact 41-member
+ * list below, in declared order; measured against `ACTION_IDS`, not
+ * incremented (this comment had drifted to "38" before Task 12 fix round 1
+ * re-counted it at 39 pre-existing plus its own two additions,
+ * `goToStart`/`goToEnd`, Ruling T12-2). */
 export type ActionId =
   | "split"
   | "delete"
@@ -54,7 +57,9 @@ export type ActionId =
   | "toggleInspector"
   | "focusPreview"
   | "guideFocus"
-  | "ratio";
+  | "ratio"
+  | "goToStart"
+  | "goToEnd";
 
 /** Every `ActionId`, once, in the union's own declared order — the one
  * place `resolveActions` iterates from, and what `editorActions.test.ts`
@@ -67,6 +72,7 @@ export const ACTION_IDS: readonly ActionId[] = [
   "fadeIn", "fadeOut", "transition", "detachAudio",
   "save", "render", "checks", "help", "importMedia", "webcam",
   "toggleLibrary", "toggleInspector", "focusPreview", "guideFocus", "ratio",
+  "goToStart", "goToEnd",
 ];
 
 // ---- human-text reasons (Behavior section's own literal values) -----------
@@ -98,6 +104,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   importMedia: "Import media", webcam: "Webcam",
   toggleLibrary: "Library", toggleInspector: "Inspector", focusPreview: "Focus preview",
   guideFocus: "Guide focus", ratio: "Aspect ratio",
+  goToStart: "Go to start", goToEnd: "Go to end",
 };
 
 /** The one `EditorCommand` wire `kind` each action maps to, when it maps to
@@ -136,6 +143,7 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
   undo: "Ctrl+Z", redo: "Ctrl+Shift+Z", copy: "Ctrl+C", cut: "Ctrl+X",
   paste: "Ctrl+V", duplicate: "Ctrl+D", group: "Ctrl+G", ungroup: "Ctrl+Shift+G",
   save: "Ctrl+S", render: "Ctrl+E", help: "F1", guideFocus: "F6",
+  goToStart: "Home", goToEnd: "End",
 };
 
 /**

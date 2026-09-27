@@ -27,6 +27,21 @@
  * `EditorShell`'s dispatcher answers both itself — neither sends a
  * command — and Escape, which dismisses the guide only when no menu or
  * popover is open (`isGuideDismissKey`, below).
+ *
+ * `home`/`end` (`goToStart`/`goToEnd`, visual-parity Task 12 fix round 1,
+ * Ruling T12-2) seek the preview to 0 / the project's own end — the
+ * concept's own global binding (`editor.js`: `case'home':...seek(0);
+ * break;case'end':...seek(duration());break;`) and exactly what
+ * `TransportBar.vue`'s Go to start/end buttons already do on a click, now
+ * reachable from the keyboard too. Neither sends a command (workspace view
+ * state, like `guideFocus`), so `EditorShell`'s dispatcher answers them
+ * itself, the `save`/`render` precedent. **Two widgets bind Home/End for
+ * their OWN roving tabindex** (`useRovingTablist.ts`: the preview toolstrip
+ * and the inspector/library tab lists) and only call `preventDefault()`,
+ * never `stopPropagation()` — so without `EditorShell`'s own
+ * `event.defaultPrevented` check (its own module doc explains why, the
+ * Escape/`isGuideDismissKey` precedent below), pressing Home to jump a
+ * tablist to its first tab would ALSO seek the preview out from under it.
  */
 import type { ActionId } from "./actions";
 
@@ -62,6 +77,8 @@ export const SHORTCUTS: ReadonlyMap<string, ActionId> = new Map<string, ActionId
   ["f1", "help"],
   ["?", "help"],
   ["f6", "guideFocus"],
+  ["home", "goToStart"],
+  ["end", "goToEnd"],
 ]);
 
 /**

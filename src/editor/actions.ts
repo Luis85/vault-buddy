@@ -32,20 +32,24 @@
  *
  * **Actions with no wire command.** `copy`/`save`/`render`/`checks`/`help`/
  * `importMedia`/`webcam`/`toggleLibrary`/`toggleInspector`/`focusPreview`/`guideFocus`/
- * `ratio` never appear in `ACTION_KIND` — `save` goes through
+ * `ratio`/`goToStart`/`goToEnd` never appear in `ACTION_KIND` — `save` goes through
  * `editorProject.save()` (a distinct IPC call, not `editor_execute`),
  * `render` (the toolbar's Review, Task 47) opens `ReviewDialog` — a render
  * job, not an edit — the `checks`/`help`/`importMedia`/`webcam` surfaces and
- * the panel/focus toggles are a later task's job or local view state, and `ratio`
+ * the panel/focus toggles are a later task's job or local view state, `ratio`
  * needs an extra user choice (which of the four canvas presets) this
  * table cannot pre-build — `resolveActions` still gates it (its own
  * `RESOLVERS` entry, `resolveProjectGated`: enabled whenever a project is
  * open), but the preview header's Frame dialog (`FrameDialog.vue`, which
  * replaced Task 32's ratio select) sends `setCanvas` directly, never
- * through `commandFor`. `commandFor` returns `null` for all of these — a
+ * through `commandFor` — and `goToStart`/`goToEnd` (visual-parity Task 12
+ * fix round 1, Ruling T12-2) move `editorWorkspace`'s playhead, workspace
+ * view state like the panel toggles, always enabled (`resolveAlways`) and
+ * acted on by `EditorShell`'s dispatcher itself, the `save`/`render`
+ * precedent. `commandFor` returns `null` for all of these — a
  * caller must special-case them (the preview header drives its panel
- * toggles, Review and the ratio itself), never send a `null` command to
- * Rust.
+ * toggles, Review and the ratio itself; `EditorShell` drives Save, Review
+ * and the two seeks), never send a `null` command to Rust.
  *
  * **`copy`/`paste` and the clipboard.** `ActionContext` carries the
  * clipboard as TWO fields on purpose: `hasClipboard` is the literal
@@ -280,6 +284,11 @@ const RESOLVERS: Partial<Record<ActionId, (ctx: ActionContext) => Verdict>> = {
   toggleInspector: resolveAlways,
   focusPreview: resolveAlways,
   guideFocus: resolveAlways,
+  // Task 12 fix round 1 (Ruling T12-2): seeking is always available once the
+  // shell can dispatch a keystroke at all (it mounts only over an open
+  // project) -- the `toggleLibrary`/`guideFocus` precedent.
+  goToStart: resolveAlways,
+  goToEnd: resolveAlways,
   addTrackVideo: () => resolveNoSurfaceYet("addTrackVideo"),
   addTrackAudio: () => resolveNoSurfaceYet("addTrackAudio"),
   // Task 35: the teaching tools (`cueActions.ts` -- which clip, which

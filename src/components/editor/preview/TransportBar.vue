@@ -6,8 +6,15 @@
  * `editorWorkspace.shortWindow`).
  *
  * - **Left**: the monitor mute icon button, a 48×8 sample-peak meter and a
- *   borderless playback-rate select (0.5×/1×/1.5×/2× — the concept's own
- *   list). "Audio mixer" and "Sound" leave this row (D10): the mixer is
+ *   borderless playback-rate select. The concept's own list is 0.5×/1×/
+ *   1.5×/2×; fix round 1 (finding 2) restores 0.25× ahead of it, because
+ *   `editorWorkspace.playbackRate` (`PLAYBACK_RATE_RANGE`, the store's own
+ *   file) still clamps to `[0.25, 2.0]` — a workspace saved before this
+ *   restyle, or restored from a portable project file, can carry a stored
+ *   rate of 0.25, and a `<select>` with no matching `<option>` shows
+ *   nothing selected rather than the rate that is actually playing (D14:
+ *   the control must never silently misrepresent live state). "Audio
+ *   mixer" and "Sound" leave this row (D10): the mixer is
  *   reachable from View ⋯ → Audio mixer… (visual-parity Task 11) and, once
  *   Task 20 lands, the Audio tab and the timeline footer. `MixerPopover`
  *   keeps its place here for now, icon-only rather than a labelled button,
@@ -76,8 +83,11 @@ const emit = defineEmits<{
   (e: "toggle-play"): void;
 }>();
 
-/** §4.3's own list. */
-const RATES = [0.5, 1, 1.5, 2] as const;
+/** §4.3's own list (0.5×/1×/1.5×/2×) plus 0.25× (fix round 1, finding 2):
+ * the workspace's stored rate still clamps to `PLAYBACK_RATE_RANGE`
+ * (`editorWorkspace.ts`), `[0.25, 2.0]`, so the select needs an option for
+ * every value that range actually allows. */
+const RATES = [0.25, 0.5, 1, 1.5, 2] as const;
 /** The concept's dB floor for the meter's fill (`(db+60)/60`) and its
  * "hot" threshold (`peak-hot`, `session-safety.js`'s `value >= .98`). */
 const METER_DB_FLOOR = -60;

@@ -49,12 +49,25 @@
  * which is why the rule was written); an
  * unmatched, currently-disabled, or nothing-to-send combo (F6 with the
  * guide closed, Ctrl+E with nothing on the timeline; F1/? and F6 are the
- * guide's, and Ctrl+S/Ctrl+E the header's Save and the toolbar's Review —
- * `onAppKey`, Task 57) is left alone to
+ * guide's, Ctrl+S/Ctrl+E the header's Save and the toolbar's Review —
+ * `onAppKey`, Task 57 — and Home/End the two seeks, `onSeekKey`, visual-
+ * parity Task 12 fix round 1) is left alone to
  * bubble normally, never swallowed with nothing done. A keystroke whose
  * target sits inside an open `role="menu"`/`role="dialog"` is the menu's
  * (`shouldHandle`'s `menuOwnsKeys`): Delete pressed in the context menu
  * must not delete the selection behind it.
+ *
+ * **A keystroke another handler already claimed is never this dispatcher's**
+ * (Ruling T12-2): `onShellKeydown` bails FIRST on `event.defaultPrevented`.
+ * Home/End move a project SEEK now, but `useRovingTablist.ts` — the preview
+ * toolstrip and the inspector/library tab lists — ALSO binds Home/End for
+ * its own roving-tabindex first/last jump, calling only `preventDefault()`,
+ * never `stopPropagation()` (nothing there needs to stop a keystroke a
+ * tablist has no further use for). Without this check, jumping a tablist to
+ * its first tab would keep bubbling and ALSO seek the preview to 0 the
+ * instant Home became a real shortcut — the same class of bug `ClipItem.
+ * vue`'s own Escape handler documents for `isGuideDismissKey` below, now
+ * generalized to every combo this dispatcher matches, not just Escape.
  *
  * **Height.** The grid fills the window (`EditorRoot`'s `main`); the
  * workspace row takes what the fixed rows leave (at least 170px, 160 in a
@@ -203,6 +216,19 @@ function onAppKey(actionId: ActionId, ctx: ActionContext): boolean {
   return true;
 }
 
+/** Home/End (visual-parity Task 12 fix round 1, Ruling T12-2): seek to 0 /
+ * the project's own end. Workspace view state, like `TransportBar.vue`'s
+ * own Go to start/end buttons — never an editor command — so this answers
+ * them itself, the `onAppKey` precedent. Gated through `resolveActions`
+ * like every other matched combo (`resolveAlways`, in practice: the shell
+ * mounts only over an open project, so neither ever refuses). */
+function onSeekKey(actionId: ActionId, ctx: ActionContext): boolean {
+  if (actionId !== "goToStart" && actionId !== "goToEnd") return false;
+  if (!resolveActions(ctx)[actionId].enabled) return false;
+  workspace.setPlayhead(actionId === "goToStart" ? 0 : editorProject.durationMs);
+  return true;
+}
+
 /** F6 and F1 type nothing, so they may leave a text field: the guide's
  * highlighted control can BE one (the fades and layout lessons land in an
  * input), and without this neither key could ever reach the guide from
@@ -231,7 +257,29 @@ function announceIfDisabled(actionId: ActionId, ctx: ActionContext): void {
   if (!verdict.enabled) announceDisabled(verdict.reason);
 }
 
+/** The `ActionContext` for a matched shortcut — the single-selected-clip
+ * pointer-target fallback `baseActionContext` already establishes for a
+ * pointer-target-less caller, split out of `onShellKeydown` itself so its
+ * own branch count stays flat (fallow's function-complexity ratchet: Task
+ * 12 fix round 1's `event.defaultPrevented` guard was the branch that
+ * crossed it). */
+function keydownContext(): ActionContext {
+  const selection = workspace.selectionClipIds;
+  const clip = selection.length === 1 ? editorProject.clipById(selection[0]) : undefined;
+  return baseActionContext(
+    editorProject.project,
+    editorProject.snapshot,
+    workspace.playheadMs,
+    selection,
+    clip ? { kind: "clip", id: clip.id, timeMs: workspace.playheadMs } : null,
+  );
+}
+
 function onShellKeydown(event: KeyboardEvent) {
+  // A keystroke another handler already claimed is never this dispatcher's
+  // (Ruling T12-2, module doc) -- most importantly a tablist's own Home/End
+  // roving-tabindex jump, which only calls `preventDefault()`.
+  if (event.defaultPrevented) return;
   const actionId = matchShortcut(event);
   if (!gateAllows(event, actionId)) return;
   if (onGuideKey(event, actionId)) {
@@ -240,16 +288,11 @@ function onShellKeydown(event: KeyboardEvent) {
     return;
   }
   if (!actionId) return;
-  const selection = workspace.selectionClipIds;
-  const clip = selection.length === 1 ? editorProject.clipById(selection[0]) : undefined;
-  const ctx = baseActionContext(
-    editorProject.project,
-    editorProject.snapshot,
-    workspace.playheadMs,
-    selection,
-    clip ? { kind: "clip", id: clip.id, timeMs: workspace.playheadMs } : null,
-  );
-  const acted = onAppKey(actionId, ctx) || activateEditorAction(actionId, ctx, (command) => editorProject.execute(command));
+  const ctx = keydownContext();
+  const acted =
+    onAppKey(actionId, ctx) ||
+    onSeekKey(actionId, ctx) ||
+    activateEditorAction(actionId, ctx, (command) => editorProject.execute(command));
   if (!acted) {
     announceIfDisabled(actionId, ctx);
     return;
