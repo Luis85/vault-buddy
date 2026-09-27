@@ -255,6 +255,20 @@ describe("useTimelineDrag — body drag", () => {
     expect(execute).toHaveBeenCalledWith({ kind: "moveClips", clipIds: ["c1"], deltaMs: 200, trackId: null });
   });
 
+  // Final review, Important 4: one id named, but the clip is grouped — Rust
+  // moves the whole group, so a `trackId` would refuse the move outright.
+  it("never sends trackId when the clip's group makes it a multi-clip move", async () => {
+    const execute = vi.fn();
+    const drag = useTimelineDrag({ ...deps(execute), movedClipCount: () => 2 });
+
+    drag.beginBodyDrag(0, 0);
+    drag.updateBodyDrag(200 * PPM);
+    expect(drag.movePreview.value).toEqual({ deltaMs: 200 });
+    await drag.endBodyDrag(68); // one lane down: v2, which would accept a lone clip
+
+    expect(execute).toHaveBeenCalledWith({ kind: "moveClips", clipIds: ["c1"], deltaMs: 200, trackId: null });
+  });
+
   it("never sends trackId when the drag moves more than one clip", async () => {
     const execute = vi.fn();
     const d = deps(execute);

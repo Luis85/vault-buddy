@@ -204,6 +204,32 @@ describe("the edit hint follows the live drag", () => {
     expect(hint(w)).toBe("Moving 2 clips together · tracks stay fixed · Esc cancels");
   });
 
+  // Final review, Important 4: a lone clip of a group, dropped on another
+  // lane, sent `trackId` (one id named) while Rust's group expansion made
+  // it a multi-clip move — refused whole, horizontal delta included — as
+  // the hint said "tracks stay fixed". Now the release agrees with the
+  // hint: the time change lands, the track does not change.
+  it("a grouped clip dropped on another lane keeps its track and its time change, as the hint says", async () => {
+    const executed = await openInspectorProject(sample());
+    const workspace = useEditorWorkspaceStore();
+    workspace.setViewport(1600, 1000);
+    workspace.select([]);
+    if (workspace.snap) workspace.toggleSnap();
+    const w = mount(TimelineView, { attachTo: document.body, props: { viewportWidth: 1_000 } });
+    await flushPromises();
+    const c2 = w.get('[data-testid="clip-c2"]');
+    // c2 sits on v1; one lane up (68 px) is v3, a video lane that would
+    // accept a lone clip.
+    await c2.trigger("pointerdown", { button: 0, clientX: 600, clientY: 100, pointerId: 1 });
+    await c2.trigger("pointermove", { clientX: 620, clientY: 32, pointerId: 1 });
+    expect(hint(w)).toBe("Moving 2 clips together · tracks stay fixed · Esc cancels");
+    // No lane preview: the dragged clip is still drawn in its own lane.
+    expect(w.get('[data-testid="track-lane-v1"]').find('[data-testid="clip-c2"]').exists()).toBe(true);
+    await c2.trigger("pointerup", { clientX: 620, clientY: 32, pointerId: 1 });
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "moveClips", clipIds: ["c2"], deltaMs: 400, trackId: null }]);
+  });
+
   it("Escape cancels the drag and the hint with it", async () => {
     const w = await timeline();
     const c3 = w.get('[data-testid="clip-c3"]');

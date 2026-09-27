@@ -228,6 +228,11 @@ export interface TimelineDragDeps {
    * (`[clip.id]` otherwise), the same rule `actions.ts`' `targetClipIds`
    * applies for a pointer-driven mutation. */
   moveTargetClipIds: () => string[];
+  /** How many clips the release really moves: `moveTargetClipIds()` grown
+   * to whole groups (`speedRipple.withGroups`, Rust's own expansion and
+   * the footer hint's count). Omitted, the named ids are the count. A lone
+   * clip of a group is a multi-clip move, and takes no `trackId`. */
+  movedClipCount?: () => number;
   /** Lane order (top to bottom) for the cross-track drop hit-test at
    * pointer-up — `TimelineView.vue`'s own `tracks` computed, id-only. */
   trackOrder: () => readonly string[];
@@ -323,8 +328,11 @@ export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
     // `trackId` is only ever valid for a single moved clip — the exact rule
     // Rust's own `moveClips` enforces (`clips.rs`: "trackId is only valid
     // when moving a single clip"), checked here so a multi-selection drag
-    // never sends a `trackId` Rust would refuse outright.
-    const trackId = clipIds.length === 1 ? targetTrackFor(clip, clientY) : null;
+    // never sends a `trackId` Rust would refuse outright. Counted after the
+    // group expansion: one grouped clip named moves its whole group (final
+    // review, Important 4), which is also what the footer hint says.
+    const moving = deps.movedClipCount?.() ?? clipIds.length;
+    const trackId = moving === 1 ? targetTrackFor(clip, clientY) : null;
     moveAnchor = null;
     movePreview.value = null;
     snapGuideMs.value = null;

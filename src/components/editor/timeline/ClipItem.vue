@@ -50,6 +50,7 @@ import { clipDragHint, useDragHintReport } from "../../../editor/dragHint";
 import { hasPreviewSource } from "../../../editor/previewLayers";
 import { isContextMenuShortcut } from "../../../editor/shortcuts";
 import { useSnapGuideReport } from "../../../editor/snapGuide";
+import { withGroups } from "../../../editor/speedRipple";
 import { MIN_CLIP_WIDTH_PX, msToX, snapTargets as computeSnapTargets } from "../../../editor/timelineLayout";
 import { clipOutputDuration, clipOutputEnd } from "../../../editor/timeMap";
 import { trackAccepts } from "../../../editor/trackCompat";
@@ -124,6 +125,14 @@ function moveTargetClipIds(): string[] {
   return sel.includes(props.clip.id) && sel.length > 1 ? sel : [props.clip.id];
 }
 
+/** What the release really moves: the named ids grown to whole groups,
+ * Rust's expansion (`withGroups`) — the count the footer hint says. */
+function movedClipCount(): number {
+  const p = editorProject.project;
+  const ids = moveTargetClipIds();
+  return p ? withGroups(p, ids).size : ids.length;
+}
+
 /** Snap targets WITHOUT the clips being moved: their own edges travel with
  * the drag, so as targets they would pull every small drag (inside the
  * snap threshold) straight back onto where it started — a silent no-op. */
@@ -140,6 +149,7 @@ const drag = useTimelineDrag({
   snapEnabled: () => workspace.snap,
   snapTargets: snapTargetsExcludingMoved,
   moveTargetClipIds,
+  movedClipCount,
   trackOrder: () => props.trackOrder,
   trackIndex: () => props.trackIndex,
   trackAccepts: (trackId) => trackAccepts(editorProject.trackById(trackId), props.assetKind),
