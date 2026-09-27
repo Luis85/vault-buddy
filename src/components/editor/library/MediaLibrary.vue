@@ -11,12 +11,13 @@
  * access to a file (ADR §3.3). Progress arrives on the job's Channel;
  * nothing here polls.
  *
- * **"+" inserts at the playhead onto the FIRST compatible, unlocked track**
- * (`trackCompat.firstAcceptingTrack` — the one copy of the rule the
- * timeline drag applies, so "+" and a drop can never disagree about where a
- * clip may go), as one `insertClip` through `editorProject.execute`; Rust
- * stays the authority (an overlap there is refused and surfaces as the
- * store's error). A control that cannot act says why in its `title`
+ * **"+" inserts at the playhead onto a FREE track** (`placeOnFreeTrack`,
+ * visual-parity Task 7, audit finding 1a — the one placement rule the
+ * Titles cards and the asset menu share): the first unlocked track of the
+ * asset's kind, top-down, with nothing in the clip's span, else a new
+ * track (above the topmost video track, below the last audio track) and
+ * the clip on it. Rust stays the authority; a refusal surfaces through the
+ * editor's toast. A control that cannot act says why in its `title`
  * (`aria-disabled`, never the native attribute, so the reason stays
  * reachable — the `TrackHeader.vue` precedent).
  *
@@ -44,9 +45,9 @@
 import { computed, onMounted, ref } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
+import { insertAssetOnFreeTrack, placementLabel, placeOnFreeTrack } from "../../../editor/placeOnFreeTrack";
 import { onReveal } from "../../../editor/revealBus";
-import { firstAcceptingTrack } from "../../../editor/trackCompat";
-import type { Asset, Track } from "../../../editorTypes";
+import type { Asset } from "../../../editorTypes";
 import { useEditorJobsStore } from "../../../stores/editorJobs";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -72,7 +73,8 @@ interface AssetRow {
   kindLabel: string;
   duration: string;
   missing: boolean;
-  target: Track | undefined;
+  /** The track "+" lands on now, or "a new … track". */
+  targetName: string;
   refusal: string | null;
 }
 
@@ -81,24 +83,26 @@ function kindLabel(asset: Asset): string {
   return asset.kind === "audio" ? "Audio" : "Video";
 }
 
-function refusalFor(missing: boolean, target: Track | undefined, asset: Asset): string | null {
-  if (missing) return "This media's file is missing. Reconnect it before inserting it.";
-  if (!target) return `Add an unlocked ${asset.kind} track first.`;
-  return null;
-}
+const MISSING_REFUSAL = "This media's file is missing. Reconnect it before inserting it.";
 
 const missingIds = computed(() => new Set(project.missing.map((m) => m.assetId)));
 
+/** Where "+" would put `asset` right now (it follows the playhead). */
+function targetNameFor(asset: Asset): string {
+  const p = project.project;
+  if (!p) return "";
+  return placementLabel(p, placeOnFreeTrack(p, asset.kind, workspace.playheadMs, asset.duration_ms), asset.kind);
+}
+
 function toRow(asset: Asset): AssetRow {
   const missing = missingIds.value.has(asset.id);
-  const target = firstAcceptingTrack(project.project, asset.kind);
   return {
     asset,
     kindLabel: kindLabel(asset),
     duration: formatDuration(asset.duration_ms),
     missing,
-    target,
-    refusal: refusalFor(missing, target, asset),
+    targetName: targetNameFor(asset),
+    refusal: missing ? MISSING_REFUSAL : null,
   };
 }
 
@@ -114,15 +118,8 @@ const emptyText = computed(() =>
 );
 
 function insert(row: AssetRow): void {
-  if (row.refusal !== null || !row.target) return;
-  void project.execute({
-    kind: "insertClip",
-    assetId: row.asset.id,
-    trackId: row.target.id,
-    startMs: workspace.playheadMs,
-    inMs: 0,
-    outMs: row.asset.duration_ms,
-  });
+  if (row.refusal !== null) return;
+  void insertAssetOnFreeTrack((command) => project.execute(command), () => project.project, row.asset, workspace.playheadMs);
 }
 
 const importRefusal = computed<string | null>(() => {
@@ -233,7 +230,7 @@ onReveal("webcam", openWebcam);
         :duration="row.duration"
         :missing="row.missing"
         :refusal="row.refusal"
-        :target-name="row.target?.name ?? ''"
+        :target-name="row.targetName"
         @insert="insert(row)"
       />
       <li

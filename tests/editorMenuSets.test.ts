@@ -150,6 +150,7 @@ function menuCtx(action: Partial<MenuContext["action"]> = {}, extra: Partial<Men
     fitTimeline: vi.fn(),
     toggleSnap: vi.fn(),
     addTrack: vi.fn(),
+    addAssetOnFreeTrack: vi.fn(),
     addAssetOnNewTrack: vi.fn(),
     renameTrack: vi.fn(),
     removeTrack: vi.fn(),
@@ -558,7 +559,7 @@ describe("assetMenu", () => {
     const items = assetMenu(ctx, "vid");
     expect(labels(items)).toEqual(["Add at playhead", "Add on a new track"]);
     run(find(items, "Add at playhead"));
-    expect(executed(ctx)).toEqual([{ kind: "insertClip", assetId: "vid", trackId: "v2", startMs: 7_000, inMs: 0, outMs: 20_000 }]);
+    expect(vi.mocked(ctx.addAssetOnFreeTrack).mock.calls[0]).toEqual([expect.objectContaining({ id: "vid" }), 7_000]);
     run(find(items, "Add on a new track"));
     expect(vi.mocked(ctx.addAssetOnNewTrack).mock.calls[0][0].id).toBe("vid");
   });

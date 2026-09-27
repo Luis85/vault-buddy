@@ -1,8 +1,9 @@
 /**
  * Which track can take media of a given kind (Task 25) — the ONE copy of
  * the rule the timeline drag (`useTimelineDrag`'s `trackAccepts`, wired in
- * `ClipItem.vue`, Task 21), the media library's "+" (`MediaLibrary.vue`),
- * and the media library's native drag-onto-a-lane drop (`TrackLane.vue`,
+ * `ClipItem.vue`, Task 21), every insert at the playhead (`placeOnFreeTrack`
+ * — the media library's "+", the Titles cards, the asset menu), and the
+ * media library's native drag-onto-a-lane drop (`TrackLane.vue`,
  * Task 26) all apply, so a clip can never be droppable where "+" would
  * refuse it or the reverse. It mirrors Rust's own two refusals rather than
  * re-deriving them: a locked track refuses every edit (`commands::
@@ -19,17 +20,12 @@
  * hand-rolled `pointermove`/`elementFromPoint` tracker spanning two
  * sibling component trees) would reinvent what the platform already does.
  */
-import type { AssetKind, Project, Track } from "../editorTypes";
+import type { AssetKind, Track } from "../editorTypes";
 import { lockedReason } from "./actionMeta";
 
 /** Can `track` take a clip of `kind`? A missing track takes nothing. */
 export function trackAccepts(track: Track | undefined, kind: AssetKind): boolean {
   return track !== undefined && !track.locked && track.kind === kind;
-}
-
-/** The first track, in the project's own track order, that accepts `kind`. */
-export function firstAcceptingTrack(project: Project | null, kind: AssetKind): Track | undefined {
-  return project?.tracks.find((t) => trackAccepts(t, kind));
 }
 
 // ---- native drag-and-drop payload (Task 26) --------------------------------

@@ -4,11 +4,18 @@
  * module doc: "A later task that wires the clipboard replaces these two
  * literals, not the callers").
  */
-import { describe, expect, it, vi } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { baseActionContext } from "../src/editor/actionContext";
 import { activateEditorAction, clearClipboardForTest, clipboardFragment, setClipboard } from "../src/editor/clipboard";
 import type { Clip, Project } from "../src/editorTypes";
+
+// Copy confirms itself through the notifications store (visual-parity
+// Task 7), so every activation needs a pinia.
+beforeEach(() => {
+  setActivePinia(createPinia());
+});
 
 function clip(id: string, overrides: Partial<Clip> = {}): Clip {
   return {

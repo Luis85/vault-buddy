@@ -64,19 +64,26 @@ function nextTrackName(project: Project | null, kind: TrackKind): string {
   return kind === "audio" ? `Audio ${count}` : `Video ${count}`;
 }
 
-/** Adds a track of `kind` below the others; resolves to it, or `null` when
- * Rust refused. `getProject` is read again after the edit lands. */
+/** Adds a track of `kind` at `index` (below the others by default);
+ * resolves to it, or `null` when Rust refused. `getProject` is read again
+ * after the edit lands. */
 export async function addTrackOfKind(
   execute: Execute,
   getProject: () => Project | null,
   kind: TrackKind,
+  at?: number,
 ): Promise<Track | null> {
   const project = getProject();
   const before = new Set((project?.tracks ?? []).map((t) => t.id));
-  const index = project?.tracks.length ?? 0;
+  const index = at ?? project?.tracks.length ?? 0;
   const added = await execute({ kind: "addTrack", trackKind: kind, name: nextTrackName(project, kind), index });
   if (!added) return null;
   return getProject()?.tracks.find((t) => !before.has(t.id)) ?? null;
+}
+
+/** The whole of `asset` at `startMs` on `trackId`. */
+export function insertAssetCommand(asset: Asset, trackId: string, startMs: number): EditorCommand {
+  return { kind: "insertClip", assetId: asset.id, trackId, startMs, inMs: 0, outMs: asset.duration_ms };
 }
 
 export async function addTrackThenInsert(
@@ -86,13 +93,5 @@ export async function addTrackThenInsert(
   startMs: number,
 ): Promise<void> {
   const track = await addTrackOfKind(execute, getProject, asset.kind);
-  if (!track) return;
-  await execute({
-    kind: "insertClip",
-    assetId: asset.id,
-    trackId: track.id,
-    startMs,
-    inMs: 0,
-    outMs: asset.duration_ms,
-  });
+  if (track) await execute(insertAssetCommand(asset, track.id, startMs));
 }

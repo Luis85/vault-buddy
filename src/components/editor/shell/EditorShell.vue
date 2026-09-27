@@ -71,6 +71,12 @@
  * toast, restyled ONLY here; the panel window's own bottom-left stack keeps
  * its exact look under the component's default `variant="panel"`.
  *
+ * **Feedback (visual-parity Task 7)** — `useEditorFeedback`, mounted
+ * here once, turns the store's refusals and revision conflicts into those
+ * toasts, and the dispatcher below hands it the registry's reason when a
+ * matched shortcut is disabled (the keydown itself still does nothing and
+ * still bubbles).
+ *
  * **Guide progress (Task 55)** is read once per window when the shell first
  * mounts (`editorOnboarding.load()` — idempotent, and it never throws: an
  * unreadable store only flips the header's "Session only").
@@ -87,6 +93,7 @@
  */
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 
+import { useEditorFeedback } from "../../../composables/useEditorFeedback";
 import { useShellLayout } from "../../../composables/useShellLayout";
 import { baseActionContext } from "../../../editor/actionContext";
 import type { ActionId } from "../../../editor/actionMeta";
@@ -153,6 +160,7 @@ function toggleTheme() {
 // ---- keyboard shortcut dispatcher (Task 21) --------------------------------
 
 const editorProject = useEditorProjectStore();
+const { announceDisabled } = useEditorFeedback();
 
 /**
  * A single selection gives the dispatcher a real `pointerTarget` — the
@@ -209,6 +217,15 @@ function gateAllows(event: KeyboardEvent, actionId: ActionId | null): boolean {
   return shouldHandle(event, { menuOwnsKeys: ownsKeys });
 }
 
+/** A matched shortcut that is disabled says why (audit finding 9) — the
+ * reason was only ever a hover tooltip. The guide's own keys are not
+ * editing actions and stay silent when they have nothing to do. */
+function announceIfDisabled(actionId: ActionId, ctx: ActionContext): void {
+  if (actionId === "help" || actionId === "guideFocus") return;
+  const verdict = resolveActions(ctx)[actionId];
+  if (!verdict.enabled) announceDisabled(verdict.reason);
+}
+
 function onShellKeydown(event: KeyboardEvent) {
   const actionId = matchShortcut(event);
   if (!gateAllows(event, actionId)) return;
@@ -228,7 +245,10 @@ function onShellKeydown(event: KeyboardEvent) {
     clip ? { kind: "clip", id: clip.id, timeMs: workspace.playheadMs } : null,
   );
   const acted = onAppKey(actionId, ctx) || activateEditorAction(actionId, ctx, (command) => editorProject.execute(command));
-  if (!acted) return;
+  if (!acted) {
+    announceIfDisabled(actionId, ctx);
+    return;
+  }
   // Claimed: stop it here so no `window`-level listener behind the shell
   // double-handles the same keystroke (see the module doc). A
   // disabled/unmatched/nothing-to-send combo returns above WITHOUT this, so

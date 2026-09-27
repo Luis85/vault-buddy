@@ -8,11 +8,12 @@
  * Rust stays the authority for everything else -- an overlap or a locked
  * track surfaces as the store's error).
  *
- * **Track choice mirrors `MediaLibrary`'s "+"**: the first unlocked VIDEO
- * track (`trackCompat.firstAcceptingTrack`, the ONE copy of that rule) if
- * one exists, else `trackId: null` -- `addCard`'s own contract for "create
- * a new top video track" (`cards.rs`'s module doc), so a fresh project's
- * very first card still lands somewhere.
+ * **Track choice is `placeOnFreeTrack`** (visual-parity Task 7, audit
+ * finding 1a) — the rule the media library's "+" shares: the first
+ * unlocked video track, top-down, free for the card's whole span, else a
+ * new video track above the topmost one, then the card on it. Taking the
+ * first video track regardless (as this used to) aimed at a track Rust
+ * refused whenever the playhead sat over an overlay.
  *
  * **An empty title falls back to the preset's own label** ("Intro",
  * "Chapter", …) rather than sending an empty string -- a blank card is
@@ -21,7 +22,7 @@
  */
 import { ref } from "vue";
 
-import { firstAcceptingTrack } from "../../../editor/trackCompat";
+import { insertOnFreeTrack } from "../../../editor/placeOnFreeTrack";
 import type { CardPreset } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -44,16 +45,24 @@ const PRESETS: { id: CardPreset; label: string }[] = [
 ];
 
 function insertCard(preset: CardPreset, label: string): void {
-  const target = firstAcceptingTrack(project.project, "video");
-  void project.execute({
-    kind: "addCard",
-    preset,
-    trackId: target ? target.id : null,
-    startMs: workspace.playheadMs,
-    durationMs: DEFAULT_CARD_DURATION_MS,
-    title: title.value.trim() || label,
-    subtitle: subtitle.value.trim(),
-  });
+  const startMs = workspace.playheadMs;
+  const cardTitle = title.value.trim() || label;
+  const cardSubtitle = subtitle.value.trim();
+  void insertOnFreeTrack(
+    (command) => project.execute(command),
+    () => project.project,
+    "video",
+    { atMs: startMs, lengthMs: DEFAULT_CARD_DURATION_MS },
+    (trackId) => ({
+      kind: "addCard",
+      preset,
+      trackId,
+      startMs,
+      durationMs: DEFAULT_CARD_DURATION_MS,
+      title: cardTitle,
+      subtitle: cardSubtitle,
+    }),
+  );
 }
 </script>
 

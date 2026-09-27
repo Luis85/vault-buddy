@@ -39,6 +39,8 @@ export interface MenuContext {
   fitTimeline(): void;
   toggleSnap(): void;
   addTrack(kind: TrackKind): void;
+  /** At `startMs` on a free track of its kind, else a new one (`placeOnFreeTrack`). */
+  addAssetOnFreeTrack(asset: Asset, startMs: number): void;
   addAssetOnNewTrack(asset: Asset, startMs: number): void;
   renameTrack(trackId: string): void;
   removeTrack(trackId: string): void;

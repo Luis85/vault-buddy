@@ -5,9 +5,10 @@
  * "+" precedent (Rust stays the authority; an overlap or a locked track
  * surfaces as the store's error).
  *
- * Track choice mirrors `MediaLibrary`'s "+": the first unlocked VIDEO track
- * (`trackCompat.firstAcceptingTrack`) if one exists, else `trackId: null` --
- * `addCard`'s own contract for "create a new top video track".
+ * Track choice is `MediaLibrary`'s "+" rule (`placeOnFreeTrack`, visual-
+ * parity Task 7): the first unlocked VIDEO track free for the card's span,
+ * else a new video track above the topmost one and the card on it
+ * (`editorPlaceOnFreeTrack.test.ts` pins the full sequence).
  */
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -122,12 +123,13 @@ describe("TitlesLibrary", () => {
     ]);
   });
 
-  it("inserts on a new top video track (trackId: null) when no unlocked video track exists", async () => {
+  // This fake never mints the track, so the card that would follow the
+  // `addTrack` is not sent — an insert never follows a track that did not land.
+  it("adds a video track on top when no unlocked video track exists", async () => {
     const w = await mountLibrary([track("v1", "video", true), track("a1", "audio")]);
     await w.get('[data-testid="titles-add-intro"]').trigger("click");
-    expect(executed).toEqual([
-      { kind: "addCard", preset: "intro", trackId: null, startMs: 5_000, durationMs: 3_000, title: "Intro", subtitle: "" },
-    ]);
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "addTrack", trackKind: "video", name: "Video 2", index: 0 }]);
   });
 
   it("does nothing when no project is open", async () => {

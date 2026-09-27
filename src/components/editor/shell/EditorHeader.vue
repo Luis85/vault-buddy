@@ -196,11 +196,13 @@ function onSaveMenu(item: "save" | "portable" | "lightweight" | "open" | "discar
       class="text-micro text-fg-subtle"
     >{{ durationLabel }}</span>
     <!-- Hidden at or below 1350px (§1.4) unless a save failed; the status
-         bar's centre slot says it too. -->
+         bar's centre slot says it too. A failed save carries its reason
+         here (audit finding 7); the toast says it once. -->
     <span
       v-show="showSaveText"
       data-testid="editor-header-status"
       class="shrink-0 text-micro text-fg-subtle"
+      :title="editorProject.saveError?.message"
     >{{ status }}</span>
     <span
       v-if="vault"

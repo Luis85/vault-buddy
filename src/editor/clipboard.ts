@@ -21,6 +21,7 @@
 import { ref } from "vue";
 
 import type { ClipboardFragment } from "../editorTypes";
+import { useNotificationsStore } from "../stores/notifications";
 import type { ActionId } from "./actionMeta";
 import type { ActionContext } from "./actions";
 import { commandFor, resolveActions, targetClipIds } from "./actions";
@@ -58,6 +59,14 @@ export function clipboardFor(projectId: string | null | undefined): ClipboardFra
  * registry, only "replace it with a new copy"). */
 export function clearClipboardForTest(): void {
   clipboardFragment.value = null;
+}
+
+/** Copy changes nothing on screen but Paste's availability (audit finding
+ * 8), so it says what it took. Here, where the menu, Ctrl+C and every
+ * other registry surface pass, so each says it exactly once. A cut needs
+ * no word: its clips leave the timeline. */
+function confirmCopy(count: number): void {
+  useNotificationsStore().info(count === 1 ? "Copied 1 clip" : `Copied ${count} clips`);
 }
 
 /**
@@ -100,6 +109,7 @@ export function activateEditorAction(
     const ids = targetClipIds(ctx);
     if (ids.length > 0) {
       setClipboard(buildFragment(ctx.project, ids), ctx.project.id);
+      if (actionId === "copy") confirmCopy(ids.length);
       acted = true;
     }
   }

@@ -13,6 +13,7 @@
  */
 import { activateEditorAction } from "../editor/clipboard";
 import type { MenuContext } from "../editor/menuContext";
+import { insertAssetOnFreeTrack } from "../editor/placeOnFreeTrack";
 import { clipNameFocus, requestReveal, requestTimelineReveal, trackRenameRequest } from "../editor/revealBus";
 import { addTrackOfKind, addTrackThenInsert } from "../editor/trackEdits";
 import { useEditorProjectStore } from "../stores/editorProject";
@@ -102,6 +103,7 @@ export function useEditorMenuContext(view: TimelineViewOps): (action: MenuContex
     fitRange: view.fitRange,
     fitTimeline: view.fitTimeline,
     addTrack: (kind) => void addTrackOfKind(execute, currentProject, kind),
+    addAssetOnFreeTrack: (asset, startMs) => void insertAssetOnFreeTrack(execute, currentProject, asset, startMs),
     addAssetOnNewTrack: (asset, startMs) => void addTrackThenInsert(execute, currentProject, asset, startMs),
     // The header that owns the name field starts its inline rename.
     renameTrack: (trackId) => {

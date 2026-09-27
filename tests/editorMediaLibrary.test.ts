@@ -2,9 +2,10 @@
  * `MediaLibrary.vue` (Task 25; F-02): search, asset cards (kind, duration,
  * availability), Import (Rust opens its own dialog), the running job's
  * progress + Cancel, the last import's per-file errors, and "+" — insert
- * at the playhead onto the FIRST compatible, unlocked track
- * (`trackCompat.firstAcceptingTrack`, the same rule the timeline drag
- * applies).
+ * at the playhead onto the first compatible, unlocked track FREE for the
+ * clip's span, else onto a new one (`placeOnFreeTrack`, visual-parity Task
+ * 7; its own suite, `editorPlaceOnFreeTrack.test.ts`, pins the rule and the
+ * addTrack-then-insert sequence).
  */
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -123,13 +124,18 @@ describe("MediaLibrary — insert", () => {
     ]);
   });
 
-  it("+ is refused, with a reason, when no unlocked track of that kind exists", async () => {
+  // Audit finding 1a: "+" used to be refused here ("Add an unlocked video
+  // track first") — now it adds the track itself. This fake never mints
+  // the track, so only the `addTrack` is sent: an insert never follows a
+  // track that did not land.
+  it("+ adds a track above the top video track when no unlocked one is free", async () => {
     const w = await mountLibrary([track("v-locked", "video", true), track("a1", "audio")]);
     const button = w.get('[data-testid="library-asset-vid-insert"]');
-    expect(button.attributes("aria-disabled")).toBe("true");
-    expect(button.attributes("title")).toMatch(/unlocked video track/i);
+    expect(button.attributes("aria-disabled")).toBe("false");
+    expect(button.attributes("title")).toBe("Insert at the playhead on a new video track");
     await button.trigger("click");
-    expect(executed).toEqual([]);
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "addTrack", trackKind: "video", name: "Video 2", index: 0 }]);
   });
 
   it("a missing asset says so and cannot be inserted", async () => {

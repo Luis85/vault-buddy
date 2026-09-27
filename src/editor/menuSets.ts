@@ -25,7 +25,6 @@ import {
   trackLockReason,
 } from "./menuContext";
 import { clipMenu, multiClipMenu } from "./menuSetsClip";
-import { firstAcceptingTrack } from "./trackCompat";
 import { closeAllGapsCommands, closeGapCommand, gapsOnTrack } from "./trackEdits";
 
 /** A new title card's and an inserted intro's length (`TitlesLibrary`'s). */
@@ -303,19 +302,16 @@ export function cueMenu(ctx: MenuContext, effectId: string): MenuItem[] {
 
 // ---- media asset (library row) ------------------------------------------------------------
 
-/** "Add at playhead" lands on the first unlocked track of the asset's kind,
- * the media library's "+" rule; a missing source is refused until it is
- * reconnected, and only then is "Reconnect original…" offered. */
+/** "Add at playhead" lands where the media library's "+" does
+ * (`placeOnFreeTrack`: a free track of the asset's kind, else a new one);
+ * a missing source is refused until it is reconnected, and only then is
+ * "Reconnect original…" offered. */
 export function assetMenu(ctx: MenuContext, assetId: string): MenuItem[] {
   const project = ctx.action.project;
   const asset = project?.assets.find((a) => a.id === assetId);
   if (!asset) return [];
   const missing = ctx.missingAssetIds.has(asset.id) ? RECONNECT_FIRST : null;
-  const target = firstAcceptingTrack(project, asset.kind);
   const playhead = ctx.action.playheadMs;
-  const place = target
-    ? [{ kind: "insertClip" as const, assetId, trackId: target.id, startMs: playhead, inMs: 0, outMs: asset.duration_ms }]
-    : [];
   const reconnect: MenuAction[] = missing
     ? [{ id: "asset-reconnect", label: "Reconnect original…", icon: "link", run: () => ctx.reconnect(assetId) }]
     : [];
@@ -324,8 +320,8 @@ export function assetMenu(ctx: MenuContext, assetId: string): MenuItem[] {
       id: "asset-add",
       label: "Add at playhead",
       icon: "plus",
-      disabledReason: missing ?? (target ? null : `Add an unlocked ${asset.kind} track first.`),
-      run: () => void executeInOrder(ctx, place),
+      disabledReason: missing,
+      run: () => ctx.addAssetOnFreeTrack(asset, playhead),
     },
     {
       id: "asset-new-track",
