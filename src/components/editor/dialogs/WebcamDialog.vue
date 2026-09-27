@@ -45,7 +45,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 
 import { useInlineLastError } from "../../../composables/useInlineLastError";
 import { placePresenterTake } from "../../../editor/placeTake";
-import type { WebcamAction } from "../../../editor/webcamPhase";
+import { insertTimeMs, type WebcamAction, webcamBusyReason } from "../../../editor/webcamPhase";
 import {
   ENCODER_UNAVAILABLE_TEXT,
   type RecorderConstructor,
@@ -72,10 +72,15 @@ const workspace = useEditorWorkspaceStore();
 const ffmpeg = useFfmpegStore();
 const inline = useInlineLastError();
 
-const IDLE: WebcamView = { state: "idle", count: null, cameras: [], take: null, problem: null };
+const IDLE: WebcamView = { state: "idle", count: null, cameras: [], microphones: [], take: null, problem: null };
 const view = shallowRef<WebcamView>(IDLE);
 const withMic = ref(false);
 const cameraId = ref("");
+const micId = ref("");
+/** Insert at timeline time, seconds as typed; the playhead at each open. */
+const insertAt = ref<string | number>("0");
+/** Mirror the live preview, and the placed clip's own flag. */
+const mirror = ref(false);
 /** The close question is showing. */
 const asking = ref(false);
 /** Why the last Add to timeline did not land, or `null`. */
@@ -104,14 +109,18 @@ function create(): WebcamRecorder {
 
 const state = computed(() => view.value.state);
 const reviewing = computed(() => state.value === "review" || state.value === "committing");
-const finishing = computed(() => state.value === "review" && view.value.take === null);
-const busy = computed(() => state.value === "requesting" || state.value === "committing" || finishing.value);
+/** Why the dialog is mid-operation (the ✕ and the footer wait), or `null`. */
+const busyReason = computed(() => webcamBusyReason(state.value, view.value.take !== null));
+const busy = computed(() => busyReason.value !== null);
+const insertAtMs = computed(() => insertTimeMs(insertAt.value, project.durationMs));
+/** Why the chosen insert time cannot be used, or `null`. */
+const placeReason = computed(() => ("reason" in insertAtMs.value ? insertAtMs.value.reason : null));
 const recording = computed(() => state.value === "recording");
 /** Re-read whenever the view changes (the recorder itself is not reactive). */
 const stream = computed(() => (view.value && recorder ? recorder.stream : null));
 
 function enable(): void {
-  void recorder?.enable(cameraId.value || undefined, withMic.value);
+  void recorder?.enable(cameraId.value || undefined, withMic.value, micId.value || undefined);
 }
 
 /** A camera or microphone change asks again — only once enabled. */
@@ -140,15 +149,25 @@ async function stop(): Promise<void> {
 async function add(): Promise<void> {
   if (!recorder) return;
   placeError.value = null;
+  const at = insertAtMs.value;
+  if (!("ms" in at)) return;
   const active = recorder;
-  const placed = await inline.track(() =>
-    active.commit((take) => placePresenterTake(project, take, workspace.playheadMs)),
-  );
+  const options = { mirror: mirror.value };
+  const placed = await inline.track(() => active.commit((take) => placePresenterTake(project, take, at.ms, options)));
   if (placed) finishClose();
   else placeError.value = inline.error.value?.message ?? "";
 }
 
-const ACTIONS: Record<WebcamAction, () => unknown> = { enable, record, cancel, stop, retake, add };
+const ACTIONS: Record<WebcamAction, () => unknown> = {
+  enable,
+  // Closes at once; the recorder turns a late answer straight off.
+  "cancel-request": finishClose,
+  record,
+  cancel,
+  stop,
+  retake,
+  add,
+};
 function act(action: WebcamAction): void {
   void ACTIONS[action]();
 }
@@ -190,6 +209,7 @@ watch(
     else if (!recorder) {
       recorder = create();
       view.value = recorder.view;
+      insertAt.value = (workspace.playheadMs / 1000).toFixed(2);
     }
   },
   { immediate: true },
@@ -212,7 +232,7 @@ onBeforeUnmount(() => {
     :width="960"
     :closable="!busy"
     close-testid="webcam-close"
-    :close-reason="busy ? 'Finishing the take…' : null"
+    :close-reason="busyReason"
     @close="requestClose"
   >
     <template #title>
@@ -248,12 +268,17 @@ onBeforeUnmount(() => {
           v-else
           :view="view"
           :stream="stream"
+          :mirror="mirror"
         />
         <WebcamSettings
           v-model:camera-id="cameraId"
           v-model:with-mic="withMic"
+          v-model:mic-id="micId"
+          v-model:insert-at="insertAt"
+          v-model:mirror="mirror"
           :view="view"
-          :playhead-ms="workspace.playheadMs"
+          :stream="stream"
+          :duration-ms="project.durationMs"
           @reselect="reselect"
         />
       </div>
@@ -282,6 +307,7 @@ onBeforeUnmount(() => {
         v-else
         :state="state"
         :has-take="view.take !== null"
+        :place-reason="placeReason"
         @act="act"
       />
     </template>

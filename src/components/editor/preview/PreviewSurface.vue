@@ -267,6 +267,9 @@ onReveal("playback", () => {
   workspace.setPlayhead(requestedPlaybackMs());
   controller?.play();
 });
+// The mixer's "Play / pause preview" (visual-parity Task 22 fix round 1):
+// the transport's own toggle.
+onReveal("playPause", togglePlay);
 
 /** D15: select the topmost visible clip under a primary press, or clear
  * the selection (and any selected cue) on empty stage. */

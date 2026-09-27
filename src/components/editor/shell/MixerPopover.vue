@@ -50,19 +50,21 @@
  * id="mixerDialog"`): the concept mixer's look inside the same popover —
  * a header with "Audio mixer", its subtitle and a ✕, one `125px 1fr 52px`
  * row per track (`MixerTrackRow`), and "Master output" with its level as a
- * mono percent. Its "Play / pause preview" button is left out: the
- * transport's Play (and Space) already does exactly that, and the popover
- * sits over the timeline, not the preview.
+ * mono percent, and "Play / pause preview" (fix round 1, Ruling T22-1),
+ * which asks the preview for the transport's own toggle through the reveal
+ * bus (`"playPause"`) — one controller call site — and leaves the mixer
+ * open, so a level can be heard while it is changed.
  */
 import type { ComponentPublicInstance } from "vue";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useWindowDismiss } from "../../../composables/useWindowDismiss";
-import { onReveal } from "../../../editor/revealBus";
+import { onReveal, requestReveal } from "../../../editor/revealBus";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import IconButton from "../../ui/IconButton.vue";
+import DialogButton from "../dialogs/DialogButton.vue";
 import EditorIcon from "../icons/EditorIcon.vue";
 import MixerPeakMeter from "./MixerPeakMeter.vue";
 import MixerSlider from "./MixerSlider.vue";
@@ -266,6 +268,14 @@ useWindowDismiss(onWindowPointerDown, onWindowKeydown);
         <p class="text-[10px] leading-[1.6] text-fg-muted">
           M = mute. S = solo. Track and master levels are part of the edit; Mute preview changes only what you hear.
         </p>
+        <DialogButton
+          icon="play"
+          data-testid="mixer-play"
+          class="self-start"
+          @click="requestReveal('playPause')"
+        >
+          Play / pause preview
+        </DialogButton>
       </div>
     </div>
   </span>

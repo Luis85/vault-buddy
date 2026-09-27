@@ -455,20 +455,34 @@ describe("WebcamDialog — the concept anatomy (§9.7)", () => {
     expect(w.get('[data-testid="webcam-placement"]').text()).toContain("0:04.2");
   });
 
-  it("while the camera is being asked for, Enable camera is disabled with its reason on screen", async () => {
+  // Fix round 1 (finding 7): the concept's requesting footer — a note and
+  // Cancel request — and the ✕ says what it is waiting for.
+  it("while the camera is being asked for, the footer says so and offers Cancel request", async () => {
     await openStore();
-    const pending = {
-      getUserMedia: () => new Promise<MediaStream>(() => {}),
-      enumerateDevices: () => Promise.resolve([]),
-    } as unknown as MediaDevices;
-    Object.defineProperty(navigator, "mediaDevices", { value: pending, configurable: true });
+    devices = fakeMediaDevices(null, { hold: true });
+    Object.defineProperty(navigator, "mediaDevices", { value: devices.mediaDevices, configurable: true });
     const w = mountDialog();
     await click(w, "webcam-enable");
-    const enable = w.get('[data-testid="webcam-enable"]');
-    expect((enable.element as HTMLButtonElement).disabled).toBe(true);
-    expect(enable.attributes("title")).toBe("Waiting for the camera…");
+    expect(footer(w)).toEqual(["Cancel request"]);
     expect(w.get('[data-testid="webcam-footer-reason"]').text()).toBe("Waiting for the camera…");
     expect(w.get('[data-testid="webcam-footer-reason"]').attributes("aria-live")).toBe("polite");
+    expect(w.get('[data-testid="webcam-close"]').attributes("title")).toBe("Waiting for the camera…");
+  });
+
+  it("Cancel request closes the dialog, and a late answer turns the camera straight off", async () => {
+    await openStore();
+    devices = fakeMediaDevices(null, { hold: true });
+    Object.defineProperty(navigator, "mediaDevices", { value: devices.mediaDevices, configurable: true });
+    const w = mountDialog();
+    await w.get('[data-testid="webcam-mic"]').setValue(true);
+    await click(w, "webcam-enable");
+    await click(w, "webcam-cancel-request");
+    expect(w.emitted("close")).toHaveLength(1);
+    devices.release();
+    await flushPromises();
+    expect(devices.tracks()).toHaveLength(2);
+    expect(devices.tracks().every((t) => t.stopped)).toBe(true);
+    expect(w.emitted("close")).toHaveLength(1);
   });
 
   it("each phase has its own footer, and the status row follows", async () => {
@@ -540,5 +554,161 @@ describe("WebcamDialog — focus around the close question", () => {
     expect(document.activeElement?.getAttribute("data-testid")).toBe("webcam-confirm-back");
     await click(w, "webcam-confirm-back");
     expect(document.activeElement?.getAttribute("data-testid")).toBe("webcam-retake");
+  });
+});
+
+// Task 22 fix round 1 (Ruling T22-1): the concept's microphone picker, mic
+// level meter, "Insert at timeline time" and mirror are built on the
+// native pieces that already exist.
+describe("WebcamDialog — the microphone", () => {
+  it("the microphone picker waits for the checkbox and says why on screen", async () => {
+    await openStore();
+    const w = mountDialog();
+    await flushPromises();
+    const picker = w.get('[data-testid="webcam-mic-device"]');
+    expect((picker.element as HTMLSelectElement).disabled).toBe(true);
+    expect(w.get('[data-testid="webcam-mic-reason"]').text()).toBe("Turn on Include microphone to choose one.");
+    await w.get('[data-testid="webcam-mic"]').setValue(true);
+    expect(w.get('[data-testid="webcam-mic-reason"]').text()).toBe("Choose a microphone once the camera is on.");
+    // Nothing asked for a device yet.
+    expect(devices.requests).toEqual([]);
+    // The checkbox is not described by the camera's reason.
+    expect(w.get('[data-testid="webcam-mic"]').attributes("aria-describedby")).toBeUndefined();
+  });
+
+  it("lists the microphones once the camera is on, and a chosen one is asked for", async () => {
+    await openStore();
+    const w = mountDialog();
+    await w.get('[data-testid="webcam-mic"]').setValue(true);
+    await click(w, "webcam-enable");
+    const picker = w.get('[data-testid="webcam-mic-device"]');
+    expect((picker.element as HTMLSelectElement).disabled).toBe(false);
+    expect(picker.text()).toContain("Microphone");
+    expect(w.get('[data-testid="webcam-mic-reason"]').text()).toBe("");
+    await picker.setValue("mic-1");
+    await flushPromises();
+    expect(devices.requests).toEqual([
+      { video: true, audio: true },
+      { video: true, audio: { deviceId: { exact: "mic-1" } } },
+    ]);
+    expect(devices.streams[0].tracks.every((t) => t.stopped)).toBe(true);
+  });
+});
+
+/** A Web Audio stand-in: an analyser whose samples peak at `peak`. */
+function fakeAudioContext(peak: number) {
+  const contexts: { closed: boolean; disconnected: number }[] = [];
+  class FakeAudioContext {
+    readonly state = { closed: false, disconnected: 0 };
+    constructor() {
+      contexts.push(this.state);
+    }
+    createMediaStreamSource() {
+      return { connect: () => undefined, disconnect: () => (this.state.disconnected += 1) };
+    }
+    createAnalyser() {
+      return {
+        fftSize: 1024,
+        getFloatTimeDomainData: (a: Float32Array) => a.fill(0).fill(-peak, 3, 4),
+        disconnect: () => (this.state.disconnected += 1),
+      };
+    }
+    close() {
+      this.state.closed = true;
+      return Promise.resolve();
+    }
+  }
+  return { FakeAudioContext, contexts };
+}
+
+/** Lets the meter's 100 ms poll run once (setInterval is not faked here). */
+function poll(): Promise<void> {
+  return new Promise((resolve) => {
+    const id = setInterval(() => {
+      clearInterval(id);
+      resolve();
+    }, 150);
+  });
+}
+
+describe("WebcamDialog — the mic level preview", () => {
+  it("reads the live microphone's peak and is torn down when the dialog closes", async () => {
+    const audio = fakeAudioContext(0.5);
+    vi.stubGlobal("AudioContext", audio.FakeAudioContext);
+    await openStore();
+    const w = mountDialog();
+    await w.get('[data-testid="webcam-mic"]').setValue(true);
+    await click(w, "webcam-enable");
+    await poll();
+    const meter = w.get('[data-testid="webcam-mic-meter"]');
+    expect(Number(meter.attributes("aria-valuenow"))).toBeCloseTo(0.5, 5);
+    expect(audio.contexts).toHaveLength(1);
+    await click(w, "webcam-close");
+    expect(audio.contexts[0]).toEqual({ closed: true, disconnected: 2 });
+  });
+
+  it("is torn down when the dialog unmounts", async () => {
+    const audio = fakeAudioContext(0.25);
+    vi.stubGlobal("AudioContext", audio.FakeAudioContext);
+    await openStore();
+    const w = mountDialog();
+    await w.get('[data-testid="webcam-mic"]').setValue(true);
+    await click(w, "webcam-enable");
+    w.unmount();
+    expect(audio.contexts[0]).toEqual({ closed: true, disconnected: 2 });
+  });
+
+  it("with the microphone off nothing is measured", async () => {
+    const audio = fakeAudioContext(0.5);
+    vi.stubGlobal("AudioContext", audio.FakeAudioContext);
+    await openStore();
+    const w = mountDialog();
+    await click(w, "webcam-enable");
+    expect(audio.contexts).toHaveLength(0);
+    expect(w.get('[data-testid="webcam-mic-meter"]').attributes("aria-valuenow")).toBe("0");
+  });
+});
+
+describe("WebcamDialog — where and how the take lands", () => {
+  it("Insert at timeline time starts at the playhead and a chosen time reaches the insert", async () => {
+    await openStore();
+    const w = mountDialog();
+    await flushPromises();
+    const field = w.get('[data-testid="webcam-insert-at"]');
+    expect((field.element as HTMLInputElement).value).toBe("4.20");
+    await field.setValue("1.5");
+    expect(w.get('[data-testid="webcam-placement"]').text()).toContain("0:01.5");
+    await recordTake(w);
+    await click(w, "webcam-add");
+    expect(executed[1]).toEqual({
+      kind: "insertClip", assetId: "take-7", trackId: "trk-new", startMs: 1_500, inMs: 0, outMs: 4_300,
+    });
+  });
+
+  it("a time outside the project cannot be used, and says why on screen", async () => {
+    await openStore();
+    const w = mountDialog();
+    await w.get('[data-testid="webcam-insert-at"]').setValue("20");
+    await recordTake(w);
+    const add = w.get('[data-testid="webcam-add"]');
+    expect((add.element as HTMLButtonElement).disabled).toBe(true);
+    expect(add.attributes("title")).toBe("Choose a time between 0 and 9.00 seconds.");
+    expect(w.get('[data-testid="webcam-footer-reason"]').text()).toBe("Choose a time between 0 and 9.00 seconds.");
+    expect((w.get('[data-testid="webcam-retake"]').element as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("Mirror mirrors the live preview only, and the placed clip through its own flag", async () => {
+    await openStore();
+    const w = mountDialog();
+    await w.get('[data-testid="webcam-mirror"]').setValue(true);
+    await click(w, "webcam-enable");
+    expect(w.get('[data-testid="webcam-live"]').classes()).toContain("scale-x-[-1]");
+    await click(w, "webcam-record");
+    await vi.advanceTimersByTimeAsync(3_000);
+    await flushPromises();
+    FakeRecorder.instances[0].emit([1, 2, 3]);
+    await click(w, "webcam-stop");
+    await click(w, "webcam-add");
+    expect(executed[2]).toMatchObject({ kind: "setLayout", mirror: true });
   });
 });

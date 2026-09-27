@@ -554,3 +554,40 @@ describe("webcamRecorder — the ffmpeg pre-flight (fix round 1)", () => {
     expect(r.view.state).toBe("recording");
   });
 });
+
+// Task 22 fix round 1 (Ruling T22-1): the microphone is chosen like the
+// camera, and a camera request answered after the dialog went away never
+// leaves the camera on.
+describe("webcamRecorder — the microphone and a late answer", () => {
+  it("lists the microphones beside the cameras", async () => {
+    const r = recorder({});
+    await r.enable();
+    expect(r.view.microphones).toEqual([{ deviceId: "mic-1", label: "Microphone" }]);
+  });
+
+  it("a chosen microphone reaches the request, the camera's own shape", async () => {
+    const r = recorder({});
+    await r.enable(undefined, true, "mic-1");
+    expect(devices.requests).toEqual([{ video: true, audio: { deviceId: { exact: "mic-1" } } }]);
+  });
+
+  it("the microphone choice is ignored while the microphone is off", async () => {
+    const r = recorder({});
+    await r.enable("cam-usb", false, "mic-1");
+    expect(devices.requests).toEqual([{ video: { deviceId: { exact: "cam-usb" } }, audio: false }]);
+  });
+
+  it("a request answered after dispose stops its tracks at once and changes nothing", async () => {
+    devices = fakeMediaDevices(null, { hold: true });
+    const r = recorder({});
+    const pending = r.enable(undefined, true);
+    r.dispose();
+    devices.release();
+    await pending;
+    await settle();
+    expect(devices.tracks()).toHaveLength(2);
+    expect(devices.tracks().every((t) => t.stopped)).toBe(true);
+    expect(r.stream).toBeNull();
+    expect(r.view.state).toBe("idle");
+  });
+});

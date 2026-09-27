@@ -1,38 +1,49 @@
 <script setup lang="ts">
 /**
  * The webcam dialog's "Set up your take" column (visual-parity Task 22;
- * concept spec §9.7's `.webcam-settings`): the camera, whether the
- * microphone is recorded too, and where the take will land. Presentational
- * — the choices are `v-model`s, and a change once the camera is live asks
- * the parent to request it again (`reselect`); nothing here touches a
- * device.
+ * concept spec §9.7's `.webcam-settings`). Presentational — every choice
+ * is a `v-model`, and a camera or microphone change once the camera is
+ * live asks the parent to request it again (`reselect`); nothing here
+ * touches a device.
  *
- * Only what the native recorder can do is offered (design D14): the
- * concept's microphone picker, mic level meter, "Insert at timeline time"
- * field and mirror toggle have no native backend and are omitted. Where
- * the take lands is said instead — Add to timeline places it at the
- * playhead, on a new track above the others (`placeTake`).
- *
- * The camera list is readable only once the camera is on (the platform
- * hides device labels before permission), so the choice waits for it and
- * says so on screen, not only in a tooltip.
+ * - **Camera**: the devices the recorder lists once the camera is on (the
+ *   platform hides device labels before permission), so the choice waits
+ *   for it and says so on screen, not only in a tooltip.
+ * - **Include microphone**, the **Microphone** picker and the **mic level
+ *   preview** (`WebcamMicSettings`, fix round 1, Ruling T22-1).
+ * - **Insert at timeline time (seconds)**: where Add to timeline places
+ *   the take (`placePresenterTake`'s `atMs`), the playhead when the dialog
+ *   opened unless changed; a time outside the project holds Add to
+ *   timeline back with its reason (`insertTimeMs`).
+ * - **Mirror preview & overlay**: mirrors the live preview only (the
+ *   recording is never mirrored), and Add to timeline sets the placed
+ *   clip's own `mirror` flag in the same `setLayout` — the flag the
+ *   inspector's Flip toggles afterward.
  */
 import { computed } from "vue";
 
 import { formatOutputTime } from "../../../editor/captionRules";
-import { webcamSettingsReason } from "../../../editor/webcamPhase";
+import { insertTimeMs, webcamSettingsReason } from "../../../editor/webcamPhase";
 import type { WebcamView } from "../../../editor/webcamRecorder";
+import WebcamMicSettings from "./WebcamMicSettings.vue";
 
-const props = defineProps<{ view: WebcamView; playheadMs: number }>();
+const props = defineProps<{ view: WebcamView; stream: MediaStream | null; durationMs: number }>();
 const emit = defineEmits<{ (e: "reselect"): void }>();
 const cameraId = defineModel<string>("cameraId", { required: true });
 const withMic = defineModel<boolean>("withMic", { required: true });
+const micId = defineModel<string>("micId", { required: true });
+const insertAt = defineModel<string | number>("insertAt", { required: true });
+const mirror = defineModel<boolean>("mirror", { required: true });
 
 /** A camera can be switched only while it is live and idle. */
 const canSwitch = computed(() => props.view.state === "ready");
-const canToggleMic = computed(() => props.view.state === "idle" || canSwitch.value);
 const reason = computed(() => webcamSettingsReason(props.view.state));
-const at = computed(() => formatOutputTime(props.playheadMs));
+const placement = computed(() => {
+  const at = insertTimeMs(insertAt.value, props.durationMs);
+  return "ms" in at
+    ? `Added at ${formatOutputTime(at.ms)}, on a new track above your other video tracks.`
+    : at.reason;
+});
 </script>
 
 <template>
@@ -75,26 +86,43 @@ const at = computed(() => formatOutputTime(props.playheadMs));
     >
       {{ reason }}
     </p>
-    <label class="flex items-center gap-2 text-[11px] text-fg">
+    <WebcamMicSettings
+      v-model:with-mic="withMic"
+      v-model:mic-id="micId"
+      :view="view"
+      :stream="stream"
+      @reselect="emit('reselect')"
+    />
+    <label class="flex flex-col gap-[5px] text-[10px] text-fg-secondary">
+      Insert at timeline time (seconds)
       <input
-        v-model="withMic"
-        data-testid="webcam-mic"
-        type="checkbox"
-        :disabled="!canToggleMic"
-        aria-describedby="webcam-device-reason"
-        @change="emit('reselect')"
+        v-model="insertAt"
+        data-testid="webcam-insert-at"
+        type="number"
+        min="0"
+        step="0.01"
+        aria-describedby="webcam-placement"
+        class="text-xs"
       >
-      Include microphone
     </label>
     <p
+      id="webcam-placement"
       data-testid="webcam-placement"
-      class="text-[10px] leading-[1.6] text-fg-muted"
+      class="-mt-1.5 text-[10px] leading-[1.6] text-fg-muted"
     >
-      Added at the playhead ({{ at }}), on a new track above your other video tracks.
+      {{ placement }}
     </p>
+    <label class="flex items-center gap-2 text-[11px] text-fg">
+      <input
+        v-model="mirror"
+        data-testid="webcam-mirror"
+        type="checkbox"
+      >
+      Mirror preview & overlay
+    </label>
     <p class="text-[10px] leading-[1.6] text-fg-muted">
-      Records a webcam take alongside your existing edit — not another screen capture. Change its size, position,
-      crop and fades afterward.
+      Records a webcam take alongside your existing edit — not another screen capture. The recording itself is never
+      mirrored. Change its size, position, crop and fades afterward.
     </p>
   </div>
 </template>

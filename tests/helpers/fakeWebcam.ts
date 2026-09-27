@@ -33,18 +33,24 @@ export interface FakeDevices {
   streams: FakeStream[];
   /** Every track any request ever handed out. */
   tracks: () => FakeTrack[];
+  /** Answers the requests held back by `{ hold: true }`, in order. */
+  release: () => void;
 }
 
-/** `deny` names the `DOMException` every request fails with. */
-export function fakeMediaDevices(deny: string | null = null): FakeDevices {
+/** `deny` names the `DOMException` every request fails with; `hold`
+ * keeps every request pending until `release()` (a permission prompt the
+ * user has not answered yet). */
+export function fakeMediaDevices(deny: string | null = null, opts: { hold?: boolean } = {}): FakeDevices {
   const requests: MediaStreamConstraints[] = [];
   const streams: FakeStream[] = [];
+  const held: (() => void)[] = [];
   const getUserMedia = vi.fn((constraints: MediaStreamConstraints) => {
     requests.push(constraints);
     if (deny) return Promise.reject(new DOMException("refused", deny));
     const stream = new FakeStream([new FakeTrack("video"), ...(constraints.audio ? [new FakeTrack("audio")] : [])]);
     streams.push(stream);
-    return Promise.resolve(stream);
+    if (!opts.hold) return Promise.resolve(stream);
+    return new Promise<FakeStream>((resolve) => held.push(() => resolve(stream)));
   });
   const enumerateDevices = () =>
     Promise.resolve([
@@ -57,6 +63,7 @@ export function fakeMediaDevices(deny: string | null = null): FakeDevices {
     requests,
     streams,
     tracks: () => streams.flatMap((s) => s.tracks),
+    release: () => held.splice(0).forEach((answer) => answer()),
   };
 }
 

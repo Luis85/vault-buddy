@@ -23,7 +23,7 @@ import TransportBar from "../src/components/editor/preview/TransportBar.vue";
 import type { EditorPort } from "../src/editor/port";
 import { EditorPortError } from "../src/editor/port";
 import type { AudioContextLike, GainLike } from "../src/editor/previewController";
-import { requestPlaybackFrom } from "../src/editor/revealBus";
+import { requestPlaybackFrom, requestReveal } from "../src/editor/revealBus";
 import type { EditorOpenResult, MediaRef, Project } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
@@ -492,6 +492,21 @@ describe("PreviewSurface", () => {
     expect(video.paused).toBe(false);
     expect(w.get('[data-testid="transport-play"]').attributes("aria-label")).toBe("Pause");
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  // Task 22 fix round 1: the mixer's "Play / pause preview" asks for the
+  // transport's own toggle — play, then pause — never a second path.
+  it("a play/pause request toggles the preview like the transport's Play", async () => {
+    const { w } = await mountSurface(() => Promise.resolve("C:\\x\\cap.mp4"));
+    const video = w.get('[data-testid="preview-layers"] video').element as HTMLVideoElement;
+    requestReveal("playPause");
+    await flushPromises();
+    expect(video.paused).toBe(false);
+    expect(w.get('[data-testid="transport-play"]').attributes("aria-label")).toBe("Pause");
+    requestReveal("playPause");
+    await flushPromises();
+    expect(video.paused).toBe(true);
+    expect(w.get('[data-testid="transport-play"]').attributes("aria-label")).toBe("Play");
   });
 
   it("a playhead moved elsewhere (the timeline) seeks the preview", async () => {

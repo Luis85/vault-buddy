@@ -8,6 +8,9 @@
  * line. Presentational: nothing here touches a device; the parent hands in
  * the recorder's stream.
  *
+ * **Mirror** (fix round 1) flips only this live preview, with CSS; the
+ * recording itself is never mirrored.
+ *
  * The concept's status-row right side names a "720p target"; the native
  * recorder asks the camera for its own default, so it says where the take
  * goes instead.
@@ -18,7 +21,7 @@ import { webcamStatus } from "../../../editor/webcamPhase";
 import type { WebcamView } from "../../../editor/webcamRecorder";
 import EditorIcon from "../icons/EditorIcon.vue";
 
-const props = defineProps<{ view: WebcamView; stream: MediaStream | null }>();
+const props = defineProps<{ view: WebcamView; stream: MediaStream | null; mirror: boolean }>();
 
 const liveVideo = ref<HTMLVideoElement | null>(null);
 const live = computed(() => ["ready", "countdown", "recording"].includes(props.view.state));
@@ -50,6 +53,7 @@ watch([() => props.stream, live, liveVideo], async () => {
         muted
         playsinline
         class="absolute inset-0 h-full w-full object-cover"
+        :class="{ 'scale-x-[-1]': mirror }"
       />
       <div
         v-else

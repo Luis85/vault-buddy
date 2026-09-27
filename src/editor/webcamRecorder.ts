@@ -82,6 +82,8 @@ export interface WebcamView {
   /** The countdown's current number, `null` outside the countdown. */
   count: number | null;
   cameras: WebcamCamera[];
+  /** The microphones, in the camera list's shape (Task 22 fix round 1). */
+  microphones: WebcamCamera[];
   /** The finished take, in `review`/`committing`. */
   take: TakeDto | null;
   problem: WebcamProblem | null;
@@ -163,14 +165,27 @@ function takeProblem(e: unknown): WebcamProblem {
   return { kind: "failed", message: `The take could not be recorded. ${message}` };
 }
 
-function constraints(deviceId: string | undefined, withMic: boolean): MediaStreamConstraints {
-  return { video: deviceId ? { deviceId: { exact: deviceId } } : true, audio: withMic };
+/** One device's constraint: a chosen one exactly, else the default. */
+function device(deviceId: string | undefined): true | MediaTrackConstraints {
+  return deviceId ? { deviceId: { exact: deviceId } } : true;
+}
+
+function constraints(deviceId: string | undefined, withMic: boolean, micId?: string): MediaStreamConstraints {
+  return { video: device(deviceId), audio: withMic ? device(micId) : false };
+}
+
+/** The devices of one kind, labelled — an unlabelled one by its place. */
+function labelled(all: MediaDeviceInfo[], kind: MediaDeviceKind, noun: string): WebcamCamera[] {
+  return all
+    .filter((d) => d.kind === kind)
+    .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `${noun} ${i + 1}` }));
 }
 
 export class WebcamRecorder {
   private state: WebcamState = "idle";
   private count: number | null = null;
   private cameras: WebcamCamera[] = [];
+  private microphones: WebcamCamera[] = [];
   private take: TakeDto | null = null;
   private problem: WebcamProblem | null = null;
   private live: MediaStream | null = null;
@@ -181,7 +196,14 @@ export class WebcamRecorder {
   constructor(private readonly deps: WebcamDeps) {}
 
   get view(): WebcamView {
-    return { state: this.state, count: this.count, cameras: this.cameras, take: this.take, problem: this.problem };
+    return {
+      state: this.state,
+      count: this.count,
+      cameras: this.cameras,
+      microphones: this.microphones,
+      take: this.take,
+      problem: this.problem,
+    };
   }
 
   /** The camera's live stream, for the dialog's preview. */
@@ -189,7 +211,7 @@ export class WebcamRecorder {
     return this.live;
   }
 
-  private set(patch: Partial<Omit<WebcamView, "cameras">>): void {
+  private set(patch: Partial<Omit<WebcamView, "cameras" | "microphones">>): void {
     if (patch.state !== undefined) this.state = patch.state;
     if (patch.count !== undefined) this.count = patch.count;
     if (patch.take !== undefined) this.take = patch.take;
@@ -199,33 +221,44 @@ export class WebcamRecorder {
 
   /** Ask for the camera (and optionally the microphone) — the ONLY
    * `getUserMedia` call anywhere in the editor. A second call (another
-   * camera, the microphone toggled) stops the previous stream first. */
-  async enable(deviceId?: string, withMic = false): Promise<void> {
+   * camera, the microphone toggled) stops the previous stream first.
+   *
+   * A request the user answers after the dialog went away (a Cancel request,
+   * a close, `pagehide` — every one bumps `epoch`) never turns the camera
+   * on: its stream is stopped the moment it arrives, and nothing changes. */
+  async enable(deviceId?: string, withMic = false, micId?: string): Promise<void> {
     this.stopTracks();
     this.set({ state: "requesting", problem: null });
+    const epoch = this.epoch;
+    let stream: MediaStream;
     try {
       const mediaDevices = this.deps.mediaDevices;
       if (!mediaDevices) throw new DOMException("no media devices", "NotFoundError");
-      this.live = await mediaDevices.getUserMedia(constraints(deviceId, withMic));
+      stream = await mediaDevices.getUserMedia(constraints(deviceId, withMic, micId));
     } catch (e) {
-      this.fail(cameraProblem(e));
+      if (epoch === this.epoch) this.fail(cameraProblem(e));
       return;
     }
-    this.cameras = await this.listDevices();
+    if (epoch !== this.epoch) {
+      for (const track of stream.getTracks()) track.stop();
+      return;
+    }
+    this.live = stream;
+    await this.listDevices();
     this.set({ state: "ready" });
   }
 
-  /** The cameras, labelled — readable only once permission was granted
-   * (before it, the platform hides labels). */
-  async listDevices(): Promise<WebcamCamera[]> {
+  /** The cameras and microphones, labelled — readable only once permission
+   * was granted (before it, the platform hides labels). */
+  private async listDevices(): Promise<void> {
     try {
       const all = (await this.deps.mediaDevices?.enumerateDevices()) ?? [];
-      return all
-        .filter((d) => d.kind === "videoinput")
-        .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` }));
+      this.cameras = labelled(all, "videoinput", "Camera");
+      this.microphones = labelled(all, "audioinput", "Microphone");
     } catch (e) {
       logWarning(`webcam: listing cameras failed: ${String(e)}`);
-      return [];
+      this.cameras = [];
+      this.microphones = [];
     }
   }
 

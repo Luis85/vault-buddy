@@ -8,7 +8,9 @@
  * `LibraryPanel` answers, and (Task 11) the learning center's Shortcuts
  * tab, which the View menu asks `GuideHelpButton` for, and (Task 15) the
  * preview's playback, which the Fades tab's "Preview entrance" asks
- * `PreviewSurface` for. `requestReveal(surface)` bumps a per-surface serial and
+ * `PreviewSurface` for, and (Task 22 fix round 1) its play/pause, which the
+ * mixer's "Play / pause preview" asks the same surface for — the
+ * transport's own toggle, never a second controller call site. `requestReveal(surface)` bumps a per-surface serial and
  * `onReveal(surface, fn)` — called from that surface's own setup — runs
  * `fn` once per request it has not handled yet, including one made just
  * before it mounted (the media library mounts only when its tab is chosen,
@@ -24,11 +26,11 @@ import { reactive, ref, watch } from "vue";
 
 export type RevealSurface =
   | "reconnect" | "webcam" | "mixer" | "ratio" | "timeline" | "library" | "inspector" | "render" | "review"
-  | "projectSection" | "shortcuts" | "playback";
+  | "projectSection" | "shortcuts" | "playback" | "playPause";
 
 const SURFACES: readonly RevealSurface[] = [
   "reconnect", "webcam", "mixer", "ratio", "timeline", "library", "inspector", "render", "review",
-  "projectSection", "shortcuts", "playback",
+  "projectSection", "shortcuts", "playback", "playPause",
 ];
 
 const requested = reactive(Object.fromEntries(SURFACES.map((s) => [s, 0])) as Record<RevealSurface, number>);

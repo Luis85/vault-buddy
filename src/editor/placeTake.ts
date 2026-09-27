@@ -12,6 +12,11 @@
  * labelled undo step, the `TimelineView.addTrackThenInsert` precedent: Rust
  * has no compound command, and a refusal at any step stops the rest (a
  * refused `addTrack` inserts nothing).
+ *
+ * `atMs` is where the clip starts — the webcam dialog's "Insert at timeline
+ * time", the playhead unless changed — and `mirror` (visual-parity Task 22
+ * fix round 1) sets the clip's own mirror flag in the same `setLayout`, so
+ * the overlay matches a mirrored preview and Flip undoes it later.
  */
 import type { EditorCommand, Project, TakeDto } from "../editorTypes";
 import { PRESENTER_CORNER, presenterBox } from "./layoutGeometry";
@@ -32,7 +37,12 @@ function presenterTrackName(project: Project): string {
 }
 
 /** Resolves `true` once all three steps landed. */
-export async function placePresenterTake(target: PlacementTarget, take: TakeDto, atMs: number): Promise<boolean> {
+export async function placePresenterTake(
+  target: PlacementTarget,
+  take: TakeDto,
+  atMs: number,
+  options: { mirror?: boolean } = {},
+): Promise<boolean> {
   const before = target.project;
   if (!before) return false;
   const known = new Set(before.tracks.map((t) => t.id));
@@ -57,5 +67,6 @@ export async function placePresenterTake(target: PlacementTarget, take: TakeDto,
     ...box,
     frameShape: PRESENTER_CORNER.frameShape,
     fit: PRESENTER_CORNER.fit,
+    ...(options.mirror ? { mirror: true } : {}),
   });
 }

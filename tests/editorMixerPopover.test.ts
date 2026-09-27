@@ -5,10 +5,12 @@
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defineComponent, h } from "vue";
 
 import MixerPopover from "../src/components/editor/shell/MixerPopover.vue";
 import { EditorPortError } from "../src/editor/port";
 import { computeLayers } from "../src/editor/previewLayers";
+import { onReveal } from "../src/editor/revealBus";
 import type { Clip, EditorOpenResult, EditorSnapshot, Project, Track } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
@@ -299,5 +301,31 @@ describe("MixerPopover — the concept look (§9.8)", () => {
   it("a locked track says so in its row", async () => {
     const { w } = await mountMixer([track("t1", { locked: true })]);
     expect(w.get('[data-testid="mixer-status-t1"]').text()).toBe("Track Track t1 is locked");
+  });
+});
+
+// Task 22 fix round 1 (Ruling T22-1): the concept's "Play / pause preview"
+// asks the preview for its own play/pause — the transport's path, through
+// the reveal bus — and leaves the mixer open.
+describe("MixerPopover — Play / pause preview", () => {
+  it("asks the preview to play or pause and keeps the mixer open", async () => {
+    const asked = vi.fn();
+    const Preview = defineComponent({
+      setup() {
+        onReveal("playPause", asked);
+        return () => h("div");
+      },
+    });
+    mount(Preview);
+    const { w } = await mountMixer([track("t1")]);
+    const play = w.get('[data-testid="mixer-play"]');
+    expect(play.text()).toBe("Play / pause preview");
+    await play.trigger("click");
+    await flushPromises();
+    expect(asked).toHaveBeenCalledTimes(1);
+    expect(w.find('[data-testid="mixer-popover"]').exists()).toBe(true);
+    await play.trigger("click");
+    await flushPromises();
+    expect(asked).toHaveBeenCalledTimes(2);
   });
 });

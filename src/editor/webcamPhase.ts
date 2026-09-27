@@ -1,56 +1,76 @@
 /**
  * What the webcam dialog shows for each recorder state (visual-parity
  * Task 22; concept spec §9.7, screen 05): the footer's buttons, the reason
- * they cannot act right now, and the status row under the camera view.
- * Pure, so `WebcamControls`/`WebcamLive` stay flat reads of one value and
- * every phase is testable without a camera.
+ * each cannot act right now, the status row under the camera view, and the
+ * reasons the take's settings wait. Pure, so `WebcamControls`/`WebcamLive`/
+ * `WebcamSettings` stay flat reads of one value and every phase is testable
+ * without a camera.
  *
  * The concept's idle "Try demo overlay" is browser-only and has no native
  * twin (design D10): idle offers Enable camera alone. Its "Save raw take"
- * has none either — a finished take is already a library asset the moment
- * it lands (GAP-195) — so review offers Retake and Add to timeline.
+ * has no native command — a finished take is already a library asset the
+ * moment it lands (GAP-195) — so review offers Retake and Add to timeline.
+ * While the camera is being asked for, the concept's Cancel request closes
+ * the dialog (the recorder turns a late answer straight off).
  */
 import type { EditorIconName } from "../components/editor/icons/conceptIcons";
 import type { WebcamState } from "./webcamRecorder";
 
-export type WebcamAction = "enable" | "record" | "cancel" | "stop" | "retake" | "add";
+export type WebcamAction = "enable" | "cancel-request" | "record" | "cancel" | "stop" | "retake" | "add";
 
 export interface WebcamFooterButton {
   action: WebcamAction;
   label: string;
   variant: "bordered" | "primary";
   icon: EditorIconName | null;
+  /** Why this button cannot act right now, or `null`. */
+  reason: string | null;
 }
 
 export interface WebcamFooter {
   buttons: WebcamFooterButton[];
-  /** Why the buttons cannot act right now, or `null`. */
-  reason: string | null;
+  /** What the footer's status line says, or `null`. */
+  note: string | null;
 }
 
-const ENABLE: WebcamFooterButton = { action: "enable", label: "Enable camera", variant: "primary", icon: "webcam" };
-const RECORD: WebcamFooterButton = { action: "record", label: "Start recording", variant: "primary", icon: "circle" };
-const CANCEL_COUNTDOWN: WebcamFooterButton = { action: "cancel", label: "Cancel countdown", variant: "bordered", icon: null };
-const DISCARD_RECORDING: WebcamFooterButton = { action: "cancel", label: "Discard recording", variant: "bordered", icon: null };
-const STOP: WebcamFooterButton = { action: "stop", label: "Stop & review", variant: "primary", icon: "stop" };
-const RETAKE: WebcamFooterButton = { action: "retake", label: "Retake", variant: "bordered", icon: null };
-const ADD: WebcamFooterButton = { action: "add", label: "Add to timeline", variant: "primary", icon: "layers" };
+type Button = Omit<WebcamFooterButton, "reason">;
 
-const FOOTERS: Record<WebcamState, WebcamFooter> = {
-  idle: { buttons: [ENABLE], reason: null },
-  requesting: { buttons: [ENABLE], reason: "Waiting for the camera…" },
-  ready: { buttons: [RECORD], reason: null },
-  countdown: { buttons: [CANCEL_COUNTDOWN], reason: null },
-  recording: { buttons: [DISCARD_RECORDING, STOP], reason: null },
-  review: { buttons: [RETAKE, ADD], reason: null },
-  committing: { buttons: [RETAKE, ADD], reason: "Adding the take…" },
+const ENABLE: Button = { action: "enable", label: "Enable camera", variant: "primary", icon: "webcam" };
+const CANCEL_REQUEST: Button = { action: "cancel-request", label: "Cancel request", variant: "bordered", icon: null };
+const RECORD: Button = { action: "record", label: "Start recording", variant: "primary", icon: "circle" };
+const CANCEL_COUNTDOWN: Button = { action: "cancel", label: "Cancel countdown", variant: "bordered", icon: null };
+const DISCARD_RECORDING: Button = { action: "cancel", label: "Discard recording", variant: "bordered", icon: null };
+const STOP: Button = { action: "stop", label: "Stop & review", variant: "primary", icon: "stop" };
+const RETAKE: Button = { action: "retake", label: "Retake", variant: "bordered", icon: null };
+const ADD: Button = { action: "add", label: "Add to timeline", variant: "primary", icon: "layers" };
+
+const BUTTONS: Record<WebcamState, Button[]> = {
+  idle: [ENABLE],
+  requesting: [CANCEL_REQUEST],
+  ready: [RECORD],
+  countdown: [CANCEL_COUNTDOWN],
+  recording: [DISCARD_RECORDING, STOP],
+  review: [RETAKE, ADD],
+  committing: [RETAKE, ADD],
 };
 
-/** The footer for `state`; a review whose take Rust is still finishing
- * shows its buttons disabled, with that reason. */
-export function webcamFooter(state: WebcamState, hasTake: boolean): WebcamFooter {
-  if (state === "review" && !hasTake) return { buttons: [RETAKE, ADD], reason: "Finishing the take…" };
-  return FOOTERS[state];
+/** Why the dialog is mid-operation — the ✕ and the whole footer wait —
+ * or `null` when it is not. */
+export function webcamBusyReason(state: WebcamState, hasTake: boolean): string | null {
+  if (state === "requesting") return "Waiting for the camera…";
+  if (state === "committing") return "Adding the take…";
+  return state === "review" && !hasTake ? "Finishing the take…" : null;
+}
+
+/** The footer for `state`. `placeReason` is why the chosen insert time
+ * cannot be used (`insertTimeMs`); it holds back Add to timeline alone. */
+export function webcamFooter(state: WebcamState, hasTake: boolean, placeReason: string | null = null): WebcamFooter {
+  const busy = webcamBusyReason(state, hasTake);
+  // Cancel request is the way out of a wait, so it never waits itself.
+  const blocked = state === "requesting" ? null : busy;
+  const reasonFor = (b: Button) => blocked ?? (b.action === "add" ? placeReason : null);
+  const buttons = BUTTONS[state].map((b) => ({ ...b, reason: reasonFor(b) }));
+  return { buttons, note: busy ?? (state === "review" ? placeReason : null) };
 }
 
 export type WebcamTone = "off" | "live" | "recording";
@@ -97,4 +117,22 @@ export function webcamSettingsReason(state: WebcamState): string {
   if (state === "ready") return "";
   if (state === "idle" || state === "requesting") return "Choose a camera once it is on.";
   return "The camera and microphone are chosen before recording.";
+}
+
+/** Why the microphone picker waits, or `""`. */
+export function micPickerReason(state: WebcamState, withMic: boolean): string {
+  if (!withMic) return "Turn on Include microphone to choose one.";
+  if (state === "idle" || state === "requesting") return "Choose a microphone once the camera is on.";
+  return webcamSettingsReason(state);
+}
+
+/** The insert time the user typed, in seconds, as output ms — or why it
+ * cannot be used: a take is placed on the project's own timeline, from its
+ * start to its end. */
+export function insertTimeMs(text: string | number, durationMs: number): { ms: number } | { reason: string } {
+  const raw = String(text).trim();
+  const seconds = Number(raw);
+  const ms = Math.round(seconds * 1000);
+  if (raw !== "" && Number.isFinite(seconds) && ms >= 0 && ms <= durationMs) return { ms };
+  return { reason: `Choose a time between 0 and ${(durationMs / 1000).toFixed(2)} seconds.` };
 }
