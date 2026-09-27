@@ -25,7 +25,9 @@ export type LearningTab = "walkthrough" | "answers" | "shortcuts";
  * 11)**: 870 wide, scrolling as a whole (`DialogHost`'s `flush` body): the
  * "Help & learning center" bar with its ✕, the hero (`LearningHero`: the
  * start/resume action and the progress ring), the underlined tabs, the
- * section, and "Progress & preferences" as the footer's disclosure.
+ * section, and "Progress & preferences" as the footer's disclosure
+ * (`LearningPreferences`: Save progress file… and Load progress file…, the
+ * latter Task 57's "Restore progress file…" under the concept's name).
  *
  * **The tabs are a real tablist** (GAP-207 (5), deferred from Task 57's
  * review): each `role="tab"` names the `role="tabpanel"` it controls via

@@ -2186,7 +2186,7 @@ is worth a consistent posture (both saturating, or both plain, with a
 comment on why) the next time either module is touched, so a future
 reader does not read the difference as meaningful when it isn't.
 
-### GAP-172 · Low (item 2 CLOSED 2026-09-25, Task 59) · The timeline's track-label column scrolls with the content instead of staying pinned, and Task 20 widened one e2e overflow tolerance to make room for it
+### GAP-172 · ~~Low~~ CLOSED 2026-09-27 (item 1, visual-parity Task 17, design D12; item 2, Task 59) · The timeline's track-label column scrolls with the content instead of staying pinned, and Task 20 widened one e2e overflow tolerance to make room for it
 Two scoped, deliberate simplifications from Task 20 (the virtualized
 multi-track timeline, `src/components/editor/timeline/`), both documented
 inline where they live and recorded here per the tutorial-editor plan's
@@ -2259,6 +2259,21 @@ the whole leftover height once the legacy surface retires (Task 59).
 > the column-fit assertion is back to a 1px tolerance at every size
 > (including the 960x640 floor), with the header's Save and Render video
 > asserted on screen at each. Item 1 (the unpinned label column) stands.
+
+> **2026-09-27 — item 1 is CLOSED by visual-parity Task 17** (commit
+> `349aecb7`, design D12 in
+> `docs/superpowers/specs/2026-09-26-tutorial-editor-visual-parity-design.md`).
+> The track label column — each track header, the ruler row's label cell,
+> the Teaching layers and Captions rows' — is `position: sticky; left: 0`
+> inside the timeline's ONE scroll container, at one width for every row
+> (196 px, 184 at or below 1200 px, 174 at or below 1000). The symptom the
+> audit found — a nudged clip's `.focus()` scrolling the lanes and taking the
+> headers with them — is pinned in a real browser by
+> `tests/e2e/editorParity.spec.ts`'s "the headers stay pinned when a nudged
+> clip's focus scrolls the lanes", "the ruler stays on top, the headers stay
+> left, and the long name never pushes a control out" (twenty tracks) and the
+> toolbar test's "the label cell stays put when the lanes scroll"; on real
+> WebView2 it is checklist row T76.
 
 ### GAP-173 · Medium (by design, until parity is proven) · The editor's preview approximates the render
 `src/editor/previewLayers.ts` + `src/editor/previewController.ts` +
@@ -3092,6 +3107,12 @@ record). Nothing is lost or misrepresented — an unavailable product says so
 find them. **Fix:** package each ledger product whose file exists as
 `products/<productId>.mp4` (`package::PackageProduct`, which the import
 already extracts and verifies), counted against `MAX_PACKAGE_MEDIA_BYTES`.
+
+> **2026-09-27 (visual-parity Task 25):** the Save a copy dialog's
+> "Include rendered videos" slot is a help line ("Rendered videos stay in
+> this project's workspace…"), not a checkbox (ruling T21-1): with `products: []`
+> always written, a checkbox would be a no-op (design D14). When this entry
+> is fixed, that line becomes the option (GAP-227 item 5).
 
 ### GAP-189 · ~~Low~~ CLOSED 2026-09-25 (hardening Task 7) · A crash mid-render leaves the render's `jobs\<jobId>\` scratch directory behind, and a crash mid-publish an unrecorded product file
 `src-tauri/src/editor/render_jobs.rs`, Task 46. A render writes
@@ -7969,3 +7990,102 @@ still checked no-follow and by owned name.
 (7) **Two Escapes for two popovers.** With a track menu and the mixer open
 together, the mixer's Escape handler stops the event's other listeners, so
 Escape closes one per press (a click outside closes both).
+
+### GAP-224 · Low · A teaching cue wholly outside its trimmed clip is drawn nowhere and cannot be reached, yet still counts toward `MAX_EFFECTS`
+`src/editor/cueLanes.ts`, `src/components/editor/timeline/TeachingLayersRow.vue`,
+`src-tauri/core/src/editor/validate.rs` (`limits::MAX_EFFECTS`, 1200).
+Recorded by visual-parity Task 25 under ruling T19-1 (Task 19). A cue is
+attached to a clip and kept in that clip's SOURCE time, like a caption, so a
+trim that cuts past it does not delete it: extending the trim brings it back,
+and Rust keeps it by design. But while it lies wholly outside the clip's
+visible span it has no OUTPUT time, so the Teaching layers row does not draw
+it (the preview and the render do not show it either, which is why it is left
+out rather than drawn at a clamped edge). Nothing in the UI can then select,
+edit or delete it: no chip, no inspector state, no Checks finding. It still
+counts toward the project's effect limit. The same class as GAP-181 (captions
+and chapters), one domain over.
+
+**Fix:** list trimmed-away cues somewhere they can be deleted — a "Not in the
+edit" line under the Teaching layers row's label, or a Checks note naming the
+clip — sharing whatever GAP-181's fix builds.
+
+### GAP-225 · Low · Several one-gesture edits are more than one Undo step
+The concept performs each of these as ONE change; the native editor sends
+several commands, each its own revision and undo step, because Rust has no
+batch or ripple form of them and the visual-parity work made no Rust change
+(design, "Out of scope"). Each stops at the first refusal, so a refused step
+is never followed by steps that assumed it landed; (1) and (2) keep the
+steps that landed before it (closing some gaps is still a correct edit),
+(3) undoes them. Every step is correct and undoable — the cost is the extra
+Undo presses, recorded here so nobody reads it as a bug to fix in the
+webview.
+(1) **Close gaps on this track / Close all gaps · this track** (the track and
+empty-lane menus, visual-parity Task 5) send one `moveClips` per gap through
+`executeInOrder` (`src/editor/menuContext.ts`).
+(2) **Fades on a multi-clip selection** (the clip menu's Fades submenu, Task
+5) sends one `setFades` per clip, the same way.
+(3) **"Move following clips" on a speed change** (the Speed tab, Task 15,
+ruling T15-1) is `setSpeed` plus one `moveClips` for the clips after it
+(the move first when the clip grows, last when it shrinks) — two steps, and
+if Rust refuses the second the first is undone, so a speed change is never
+left half applied (`src/editor/speedRipple.ts`, `runInOrderOrUndo`). Under ruling T15-2 the choice is disabled, with
+its reason, whenever the client-side group expansion would move the sped clip
+itself, clamp, or collide — a sequence Rust would refuse for a reason the
+webview can know — so grouped layouts lose the ripple until a Rust `ripple`
+option exists.
+(4) **Save a copy with a changed Project name** (Task 21, rulings T21-2 and
+T21-4) applies the rename as its own undoable `rename` before the export; a
+cancelled or failed export says the rename was kept and that Undo restores
+the old name.
+**Fix (each):** a Rust command that takes the whole batch (`closeGaps`,
+`setFades{clipIds}`, `setSpeed{ripple}`) and lands it as one revision; (4)
+needs the export to take a name instead.
+
+### GAP-226 · Low · Two editor controls stand in for a fact the webview cannot get from Rust
+(1) **"Matches this edit" is session-local and conservative**
+(`src/stores/editorProducts.ts`, the product card's pill, visual-parity Task
+10). Rust records each product's `editFingerprint`, but no command exposes
+the CURRENT edit's fingerprint, and a revision number repeats across sessions
+(a reopen resumes at the persisted revision; the ledger keeps renders of
+unsaved edits). So a product reads "Matches this edit" only when its render
+finished in THIS session at the revision on screen, and "Earlier edit"
+otherwise — after a reopen, a product of the very edit on screen reads
+"Earlier edit". Never a false match, sometimes a false mismatch. **Fix:** an
+`editor_get_snapshot` field (or a products-read field) carrying the current
+fingerprint, compared as-is.
+(2) **Detach source audio stays enabled for a silent video**
+(`src/components/editor/inspector/AudioDetachControl.vue`, Task 15, ruling
+T15-3). Whether a video has sound is `sources.json`'s `hasAudio`, which Rust
+reads when it builds `detachAudio`'s `CommandContext`; the projection's
+`Asset` carries no such fact, so the webview cannot pre-disable the button.
+Pressing it on a silent video is refused and the refusal toast is the reason
+(design D14: visible, never silent). **Fix:** carry `hasAudio` on the
+projected asset and give the button that reason up front.
+
+### GAP-227 · Low (by design) · The editor's recorded departures from the concept
+The visual-parity port (`docs/superpowers/specs/2026-09-26-tutorial-editor-visual-parity-design.md`)
+matches the concept's frame, anatomy, sizes, icons, colours and interactions;
+these are the places it deliberately does not, each ruled on and recorded
+here so the concept is not read as the implementation (the GAP-148
+precedent for the screen-capture spec).
+(1) **No filmstrip on a clip narrower than 48 px** (ruling T18-3, Task 18):
+the concept draws thumbnails on any clip; the native timeline keeps Task
+28's 48 px threshold rather than request thumbnails for slivers.
+(2) **The webcam dialog has no "Try demo overlay" and no "Save raw take"**
+(ruling T22-1, Task 22): the first is browser-only (design D10), the second
+has no native command (a take is always remuxed, or kept raw only when
+ffmpeg is missing, GAP-196).
+(3) **Items with no native backend are omitted, never shown disabled**
+(design D7, D14): the Project menu's "New project…" and "Restore sample
+project…", the preview's "Browse all teaching tools" and "Download annotated
+frame…" (Task 11), and the concept's browser-only copy, replaced by the
+native wording in D10 (the status bar, the save state, the Render dialog's
+quality radios in place of its "Browser review" profile).
+(4) **The no-peaks note says why** (rulings T18-1, T18-2): where the
+concept draws a waveform or nothing, an audio clip without peaks reads
+"Install ffmpeg to see waveforms · audio still plays" (ffmpeg missing),
+"waveform unavailable · audio still plays" (a decode failure), or nothing
+at all when the source is missing or has no sound.
+(5) **Save a copy's "Include rendered videos" is a help line, not a
+checkbox** (ruling T21-1): the portable export writes no product files
+(GAP-188), so a checkbox would change nothing.

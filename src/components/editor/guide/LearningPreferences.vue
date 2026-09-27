@@ -9,8 +9,11 @@
  * - **Save progress file…** hands the CURRENT progress to Rust, which
  *   validates it like any save and opens its own save dialog: the portable
  *   backup, and the only way to keep progress that is "Session only".
- * - **Restore progress file…** — Rust opens its own open dialog and returns
- *   the file's progress only if it passes the same validation. It is then
+ * - **Load progress file…** (Task 57's "Restore progress file…", renamed to
+ *   the concept's wording by visual-parity Task 23; the store verb is still
+ *   `restoreFrom`, the testid `learning-restore-file`) — Rust opens its own
+ *   open dialog and returns the file's progress only if it passes the same
+ *   validation. It is then
  *   installed PAUSED (`restoreFrom`): restoring never starts the guide,
  *   opens a device or touches the project. A refused or dismissed restore
  *   changes nothing.
@@ -21,8 +24,7 @@
  * Visual-parity Task 23 (concept §9.3): the learning center's footer, a
  * "Progress & preferences" disclosure whose summary says where progress is
  * kept (design D10: "Progress remembered on this PC", or "Session only"
- * when it cannot be stored). The concept's "Load progress file" names the
- * restore.
+ * when it cannot be stored).
  */
 import { computed, ref } from "vue";
 
