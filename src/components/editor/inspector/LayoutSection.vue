@@ -26,7 +26,7 @@ import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { percentField, useInspectorDraft } from "../../../composables/useInspectorDraft";
 import { useSelectedClips } from "../../../composables/useSelectedClips";
 import type { Corner } from "../../../editor/layoutGeometry";
-import { maxProportionalWidth, roundBox, sizeBox } from "../../../editor/layoutGeometry";
+import { maxProportionalWidth, minProportionalWidth, roundBox, sizeBox } from "../../../editor/layoutGeometry";
 import type { LayoutPatch } from "../../../editor/layoutPresets";
 import { cornerPatch, FULL_FRAME, isWebcamAsset, pipPatch } from "../../../editor/layoutPresets";
 import { allOnVideoTracks } from "../../../editor/visualTargets";
@@ -81,9 +81,16 @@ const fields = {
   ),
 };
 
-const sizeMax = computed(() => Math.round(maxProportionalWidth(c.value) * 1000) / 10);
+/** The Size range in percent, a tenth inside the widths Rust accepts (the
+ * epsilon keeps a float like 100.00000000000003 from rounding a step away). */
+const TENTHS_EPSILON = 1e-9;
+const sizeMin = computed(() => Math.ceil(minProportionalWidth(c.value) * 1000 - TENTHS_EPSILON) / 10);
+const sizeMax = computed(() => Math.floor(maxProportionalWidth(c.value) * 1000 + TENTHS_EPSILON) / 10);
+/** One clip keeps its box inside the frame; a selection gets only the size,
+ * never the first clip's place (each keeps its own). */
 function onSize(pct: number): Promise<boolean> {
-  return send(roundBox(sizeBox(c.value, pct / 100)));
+  const box = roundBox(sizeBox(c.value, pct / 100));
+  return send(clips.value.length === 1 ? box : { w: box.w, h: box.h });
 }
 function onCorner(corner: Corner): void {
   void send(cornerPatch(corner, c.value, canvas.value, asset.value));
@@ -134,7 +141,7 @@ function onCorner(corner: Corner): void {
         label="Size"
         testid="layout-section-size"
         :value="Math.round(c.w * 1000) / 10"
-        :min="10"
+        :min="sizeMin"
         :max="sizeMax"
         :step="0.5"
         suffix="%"

@@ -483,10 +483,23 @@ test.describe("parity 1600x1000: the inspector frame (screens 02, 04)", () => {
     expect(tr.x + tr.width).toBeLessThanOrEqual(body.x + body.width + 1);
     await expect(page.getByTestId("layout-frame-crop")).not.toHaveAttribute("open", /.*/);
     await expect(page.getByTestId("layout-transform")).not.toHaveAttribute("open", /.*/);
+  });
+
+  // Split from the geometry test above (Task 14 fix round 1): one long test
+  // ran past the 30 s budget under a loaded full run. Reduced motion stands in
+  // for the old fixed wait for the tabs' colour transition.
+  test("the Layout disclosures stay open for their clip, and the Clip tab is in seconds", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.getByTestId("clip-c5").click();
+    await page.getByTestId("inspector-tab-layout").click();
     // A click on a summary opens it; the tab remembers that for this clip.
     await page.getByTestId("layout-frame-crop").locator("summary").click();
     await page.getByTestId("layout-transform").locator("summary").click();
     await expect(page.getByTestId("layout-section-mirror")).toBeVisible();
+    // Ruling T14-1: the exact, non-proportional size lives here.
+    await expect(page.getByTestId("layout-section-w")).toHaveValue("19");
+    await expect(page.getByTestId("layout-section-h")).toHaveValue("33.78");
     await expect(page.getByTestId("layout-transform-rotate")).toBeVisible();
     await page.getByTestId("layout-transform-rotate").scrollIntoViewIfNeeded();
     await page.getByTestId("editor-shell-inspector").screenshot({ path: "test-results/parity/built-02-layout-disclosures.png" });
@@ -494,7 +507,7 @@ test.describe("parity 1600x1000: the inspector frame (screens 02, 04)", () => {
     await page.getByTestId("inspector-tab-clip").click();
     await expect(page.getByTestId("inspector-body").locator("h3")).toHaveText(["Placement", "Source range"]);
     await expect(page.getByTestId("inspector-body")).not.toContainText(/\bms\b/);
-    await page.waitForTimeout(250);
+    await expect(page.getByTestId("inspector-tab-clip")).toHaveClass(/(^|\s)active(\s|$)/);
     await page.screenshot({ path: "test-results/parity/built-02-clip-tab.png" });
     await composite(page, "02-workspace.png", "test-results/parity/built-02-clip-tab.png", "vs-02-clip-tab");
     await page.getByTestId("inspector-tab-layout").click();
@@ -667,10 +680,13 @@ for (const theme of ["dark", "light"] as const) {
   test(`tokens: the concept's ${theme} palette on the editor's root`, async ({ page }) => {
     await openParity(page, { width: 1600, height: 1000 }, { theme, invitation: false });
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-    const tokens = await rootTokens(page);
-    for (const [role, token, dark, light] of CONCEPT_TOKENS) {
-      expect(tokens[token], `${role} (${token}) in ${theme}`).toBe(theme === "dark" ? dark : light);
-    }
+    // Polled, not read once (Task 14 fix round 1): under a loaded run the
+    // first read could land before the theme's tokens had been applied. It
+    // still fails, naming the tokens, if they never arrive.
+    const expected = Object.fromEntries(
+      CONCEPT_TOKENS.map(([, token, dark, light]) => [token, theme === "dark" ? dark : light]),
+    );
+    await expect.poll(() => rootTokens(page), { message: `the concept's ${theme} tokens` }).toEqual(expected);
   });
 }
 

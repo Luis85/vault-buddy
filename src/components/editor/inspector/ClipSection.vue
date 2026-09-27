@@ -95,9 +95,12 @@ const drafts = clip.value
 
 const tracks = computed(() => (clip.value ? trackOptions(editorProject.project, clip.value) : []));
 const trackRefusal = computed(() => (clip.value ? trackMoveRefusal(editorProject.project, clip.value) : null));
-/** A refused move cannot reach here: the select is disabled with its reason. */
-function onTrack(event: Event): void {
-  void moveTo((event.target as HTMLSelectElement).value);
+/** The select then shows where the clip IS: after a move Rust refused, the
+ * model did not change, so Vue would not repaint the option chosen. */
+async function onTrack(event: Event): Promise<void> {
+  const select = event.target as HTMLSelectElement;
+  await moveTo(select.value);
+  select.value = clip.value?.track_id ?? select.value;
 }
 
 const PRESETS: { id: ActionId; label: string; icon: EditorIconName }[] = [

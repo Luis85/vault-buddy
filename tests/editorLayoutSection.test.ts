@@ -200,6 +200,26 @@ describe("LayoutSection — the overlay section", () => {
     expect(executed).toEqual([]);
   });
 
+  // Fix round 1: the range offers exactly the widths Rust accepts — w and
+  // h both at least 0.1 (validate::check_clip), the proportions kept.
+  it("Size's minimum is the narrowest width whose height Rust still accepts", async () => {
+    await open(project([clip("c1"), clip("c2", { w: 0.4, h: 0.8, start_ms: 6_000 })]));
+    const wide = mount(LayoutSection, { props: { clipIds: ["c1"] } });
+    // 0.27 x 0.19: h reaches 0.1 at w = 0.1421, so 14.3 % is the first safe step.
+    expect((wide.get('[data-testid="layout-section-size"]').element as HTMLInputElement).min).toBe("14.3");
+    const tall = mount(LayoutSection, { props: { clipIds: ["c2"] } });
+    expect((tall.get('[data-testid="layout-section-size"]').element as HTMLInputElement).min).toBe("10");
+  });
+
+  it("a multi-selection's Size sends only the size, never the first clip's place", async () => {
+    await open(project([clip("c1"), clip("c2", { start_ms: 6_000, x: 0.1, y: 0.1 })]));
+    const w = mount(LayoutSection, { props: { clipIds: ["c1", "c2"] } });
+    await slide(w, "layout-section-size", "50");
+    const sent0 = sent();
+    expect(Object.keys(sent0).sort()).toEqual(["clipIds", "h", "kind", "w"]);
+    expect(sent0.w).toBe(0.5);
+  });
+
   it("Size is a 10–100 range with its mono value, bounded by the frame's proportions", async () => {
     await open(project([clip("c1", { w: 0.4, h: 0.8 })]));
     const w = mount(LayoutSection, { props: { clipIds: ["c1"] } });
@@ -371,6 +391,52 @@ describe("LayoutSection — Frame & crop", () => {
       { kind: "setLayout", clipIds: ["c1"], cropZoom: 2.5 },
       { kind: "setLayout", clipIds: ["c1"], cropY: 0.8 },
     ]);
+  });
+
+  // Fix round 1: a refused edit must not leave the control showing the
+  // refused value.
+  it("an Image fitting Rust refuses puts the select back", async () => {
+    await open(project([clip("c1")]));
+    refuse = true;
+    const w = mount(LayoutSection, { props: { clipIds: ["c1"] } });
+    await w.get('[data-testid="layout-section-fit"]').setValue("cover");
+    await flushPromises();
+    expect(executed).toHaveLength(1);
+    expect((w.get('[data-testid="layout-section-fit"]').element as HTMLSelectElement).value).toBe("contain");
+  });
+
+  it("a Mirror Rust refuses unticks the box again", async () => {
+    await open(project([clip("c1")]));
+    refuse = true;
+    const w = mount(LayoutSection, { props: { clipIds: ["c1"] } });
+    await w.get('[data-testid="layout-section-mirror"]').setValue(true);
+    await flushPromises();
+    expect(executed).toHaveLength(1);
+    expect((w.get('[data-testid="layout-section-mirror"]').element as HTMLInputElement).checked).toBe(false);
+  });
+
+  // Ruling T14-1: keyboard users keep a non-proportional size.
+  it("Width and Height live in Frame & crop and change only their own side", async () => {
+    await open(project([clip("c1")]));
+    const w = mount(LayoutSection, { props: { clipIds: ["c1"] } });
+    const frame = w.get('[data-testid="layout-frame-crop"]');
+    expect(frame.text()).toContain("Width (%)");
+    expect(frame.text()).toContain("Height (%)");
+    expect((w.get('[data-testid="layout-section-w"]').element as HTMLInputElement).value).toBe("27");
+    await type(w, "layout-section-w", "30");
+    await type(w, "layout-section-h", "25");
+    expect(executed).toEqual([
+      { kind: "setLayout", clipIds: ["c1"], w: 0.3 },
+      { kind: "setLayout", clipIds: ["c1"], h: 0.25 },
+    ]);
+  });
+
+  it("a Width past the room the position leaves is refused inline", async () => {
+    await open(project([clip("c1")]));
+    const w = mount(LayoutSection, { props: { clipIds: ["c1"] } });
+    await type(w, "layout-section-w", "50");
+    expect(w.get('[data-testid="layout-section-w-error"]').text()).toContain("39%");
+    expect(executed).toEqual([]);
   });
 
   it("Mirror and Opacity send their own field", async () => {

@@ -1,14 +1,19 @@
 <script setup lang="ts">
 /**
  * The Layout tab's "Frame & crop" disclosure (visual-parity Task 14; concept
- * spec §5, `webcam.js: videoLayoutHTML`): the frame shape, how the picture
- * fits its frame, the crop zoom and focus (only when it fills the frame —
- * they mean nothing otherwise), mirror and opacity. Each is one `setLayout`
- * through the section's `send`, over its whole selection.
+ * spec §5, `webcam.js: videoLayoutHTML`): the frame shape, its exact Width
+ * and Height (ruling T14-1: the one keyboard path to a non-proportional box,
+ * since Size keeps the proportions and the preview handles need a mouse),
+ * how the picture fits its frame, the crop zoom and focus (only when it
+ * fills the frame — they mean nothing otherwise), mirror and opacity. Each
+ * is one `setLayout` through the section's `send`, over its whole
+ * selection. A select or checkbox Rust refused is put back on the model's
+ * value: the model did not change, so Vue would not repaint it.
  */
 import { computed } from "vue";
 
 import { percentField, useInspectorDraft } from "../../../composables/useInspectorDraft";
+import { MIN_SIZE } from "../../../editor/layoutGeometry";
 import type { LayoutClip, LayoutPatch } from "../../../editor/layoutPresets";
 import { shapePatch } from "../../../editor/layoutPresets";
 import type { Size } from "../../../editor/previewGeometry";
@@ -38,6 +43,16 @@ const SHAPES: { id: FrameShape; label: string }[] = [
 const shape = computed(() => shapeOf(props.clip));
 const fit = computed<Fit>(() => props.clip.fit ?? "contain");
 const whole = { min: () => 0, max: () => 1 };
+// Bounded by the frame the way the preview handles are: a side may grow only
+// as far as the position leaves room for (`layoutGeometry.MIN_SIZE` below).
+const width = useInspectorDraft(
+  percentField({ value: () => props.clip.w, label: "Width", min: () => MIN_SIZE, max: () => 1 - props.clip.x }),
+  (w) => props.send({ w }),
+);
+const height = useInspectorDraft(
+  percentField({ value: () => props.clip.h, label: "Height", min: () => MIN_SIZE, max: () => 1 - props.clip.y }),
+  (h) => props.send({ h }),
+);
 const focusX = useInspectorDraft(
   percentField({ value: () => props.clip.crop_x ?? 0.5, label: "Focus X", ...whole }),
   (cropX) => props.send({ cropX }),
@@ -47,11 +62,15 @@ const focusY = useInspectorDraft(
   (cropY) => props.send({ cropY }),
 );
 
-function onFit(event: Event): void {
-  void props.send({ fit: (event.target as HTMLSelectElement).value as Fit });
+async function onFit(event: Event): Promise<void> {
+  const select = event.target as HTMLSelectElement;
+  await props.send({ fit: select.value as Fit });
+  select.value = fit.value;
 }
-function onMirror(event: Event): void {
-  void props.send({ mirror: (event.target as HTMLInputElement).checked });
+async function onMirror(event: Event): Promise<void> {
+  const box = event.target as HTMLInputElement;
+  await props.send({ mirror: box.checked });
+  box.checked = props.clip.mirror ?? false;
 }
 </script>
 
@@ -76,6 +95,20 @@ function onMirror(event: Event): void {
       >
         {{ s.label }}
       </InspectorButton>
+    </div>
+    <div class="grid grid-cols-2 gap-[9px]">
+      <InspectorNumberInput
+        :field="width"
+        label="Width (%)"
+        testid="layout-section-w"
+        :step="0.5"
+      />
+      <InspectorNumberInput
+        :field="height"
+        label="Height (%)"
+        testid="layout-section-h"
+        :step="0.5"
+      />
     </div>
     <label class="flex flex-col gap-[5px] text-[10px] text-fg-secondary">
       Image fitting

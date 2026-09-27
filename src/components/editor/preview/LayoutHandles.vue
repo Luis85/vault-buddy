@@ -20,8 +20,10 @@
  *
  * Pointers map through `previewGeometry.clientToCanvas` (Task 22), which
  * undoes the letterbox, against this overlay's own rect — the same rect as
- * the stage, since both fill the same wrapper. The keyboard alternative to
- * dragging is the Layout inspector's numeric fields.
+ * the stage, since both fill the same wrapper. There is no arrow-key move
+ * or resize here: the keyboard alternative is the Layout tab — Horizontal /
+ * Vertical and the proportional Size in its overlay section, and the exact
+ * Width / Height inside its Frame & crop disclosure.
  *
  * A press on the box's body where another clip's picture is on top
  * (`stageHit.clipAtPoint`) selects that clip rather than moving this one —

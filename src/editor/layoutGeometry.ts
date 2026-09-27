@@ -67,6 +67,13 @@ export function roundBox(box: NormBox): NormBox {
   return clampBox({ x: r(box.x), y: r(box.y), w: r(box.w), h: r(box.h) });
 }
 
+/** The narrowest a box may be while keeping its proportions: both sides at
+ * least `MIN_SIZE`, the floor Rust's `validate::check_clip` accepts — the
+ * inspector's Size range starts here. */
+export function minProportionalWidth(box: NormBox): number {
+  return Math.max(MIN_SIZE, (MIN_SIZE * box.w) / box.h);
+}
+
 /** The widest a box may be while keeping its proportions (`h / w`) inside
  * the frame — the inspector's Size range tops out here. */
 export function maxProportionalWidth(box: NormBox): number {

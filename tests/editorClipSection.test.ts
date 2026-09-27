@@ -290,6 +290,35 @@ describe("ClipSection — Placement", () => {
     expect(executed).toEqual([{ kind: "moveClips", clipIds: ["c1"], deltaMs: 0, trackId: "v2" }]);
   });
 
+  // Fix round 1: a move Rust refuses must not leave the select naming the
+  // track the clip never reached.
+  it("a track move Rust refuses puts the select back on the clip's own track", async () => {
+    executed = [];
+    const store = useEditorProjectStore();
+    const s = snapshot();
+    store.setPort(
+      fakePort({
+        openStaged: () =>
+          Promise.resolve<EditorOpenResult>({
+            snapshot: s, project: project({ tracks: [track("v1"), track("v2")] }), workspace: {}, missing: [], sourceBase: "base", recovered: false,
+          }),
+        execute: (req) => {
+          executed.push(req.command);
+          return Promise.reject(
+            new EditorPortError({ code: "invalidRequest", message: "overlap", retryable: false, operationId: "op-1" }),
+          );
+        },
+      }),
+    );
+    await store.openStaged("base");
+    const w = mount(ClipSection, { props: { clipIds: ["c1"] } });
+    await flushPromises();
+    await w.get('[data-testid="clip-section-track"]').setValue("v2");
+    await flushPromises();
+    expect(executed).toHaveLength(1);
+    expect((w.get('[data-testid="clip-section-track"]').element as HTMLSelectElement).value).toBe("v1");
+  });
+
   it("a grouped clip's Track select is unavailable and says why (Rust moves one clip only)", async () => {
     executed = [];
     await openProject({
