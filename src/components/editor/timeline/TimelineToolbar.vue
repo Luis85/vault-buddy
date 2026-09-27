@@ -21,15 +21,23 @@
  * **Edit actions** opens the timeline's own action menu — the one a
  * right-click on a clip opens — for the SELECTION (onboarding lesson 9).
  * `TimelineView` owns that menu, so this only reports where the button is.
+ * Shift+F10 or the Menu key anywhere in the toolbar opens it too.
+ *
+ * **Keyboard (D16)**: the buttons — its own and the zoom group's — are one
+ * Tab stop with roving arrows (`useToolbarRoving`); the Delete-mode select
+ * and the zoom range stay their own stops with their own arrow keys.
  * It, the row itself, Split and Undo are the guide's `timeline.more` /
  * `timeline.toolbar` / `timeline.split` / `timeline.undo`.
  */
-import { computed } from "vue";
+import type { ComponentPublicInstance } from "vue";
+import { computed, ref } from "vue";
 
 import { useActionRegistry, useBaseActionContext } from "../../../composables/useActionRegistry";
 import type { GuideRef } from "../../../composables/useGuideTarget";
 import { useGuideTarget } from "../../../composables/useGuideTarget";
+import { useToolbarRoving } from "../../../composables/useToolbarRoving";
 import type { ActionId } from "../../../editor/actionMeta";
+import { isContextMenuShortcut } from "../../../editor/shortcuts";
 import type { DeleteMode } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -77,15 +85,41 @@ function onDeleteMode(event: Event): void {
 
 const toolbarTarget = useGuideTarget("timeline.toolbar");
 const moreTarget = useGuideTarget("timeline.more");
-const actionTargets: Partial<Record<string, GuideRef>> = {
+const actionTargets: Partial<Record<ActionId, GuideRef>> = {
   split: useGuideTarget("timeline.split"),
   undo: useGuideTarget("timeline.undo"),
 };
 
-/** Opens the action menu just below the button. */
-function onMore(event: MouseEvent): void {
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-  emit("more", { x: rect.left, y: rect.bottom });
+/** One element, two refs: the roving root and the guide's target. */
+const root = ref<HTMLElement | null>(null);
+function bindRoot(el: Element | ComponentPublicInstance | null): void {
+  root.value = el as HTMLElement | null;
+  toolbarTarget(el);
+}
+const moreButton = ref<HTMLElement | null>(null);
+function bindMore(el: Element | ComponentPublicInstance | null): void {
+  moreButton.value = el as HTMLElement | null;
+  moreTarget(el);
+}
+
+/** Opens the action menu just below the Edit actions button. */
+function openMore(): void {
+  const rect = moreButton.value?.getBoundingClientRect();
+  if (rect) emit("more", { x: rect.left, y: rect.bottom });
+}
+
+const { roving, onToolbarKeydown } = useToolbarRoving(root, "undo");
+
+/** Shift+F10 / the Menu key anywhere in the toolbar is Edit actions (its
+ * tooltip names it); every other key is the roving set's. */
+function onKeydown(event: KeyboardEvent): void {
+  if (isContextMenuShortcut(event)) {
+    event.preventDefault();
+    event.stopPropagation();
+    openMore();
+    return;
+  }
+  onToolbarKeydown(event);
 }
 
 const ICON_BUTTON = "inline-flex h-8 w-8 shrink-0 items-center justify-center p-1.5 text-fg-muted";
@@ -94,11 +128,12 @@ const LABELLED = "inline-flex min-h-[30px] shrink-0 items-center gap-[7px] px-2.
 
 <template>
   <div
-    :ref="toolbarTarget"
+    :ref="bindRoot"
     data-testid="timeline-toolbar"
     role="toolbar"
     aria-label="Timeline tools"
     class="flex h-11 shrink-0 items-center gap-1.5 border-b border-line bg-panel px-3 max-[1200px]:gap-0.5"
+    @keydown="onKeydown"
   >
     <span class="mr-[5px] shrink-0 text-[10px] text-fg-muted">Timeline</span>
     <button
@@ -107,6 +142,7 @@ const LABELLED = "inline-flex min-h-[30px] shrink-0 items-center gap-[7px] px-2.
       :ref="actionTargets[id]"
       type="button"
       :data-testid="`timeline-toolbar-${id}`"
+      v-bind="roving.bind(id)"
       :aria-label="resolved[id].label"
       :aria-disabled="!resolved[id].enabled"
       :title="titleFor(id, resolved[id].label)"
@@ -122,6 +158,7 @@ const LABELLED = "inline-flex min-h-[30px] shrink-0 items-center gap-[7px] px-2.
       :ref="actionTargets.split"
       type="button"
       data-testid="timeline-toolbar-split"
+      v-bind="roving.bind('split')"
       :aria-disabled="!resolved.split.enabled"
       :title="titleFor('split', 'Split selected clip at playhead')"
       :class="[LABELLED, 'text-fg-secondary', stateClass('split')]"
@@ -133,6 +170,7 @@ const LABELLED = "inline-flex min-h-[30px] shrink-0 items-center gap-[7px] px-2.
     <button
       type="button"
       data-testid="timeline-toolbar-delete"
+      v-bind="roving.bind('delete')"
       aria-label="Delete selection"
       :aria-disabled="!resolved[deleteActionId].enabled"
       :title="titleFor(deleteActionId, deleteHint)"
@@ -159,6 +197,7 @@ const LABELLED = "inline-flex min-h-[30px] shrink-0 items-center gap-[7px] px-2.
     <button
       type="button"
       data-testid="timeline-toolbar-marker"
+      v-bind="roving.bind('marker')"
       aria-label="Add chapter marker"
       :aria-disabled="!resolved.addMarker.enabled"
       :title="titleFor('addMarker', 'Add chapter marker at the playhead')"
@@ -168,14 +207,15 @@ const LABELLED = "inline-flex min-h-[30px] shrink-0 items-center gap-[7px] px-2.
       <EditorIcon name="bookmark" />
     </button>
     <button
-      :ref="moreTarget"
+      :ref="bindMore"
       type="button"
       data-testid="timeline-toolbar-more"
+      v-bind="roving.bind('more')"
       aria-haspopup="menu"
       :aria-expanded="moreOpen ? 'true' : 'false'"
       title="Edit actions for the current selection (Shift+F10)"
       class="ml-[3px] inline-flex min-h-8 shrink-0 items-center gap-[7px] rounded-l-none rounded-r-[6px] border-y-0 border-r-0 border-l border-line px-2.5 text-[11px] text-fg-secondary"
-      @click="onMore"
+      @click="openMore"
     >
       <EditorIcon name="more" />
       Edit actions
@@ -186,6 +226,7 @@ const LABELLED = "inline-flex min-h-[30px] shrink-0 items-center gap-[7px] px-2.
     <button
       type="button"
       data-testid="timeline-toolbar-snap"
+      v-bind="roving.bind('snap')"
       :aria-pressed="workspace.snap"
       title="Snap to clip edges, markers and the playhead"
       :class="[LABELLED, 'border-0', workspace.snap ? 'bg-accent-bg text-accent' : 'bg-transparent text-fg-secondary']"

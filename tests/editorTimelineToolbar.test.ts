@@ -317,6 +317,17 @@ describe("the timeline header row (§6.3)", () => {
     expect(workspace.playheadMs).toBe(0);
   });
 
+  // Fix round 1, finding 4: one frame is the project's own, not a fixed 33 ms.
+  it("an arrow steps one frame of the project's own frame rate (whole ms)", async () => {
+    const w = await mountTimeline({ canvas: { width: 1280, height: 720, fps: 60 } });
+    const workspace = useEditorWorkspaceStore();
+    const ruler = byId(w, "timeline-ruler-ticks");
+    await ruler.trigger("keydown", { key: "ArrowRight" });
+    expect(workspace.playheadMs).toBe(17);
+    await ruler.trigger("keydown", { key: "ArrowUp" });
+    expect(workspace.playheadMs).toBe(34);
+  });
+
   it("a chapter is a gold ◆ at its OUTPUT time; clicking it seeks there, not to the press", async () => {
     const w = await mountTimeline();
     const workspace = useEditorWorkspaceStore();
@@ -326,6 +337,11 @@ describe("the timeline header row (§6.3)", () => {
     expect(marker.attributes("title")).toBe("Create a project");
     expect(marker.classes()).toEqual(expect.arrayContaining(["text-gold", "h-6", "w-6", "-translate-x-1/2"]));
     expect(marker.attributes("style")).toContain(`left: ${4_500 * pxPerMs(1)}px`);
+    // Fix round 1, finding 1: a slider's children are presentational, so a
+    // marker nested in it would lose its role and name. It sits beside it.
+    expect(marker.element.closest('[role="slider"]')).toBeNull();
+    expect(marker.element.closest('[data-testid="timeline-ruler"]')).not.toBeNull();
+    expect(byId(w, "timeline-ruler-ticks").findAll("button")).toHaveLength(0);
 
     // The press does not reach the ruler (which would seek to the pointer).
     await marker.trigger("pointerdown", { clientX: 10 });
@@ -370,5 +386,78 @@ describe("the timeline header row (§6.3)", () => {
     (video.element as HTMLElement).focus();
     await flushPromises();
     expect(byId(w, "timeline-add-track-panel-hint").text()).toBe("This project already has the maximum of 32 tracks");
+  });
+});
+
+// ---- keyboard (fix round 1, findings 2 and 3) ---------------------------------
+
+describe("the timeline toolbar from the keyboard", () => {
+  const ROVING = ["undo", "redo", "split", "delete", "marker", "more", "snap", "zoom-out", "zoom-in", "fit"];
+  const tabindexes = (w: VueWrapper) => ROVING.map((id) => byId(w, `timeline-toolbar-${id}`).attributes("tabindex"));
+  const focused = () => (document.activeElement as HTMLElement | null)?.dataset.testid;
+  function press(w: VueWrapper, id: string, key: string, init: KeyboardEventInit = {}): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+    byId(w, id).element.dispatchEvent(event);
+    return event;
+  }
+
+  it("its buttons are one Tab stop with roving arrows (D16); the select and the range stay their own", async () => {
+    const w = await mountTimeline();
+    expect(tabindexes(w)).toEqual(["0", "-1", "-1", "-1", "-1", "-1", "-1", "-1", "-1", "-1"]);
+    expect(byId(w, "timeline-toolbar-delete-mode").attributes("tabindex")).toBeUndefined();
+    expect(byId(w, "timeline-toolbar-zoom-range").attributes("tabindex")).toBeUndefined();
+
+    (byId(w, "timeline-toolbar-undo").element as HTMLElement).focus();
+    press(w, "timeline-toolbar-undo", "ArrowRight");
+    await flushPromises();
+    expect(focused()).toBe("timeline-toolbar-redo");
+    expect(tabindexes(w).indexOf("0")).toBe(1);
+
+    // End jumps to Fit, across the select and the range; → wraps to Undo.
+    const end = press(w, "timeline-toolbar-redo", "End");
+    await flushPromises();
+    expect(end.defaultPrevented).toBe(true); // so the editor's own End (seek) stays out
+    expect(focused()).toBe("timeline-toolbar-fit");
+    press(w, "timeline-toolbar-fit", "ArrowRight");
+    await flushPromises();
+    expect(focused()).toBe("timeline-toolbar-undo");
+    press(w, "timeline-toolbar-undo", "ArrowLeft");
+    await flushPromises();
+    expect(focused()).toBe("timeline-toolbar-fit");
+    press(w, "timeline-toolbar-fit", "Home");
+    await flushPromises();
+    expect(focused()).toBe("timeline-toolbar-undo");
+
+    // A click (or Tab) onto a button makes it the toolbar's stop.
+    await byId(w, "timeline-toolbar-snap").trigger("focus");
+    expect(tabindexes(w).indexOf("0")).toBe(ROVING.indexOf("snap"));
+
+    // The select's and the range's arrows are their own.
+    for (const id of ["timeline-toolbar-delete-mode", "timeline-toolbar-zoom-range"]) {
+      (byId(w, id).element as HTMLElement).focus();
+      const arrow = press(w, id, "ArrowRight");
+      await flushPromises();
+      expect(arrow.defaultPrevented).toBe(false);
+      expect(focused()).toBe(id);
+    }
+  });
+
+  it("Shift+F10 or the Menu key on the toolbar opens Edit actions, as its tooltip says", async () => {
+    const w = await mountTimeline();
+    const more = byId(w, "timeline-toolbar-more");
+    expect(more.attributes("title")).toContain("(Shift+F10)");
+    const event = press(w, "timeline-toolbar-undo", "F10", { shiftKey: true });
+    await flushPromises();
+    expect(event.defaultPrevented).toBe(true);
+    expect(more.attributes("aria-expanded")).toBe("true");
+    expect(w.find('[data-testid="editor-context-menu-root"]').exists()).toBe(true);
+
+    // Escape closes it and hands focus back to the toolbar.
+    (document.activeElement as HTMLElement | null)?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushPromises();
+    expect(more.attributes("aria-expanded")).toBe("false");
+    press(w, "timeline-toolbar-more", "ContextMenu");
+    await flushPromises();
+    expect(more.attributes("aria-expanded")).toBe("true");
   });
 });

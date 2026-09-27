@@ -633,6 +633,10 @@ test.describe("parity 1600x1000: the timeline toolbar and ruler (screen 02, §6.
   test("a chapter marker seeks; Add track sends the registry's addTrack", async ({ page }) => {
     await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
     const marker = page.getByTestId("timeline-marker-m1");
+    // Fix round 1: the markers sit beside the ruler's slider, never in it (a
+    // slider's children are presentational), so each keeps its role and name.
+    await expect(page.locator('[role="slider"] button')).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Go to Create a project" })).toBeVisible();
     const hit = await box(page, "timeline-marker-m1");
     expect(hit.width).toBeCloseTo(24, 0);
     expect(hit.height).toBeCloseTo(24, 0);

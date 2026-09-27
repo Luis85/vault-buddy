@@ -13,15 +13,17 @@
  * press seeks and a drag keeps seeking — and ONLY the playhead: it never
  * touches the selection. Capturing the pointer on `pointerdown` keeps a
  * drag past either edge on the same `localX -> ms` path as the click. From
- * the keyboard, ←/↓ and →/↑ step one frame (33 ms, a clip nudge's step)
- * and Page Up/Down one second; Home/End reach the editor's own Go to start
- * / Go to end.
+ * the keyboard, ←/↓ and →/↑ step one frame of the project's own frame
+ * rate (whole ms) and Page Up/Down one second; Home/End reach the editor's
+ * own Go to start / Go to end.
  *
  * **Chapter markers** are gold ◆ buttons with a 24px hit area, centred on
  * their OUTPUT time (`captionRules.chapterRows`: a marker is stored in its
- * clip's source time), named "Go to <title>"; a click seeks there. Their
- * `pointerdown` stops here, or the ruler under them would capture the
- * pointer and seek to the press instead.
+ * clip's source time), named "Go to <title>"; a click seeks there. They
+ * are the slider's SIBLINGS, laid over it in one positioned layer — never
+ * its children, which ARIA makes presentational (a marker inside would
+ * lose its role and name). Their `pointerdown` still stops at them, so a
+ * press can never reach the ruler and seek to the pointer instead.
  */
 import { computed, ref } from "vue";
 
@@ -83,20 +85,23 @@ function onPointerUp(event: PointerEvent) {
   if (el.hasPointerCapture?.(event.pointerId)) el.releasePointerCapture?.(event.pointerId);
 }
 
-const FRAME_MS = 33;
-const KEY_STEPS_MS: Record<string, number> = {
-  ArrowLeft: -FRAME_MS,
-  ArrowDown: -FRAME_MS,
-  ArrowRight: FRAME_MS,
-  ArrowUp: FRAME_MS,
-  PageDown: -1_000,
-  PageUp: 1_000,
+/** One frame at the project's own rate, in whole ms (30 fps: 33; 60: 17). */
+const frameMs = computed(() => Math.round(1_000 / (editorProject.project?.canvas.fps || 30)));
+/** Each key's step, in frames (±1) or whole seconds (±1 s). */
+const KEY_STEPS: Record<string, { frames?: number; ms?: number }> = {
+  ArrowLeft: { frames: -1 },
+  ArrowDown: { frames: -1 },
+  ArrowRight: { frames: 1 },
+  ArrowUp: { frames: 1 },
+  PageDown: { ms: -1_000 },
+  PageUp: { ms: 1_000 },
 };
 
 function onKeydown(event: KeyboardEvent) {
-  // A focused marker's own keys are its own (Enter seeks to it).
+  // Only the slider's own keys: never one that bubbled up to it.
   if (event.target !== event.currentTarget) return;
-  const step = KEY_STEPS_MS[event.key];
+  const key = KEY_STEPS[event.key];
+  const step = key && (key.ms ?? (key.frames as number) * frameMs.value);
   if (step === undefined || event.ctrlKey || event.altKey || event.metaKey) return;
   event.preventDefault();
   workspace.setPlayhead(Math.max(0, workspace.playheadMs + step));
@@ -121,28 +126,32 @@ function onKeydown(event: KeyboardEvent) {
       >Layers ↓</span>
     </div>
     <div
-      data-testid="timeline-ruler-ticks"
-      role="slider"
-      tabindex="0"
-      aria-label="Timeline playhead"
-      aria-valuemin="0"
-      :aria-valuemax="editorProject.durationMs / 1000"
-      :aria-valuenow="(workspace.playheadMs / 1000).toFixed(2)"
-      :aria-valuetext="formatMenuTime(workspace.playheadMs)"
-      class="relative h-full cursor-ew-resize touch-none select-none focus:outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+      class="relative h-full shrink-0"
       :style="{ width: `${widthPx}px` }"
-      @pointerdown="onPointerDown"
-      @pointermove="onPointerMove"
-      @pointerup="onPointerUp"
-      @keydown="onKeydown"
     >
-      <span
-        v-for="t in ticks"
-        :key="t.ms"
-        data-testid="timeline-ruler-tick"
-        class="pointer-events-none absolute top-[3px] font-mono text-[9px] text-fg-muted after:mt-[5px] after:block after:h-[7px] after:border-l after:border-line after:content-['']"
-        :style="{ left: `${t.x}px` }"
-      >{{ t.label }}</span>
+      <div
+        data-testid="timeline-ruler-ticks"
+        role="slider"
+        tabindex="0"
+        aria-label="Timeline playhead"
+        aria-valuemin="0"
+        :aria-valuemax="editorProject.durationMs / 1000"
+        :aria-valuenow="(workspace.playheadMs / 1000).toFixed(2)"
+        :aria-valuetext="formatMenuTime(workspace.playheadMs)"
+        class="relative h-full cursor-ew-resize touch-none select-none focus:outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+        @pointerdown="onPointerDown"
+        @pointermove="onPointerMove"
+        @pointerup="onPointerUp"
+        @keydown="onKeydown"
+      >
+        <span
+          v-for="t in ticks"
+          :key="t.ms"
+          data-testid="timeline-ruler-tick"
+          class="pointer-events-none absolute top-[3px] font-mono text-[9px] text-fg-muted after:mt-[5px] after:block after:h-[7px] after:border-l after:border-line after:content-['']"
+          :style="{ left: `${t.x}px` }"
+        >{{ t.label }}</span>
+      </div>
       <button
         v-for="m in markers"
         :key="m.id"

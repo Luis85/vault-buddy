@@ -173,9 +173,10 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * entries would have rendered `addTrackVideo`/`addTrackAudio` as ENABLED
  * buttons `commandFor` still returned `null` for. **Task 26 is that
  * surface's first consumer** — dropping a media asset below the timeline's
- * last lane sends `addTrack` directly from `TimelineView.vue`
- * (`editorProject.execute`, the `TrackHeader.vue` direct-call precedent
- * above, never through this registry) — so the "no consuming UI yet"
+ * last lane sends `addTrack` (`TimelineView.vue` via
+ * `trackEdits.addTrackThenInsert`, whose command `trackEdits.addTrackCommand`
+ * builds — the one `addTrack` builder every caller, this registry included,
+ * shares since visual-parity Task 16) — so the "no consuming UI yet"
  * condition no longer holds for `addTrack` ITSELF, and it is removed from
  * the set below in the same commit, per `mod.rs`'s own rule.
  * `addTrackVideo`/`addTrackAudio` got their own surfaces in visual-parity

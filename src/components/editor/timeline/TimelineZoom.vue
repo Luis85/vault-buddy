@@ -14,6 +14,7 @@
  */
 import { computed } from "vue";
 
+import { injectToolbarRoving } from "../../../composables/useToolbarRoving";
 import { useEditorWorkspaceStore, ZOOM_RANGE } from "../../../stores/editorWorkspace";
 import { useNotificationsStore } from "../../../stores/notifications";
 import EditorIcon from "../icons/EditorIcon.vue";
@@ -22,6 +23,8 @@ const emit = defineEmits<(e: "fit") => void>();
 
 const workspace = useEditorWorkspaceStore();
 const notifications = useNotificationsStore();
+/** Its buttons join the toolbar's roving set (the range stays its own stop). */
+const roving = injectToolbarRoving();
 
 const ZOOM_STEP = 1.25;
 const [MIN_ZOOM, MAX_ZOOM] = ZOOM_RANGE;
@@ -56,6 +59,7 @@ const DISABLED = "cursor-not-allowed opacity-40";
     <button
       type="button"
       data-testid="timeline-toolbar-zoom-out"
+      v-bind="roving.bind('zoom-out')"
       aria-label="Zoom timeline out"
       :aria-disabled="outReason !== null"
       :title="outReason ?? 'Zoom timeline out'"
@@ -79,6 +83,7 @@ const DISABLED = "cursor-not-allowed opacity-40";
     <button
       type="button"
       data-testid="timeline-toolbar-zoom-in"
+      v-bind="roving.bind('zoom-in')"
       aria-label="Zoom timeline in"
       :aria-disabled="inReason !== null"
       :title="inReason ?? 'Zoom timeline in'"
@@ -90,6 +95,7 @@ const DISABLED = "cursor-not-allowed opacity-40";
     <button
       type="button"
       data-testid="timeline-toolbar-fit"
+      v-bind="roving.bind('fit')"
       title="Fit the whole edit"
       class="min-h-[30px] shrink-0 px-2.5 text-[11px] text-fg-secondary"
       @click="emit('fit')"
