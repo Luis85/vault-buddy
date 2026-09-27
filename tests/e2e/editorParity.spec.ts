@@ -411,6 +411,57 @@ test.describe("parity 1600x1000: the transport (screen 02, §4.3)", () => {
   });
 });
 
+// Task 13 (screens 02 and 04, concept spec §5): the inspector's frame —
+// the 48px heading, the selection card and the 2×3 category grid — and its
+// empty state.
+test.describe("parity 1600x1000: the inspector frame (screens 02, 04)", () => {
+  test("a selected clip: 48px heading, 34px card glyph, a 3-column category grid", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await expect(page.getByTestId("inspector-empty")).toBeVisible();
+    await expect(page.getByTestId("inspector-title")).toHaveText("Properties");
+
+    await page.getByTestId("clip-c5").click();
+    await page.getByTestId("inspector-tab-layout").click();
+    // Let the tabs' colour transition settle before the picture is taken.
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: "test-results/parity/built-02-inspector.png" });
+    await composite(page, "02-workspace.png", "test-results/parity/built-02-inspector.png", "vs-02-inspector");
+
+    const heading = await box(page, "inspector-heading");
+    const column = await box(page, "editor-shell-inspector");
+    expect(heading.height).toBeCloseTo(48, 0);
+    expect(Math.abs(heading.width - (column.width - 1))).toBeLessThanOrEqual(1);
+    await expect(page.getByTestId("inspector-title")).toHaveText("Clip properties");
+    const glyph = await box(page, "inspector-card-glyph");
+    expect(glyph.width).toBeCloseTo(34, 0);
+    expect(glyph.height).toBeCloseTo(34, 0);
+    await expect(page.getByTestId("inspector-card-name")).toHaveText("Presenter · demo");
+    await expect(page.getByTestId("inspector-card-detail")).toHaveText("Webcam · presenter · 32.0s");
+    const columns = await page
+      .getByTestId("inspector-tablist")
+      .evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(" ").length);
+    expect(columns).toBe(3);
+    // Two rows of three; each tab at least 30px tall.
+    const clipTab = await box(page, "inspector-tab-clip");
+    const audioTab = await box(page, "inspector-tab-audio");
+    expect(clipTab.height).toBeGreaterThanOrEqual(30);
+    expect(audioTab.x).toBeCloseTo(clipTab.x, 0);
+    expect(audioTab.y).toBeGreaterThan(clipTab.y + clipTab.height);
+    await expect(page.getByTestId("inspector-tab-layout")).toHaveClass(/(^|\s)active(\s|$)/);
+
+    await page.getByTestId("inspector-tab-fades").click();
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: "test-results/parity/built-04-inspector.png" });
+    await composite(page, "04-fades.png", "test-results/parity/built-04-inspector.png", "vs-04-inspector");
+  });
+
+  test("the ✕ hides the inspector and gives its column to the preview", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("inspector-hide").click();
+    await expect.poll(() => collapsed(page, "editor-shell-inspector")).toBe(true);
+  });
+});
+
 test.describe("parity 960x640 (12-compact)", () => {
   test("frame: header 52, preview header 44, transport 40, timeline 270, status 23", async ({ page }) => {
     await openParity(page, { width: 960, height: 640 }, { invitation: false });

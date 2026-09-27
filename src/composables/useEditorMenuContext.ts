@@ -16,6 +16,7 @@ import type { MenuContext } from "../editor/menuContext";
 import { insertAssetOnFreeTrack } from "../editor/placeOnFreeTrack";
 import { clipNameFocus, requestReveal, requestTimelineReveal, trackRenameRequest } from "../editor/revealBus";
 import { addTrackOfKind, addTrackThenInsert } from "../editor/trackEdits";
+import { requestTrackRemoval } from "../editor/trackRemoval";
 import { useEditorProjectStore } from "../stores/editorProject";
 import { useEditorWorkspaceStore } from "../stores/editorWorkspace";
 
@@ -109,8 +110,8 @@ export function useEditorMenuContext(view: TimelineViewOps): (action: MenuContex
     renameTrack: (trackId) => {
       trackRenameRequest.value = trackId;
     },
-    // No confirmation exists yet; the removal is one undoable edit. The
-    // header menu that mounts the track menu adds the concept's confirm.
-    removeTrack: (trackId) => void execute({ kind: "deleteTrack", trackId }),
+    // A track with clips asks first (`RemoveTrackDialog`), the inspector's
+    // own Remove track… rule (visual-parity Task 13).
+    removeTrack: (trackId) => requestTrackRemoval(currentProject(), trackId, execute),
   });
 }

@@ -1,60 +1,35 @@
 <script setup lang="ts">
 /**
- * The tutorial editor's inspector shell (Task 19; F-48/F-49;
- * ARCHITECTURE-AND-STACK.md: "`Inspector` and six panels | Clip, Layout,
- * Fades, Audio, Speed, Color"; SCREENS-AND-INTERACTIONS.md §04: "Inspector
- * categories are Clip, Layout, Fades, Audio, Speed and Color. A control's
- * scope is the selected object or an explicitly indicated multi-selection.";
- * §02: "Unselected states teach what to do next rather than filling the
- * inspector with disabled controls.").
+ * The tutorial editor's inspector (Task 19; F-48/F-49; visual-parity
+ * Task 13, concept spec §5): a 48px heading naming what is selected, with
+ * the ✕ that hides the panel (`InspectorHeading`), over a scrolling body
+ * that shows one of five states (`inspectorState.ts`):
  *
- * The six category tabs are shown whenever no teaching cue is selected (see
- * below) (a `role="tablist"` bound to
- * `editorWorkspace.propertyTab`, the persisted `property_tab` field —
- * choosing a tab is a view preference independent of what's selected right
- * now, so it survives across selections and a reopen). What renders BELOW
- * the tabs depends on `editorWorkspace.selectionClipIds`:
- *
- *   - empty: teaching copy, never a disabled control — there is nothing to
- *     scope a control to yet, and greying out six panels of inputs would
- *     bury the one actionable instruction ("select a clip") under noise.
- *   - exactly one clip: the active category's slot renders scoped to that
- *     one id, no extra banner (a single selection IS the scope).
- *   - more than one: a "`N` clips selected" statement states the scope
- *     explicitly before the slot, so a later section filling that slot
- *     never has to re-derive or restate what it's editing.
- *
- * Each category is a named slot (`clip`/`layout`/`fades`/`audio`/`speed`/
- * `color`), scoped with `clipIds` — the exact selection to act on — so a
- * later task's real section (Task 20 onward) can be dropped in without this
- * shell changing. Only the ACTIVE category's slot is rendered; the other
- * five stay unmounted, the same "don't pay for a hidden tab" posture
- * `ScreenSourcePicker`'s `<TabGroup>` already uses elsewhere in this repo.
- *
- * **A selected teaching cue** (Task 35) is a different object from its clip,
- * so while one is selected (`cueActions.selectedEffectOf`) the `#effect`
- * slot replaces the clip categories entirely, with a "Clip settings" button
- * back to them (it drops the cue selection, keeping the clip selected).
+ *   - nothing selected: what to do next and the project's facts
+ *     (`EmptyInspector`) — never a panel of disabled controls (SCREENS §02);
+ *   - one clip (`ClipInspector`): its card, then its categories as a 2×3
+ *     grid bound to the persisted `editorWorkspace.propertyTab` — Clip,
+ *     Layout, Fades, Audio, Speed, Color, or four for a sound clip — and the
+ *     active category's named slot (`clip`/`layout`/…), scoped with
+ *     `clipIds`; the other slots stay unmounted;
+ *   - several clips: the shared actions (`MultiInspector`);
+ *   - a track (`editorWorkspace.selectedTrackId`): its own controls
+ *     (`TrackInspector`);
+ *   - a teaching cue (`cueActions.selectedEffectOf`, Task 35): the `#effect`
+ *     slot in place of the clip categories, with a way back to them.
  */
 import { computed } from "vue";
 
-import { useGuideTabTargets, useGuideTarget } from "../../../composables/useGuideTarget";
-import { useRovingTablist } from "../../../composables/useRovingTablist";
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { selectedEffectOf } from "../../../editor/cueActions";
+import { INSPECTOR_TITLES, inspectorMode } from "../../../editor/inspectorState";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
-
-type CategoryId = "clip" | "layout" | "fades" | "audio" | "speed" | "color";
-
-const CATEGORIES: { id: CategoryId; label: string }[] = [
-  { id: "clip", label: "Clip" },
-  { id: "layout", label: "Layout" },
-  { id: "fades", label: "Fades" },
-  { id: "audio", label: "Audio" },
-  { id: "speed", label: "Speed" },
-  { id: "color", label: "Color" },
-];
-const CATEGORY_IDS = CATEGORIES.map((c) => c.id);
+import ClipInspector from "./ClipInspector.vue";
+import EmptyInspector from "./EmptyInspector.vue";
+import InspectorHeading from "./InspectorHeading.vue";
+import MultiInspector from "./MultiInspector.vue";
+import TrackInspector from "./TrackInspector.vue";
 
 const workspace = useEditorWorkspaceStore();
 const editorProject = useEditorProjectStore();
@@ -62,128 +37,60 @@ const editorProject = useEditorProjectStore();
 const selectedEffectId = computed(
   () => selectedEffectOf(editorProject.project, workspace.selected, workspace.selectionClipIds)?.id ?? null,
 );
-
-/** Falls back to the first category when the persisted tab is unset or
- * names something this shell no longer recognizes (a stale `workspace.json`
- * from a future build, or the never-populated initial `null`). */
-const activeTab = computed<CategoryId>(() => {
-  const saved = workspace.propertyTab;
-  return (CATEGORY_IDS as string[]).includes(saved ?? "") ? (saved as CategoryId) : "clip";
-});
-
-function selectTab(id: CategoryId): void {
-  workspace.setPropertyTab(id);
-}
-
-const selectionCount = computed(() => workspace.selectionClipIds.length);
-const hasSelection = computed(() => selectionCount.value > 0);
-const isMultiSelection = computed(() => selectionCount.value > 1);
-
-// ---- roving tabindex over the tablist (the preview Toolstrip/ContextMenu
-// precedent: arrow keys move focus, Home/End jump to the ends) -- via the
-// shared `useRovingTablist` composable (Task 33 fix round 1: this file's
-// own copy of the handler and `LibraryPanel.vue`'s were extracted into it
-// once `check:quality`'s clone-group gate caught the two as duplicates).
-const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
-  () => CATEGORIES.length,
-  () => CATEGORY_IDS.indexOf(activeTab.value),
-  (i) => selectTab(CATEGORIES[i].id),
+const track = computed(
+  () => editorProject.project?.tracks.find((t) => t.id === workspace.selectedTrackId) ?? null,
+);
+const mode = computed(() =>
+  inspectorMode(track.value?.id ?? null, selectedEffectId.value, workspace.selectionClipIds.length),
 );
 
-// ---- guide targets (Task 55): the panel is `inspector`; the Layout and
-// Fades tabs are the fallback route to their sections, which bind the same
-// keys themselves and win while open.
+// The guide's `inspector` target (Task 55) is the whole panel.
 const panelTarget = useGuideTarget("inspector");
-const bindTabTarget = useGuideTabTargets<CategoryId>({
-  layout: ["inspector.layout"],
-  fades: ["inspector.fades"],
-});
-function setTab(i: number, el: Element | null): void {
-  setTabRef(i, el);
-  bindTabTarget(CATEGORIES[i].id, el);
-}
 </script>
 
 <template>
   <div
     :ref="panelTarget"
     data-testid="inspector-panel"
-    class="flex h-full flex-col gap-2"
+    class="flex h-full min-h-0 flex-col"
   >
-    <div
-      v-if="selectedEffectId"
-      data-testid="inspector-effect"
-      class="flex flex-1 flex-col gap-2 text-micro text-fg-subtle"
-    >
-      <button
-        type="button"
-        data-testid="inspector-effect-back"
-        class="cursor-pointer self-start rounded px-1.5 py-0.5 text-fg-secondary hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-        @click="workspace.setSelected(null)"
-      >
-        ← Clip settings
-      </button>
-      <slot
-        name="effect"
-        :effect-id="selectedEffectId"
+    <InspectorHeading :title="INSPECTOR_TITLES[mode]" />
+    <div class="min-h-0 flex-1 overflow-y-auto p-3.5 text-micro text-fg-subtle">
+      <!-- The states in `inspectorMode`'s order: a track, a cue, several
+           clips, nothing, one clip. -->
+      <TrackInspector
+        v-if="track"
+        :key="track.id"
+        :track="track"
       />
-    </div>
-    <template v-else>
       <div
-        role="tablist"
-        aria-label="Inspector categories"
-        data-testid="inspector-tablist"
-        class="flex flex-wrap gap-1"
-        @keydown="onTablistKeydown"
+        v-else-if="selectedEffectId"
+        data-testid="inspector-effect"
+        class="flex flex-col gap-2"
       >
         <button
-          v-for="(cat, i) in CATEGORIES"
-          :id="`inspector-tab-${cat.id}`"
-          :key="cat.id"
-          :ref="(el) => setTab(i, el as Element | null)"
           type="button"
-          role="tab"
-          :data-testid="`inspector-tab-${cat.id}`"
-          :aria-selected="cat.id === activeTab"
-          :aria-controls="`inspector-tabpanel-${cat.id}`"
-          :tabindex="cat.id === activeTab ? 0 : -1"
-          class="cursor-pointer rounded px-1.5 py-0.5 text-micro transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-          :class="cat.id === activeTab ? 'bg-accent/20 text-accent-fg' : 'text-fg-subtle'"
-          @click="selectTab(cat.id)"
+          data-testid="inspector-effect-back"
+          class="cursor-pointer self-start rounded px-1.5 py-0.5 text-fg-secondary hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          @click="workspace.setSelected(null)"
         >
-          {{ cat.label }}
+          ← Clip settings
         </button>
+        <slot
+          name="effect"
+          :effect-id="selectedEffectId"
+        />
       </div>
-
-      <div
-        :id="`inspector-tabpanel-${activeTab}`"
-        role="tabpanel"
-        :aria-labelledby="`inspector-tab-${activeTab}`"
-        data-testid="inspector-body"
-        class="flex-1 text-micro text-fg-subtle"
-      >
-        <p
-          v-if="!hasSelection"
-          data-testid="inspector-empty"
-        >
-          Select a clip to adjust it…
-        </p>
-        <template v-else>
-          <p
-            v-if="isMultiSelection"
-            data-testid="inspector-scope"
-            class="mb-2 text-fg-muted"
-          >
-            {{ selectionCount }} clips selected
-          </p>
+      <MultiInspector v-else-if="mode === 'multi'" />
+      <EmptyInspector v-else-if="mode === 'none'" />
+      <ClipInspector v-else>
+        <template #default="{ tab, clipIds }">
           <slot
-            :name="activeTab"
-            :clip-ids="workspace.selectionClipIds"
-          >
-            This section arrives in a later task.
-          </slot>
+            :name="tab"
+            :clip-ids="clipIds"
+          />
         </template>
-      </div>
-    </template>
+      </ClipInspector>
+    </div>
   </div>
 </template>

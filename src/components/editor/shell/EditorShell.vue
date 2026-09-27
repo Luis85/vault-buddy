@@ -107,6 +107,7 @@ import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import NotificationHost from "../../NotificationHost.vue";
+import RemoveTrackDialog from "../dialogs/RemoveTrackDialog.vue";
 import GuideCoach from "../guide/GuideCoach.vue";
 import GuideInvitation from "../guide/GuideInvitation.vue";
 import TimelineSplitter from "../timeline/TimelineSplitter.vue";
@@ -311,7 +312,7 @@ function onShellKeydown(event: KeyboardEvent) {
         v-show="workspace.inspectorVisible"
         data-testid="editor-shell-inspector"
         :aria-hidden="!workspace.inspectorVisible"
-        class="flex min-h-0 min-w-0 flex-col overflow-y-auto border-l border-line bg-panel p-2 text-micro text-fg-subtle"
+        class="flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-line bg-panel text-micro text-fg-subtle"
         :class="inspectorClass"
       >
         <slot name="inspector">
@@ -334,6 +335,8 @@ function onShellKeydown(event: KeyboardEvent) {
     <EditorStatusBar />
 
     <NotificationHost variant="editor" />
+    <!-- "Remove track…" from the track menu or the inspector asks here. -->
+    <RemoveTrackDialog />
     <GuideInvitation />
     <GuideCoach ref="coach" />
   </div>

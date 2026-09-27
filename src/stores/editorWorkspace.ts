@@ -46,6 +46,7 @@ import { fitZoom, msToX, TRACK_LABEL_WIDTH_PX } from "../editor/timelineLayout";
 import type { DeleteMode, Selected, Theme, Workspace } from "../editorTypes";
 import { logWarning } from "../logging";
 import { toEditorError, useEditorProjectStore } from "./editorProject";
+import { createSelection, pruneSelectedTrack } from "./workspaceSelection";
 
 const PERSIST_DEBOUNCE_MS = 750;
 
@@ -290,24 +291,10 @@ function createHydrator(
 }
 
 /** Every mutator — presentation state only, never `editorProject.execute`
- * (this task's own `toggleMonitorMute` test). Every one calls `persist`. */
+ * (this task's own `toggleMonitorMute` test). Every one calls `persist`.
+ * The selection's own live in `workspaceSelection.ts`. */
 function createMutators(f: WorkspaceFields, persist: () => void, getDurationMs: () => number) {
   return {
-    select(ids: string[]): void {
-      f.selectionClipIds.value = [...new Set(ids)];
-      persist();
-    },
-    setSelected(next: Selected | null): void {
-      f.selected.value = next;
-      persist();
-    },
-    /** A picture click (visual-parity Task 11, D15): these clips and no
-     * selected cue, in one persist. */
-    selectClipsOnly(ids: string[]): void {
-      f.selectionClipIds.value = [...new Set(ids)];
-      f.selected.value = null;
-      persist();
-    },
     setPlayhead(ms: number): void {
       f.playheadMs.value = clamp(ms, [0, getDurationMs()]);
       persist();
@@ -436,6 +423,11 @@ export const useEditorWorkspaceStore = defineStore("editorWorkspace", () => {
   // installed projection, not once per field inside it.
   const editorProject = useEditorProjectStore();
   const mutators = createMutators(fields, persist, () => editorProject.durationMs);
+  // Visual-parity Task 13: the selected track (view state, never persisted;
+  // `workspaceSelection.ts`), forgotten with the session that had it.
+  const selectedTrackId = ref<string | null>(null);
+  const selection = createSelection({ ...fields, selectedTrackId }, persist);
+  watch(sessionId, () => (selectedTrackId.value = null));
 
   // Visual-parity Task 4 (D4, D5): the window's size (session state, never
   // persisted — the shell keeps it current) and the library drawer, which
@@ -453,6 +445,7 @@ export const useEditorWorkspaceStore = defineStore("editorWorkspace", () => {
     () => {
       const knownIds = new Set((editorProject.project?.clips ?? []).map((c) => c.id));
       if (pruneSelection(fields, knownIds)) persist();
+      pruneSelectedTrack(selectedTrackId, (editorProject.project?.tracks ?? []).map((t) => t.id));
     },
   );
 
@@ -460,6 +453,7 @@ export const useEditorWorkspaceStore = defineStore("editorWorkspace", () => {
     sessionId,
     selectionClipIds: fields.selectionClipIds,
     selected: fields.selected,
+    selectedTrackId,
     playheadMs: fields.playheadMs,
     libraryTab: fields.libraryTab,
     propertyTab: fields.propertyTab,
@@ -484,6 +478,7 @@ export const useEditorWorkspaceStore = defineStore("editorWorkspace", () => {
     hydrate,
     persist,
     ...mutators,
+    ...selection,
     ...createRangeZoom(fields, persist),
     ...panels,
   };

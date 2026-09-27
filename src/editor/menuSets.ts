@@ -125,9 +125,10 @@ function flagItems(ctx: MenuContext, track: Track): MenuAction[] {
   ];
 }
 
-/** "Rename track…" and "Remove track…" hand over to the header that owns
- * the name field and the confirmation (`MenuContext.renameTrack` /
- * `removeTrack`). */
+/** "Rename track…" hands over to the header that owns the name field
+ * (`MenuContext.renameTrack`); "Remove track…" asks first when the track
+ * holds clips (`MenuContext.removeTrack` → `trackRemoval.ts`, the rule the
+ * inspector's Track properties share). */
 export function trackMenu(ctx: MenuContext, trackId: string): MenuItem[] {
   const project = ctx.action.project;
   const index = project?.tracks.findIndex((t) => t.id === trackId) ?? -1;

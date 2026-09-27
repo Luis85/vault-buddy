@@ -43,6 +43,7 @@ export interface MenuContext {
   addAssetOnFreeTrack(asset: Asset, startMs: number): void;
   addAssetOnNewTrack(asset: Asset, startMs: number): void;
   renameTrack(trackId: string): void;
+  /** Removes the track, asking first when it holds clips. */
   removeTrack(trackId: string): void;
   reconnect(assetId: string): void;
 }

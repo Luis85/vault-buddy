@@ -110,6 +110,13 @@
      `.canvas-wrap{background:#17151f}`): the same in both themes, like the
      card canvases above — it stands for the rendered video's own black. */
   --color-canvas: #17151f;
+  /* The colour treatments' sample picture (concept spec §5 `.filter-tile`):
+     a gradient, a lilac shape and "Aa", filtered per treatment — a picture,
+     so the same in both themes. */
+  --color-swatch-from: #244f4a;
+  --color-swatch-to: #efae77;
+  --color-swatch-shape: #cfade9;
+  --color-swatch-ink: #ffffff;
 
   /* Editor shell region sizes (the CONTRACT's 244/276, the concept's
      runtime values). Not a Tailwind namespace, so no utility class is

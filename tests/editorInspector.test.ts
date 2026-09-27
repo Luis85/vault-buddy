@@ -19,31 +19,31 @@ beforeEach(() => {
 });
 
 describe("InspectorPanel", () => {
+  // The frame and the none/track/multi states (visual-parity Task 13) are
+  // `editorInspectorStates.test.ts`'s; these pin the category tablist.
   it("no selection shows guidance, not disabled controls", () => {
     const w = mount(InspectorPanel);
 
-    expect(w.get('[data-testid="inspector-empty"]').text()).toBe("Select a clip to adjust it…");
-    expect(w.find('[data-testid="inspector-scope"]').exists()).toBe(false);
+    expect(w.get('[data-testid="inspector-empty"]').text()).toContain("Select something to shape it.");
     // SCREENS-AND-INTERACTIONS.md §02: "Unselected states teach what to do
     // next rather than filling the inspector with disabled controls" -- no
-    // element anywhere in the panel is disabled while nothing is selected.
+    // element anywhere in the panel is disabled while nothing is selected,
+    // and no category tab is offered for nothing.
     expect(w.findAll("[disabled]")).toHaveLength(0);
-    // The category chrome itself is unaffected by selection -- it is a view
-    // preference (`propertyTab`), not a selected-object control.
-    expect(w.get('[data-testid="inspector-tab-clip"]').attributes("aria-disabled")).toBeUndefined();
+    expect(w.find('[data-testid="inspector-tablist"]').exists()).toBe(false);
   });
 
-  it("multi-selection states its scope", () => {
+  it("several clips show the shared actions instead of one clip's categories", () => {
     const workspace = useEditorWorkspaceStore();
     workspace.select(["c1", "c2", "c3"]);
 
     const w = mount(InspectorPanel);
 
-    expect(w.get('[data-testid="inspector-scope"]').text()).toBe("3 clips selected");
-    expect(w.find('[data-testid="inspector-empty"]').exists()).toBe(false);
+    expect(w.get('[data-testid="inspector-title"]').text()).toBe("Selection properties");
+    expect(w.find('[data-testid="inspector-tablist"]').exists()).toBe(false);
   });
 
-  it("a single selection scopes the active slot without a banner", () => {
+  it("a single selection scopes the active slot", () => {
     const workspace = useEditorWorkspaceStore();
     workspace.select(["c1"]);
 
@@ -51,12 +51,12 @@ describe("InspectorPanel", () => {
       slots: { clip: `<template #clip="{ clipIds }"><p data-testid="clip-scope">{{ clipIds.join(",") }}</p></template>` },
     });
 
-    expect(w.find('[data-testid="inspector-scope"]').exists()).toBe(false);
     expect(w.find('[data-testid="inspector-empty"]').exists()).toBe(false);
     expect(w.get('[data-testid="clip-scope"]').text()).toBe("c1");
   });
 
-  it("renders all six categories, defaults to Clip, and switches on click", async () => {
+  it("renders all six categories for a picture clip, defaults to Clip, and switches on click", async () => {
+    useEditorWorkspaceStore().select(["c1"]);
     const w = mount(InspectorPanel);
     const ids = ["clip", "layout", "fades", "audio", "speed", "color"];
     for (const id of ids) {
@@ -75,17 +75,20 @@ describe("InspectorPanel", () => {
 
   it("falls back to Clip when the persisted tab names an unknown category", () => {
     const workspace = useEditorWorkspaceStore();
+    workspace.select(["c1"]);
     workspace.setPropertyTab("caption-settings"); // not one of the six inspector categories
     const w = mount(InspectorPanel);
     expect(w.get('[data-testid="inspector-tab-clip"]').attributes("aria-selected")).toBe("true");
   });
 
   it("arrow keys and Home/End move the active tab (roving tabindex)", async () => {
+    useEditorWorkspaceStore().select(["c1"]);
     const w = mount(InspectorPanel, { attachTo: document.body });
     const tablist = w.get('[data-testid="inspector-tablist"]');
 
     await tablist.trigger("keydown", { key: "ArrowRight" });
     expect(w.get('[data-testid="inspector-tab-layout"]').attributes("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(w.get('[data-testid="inspector-tab-layout"]').element);
 
     await tablist.trigger("keydown", { key: "ArrowLeft" });
     expect(w.get('[data-testid="inspector-tab-clip"]').attributes("aria-selected")).toBe("true");
