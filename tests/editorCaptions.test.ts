@@ -71,6 +71,14 @@ function cue(id: string, start_ms: number, end_ms: number, text: string): Captio
   return { id, clip_id: "c1", start_ms, end_ms, text };
 }
 
+/** `core::editor::commands::captions::split_words`, verbatim in TS: the
+ * left half is round(words × fraction), clamped to [1, words - 1]. */
+function rustSplitWords(text: string, fraction: number): [string, string] {
+  const words = text.split(/\s+/).filter(Boolean);
+  const left = Math.min(Math.max(Math.round(words.length * fraction), 1), words.length - 1);
+  return [words.slice(0, left).join(" "), words.slice(left).join(" ")];
+}
+
 // Output spans at speed 2 from output 1000:
 // capA [2000,4000) -> [1000,2000), 11 chars in 1 s
 // capB [4000,6000) -> [2000,3000), 21 chars in 1 s: over the 20 cps line
@@ -296,14 +304,56 @@ describe("CaptionsLibrary authoring", () => {
     expect(add.attributes("title")).toMatch(/clip/i);
   });
 
-  // visual-parity Task 10 (concept §3.4): each card's own "Split cue"
-  // divides its words in two and its SOURCE span in the same proportion —
-  // "Hello there" is 5 + 5 characters, so capA [2000, 4000) splits at 3000.
-  it("Split cue divides a card's text and its SOURCE span in proportion", async () => {
+  // visual-parity Task 10 (concept §3.4): each card's own "Split cue". With
+  // the playhead outside the cue it splits between the middle words — "Hello
+  // there" is two words, so capA [2000, 4000) splits at half its time.
+  it("Split cue splits between the middle words when the playhead is outside the cue", async () => {
     const w = await mountLibrary(project(), null, 9_000);
-    await w.get('[data-testid="caption-split-capA"]').trigger("click");
+    const split = w.get('[data-testid="caption-split-capA"]');
+    expect(split.attributes("title")).toBe("Split between the middle words; the playhead is not inside this caption");
+    await split.trigger("click");
     await flushPromises();
     expect(executed).toEqual([{ kind: "splitCaption", captionId: "capA", atMs: 3_000 }]);
+  });
+
+  // Fix round 1 (review finding 1): the split at a chosen instant survives —
+  // with the playhead strictly inside the cue, Split cue splits THERE, at
+  // its SOURCE instant (output 1250 on c1 = 2000 + 250 × 2 = 2500).
+  it("Split cue splits at the playhead when the playhead is inside the cue", async () => {
+    const w = await mountLibrary(project(), null, 1_250);
+    const split = w.get('[data-testid="caption-split-capA"]');
+    expect(split.attributes("title")).toBe("Split at the playhead");
+    await split.trigger("click");
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "splitCaption", captionId: "capA", atMs: 2_500 }]);
+  });
+
+  // Fix round 1 (review finding 2): Rust's `split_words` cuts the text by
+  // WORD COUNT in the time's proportion — round(words × fraction) — so the
+  // middle split must pick its instant by words, not characters. An
+  // asymmetric cue: by characters "a b" | "c ddd…" would land at 3/21 of
+  // the time, where Rust keeps only "a" on the left.
+  it("the middle split's instant makes Rust keep the first half of the WORDS", async () => {
+    const text = "a b c dddddddddddddddd";
+    const w = await mountLibrary(project([cue("capW", 2_000, 4_000, text)]), null, 9_000);
+    await w.get('[data-testid="caption-split-capW"]').trigger("click");
+    await flushPromises();
+    const sent = executed[0] as { kind: "splitCaption"; atMs: number };
+    expect(sent).toEqual({ kind: "splitCaption", captionId: "capW", atMs: 3_000 });
+    expect(rustSplitWords(text, (sent.atMs - 2_000) / 2_000)).toEqual(["a b", "c dddddddddddddddd"]);
+  });
+
+  it("Split cue says why on a locked track and on a caption too short to split", async () => {
+    const locked = project();
+    locked.tracks[0].locked = true;
+    const w = await mountLibrary(locked, null, 9_000);
+    expect(w.get('[data-testid="caption-split-capA"]').attributes("title")).toBe("Track Screen is locked");
+    expect(w.get('[data-testid="caption-split-capA"]').attributes("disabled")).toBeDefined();
+
+    const short = await mountLibrary(project([cue("capS", 2_000, 2_001, "one two three")]), null, 9_000);
+    const split = short.get('[data-testid="caption-split-capS"]');
+    expect(split.attributes("disabled")).toBeDefined();
+    expect(split.attributes("title")).toBe("This caption is too short to split.");
   });
 
   it("Split cue is disabled, and says why, for a one-word caption", async () => {
@@ -497,6 +547,8 @@ describe("CaptionsLibrary — concept §3.4", () => {
     expect(time.text()).toBe("0:01.0 — 0:02.0");
     expect(time.classes()).toEqual(expect.arrayContaining(["font-mono", "text-gold"]));
     expect(w.get('[data-testid="caption-body-capA"]').text()).toBe("Hello there");
+    // The caption text is part of the button's accessible name (review minor 4).
+    expect(w.get('[data-testid="caption-body-capA"]').attributes("aria-label")).toBe("Edit caption 1: Hello there");
     expect(w.get('[data-testid="caption-edit-capA"]').attributes("aria-label")).toBe("Edit caption 1");
     expect(w.get('[data-testid="caption-split-capA"]').text()).toBe("Split cue");
     expect(w.get('[data-testid="caption-delete-capA"]').attributes("aria-label")).toBe("Delete caption 1");

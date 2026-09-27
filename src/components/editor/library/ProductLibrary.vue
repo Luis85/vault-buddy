@@ -4,8 +4,8 @@
  * the library's Project section (`ProjectSection`, visual-parity Task 10,
  * design D9 — Products left the tabs). A "RENDERED PRODUCTS" heading with
  * the count, then one `ProductCard` per ledger entry, newest first: name,
- * the revision it was rendered from (and whether that is the revision on
- * screen), its range, when it was made, and whether its file is still on
+ * the revision it was rendered from (and whether this session rendered it
+ * from the edit on screen, `editorProducts.matchesEdit`), its range, when it was made, and whether its file is still on
  * disk — or the concept's dashed "No renders yet" (§3.6).
  *
  * **Watch** plays the ACTUAL encoded file (`ProductPlayer`, fed by
@@ -33,7 +33,6 @@ import ProductCard from "./ProductCard.vue";
 const editorProject = useEditorProjectStore();
 const products = useEditorProductsStore();
 const newestFirst = computed(() => products.current.slice().reverse());
-const onScreenRevision = computed(() => editorProject.snapshot?.revision ?? null);
 
 onMounted(() => void products.refresh());
 watch(
@@ -97,7 +96,7 @@ async function confirmRestore(id: string): Promise<void> {
       v-for="p in newestFirst"
       :key="p.id"
       :product="p"
-      :current="p.revision === onScreenRevision"
+      :current="products.matchesEdit(p)"
       :watching="watchingId === p.id"
       :confirming="confirmingId === p.id"
       :busy="restoringId !== null"

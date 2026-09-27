@@ -166,23 +166,52 @@ export function addCaptionAt(project: Project | null, selectedClipIds: string[],
   return { command: { kind: "addCaption", clipId: clip.id, startMs, endMs, text: NEW_CAPTION_TEXT } };
 }
 
-/** A card's own "Split cue" (visual-parity Task 10, concept spec §3.4):
- * the words divide in two (the first half takes the extra one) and the
- * cue's SOURCE span divides in the same proportion of characters — Rust's
- * `splitCaption` then cuts the text at that instant. */
-export function splitCaptionCue(project: Project | null, row: CaptionRow): Draft {
+/** A "Split cue" draft, and — when it can run — which instant it uses. */
+export type SplitDraft = { command: EditorCommand; hint: string } | { reason: string };
+
+const SPLIT_AT_PLAYHEAD = "Split at the playhead";
+const SPLIT_IN_MIDDLE = "Split between the middle words; the playhead is not inside this caption";
+
+/** The playhead's SOURCE instant when it lies strictly inside `row`'s cue. */
+function playheadInside(row: CaptionRow, t: number): number | null {
+  const at = sourceAt(clipSpanOf(row.clip), t);
+  return at !== null && at > row.cue.start_ms && at < row.cue.end_ms ? at : null;
+}
+
+/** Rust's `split_words` left-half size for a split at `atMs`:
+ * round(words · fraction of the cue's time), clamped to [1, words - 1]. */
+function rustLeftWords(words: number, cue: CaptionCue, atMs: number): number {
+  const fraction = (atMs - cue.start_ms) / (cue.end_ms - cue.start_ms);
+  return Math.min(Math.max(Math.round(words * fraction), 1), words - 1);
+}
+
+/** The instant whose time fraction makes Rust keep the first ⌈n/2⌉ words
+ * on the left — `split_words` divides the text by WORD COUNT in the same
+ * proportion as time, so time follows the word split. `null` when the cue
+ * is too short for any instant to land that split. */
+function middleInstant(cue: CaptionCue, words: number): number | null {
+  const middle = Math.ceil(words / 2);
+  const at = Math.round(cue.start_ms + ((cue.end_ms - cue.start_ms) * middle) / words);
+  const inside = at > cue.start_ms && at < cue.end_ms;
+  return inside && rustLeftWords(words, cue, at) === middle ? at : null;
+}
+
+/** A card's own "Split cue" (visual-parity Task 10, concept spec §3.4; fix
+ * round 1): at the playhead when it lies strictly inside the cue — the
+ * split-at-a-chosen-instant this list had before — else between the
+ * middle words (the first half takes the extra one). Either way Rust's
+ * `splitCaption` divides the words by the same proportion as the time. */
+export function splitCaptionCue(project: Project | null, row: CaptionRow, playheadMs: number): SplitDraft {
   if (!project) return { reason: NO_PROJECT };
   const locked = lockReason(project, row.clip);
   if (locked) return { reason: locked };
-  const words = row.cue.text.trim().split(/\s+/);
-  if (words.length < 2) return { reason: ONE_WORD };
-  const middle = Math.ceil(words.length / 2);
-  const left = words.slice(0, middle).join(" ").length;
-  const right = words.slice(middle).join(" ").length;
-  const { start_ms: start, end_ms: end } = row.cue;
-  const atMs = Math.round(start + ((end - start) * left) / (left + right));
-  if (atMs <= start || atMs >= end) return { reason: TOO_SHORT_TO_SPLIT };
-  return { command: { kind: "splitCaption", captionId: row.cue.id, atMs } };
+  const words = row.cue.text.trim().split(/\s+/).length;
+  if (words < 2) return { reason: ONE_WORD };
+  const atPlayhead = playheadInside(row, playheadMs);
+  const atMs = atPlayhead ?? middleInstant(row.cue, words);
+  if (atMs === null) return { reason: TOO_SHORT_TO_SPLIT };
+  const hint = atPlayhead !== null ? SPLIT_AT_PLAYHEAD : SPLIT_IN_MIDDLE;
+  return { command: { kind: "splitCaption", captionId: row.cue.id, atMs }, hint };
 }
 
 function verdictOf(draft: Draft): Verdict {

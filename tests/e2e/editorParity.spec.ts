@@ -173,6 +173,10 @@ test.describe("parity 1600x1000: the captions library (screen 06)", () => {
     await expect(page.getByTestId("caption-settings").locator("summary")).toHaveText("Caption appearance");
     await expect(page.getByTestId("caption-time-cap1")).toHaveCSS("color", "rgb(235, 197, 130)");
     await expect(page.getByTestId("caption-export-srt")).toHaveText("Export timeline SRT");
+    // One scroller (fix round 1): the tab scrolls, the windowed list inside
+    // it does not scroll on its own.
+    expect(await page.getByTestId("caption-list").evaluate((el) => getComputedStyle(el).overflowY)).toBe("visible");
+    expect(await page.getByTestId("captions-library").evaluate((el) => getComputedStyle(el).overflowY)).toBe("auto");
   });
 
   // A scrolling flex column shrank the intro button (min-height 32 from the

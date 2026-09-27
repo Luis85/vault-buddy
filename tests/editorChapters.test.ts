@@ -198,6 +198,9 @@ describe("ChaptersLibrary", () => {
     await flushPromises();
     expect(executed).toEqual([{ kind: "updateMarker", markerId: "m1", title: "Too long for Rust, say" }]);
     expect((title.element as HTMLInputElement).value).toBe("Wrap up");
+    // Fix round 1 (Task 10): a refusal keeps the row in edit mode, so the
+    // person sees the stored title and can try again.
+    expect(w.find('[data-testid="chapter-title-m1"]').exists()).toBe(true);
   });
 });
 

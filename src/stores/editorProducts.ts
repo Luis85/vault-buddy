@@ -13,6 +13,15 @@
  * switch `current` is empty until the next read, never the previous
  * project's products. A read that lands after a newer one was asked for,
  * or after the session changed, is dropped.
+ *
+ * **"Matches this edit"** (visual-parity Task 10 fix round 1): the webview
+ * cannot compute the current edit's fingerprint, and a revision number
+ * repeats across sessions (a reopen resumes at the persisted revision, and
+ * the ledger keeps renders of unsaved edits). So `matchesEdit` claims a
+ * match only for a product whose render finished in THIS session
+ * (`noteRendered`, from `editorJobs.install`) at the revision on screen —
+ * within one session revisions only grow — and otherwise errs toward
+ * "Earlier edit".
  */
 import { defineStore } from "pinia";
 
@@ -28,6 +37,9 @@ export const useEditorProductsStore = defineStore("editorProducts", {
     error: null as EditorError | null,
     /** Bumped per read; only the newest read installs. */
     ticket: 0,
+    /** Product id → the session whose render made it, for renders this
+     * webview saw finish. */
+    renderedIn: {} as Record<string, string>,
   }),
   getters: {
     /** The open session's products, oldest first (the ledger's order). */
@@ -38,6 +50,16 @@ export const useEditorProductsStore = defineStore("editorProducts", {
     },
   },
   actions: {
+    /** A render of `sessionId` finished as `productId`. */
+    noteRendered(sessionId: string, productId: string): void {
+      this.renderedIn = { ...this.renderedIn, [productId]: sessionId };
+    },
+    /** Rendered by the open session from the revision on screen. */
+    matchesEdit(product: ProductDto): boolean {
+      const project = useEditorProjectStore();
+      const renderedHere = project.sessionId !== null && this.renderedIn[product.id] === project.sessionId;
+      return renderedHere && product.revision === project.snapshot?.revision;
+    },
     /** Re-read the ledger for the open session. */
     async refresh(): Promise<void> {
       const project = useEditorProjectStore();

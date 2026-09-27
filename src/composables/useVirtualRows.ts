@@ -9,6 +9,11 @@
  * `clientHeight` is 0 before layout (and always in happy-dom), so an
  * unmeasured viewport falls back to `fallbackHeight` rather than rendering
  * nothing.
+ *
+ * The list need not be the viewport's only content (visual-parity Task 10
+ * fix round 1: the Captions tab is ONE scroller with the list inside it):
+ * `listOffset()` is where the list starts within the viewport's scrolled
+ * content, and the window is measured from there.
  */
 import type { Ref } from "vue";
 import { computed, ref } from "vue";
@@ -34,6 +39,7 @@ export function useVirtualRows(
   rowHeight: number,
   fallbackHeight = 360,
   overscan = 4,
+  listOffset: () => number = () => 0,
 ): VirtualRows {
   const viewport = ref<HTMLElement | null>(null);
   const scrollTop = ref(0);
@@ -41,8 +47,9 @@ export function useVirtualRows(
   const range = computed<VirtualRange>(() => {
     const total = count();
     const height = viewport.value?.clientHeight || fallbackHeight;
-    const first = Math.max(0, Math.floor(scrollTop.value / rowHeight) - overscan);
-    const last = Math.min(total, Math.ceil((scrollTop.value + height) / rowHeight) + overscan);
+    const top = Math.max(0, scrollTop.value - listOffset());
+    const first = Math.max(0, Math.floor(top / rowHeight) - overscan);
+    const last = Math.min(total, Math.ceil((top + height) / rowHeight) + overscan);
     return { first, last, padTop: first * rowHeight, padBottom: Math.max(0, total - last) * rowHeight };
   });
 
@@ -51,7 +58,7 @@ export function useVirtualRows(
   }
 
   function scrollToIndex(index: number): void {
-    const top = Math.max(0, index) * rowHeight;
+    const top = listOffset() + Math.max(0, index) * rowHeight;
     if (viewport.value) viewport.value.scrollTop = top;
     scrollTop.value = top;
   }

@@ -12,8 +12,8 @@
  * go, and each says why (R20: a disabled control carries a reason).
  *
  * Visual-parity Task 10 (concept spec §3.6 `.product-card`): a 9px-radius
- * card — a pill saying whether it "Matches this edit" (rendered from the
- * revision on screen) or an "Earlier edit", the mono revision, the name,
+ * card — a pill saying whether it "Matches this edit" (rendered by this
+ * session from the edit on screen) or an "Earlier edit", the mono revision, the name,
  * the length and range, when it was made, then Watch and Publish as small
  * bordered buttons and Restore as the concept's undo icon.
  */
@@ -32,7 +32,8 @@ const props = defineProps<{
   confirming: boolean;
   /** A restore is in flight somewhere in the library. */
   busy: boolean;
-  /** Rendered from the revision on screen. */
+  /** Rendered by this session from the edit on screen
+   * (`editorProducts.matchesEdit`). */
   current: boolean;
 }>();
 const emit = defineEmits<{

@@ -245,7 +245,9 @@ export const useEditorJobsStore = defineStore("editorJobs", {
         void useEditorProjectStore().refresh();
       }
       if (!wasTerminal && next.terminal?.productId) {
-        void useEditorProductsStore().refresh();
+        const products = useEditorProductsStore();
+        products.noteRendered(next.sessionId, next.terminal.productId);
+        void products.refresh();
       }
     },
     /** Open one job's Channel through `start` and resolve its id. Messages

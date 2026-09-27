@@ -15,10 +15,11 @@ import LibraryPanel from "../src/components/editor/library/LibraryPanel.vue";
 import ProjectSection from "../src/components/editor/library/ProjectSection.vue";
 import { requestReveal, revealSerial } from "../src/editor/revealBus";
 import { revealWorkspaceProducts } from "../src/editor/revealProducts";
+import { useEditorJobsStore } from "../src/stores/editorJobs";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
-import { openWithRenders, product } from "./helpers/renderFixtures";
+import { openWithRenders, product, progress } from "./helpers/renderFixtures";
 
 enableAutoUnmount(afterEach);
 
@@ -44,14 +45,33 @@ describe("ProjectSection", () => {
     expect(w.get('[data-testid="project-summary"]').text()).toContain("Walkthrough");
   });
 
-  it("lists each rendered product with Watch and Restore, and says whether it matches this edit", async () => {
-    const w = await section([product(), product({ id: "prod-now", name: "Current cut", revision: 7 })]);
+  it("lists each rendered product with Watch and Restore", async () => {
+    const w = await section([product()]);
     const earlier = w.get('[data-testid="product-card-prod-a"]');
     expect(earlier.get('[data-testid="product-match-prod-a"]').text()).toBe("Earlier edit");
     expect(earlier.find('[data-testid="product-watch-prod-a"]').exists()).toBe(true);
     expect(earlier.get('[data-testid="product-restore-prod-a"]').attributes("aria-label")).toBe(
       "Restore the edit Walkthrough v1 was rendered from",
     );
+  });
+
+  // Fix round 1 (review finding 3): revisions repeat across sessions (a
+  // reopen resumes at the persisted revision, and the ledger keeps unsaved
+  // renders), so revision equality alone never claims a match. Only a
+  // product whose render finished in THIS session, at the revision on
+  // screen, "Matches this edit".
+  it("claims a match only for a product this session rendered at the revision on screen", async () => {
+    const same = product({ id: "prod-now", name: "Current cut", revision: 7 });
+    const getProducts = vi.fn(() => Promise.resolve([same]));
+    const { deliver } = await openWithRenders({ getProducts });
+    const w = mount(ProjectSection);
+    await flushPromises();
+    // Rendered at r7 — but not by this session: it may be another edit's r7.
+    expect(w.get('[data-testid="product-match-prod-now"]').text()).toBe("Earlier edit");
+
+    await useEditorJobsStore().startRender({ name: "Current cut", range: null, quality: "balanced" });
+    deliver(0, progress("job-0", { sequence: 2, phase: "complete", fraction: 1, terminal: { productId: "prod-now" } }));
+    await flushPromises();
     expect(w.get('[data-testid="product-match-prod-now"]').text()).toBe("Matches this edit");
   });
 

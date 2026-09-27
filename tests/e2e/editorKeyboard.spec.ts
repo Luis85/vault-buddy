@@ -482,8 +482,9 @@ for (const theme of ["light", "dark"] as const) {
 }
 
 // visual-parity Task 10: the library's Titles, Captions and Chapters tabs
-// and its Project section (with a product rendered from the revision on
-// screen, so its "Matches this edit" pill is measured) are surfaces too.
+// and its Project section (with a product card, so its "Earlier edit" pill
+// is measured — only a render this session finished can match) are
+// surfaces too.
 const PRODUCT = {
   id: "prod-keys",
   projectId: "project-keys",
@@ -506,7 +507,7 @@ for (const theme of ["light", "dark"] as const) {
       expect(await lowContrast(page), tab).toEqual([]);
     }
     await page.getByTestId("editor-statusbar-products").click();
-    await expect(page.getByTestId("product-match-prod-keys")).toHaveText("Matches this edit");
+    await expect(page.getByTestId("product-match-prod-keys")).toHaveText("Earlier edit");
     expect(await lowContrast(page)).toEqual([]);
   });
 }

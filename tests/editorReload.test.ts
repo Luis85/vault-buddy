@@ -179,7 +179,7 @@ describe("a reload of the editor webview", () => {
   });
 
   // The media library reconciles on its own mount, but it is not mounted
-  // while the Titles or Products tab is the one open: the root's reconcile
+  // while another tab or the Project section is open: the root's reconcile
   // for every new session is what finds the render then.
   it("finds a running render even when the media library is not mounted", async () => {
     const rust = rustStash({ kind: "project", value: "project-r" });
@@ -191,7 +191,7 @@ describe("a reload of the editor webview", () => {
     expect(w.get('[data-testid="render-progress-phase"]').text()).toBe("Preparing the render…");
   });
 
-  // A finished render is in the Products tab; there is nothing to follow.
+  // A finished render is in the Project section; there is nothing to follow.
   it("opens no dialog when no render is running", async () => {
     const rust = rustStash({ kind: "project", value: "project-r" });
     const { port } = reusingPort(rust, {

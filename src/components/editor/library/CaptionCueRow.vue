@@ -17,7 +17,7 @@
  * does not change then, so Vue would never re-patch `:value` and the field
  * would keep showing a value that is not the stored one).
  */
-import type { CaptionRow } from "../../../editor/captionRules";
+import type { CaptionRow, SplitDraft } from "../../../editor/captionRules";
 import { formatOutputTime } from "../../../editor/captionRules";
 import EditorIcon from "../icons/EditorIcon.vue";
 
@@ -26,8 +26,8 @@ const props = defineProps<{
   selected: boolean;
   height: number;
   editing: boolean;
-  /** Why "Split cue" cannot run, or `null`. */
-  splitReason: string | null;
+  /** What "Split cue" would send (and where), or why it cannot. */
+  split: SplitDraft;
 }>();
 
 /** Puts the stored value back into the field that emitted. */
@@ -147,7 +147,7 @@ function onTime(which: "start" | "end", event: Event): void {
       v-else
       type="button"
       :data-testid="`caption-body-${row.cue.id}`"
-      :aria-label="`Edit caption ${row.index} text`"
+      :aria-label="`Edit caption ${row.index}: ${row.cue.text}`"
       class="flex min-h-0 flex-1 items-start rounded p-0 text-left text-[11px] leading-[1.6] text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       @click="emit('edit')"
     >
@@ -157,8 +157,8 @@ function onTime(which: "start" | "end", event: Event): void {
       <button
         type="button"
         :data-testid="`caption-split-${row.cue.id}`"
-        :disabled="splitReason !== null"
-        :title="splitReason ?? 'Split text and divide its duration'"
+        :disabled="'reason' in split"
+        :title="'reason' in split ? split.reason : split.hint"
         class="min-h-0 rounded px-0 py-[3px] text-[9px] text-fg-secondary hover:bg-transparent hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="emit('split')"
       >

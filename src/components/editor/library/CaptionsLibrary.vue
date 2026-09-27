@@ -21,14 +21,17 @@
  * plain words, rather than leaving an empty list to imply one is coming.
  *
  * The list is windowed (`useVirtualRows`): a project may hold 2000
- * captions, each row an editable text box and two time fields.
+ * captions, each a card that can turn into fields. The tab is ONE scroller
+ * (fix round 1): the root scrolls, and the window is measured from where
+ * the list starts inside it (`listOffset`), so the list never scrolls on
+ * its own inside a scrolling tab.
  */
 import { computed, onMounted, ref, watch } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useVirtualRows } from "../../../composables/useVirtualRows";
 import { clipSpanOf, lockedTrackName } from "../../../editor/actionTargets";
-import type { CaptionRow, Draft } from "../../../editor/captionRules";
+import type { CaptionRow, Draft, SplitDraft } from "../../../editor/captionRules";
 import {
   addCaptionAt,
   captionNotices,
@@ -92,11 +95,25 @@ const replace = ref(false);
 const importing = ref(false);
 const importStatus = ref<string | null>(null);
 
-const { viewport, range, onScroll, scrollToIndex } = useVirtualRows(() => rows.value.length, ROW_HEIGHT);
+/** The list sits inside the tab's one scroller (the root); its top within
+ * that scroller is where the window is measured from. */
+const listEl = ref<HTMLElement | null>(null);
+const { viewport, range, onScroll, scrollToIndex } = useVirtualRows(
+  () => rows.value.length,
+  ROW_HEIGHT,
+  undefined,
+  undefined,
+  () => listEl.value?.offsetTop ?? 0,
+);
 const visible = computed(() => rows.value.slice(range.value.first, range.value.last));
 
-function setViewport(el: unknown): void {
+function bindRoot(el: unknown): void {
+  guideTarget(el as Element | null);
   viewport.value = (el as HTMLElement | null) ?? null;
+}
+
+function splitFor(row: CaptionRow): SplitDraft {
+  return splitCaptionCue(project.project, row, workspace.playheadMs);
 }
 
 function send(draft: Draft): void {
@@ -175,9 +192,10 @@ function selectCue(row: CaptionRow): void {
 
 <template>
   <div
-    :ref="guideTarget"
+    :ref="bindRoot"
     data-testid="captions-library"
-    class="flex h-full flex-col overflow-y-auto text-fg"
+    class="relative flex h-full flex-col overflow-y-auto text-fg"
+    @scroll="onScroll"
   >
     <LibraryHeading
       label="EVERY WORD, ACCESSIBLE"
@@ -241,10 +259,9 @@ function selectCue(row: CaptionRow): void {
     </p>
     <div
       v-else
-      :ref="setViewport"
+      ref="listEl"
       data-testid="caption-list"
-      class="min-h-48 flex-1 overflow-y-auto"
-      @scroll="onScroll"
+      class="shrink-0"
     >
       <ul
         aria-label="Captions"
@@ -257,14 +274,14 @@ function selectCue(row: CaptionRow): void {
           :height="ROW_HEIGHT"
           :selected="row.cue.id === selectedId"
           :editing="row.cue.id === editingId"
-          :split-reason="reasonOf(splitCaptionCue(project.project, row))"
+          :split="splitFor(row)"
           @text="(value, revert) => updateText(row, value, revert)"
           @start="(ms, revert) => updateStart(row, ms, revert)"
           @end="(ms, revert) => updateEnd(row, ms, revert)"
           @remove="remove(row)"
           @edit="toggleEdit(row)"
           @select="selectCue(row)"
-          @split="send(splitCaptionCue(project.project, row))"
+          @split="send(splitFor(row))"
         />
       </ul>
     </div>
