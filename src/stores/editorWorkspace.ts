@@ -198,8 +198,13 @@ function pruneSelection(f: WorkspaceFields, knownClipIds: ReadonlySet<string>): 
 
 /** A debounced `editor_save_workspace` sender, its timer private to the
  * closure this factory returns — each store instance calls this exactly
- * once, so the timer is never shared across instances (or leaked across
- * `setActivePinia(createPinia())` test resets). */
+ * once, so the timer is never SHARED across instances. It can still
+ * OUTLIVE one: nothing cancels a pending save when a test resets with
+ * `setActivePinia(createPinia())`, so it fires up to 750 ms later against
+ * that instance's own port and session — a test that changes a workspace
+ * field must give its port a `saveWorkspace`. Its callback reads refs and
+ * calls the port directly, never a store action (AGENTS.md § Testing
+ * conventions), so a late fire re-activates no stale pinia. */
 function createPersister(
   port: Ref<EditorPort>,
   sessionId: Ref<string | null>,

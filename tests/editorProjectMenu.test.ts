@@ -57,6 +57,10 @@ async function mountRoot(overrides: Partial<EditorPort> = {}): Promise<VueWrappe
     openProject: (id) => Promise.resolve(id === "proj-b" ? result("proj-b", "Second") : result("proj-a", "First")),
     listProjects: () => Promise.resolve([CURRENT, OTHER]),
     getWorkspace: () => Promise.resolve({}),
+    // "Workspace & rendered products" changes the library tab, which
+    // schedules the store's 750 ms debounced save; that timer outlives its
+    // test and fires during a later one (reliably under coverage timing).
+    saveWorkspace: () => Promise.resolve(),
     getJobs: () => Promise.resolve([]),
     getChecks: () => Promise.resolve([]),
     getProducts: () => Promise.resolve([]),
