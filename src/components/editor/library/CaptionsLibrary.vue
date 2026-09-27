@@ -176,11 +176,15 @@ function changeSettings(patch: CaptionSettingsPatch): void {
 }
 
 /** Task 54: a caption finding opens this tab with its cue already
- * selected (`checkReveal.ts`) — scroll the cue into the list. */
-onMounted(() => {
+ * selected (`checkReveal.ts`) — scroll the cue into the list; and so does
+ * a caption chosen on the timeline's Captions row while the tab is already
+ * open (visual-parity Task 19). */
+function scrollToSelected(): void {
   const i = rows.value.findIndex((row) => row.cue.id === selectedId.value);
   if (i !== -1) scrollToIndex(i);
-});
+}
+onMounted(scrollToSelected);
+watch(selectedId, scrollToSelected);
 
 /** "Select cue": select it, move the playhead onto it, scroll it in. */
 function selectCue(row: CaptionRow): void {

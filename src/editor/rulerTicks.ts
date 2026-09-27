@@ -54,3 +54,15 @@ export function rulerTicks(pps: number, widthPx: number): RulerTick[] {
   }
   return out;
 }
+
+/** A lane's background: a 1px grid line at every ruler tick (§6.4), the
+ * track lanes' and the Teaching layers row's alike. `pxPerSecond` is the
+ * zoom's own scale; float noise (`0.05 × 3 × 1000`) never reaches the
+ * stylesheet. */
+export function laneGridStyle(pxPerSecond: number, widthPx: number): Record<string, string> {
+  return {
+    width: `${widthPx}px`,
+    backgroundImage: "linear-gradient(to right, var(--color-line) 1px, transparent 1px)",
+    backgroundSize: `${Number((tickStep(pxPerSecond) * pxPerSecond).toFixed(3))}px 100%`,
+  };
+}

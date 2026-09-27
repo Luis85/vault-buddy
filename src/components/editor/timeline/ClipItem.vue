@@ -41,13 +41,13 @@
  * Shift+F10/Menu.
  */
 import type { ComponentPublicInstance } from "vue";
-import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, ref } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useTimelineDrag } from "../../../composables/useTimelineDrag";
 import { hasPreviewSource } from "../../../editor/previewLayers";
 import { isContextMenuShortcut } from "../../../editor/shortcuts";
-import { SNAP_GUIDE_KEY } from "../../../editor/snapGuide";
+import { useSnapGuideReport } from "../../../editor/snapGuide";
 import { MIN_CLIP_WIDTH_PX, msToX, snapTargets as computeSnapTargets } from "../../../editor/timelineLayout";
 import { clipOutputDuration, clipOutputEnd } from "../../../editor/timeMap";
 import { trackAccepts } from "../../../editor/trackCompat";
@@ -148,13 +148,7 @@ const drag = useTimelineDrag({
 });
 
 /** The dashed guide `TimelineView` draws while this clip's drag snaps. */
-const snapGuide = inject(SNAP_GUIDE_KEY, null);
-watch(drag.snapGuideMs, (ms) => {
-  if (snapGuide) snapGuide.value = ms;
-});
-onBeforeUnmount(() => {
-  if (snapGuide && drag.snapGuideMs.value !== null) snapGuide.value = null;
-});
+useSnapGuideReport(drag.snapGuideMs);
 
 const root = ref<HTMLElement | null>(null);
 /** The guide's `clip.selected` (Task 55): this clip, while it is selected. */

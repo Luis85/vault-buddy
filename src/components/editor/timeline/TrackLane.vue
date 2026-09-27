@@ -48,7 +48,7 @@
 import { computed, ref } from "vue";
 
 import { lockedReason } from "../../../editor/actionMeta";
-import { tickStep } from "../../../editor/rulerTicks";
+import { laneGridStyle } from "../../../editor/rulerTicks";
 import { isContextMenuShortcut } from "../../../editor/shortcuts";
 import { LANE_HEIGHT_PX, msToX, pxPerMs } from "../../../editor/timelineLayout";
 import { clipOutputEnd } from "../../../editor/timeMap";
@@ -148,15 +148,7 @@ function onHeaderKeydown(event: KeyboardEvent): void {
 }
 
 /** One grid line per ruler tick, at the ruler's own step (§6.4). */
-const laneStyle = computed(() => {
-  const pps = pxPerMs(props.zoom) * 1000;
-  return {
-    width: `${props.widthPx}px`,
-    backgroundImage: "linear-gradient(to right, var(--color-line) 1px, transparent 1px)",
-    // Float noise (`0.05 × 3 × 1000`) never reaches the stylesheet.
-    backgroundSize: `${Number((tickStep(pps) * pps).toFixed(3))}px 100%`,
-  };
-});
+const laneStyle = computed(() => laneGridStyle(pxPerMs(props.zoom) * 1000, props.widthPx));
 const laneClass = computed(() => [
   props.track.locked ? "vb-lane-locked pointer-events-none" : "",
   dropReason.value ? "cursor-not-allowed" : "",

@@ -131,3 +131,14 @@ export function revealFinding(finding: CheckFinding): boolean {
   REVEALERS[finding.action](useEditorWorkspaceStore(), project, finding);
   return true;
 }
+
+/** A caption on the timeline's Captions row (visual-parity Task 19): the
+ * Captions tab, open on that cue — what a caption finding's "Open
+ * Captions" does. */
+export function openCaptionCue(id: string): void {
+  const project = useEditorProjectStore().project;
+  if (!project) return;
+  const ws = useEditorWorkspaceStore();
+  openLibrary(ws, "captions");
+  showCaption(ws, project, id);
+}

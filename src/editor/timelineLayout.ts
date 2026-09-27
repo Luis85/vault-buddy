@@ -190,12 +190,19 @@ export function visibleClips(
   width: number,
   zoom: number,
 ): Clip[] {
-  const ppm = pxPerMs(zoom);
-  if (ppm <= 0) return [...clips];
-  const pad = Math.max(width, 0);
-  const loMs = (scrollLeft - pad) / ppm;
-  const hiMs = (scrollLeft + width + pad) / ppm;
+  const [loMs, hiMs] = visibleWindowMs(scrollLeft, width, zoom);
   return clips.filter((c) => clipOutputEnd(clipSpanOf(c)) > loMs && c.start_ms < hiMs);
+}
+
+/** The OUTPUT window `visibleClips` keeps, `[lo, hi)` in ms — shared with
+ * the Teaching layers and Captions rows (visual-parity Task 19), whose cues
+ * mount and unmount at the same screen's distance as the clips. A
+ * non-positive zoom keeps everything. */
+export function visibleWindowMs(scrollLeft: number, width: number, zoom: number): [number, number] {
+  const ppm = pxPerMs(zoom);
+  if (ppm <= 0) return [Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY];
+  const pad = Math.max(width, 0);
+  return [(scrollLeft - pad) / ppm, (scrollLeft + width + pad) / ppm];
 }
 
 /**

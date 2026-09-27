@@ -118,6 +118,12 @@
      into its own fill, so it follows the theme with the pair. */
   --color-clip-video-edge: color-mix(in srgb, var(--color-video) 48%, var(--color-video-bg));
   --color-clip-audio-edge: color-mix(in srgb, var(--color-audio) 46%, var(--color-audio-bg));
+  /* The Teaching layers row (§6.4 `.track-row.fx`, `.fx-clip`) and the
+     Captions row's cues (`.caption-cue`): mixes of the theme's own pair,
+     so they follow it. */
+  --color-teaching-row: color-mix(in srgb, var(--color-accent-bg) 14%, var(--color-panel));
+  --color-cue-edge: color-mix(in srgb, var(--color-accent) 40%, var(--color-line));
+  --color-caption-edge: color-mix(in srgb, var(--color-gold) 50%, var(--color-line));
   /* A clip's chips (§6.5): the length pill (`.clip-duration`, #16141a80,
      white) and the badges (`.clip-badges`, #24202dc9, #f1eaff) — concept
      literals over the picture, the same in both themes but the pill,

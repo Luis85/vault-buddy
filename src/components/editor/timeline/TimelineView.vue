@@ -47,6 +47,17 @@
  * hints, which send the lane menu's own `closeGapCommand`. Fit fits the
  * edit into the lanes as the concept does: the timeline's width less the
  * label column and a 26 px margin, a short edit counted as 15 s.
+ *
+ * **Teaching layers and captions (visual-parity Task 19, concept spec
+ * §6.4, design D11).** Right under the ruler, the Captions row while the
+ * edit has captions, then the Teaching layers row above every track: each
+ * project cue as a chip packed into rows 22 px apart. Both pin their label
+ * cell like a track header, and both keep only the cues within a screen of
+ * the viewport, as the lanes keep their clips (`visibleWindowMs`); the
+ * lane count comes from EVERY cue, so scrolling never resizes the row. A
+ * cue's right-click or Shift+F10 opens the cue menu in the one
+ * `ContextMenu`, and with a cue selected the toolbar's Edit actions opens
+ * that cue's menu rather than its clip's.
  */
 import { computed, onBeforeUnmount, onMounted, provide, ref } from "vue";
 
@@ -54,6 +65,8 @@ import type { TimelineViewOps } from "../../../composables/useEditorMenuContext"
 import { SNAP_THRESHOLD_PX, snappedMs } from "../../../composables/useTimelineDrag";
 import { baseActionContext } from "../../../editor/actionContext";
 import type { PointerTarget } from "../../../editor/actions";
+import { captionRows } from "../../../editor/captionRules";
+import { laneCount, teachingCues } from "../../../editor/cueLanes";
 import { onReveal, revealedTimelineMs } from "../../../editor/revealBus";
 import { SNAP_GUIDE_KEY } from "../../../editor/snapGuide";
 import {
@@ -65,6 +78,7 @@ import {
   snapTargets,
   trackBadges,
   visibleClips,
+  visibleWindowMs,
   xToMs,
 } from "../../../editor/timelineLayout";
 import { draggedAssetId, draggedAssetKind } from "../../../editor/trackCompat";
@@ -73,6 +87,8 @@ import type { Asset, Clip } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import ContextMenu from "../menus/ContextMenu.vue";
+import CaptionsRow from "./CaptionsRow.vue";
+import TeachingLayersRow from "./TeachingLayersRow.vue";
 import TimelineRuler from "./TimelineRuler.vue";
 import TimelineToolbar from "./TimelineToolbar.vue";
 import TrackLane from "./TrackLane.vue";
@@ -179,6 +195,22 @@ const clipsByTrack = computed(() => {
   return map;
 });
 
+// ---- the Teaching layers and Captions rows (§6.4) -----------------------------
+
+const cues = computed(() => teachingCues(editorProject.project));
+const cueLanes = computed(() => laneCount(cues.value));
+const captions = computed(() => captionRows(editorProject.project));
+/** The output window the lanes keep clips in, for the rows' cues too. */
+const shownWindow = computed(() =>
+  visibleWindowMs(bodyScrollLeft.value, effectiveViewportWidth.value, workspace.timelineZoom),
+);
+function shown(span: { startMs: number; endMs: number }): boolean {
+  const [lo, hi] = shownWindow.value;
+  return span.endMs > lo && span.startMs < hi;
+}
+const shownCues = computed(() => cues.value.filter(shown));
+const shownCaptions = computed(() => captions.value.filter(shown));
+
 // ---- the snap guide and the gap hints (§6.5) ---------------------------------
 
 /** The snap target a dragging clip's edge sits on (`snapGuide.ts`). */
@@ -272,6 +304,11 @@ function onTrackContextMenu(payload: { trackId: string; clientX: number; clientY
   openMenu({ kind: "track", id: payload.trackId, timeMs: null }, payload.clientX, payload.clientY);
 }
 
+/** A teaching cue's right-click or Shift+F10 (visual-parity Task 19). */
+function onCueContextMenu(payload: { effectId: string; clientX: number; clientY: number }) {
+  openMenu({ kind: "effect", id: payload.effectId, timeMs: null }, payload.clientX, payload.clientY);
+}
+
 /** A right-click on an empty stretch of a lane (visual-parity Task 5). */
 function onLaneContextMenu(payload: { trackId: string; clientX: number; clientY: number }) {
   openMenu({ kind: "gap", id: payload.trackId, timeMs: msFromClientX(payload.clientX) }, payload.clientX, payload.clientY);
@@ -280,9 +317,16 @@ function onLaneContextMenu(payload: { trackId: string; clientX: number; clientY:
 /** The toolbar's Edit actions (Task 55): the same menu, for the selection
  * at the playhead, or the editor actions when nothing is selected. */
 function onToolbarMore(at: { x: number; y: number }) {
+  openMenu(selectionTarget(), at.x, at.y, true);
+}
+
+/** What Edit actions acts on: a selected cue (its clip is selected with
+ * it, but the inspector shows the cue), else the first selected clip. */
+function selectionTarget(): PointerTarget | null {
+  const sel = workspace.selected;
+  if (sel?.type === "effect") return { kind: "effect", id: sel.id, timeMs: null };
   const first = workspace.selectionClipIds[0];
-  const target: PointerTarget | null = first ? { kind: "clip", id: first, timeMs: workspace.playheadMs } : null;
-  openMenu(target, at.x, at.y, true);
+  return first ? { kind: "clip", id: first, timeMs: workspace.playheadMs } : null;
 }
 
 // ---- native drag-and-drop: place a library asset (Task 26) ----------------
@@ -389,6 +433,21 @@ async function onBelowLanesDrop(event: DragEvent) {
           data-testid="timeline-snap-guide"
           class="pointer-events-none absolute top-8 bottom-0 z-[12] border-l border-dashed border-gold"
           :style="{ left: `${labelPx + msToX(snapGuideMs, workspace.timelineZoom)}px` }"
+        />
+        <CaptionsRow
+          :rows="shownCaptions"
+          :count="captions.length"
+          :zoom="workspace.timelineZoom"
+          :width-px="contentWidthPx"
+          :label-width="labelPx"
+        />
+        <TeachingLayersRow
+          :cues="shownCues"
+          :lanes="cueLanes"
+          :zoom="workspace.timelineZoom"
+          :width-px="contentWidthPx"
+          :label-width="labelPx"
+          @context-menu="onCueContextMenu"
         />
         <TrackLane
           v-for="(track, i) in tracks"

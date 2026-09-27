@@ -15,6 +15,7 @@ import { formatMenuTime, SEPARATOR } from "../components/editor/menus/menuModel"
 import type { Project, Track } from "../editorTypes";
 import { primaryTargetClip, targetClipIds } from "./actionTargets";
 import { duplicateCueCommand } from "./cueActions";
+import { EFFECT_NAMES } from "./effectFields";
 import type { MenuContext } from "./menuContext";
 import {
   actionItem,
@@ -57,20 +58,35 @@ function assetTargetMenu(ctx: MenuContext, assetId: string): BuiltMenu {
   return { heading: name || "Media asset", items: assetMenu(ctx, assetId) };
 }
 
+/** A teaching cue opens the cue menu, headed by its kind ("Highlight"),
+ * the concept's `menuTitle` (visual-parity Task 19). */
+function cueTargetMenu(ctx: MenuContext, effectId: string): BuiltMenu {
+  const kind = ctx.action.project?.effects.find((e) => e.id === effectId)?.kind;
+  return { heading: kind ? EFFECT_NAMES[kind] : "Teaching cue", items: cueMenu(ctx, effectId) };
+}
+
 function trackTargetMenu(ctx: MenuContext, trackId: string): BuiltMenu {
   const name = ctx.action.project?.tracks.find((t) => t.id === trackId)?.name;
   return { heading: name || "Track", items: trackMenu(ctx, trackId) };
 }
 
 /** A track header opens the track menu (visual-parity Task 17, ruling P4);
- * a lane opens the gap menu ("Timeline gap"); no target at all — the
+ * a lane opens the gap menu ("Timeline gap"); a teaching cue the cue menu;
+ * no target at all — the
  * toolbar's Edit actions with nothing selected — the editor actions, at the
  * playhead. */
+/** The menus named by an id: an asset row, a track header, a cue. */
+const MENU_BY_ID: Partial<Record<string, (ctx: MenuContext, id: string) => BuiltMenu>> = {
+  asset: assetTargetMenu,
+  track: trackTargetMenu,
+  effect: cueTargetMenu,
+};
+
 export function contextMenuFor(ctx: MenuContext): BuiltMenu {
   const target = ctx.action.pointerTarget;
   if (target?.kind === "clip") return clipTargetMenu(ctx);
-  if (target?.kind === "asset" && target.id) return assetTargetMenu(ctx, target.id);
-  if (target?.kind === "track" && target.id) return trackTargetMenu(ctx, target.id);
+  const byId = target?.id ? MENU_BY_ID[target.kind] : undefined;
+  if (target?.id && byId) return byId(ctx, target.id);
   if (target?.kind === "gap") {
     return {
       heading: "Timeline gap",

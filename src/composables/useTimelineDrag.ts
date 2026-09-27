@@ -172,7 +172,7 @@ export function computeFadeDrag(clip: Clip, edge: "in" | "out", rawDeltaMs: numb
  * preview put the edge after its clamps, so a clamp that pulled it off the
  * target shows no guide; within 1 ms, because a sped-up trim's end is
  * rounded through the source range. */
-function snapGuideFor(rawMs: number, finalMs: number, opts: SnapOptions): number | null {
+export function snapGuideFor(rawMs: number, finalMs: number, opts: SnapOptions): number | null {
   if (!opts.snapEnabled) return null;
   const target = snap(rawMs, opts.targets, opts.thresholdPx, opts.zoom);
   return opts.targets.includes(target) && Math.abs(target - finalMs) <= 1 ? target : null;

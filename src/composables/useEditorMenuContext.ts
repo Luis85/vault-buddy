@@ -29,6 +29,15 @@ export interface TimelineViewOps {
 
 type Workspace = ReturnType<typeof useEditorWorkspaceStore>;
 
+/** A cue lives on its clip: select both, and bring the inspector in (a
+ * drawer at narrow widths) where the cue's fields are — the cue menu's
+ * "Edit annotation" and a click on a timeline cue (visual-parity Task 19). */
+export function selectCue(workspace: Workspace, effect: { id: string; clip_id: string }): void {
+  workspace.select([effect.clip_id]);
+  workspace.setSelected({ type: "effect", id: effect.id });
+  requestReveal("inspector");
+}
+
 /** Selecting from a menu: a clip selection clears a selected cue, the way a
  * click on a clip does, so the inspector shows the clip and not the cue. */
 function selectionOps(workspace: Workspace) {
@@ -37,12 +46,8 @@ function selectionOps(workspace: Workspace) {
       workspace.select(ids);
       workspace.setSelected(null);
     },
-    /** A cue lives on its clip: select both, and bring the inspector in
-     * (a drawer at narrow widths) where the cue's fields are. */
     selectEffect(effect: { id: string; clip_id: string }): void {
-      workspace.select([effect.clip_id]);
-      workspace.setSelected({ type: "effect", id: effect.id });
-      requestReveal("inspector");
+      selectCue(workspace, effect);
     },
     clearSelection(): void {
       workspace.select([]);
