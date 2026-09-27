@@ -8,7 +8,9 @@
  * selection (`clipIds`), so a multi-selection gets identical values and
  * Rust applies them atomically or not at all. The fields show the first
  * selected clip's values; `InspectorPanel` already states the scope. A clip
- * on a locked track disables everything and says why (R20).
+ * on a locked track disables everything; the inspector's frame says why
+ * (one lock note, visual-parity Task 13), and the fields carry the reason
+ * as their tooltip.
  *
  * Position and size are bounded by the frame the way the preview handles
  * are (`layoutGeometry`): X may go only as far as the width leaves room
@@ -27,6 +29,7 @@ import type { EditorCommand } from "../../../editor/editorCommandTypes";
 import type { Corner } from "../../../editor/layoutGeometry";
 import { aspectHeight, clampBox, cornerPreset, PIP_SIZE, roundBox } from "../../../editor/layoutGeometry";
 import { shapeOf } from "../../../editor/previewTransform";
+import { allOnVideoTracks } from "../../../editor/visualTargets";
 import type { Clip, Fit, FrameShape, Rotation } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import InspectorNumberInput from "./InspectorNumberInput.vue";
@@ -43,12 +46,14 @@ const first = computed(() => clips.value[0]);
 /** The first clip, or a full-frame stand-in the fields can read safely. */
 const c = (): Pick<Clip, "x" | "y" | "w" | "h" | "opacity"> & Partial<Clip> => first.value ?? FULL;
 
-/** Only video-track clips have a layout: anything else gets the note. */
-const ready = computed(() => {
-  const tracks = editorProject.project?.tracks ?? [];
-  const visual = (trackId: string) => tracks.find((t) => t.id === trackId)?.kind === "video";
-  return clips.value.length > 0 && clips.value.every((clip) => visual(clip.track_id));
-});
+/** Only video-track clips have a layout (`visualTargets.ts`, Rust's
+ * `check_targets`): anything else gets the note. */
+const ready = computed(() =>
+  allOnVideoTracks(
+    editorProject.project,
+    clips.value.map((clip) => clip.id),
+  ),
+);
 const canvas = computed(() => editorProject.project?.canvas ?? { width: 1280, height: 720 });
 const shape = computed<FrameShape>(() => shapeOf(c()));
 const fit = computed<Fit>(() => c().fit ?? "contain");
@@ -132,14 +137,10 @@ function onFlip(event: Event): void {
     data-testid="layout-section"
     class="flex flex-col gap-2"
   >
-    <p
-      v-if="lockReason"
-      data-testid="layout-section-locked"
-    >
-      {{ lockReason }} — unlock it to change this layout.
-    </p>
     <fieldset
+      data-testid="layout-section-fields"
       :disabled="lockReason !== null"
+      :title="lockReason ?? undefined"
       class="flex flex-col gap-2 disabled:opacity-50"
     >
       <div class="grid grid-cols-2 gap-2">

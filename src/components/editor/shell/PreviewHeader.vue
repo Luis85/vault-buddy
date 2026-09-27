@@ -33,7 +33,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import { baseActionContext } from "../../../editor/actionContext";
 import { resolveActions } from "../../../editor/actions";
-import { panelToggleTitle, previewDensity } from "../../../editor/previewHeader";
+import { panelToggleTitle, previewDensity, PROPERTIES_TOGGLE_ID } from "../../../editor/previewHeader";
 import { reviewRange } from "../../../editor/renderRanges";
 import { onReveal } from "../../../editor/revealBus";
 import type { RenderRange } from "../../../editorTypes";
@@ -172,6 +172,7 @@ const propertiesTitle = computed(() => panelToggleTitle(workspace.inspectorVisib
       </button>
       <ViewMenuButton />
       <PanelToggleButton
+        :id="PROPERTIES_TOGGLE_ID"
         data-testid="preview-properties-toggle"
         icon="sliders"
         :pressed="workspace.inspectorVisible"

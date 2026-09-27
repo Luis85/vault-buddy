@@ -23,80 +23,18 @@ import type { EditorCommand } from "../src/editor/editorCommandTypes";
 import { trackMenu } from "../src/editor/menuSets";
 import { checksDialogOpen } from "../src/editor/revealBus";
 import { trackRemovalRequest } from "../src/editor/trackRemoval";
-import type { Clip, EditorOpenResult, Project, Track } from "../src/editorTypes";
+import type { Project } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
+import { clip, openInspectorProject, project, track } from "./helpers/inspectorProject";
 
 enableAutoUnmount(afterEach);
-
-function track(id: string, name: string, kind: "video" | "audio" = "video", extra: Partial<Track> = {}): Track {
-  return { id, kind, name, visible: true, locked: false, muted: false, solo: false, volume: 1, ...extra };
-}
-function clip(id: string, assetId: string, trackId: string, start: number, len: number, name: string, extra: Partial<Clip> = {}): Clip {
-  return {
-    id, asset_id: assetId, track_id: trackId, name, start_ms: start, in_ms: 0, out_ms: len,
-    fade_in_ms: 0, fade_out_ms: 0, fade_curve: "linear", opacity: 1, volume: 1, muted: false,
-    x: 0, y: 0, w: 1, h: 1, ...extra,
-  };
-}
-function project(overrides: Partial<Project> = {}): Project {
-  return {
-    schema: "vault-buddy-video-project/3",
-    id: "project-a",
-    title: "Tutorial",
-    canvas: { width: 1280, height: 720, fps: 30 },
-    master_gain: 1,
-    assets: [
-      { id: "presenter", kind: "video", name: "Presenter · demo", duration_ms: 33_000 },
-      { id: "capture", kind: "video", name: "Getting started.capture", duration_ms: 36_000 },
-      { id: "music", kind: "audio", name: "Guide cues · synth", duration_ms: 36_000 },
-    ],
-    tracks: [
-      track("v3", "Webcam · presenter"),
-      track("v1", "Screen recording"),
-      track("a1", "Guide cues", "audio"),
-      track("v9", "Empty overlay"),
-    ],
-    clips: [
-      clip("c5", "presenter", "v3", 1_500, 32_000, "Presenter · demo"),
-      clip("c1", "capture", "v1", 0, 9_500, "Open your workspace"),
-      clip("c2", "capture", "v1", 9_500, 14_000, "Create a project"),
-      clip("c6", "music", "a1", 300, 33_000, "Chapter cues · demo"),
-    ],
-    effects: [{ id: "fx1", clip_id: "c1", kind: "text", start_ms: 0, end_ms: 1_000, x: 0.1, y: 0.1, text: "Hi", color: "#ffd279" }],
-    markers: [],
-    transitions: [],
-    captions: null,
-    destination: { vault: "vault-a", folder: "", dated: false },
-    ...overrides,
-  };
-}
 
 let executed: EditorCommand[];
 
 async function openProject(p: Project = project()) {
-  executed = [];
-  const store = useEditorProjectStore();
-  const snapshot = {
-    sessionId: "ses-a", projectId: "project-a", revision: 1, persistedRevision: null, title: "Tutorial",
-    durationMs: 33_500, canUndo: false, canRedo: false, undoLabel: null, redoLabel: null,
-  };
-  const opened: EditorOpenResult = { snapshot, project: p, workspace: {}, missing: [], sourceBase: "base", recovered: false };
-  let revision = 1;
-  store.setPort(
-    fakeEditorPort({
-      openStaged: () => Promise.resolve(opened),
-      execute: (req) => {
-        executed.push(req.command);
-        revision += 1;
-        return Promise.resolve({ snapshot: { ...snapshot, revision }, project: p });
-      },
-      getWorkspace: () => Promise.resolve({}),
-      saveWorkspace: () => Promise.resolve(),
-    }),
-  );
-  await store.openStaged("base");
+  executed = await openInspectorProject(p);
 }
 
 beforeEach(() => {
@@ -333,7 +271,7 @@ describe("a selected track", () => {
     const w = await mountTrack("v3");
     await w.get('[data-testid="track-inspector-remove"]').trigger("click");
     expect(executed).toEqual([]);
-    expect(trackRemovalRequest.value).toBe("v3");
+    expect(trackRemovalRequest.value).toEqual({ sessionId: "ses-a", trackId: "v3" });
 
     const dialog = mount(RemoveTrackDialog, { attachTo: document.body });
     await flushPromises();
@@ -349,7 +287,7 @@ describe("a selected track", () => {
 
   it("the question closes when its track is gone (an undo, a removal elsewhere)", async () => {
     await openProject();
-    trackRemovalRequest.value = "v1";
+    trackRemovalRequest.value = { sessionId: "ses-a", trackId: "v1" };
     const dialog = mount(RemoveTrackDialog, { attachTo: document.body });
     await flushPromises();
     expect(dialog.find('[data-testid="remove-track-dialog"]').exists()).toBe(true);
@@ -371,7 +309,7 @@ describe("a selected track", () => {
 
   it("Cancel keeps the track", async () => {
     await openProject();
-    trackRemovalRequest.value = "v1";
+    trackRemovalRequest.value = { sessionId: "ses-a", trackId: "v1" };
     const dialog = mount(RemoveTrackDialog, { attachTo: document.body });
     await flushPromises();
     expect(dialog.text()).toContain("its 2 clips");
@@ -397,7 +335,7 @@ describe("a selected track", () => {
     findMenuAction(trackMenu(ctx, "v1"), "track-remove")?.run?.();
     await flushPromises();
     expect(executed).toEqual([]);
-    expect(trackRemovalRequest.value).toBe("v1");
+    expect(trackRemovalRequest.value).toEqual({ sessionId: "ses-a", trackId: "v1" });
   });
 
   it("a removed track leaves the track state", async () => {

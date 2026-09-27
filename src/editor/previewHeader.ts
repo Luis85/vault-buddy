@@ -18,6 +18,10 @@ import type { MenuItem } from "../components/editor/menus/menuModel";
 import { SEPARATOR } from "../components/editor/menus/menuModel";
 import type { ActionId, ResolvedAction } from "./actions";
 
+/** The element id of the header's properties toggle: the inspector's ✕
+ * returns focus there once it has hidden the panel (visual-parity Task 13). */
+export const PROPERTIES_TOGGLE_ID = "editor-properties-toggle";
+
 export type PreviewDensity = "wide" | "medium" | "compact";
 
 /** `wide` from 800px, `medium` from 520, `compact` below (§11). A header

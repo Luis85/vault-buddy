@@ -243,7 +243,10 @@ describe("ColorSection", () => {
   it("a locked track disables the controls and says why", async () => {
     await open(project([clip("c1")], [track("v1", { locked: true, name: "Webcam" })]));
     const w = mount(ColorSection, { props: { clipIds: ["c1"] } });
-    expect(w.get('[data-testid="color-section-locked"]').text()).toContain("Track Webcam is locked");
+    // The inspector's frame says it once (visual-parity Task 13); the
+    // fields carry the reason as their tooltip.
+    expect(w.find('[data-testid="color-section-locked"]').exists()).toBe(false);
+    expect(w.get("fieldset").attributes("title")).toContain("Track Webcam is locked");
     expect(w.get("fieldset").attributes("disabled")).toBeDefined();
     await w.get('[data-testid="color-preset-mono"]').trigger("click");
     expect(executed).toEqual([]);

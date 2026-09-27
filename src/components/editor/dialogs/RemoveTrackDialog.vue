@@ -6,8 +6,8 @@
  * inspector's "Remove track…" both land here. Continue sends one
  * `deleteTrack`; a refusal is said by the shell's feedback toast
  * (visual-parity Task 7). A track that disappears while the question is open
- * (an undo, a removal elsewhere) closes it: there is nothing left to ask
- * about.
+ * (an undo, a removal elsewhere) closes it, and so does a session change:
+ * there is nothing left to ask about.
  */
 import { computed, watch } from "vue";
 
@@ -18,21 +18,30 @@ import DialogHost from "../shell/DialogHost.vue";
 
 const editorProject = useEditorProjectStore();
 
-const track = computed(() => editorProject.project?.tracks.find((t) => t.id === trackRemovalRequest.value) ?? null);
+/** The track asked about — only in the session that asked. */
+const track = computed(() => {
+  const request = trackRemovalRequest.value;
+  if (!request || request.sessionId !== editorProject.sessionId) return null;
+  return editorProject.project?.tracks.find((t) => t.id === request.trackId) ?? null;
+});
 const message = computed(() =>
   track.value ? removalMessage(track.value.name, clipsOnTrack(editorProject.project, track.value.id)) : "",
 );
 
-watch(track, (t) => {
-  if (!t) trackRemovalRequest.value = null;
-});
+watch(
+  track,
+  (t) => {
+    if (!t) trackRemovalRequest.value = null;
+  },
+  { immediate: true },
+);
 
 function cancel(): void {
   trackRemovalRequest.value = null;
 }
 
 function confirm(): void {
-  const trackId = trackRemovalRequest.value;
+  const trackId = track.value?.id;
   trackRemovalRequest.value = null;
   if (trackId) void editorProject.execute({ kind: "deleteTrack", trackId });
 }

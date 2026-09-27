@@ -73,13 +73,8 @@ function onPitch(event: Event): void {
     v-if="clip"
     data-testid="speed-section"
     class="flex flex-col gap-2"
+    :title="lockReason ?? undefined"
   >
-    <p
-      v-if="lockReason"
-      data-testid="speed-section-locked"
-    >
-      {{ lockReason }} — unlock it to change this clip's speed.
-    </p>
     <div
       class="flex flex-wrap gap-1"
       role="group"

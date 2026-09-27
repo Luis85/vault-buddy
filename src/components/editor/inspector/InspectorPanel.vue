@@ -12,7 +12,8 @@
  *     Layout, Fades, Audio, Speed, Color, or four for a sound clip — and the
  *     active category's named slot (`clip`/`layout`/…), scoped with
  *     `clipIds`; the other slots stay unmounted;
- *   - several clips: the shared actions (`MultiInspector`);
+ *   - several clips: the shared actions (`MultiInspector`), then the Layout
+ *     and Color categories over the whole selection (`AdjustAllSection`);
  *   - a track (`editorWorkspace.selectedTrackId`): its own controls
  *     (`TrackInspector`);
  *   - a teaching cue (`cueActions.selectedEffectOf`, Task 35): the `#effect`
@@ -25,6 +26,7 @@ import { selectedEffectOf } from "../../../editor/cueActions";
 import { INSPECTOR_TITLES, inspectorMode } from "../../../editor/inspectorState";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import AdjustAllSection from "./AdjustAllSection.vue";
 import ClipInspector from "./ClipInspector.vue";
 import EmptyInspector from "./EmptyInspector.vue";
 import InspectorHeading from "./InspectorHeading.vue";
@@ -81,7 +83,17 @@ const panelTarget = useGuideTarget("inspector");
           :effect-id="selectedEffectId"
         />
       </div>
-      <MultiInspector v-else-if="mode === 'multi'" />
+      <template v-else-if="mode === 'multi'">
+        <MultiInspector />
+        <AdjustAllSection>
+          <template #default="{ tab, clipIds }">
+            <slot
+              :name="tab"
+              :clip-ids="clipIds"
+            />
+          </template>
+        </AdjustAllSection>
+      </template>
       <EmptyInspector v-else-if="mode === 'none'" />
       <ClipInspector v-else>
         <template #default="{ tab, clipIds }">

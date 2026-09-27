@@ -211,7 +211,10 @@ describe("LayoutSection", () => {
   it("a locked track disables the controls and says why", async () => {
     await open(project([clip("c1")], [track("v1", { locked: true, name: "Webcam" })]));
     const w = mount(LayoutSection, { props: { clipIds: ["c1"] } });
-    expect(w.get('[data-testid="layout-section-locked"]').text()).toContain("Track Webcam is locked");
+    // The inspector's frame says it once (visual-parity Task 13); the
+    // fields carry the reason as their tooltip.
+    expect(w.find('[data-testid="layout-section-locked"]').exists()).toBe(false);
+    expect(w.get("fieldset").attributes("title")).toContain("Track Webcam is locked");
     expect(w.get("fieldset").attributes("disabled")).toBeDefined();
     await w.get('[data-testid="layout-corner-tr"]').trigger("click");
     expect(executed).toEqual([]);
@@ -258,7 +261,8 @@ describe("SpeedSection", () => {
   it("a locked track disables speed and says why", async () => {
     await open(project([clip("c1")], [track("v1", { locked: true, name: "Screen" })]));
     const w = mount(SpeedSection, { props: { clipIds: ["c1"] } });
-    expect(w.get('[data-testid="speed-section-locked"]').text()).toContain("Track Screen is locked");
+    expect(w.find('[data-testid="speed-section-locked"]').exists()).toBe(false);
+    expect(w.get('[data-testid="speed-section"]').attributes("title")).toContain("Track Screen is locked");
     expect(w.get('[data-testid="speed-preset-2"]').attributes("disabled")).toBeDefined();
     await w.get('[data-testid="speed-section-pitch"]').setValue(false);
     expect(executed).toEqual([]);

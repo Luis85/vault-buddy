@@ -4,14 +4,25 @@
  * `.inspector-heading`): what is selected ("Clip properties", "Track
  * properties"…) and the ✕ that hides the panel — the same D5 toggle the
  * preview header's properties button drives (`panelLayout.ts`), so at a
- * drawer width it closes the drawer.
+ * drawer width it closes the drawer. The ✕ hides its own panel, so focus
+ * goes to that properties button — the control that brings the panel back
+ * — rather than falling to the page (fix round 1).
  */
+import { nextTick } from "vue";
+
+import { PROPERTIES_TOGGLE_ID } from "../../../editor/previewHeader";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import EditorIcon from "../icons/EditorIcon.vue";
 
 defineProps<{ title: string }>();
 
 const workspace = useEditorWorkspaceStore();
+
+async function hide(): Promise<void> {
+  workspace.toggleInspector();
+  await nextTick();
+  document.getElementById(PROPERTIES_TOGGLE_ID)?.focus();
+}
 </script>
 
 <template>
@@ -31,7 +42,7 @@ const workspace = useEditorWorkspaceStore();
       aria-label="Hide properties"
       title="Hide properties"
       class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-fg-muted hover:bg-hover hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      @click="workspace.toggleInspector()"
+      @click="hide"
     >
       <EditorIcon name="x" />
     </button>

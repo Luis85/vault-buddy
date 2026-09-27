@@ -49,9 +49,18 @@ export const TAB_LABELS: Record<InspectorTab, string> = {
   color: "Color",
 };
 
-/** The persisted tab when this clip offers it, else Clip. */
+/** The persisted tab when these categories include it, else the first. */
 export function activeTabOf(saved: string | null, tabs: readonly InspectorTab[]): InspectorTab {
-  return tabs.find((t) => t === saved) ?? "clip";
+  return tabs.find((t) => t === saved) ?? tabs[0];
+}
+
+/** The categories that act on a whole multi-selection at once: Layout and
+ * Color send one atomic `setLayout` / `setAdjustments` over every clip. */
+export const BATCH_TABS: readonly InspectorTab[] = ["layout", "color"];
+
+/** Whether `clip` offers the category `tab`. */
+export function offersTab(project: Project | null, clip: Clip, tab: InspectorTab): boolean {
+  return tabsFor(assetKindOf(project, clip)).includes(tab);
 }
 
 /** "{track name} · {d.d}s", the clip's length on the timeline. */

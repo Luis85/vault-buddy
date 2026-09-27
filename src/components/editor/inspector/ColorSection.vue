@@ -21,6 +21,7 @@ import { numberField, useInspectorDraft } from "../../../composables/useInspecto
 import { useSelectedClips } from "../../../composables/useSelectedClips";
 import type { ColorPresetId } from "../../../editor/colorPresets";
 import { COLOR_PRESETS, findColorPreset } from "../../../editor/colorPresets";
+import { colorRefusal } from "../../../editor/visualTargets";
 import type { Adjustments } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import InspectorNumberInput from "./InspectorNumberInput.vue";
@@ -30,22 +31,15 @@ const props = defineProps<{ clipIds: string[] }>();
 const editorProject = useEditorProjectStore();
 const { clips, lockReason } = useSelectedClips(() => props.clipIds);
 
-const CARD_NOTE = "Colour applies to footage, not title cards.";
-const VISUAL_NOTE = "Colour applies to video and image clips. Select only those to adjust them.";
-
 /** Why this selection cannot be colour-adjusted, or `null` when it can —
- * mirrors `check_color_targets`'s own two refusals, in the same order, so
- * whichever one Rust would name first is also the one shown here first. */
-const blockedReason = computed<string | null>(() => {
-  if (clips.value.length === 0) return VISUAL_NOTE;
-  const tracks = editorProject.project?.tracks ?? [];
-  const isVisual = (trackId: string) => tracks.find((t) => t.id === trackId)?.kind === "video";
-  if (!clips.value.every((c) => isVisual(c.track_id))) return VISUAL_NOTE;
-  const assets = editorProject.project?.assets ?? [];
-  const isCard = (assetId: string) => assets.find((a) => a.id === assetId)?.builtin === "card";
-  if (clips.value.some((c) => isCard(c.asset_id))) return CARD_NOTE;
-  return null;
-});
+ * `check_color_targets`'s own two refusals, in its order
+ * (`visualTargets.ts`, which the clip menus' Color treatment shares). */
+const blockedReason = computed(() =>
+  colorRefusal(
+    editorProject.project,
+    clips.value.map((c) => c.id),
+  ),
+);
 const ready = computed(() => blockedReason.value === null);
 
 const DEFAULT_ADJUSTMENTS: Adjustments = { brightness: 1, contrast: 1, saturation: 1, sepia: 0, grayscale: 0 };
@@ -115,14 +109,10 @@ function onPreset(id: ColorPresetId): void {
     data-testid="color-section"
     class="flex flex-col gap-2"
   >
-    <p
-      v-if="lockReason"
-      data-testid="color-section-locked"
-    >
-      {{ lockReason }} — unlock it to change this clip's colour.
-    </p>
     <fieldset
+      data-testid="color-section-fields"
       :disabled="lockReason !== null"
+      :title="lockReason ?? undefined"
       class="flex flex-col gap-2 disabled:opacity-50"
     >
       <div

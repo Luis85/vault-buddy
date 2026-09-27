@@ -112,6 +112,6 @@ export function useEditorMenuContext(view: TimelineViewOps): (action: MenuContex
     },
     // A track with clips asks first (`RemoveTrackDialog`), the inspector's
     // own Remove track… rule (visual-parity Task 13).
-    removeTrack: (trackId) => requestTrackRemoval(currentProject(), trackId, execute),
+    removeTrack: (trackId) => requestTrackRemoval(project, trackId),
   });
 }

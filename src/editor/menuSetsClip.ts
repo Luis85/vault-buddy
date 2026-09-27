@@ -28,6 +28,7 @@ import type { EditorCommand } from "./editorCommandTypes";
 import type { InspectorTab, MenuContext } from "./menuContext";
 import { actionItem, clearSelectionItem, executeInOrder, lockReason, sendCommand } from "./menuContext";
 import { clipOutputEnd, sourceAt } from "./timeMap";
+import { colorRefusal } from "./visualTargets";
 
 /** The concept's speed presets; the Speed tab takes any other value. */
 const SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4] as const;
@@ -135,7 +136,9 @@ function colorItem(
     id: "color",
     label: "Color treatment",
     icon: "palette",
-    disabledReason: locked,
+    // Rust refuses the whole selection when any clip is off a video track
+    // or is a title card (`visualTargets.ts`), so the menu says so first.
+    disabledReason: locked ?? colorRefusal(ctx.action.project, clipIds),
     submenu: [...treatments, ...more],
   };
 }

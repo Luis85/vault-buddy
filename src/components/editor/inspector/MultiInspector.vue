@@ -11,6 +11,9 @@
  * run through its own `run` and refused with its own reason, so the rules
  * — the lock, a mute that would change nothing, a fade kept within half a
  * clip — exist once.
+ *
+ * Below it, `AdjustAllSection` (fix round 1, ruling T13-1) keeps the Layout
+ * and Color categories reachable for the whole selection.
  */
 import { computed } from "vue";
 
@@ -19,6 +22,7 @@ import { targetClips } from "../../../editor/actionTargets";
 import { COLOR_TREATMENTS, isTreatment } from "../../../editor/colorPresets";
 import { lockReason } from "../../../editor/menuContext";
 import { multiClipMenu } from "../../../editor/menuSetsClip";
+import { allOnVideoTracks } from "../../../editor/visualTargets";
 import EditorIcon from "../icons/EditorIcon.vue";
 import type { MenuAction } from "../menus/menuModel";
 import ColorTreatmentGrid from "./ColorTreatmentGrid.vue";
@@ -46,8 +50,14 @@ const grouped = computed(() => {
   return Boolean(group) && clips.value.every((c) => c.group_id === group);
 });
 const groupAction = computed(() => item(grouped.value ? "ungroup" : "group"));
+/** Shared color only when every clip has a picture — Rust refuses the whole
+ * selection otherwise (`visualTargets.ts`); a title card among them is the
+ * colour item's own refusal. */
 const pictures = computed(() =>
-  clips.value.some((c) => project.value?.assets.find((a) => a.id === c.asset_id)?.kind !== "audio"),
+  allOnVideoTracks(
+    project.value,
+    clips.value.map((c) => c.id),
+  ),
 );
 const activeTreatment = computed(
   () => COLOR_TREATMENTS.find((t) => clips.value.every((c) => isTreatment(c.adjustments, t.adjustments)))?.id ?? null,
