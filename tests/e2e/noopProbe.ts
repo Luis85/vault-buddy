@@ -9,7 +9,8 @@
  * - `mark(key)`: tags that control with `data-noop-target`;
  * - `watch()` / `effect()` / `unwatch()`: records the page's state, then
  *   answers whether anything observable happened since — a new IPC call
- *   (the debounced `editor_save_workspace` and log calls aside), a mutation
+ *   (the debounced `editor_save_workspace` / `editor_save_guide_progress`
+ *   and log calls aside), a mutation
  *   on a node the idle baseline (`window.__noisy`, left by `settle`) did not
  *   see, focus moving to another element, a change in the number of open
  *   dialogs/menus, or the target's `checked` changing (a property, which no
@@ -142,8 +143,11 @@ export function installNoopProbe(): void {
 
   const target = () => document.querySelector<HTMLInputElement>(`[${TARGET}]`);
   const overlayCount = () => document.querySelectorAll(OVERLAYS).length;
+  /** Debounced saves that trail a state change the scenario itself made
+   * (the workspace's view state, the guide's progress), never a click's. */
+  const TRAILING = new Set(["editor_save_workspace", "editor_save_guide_progress"]);
   const newCalls = (from: number) =>
-    win.__calls.slice(from).filter((c) => c.cmd !== "editor_save_workspace" && !c.cmd.startsWith("plugin:log"));
+    win.__calls.slice(from).filter((c) => !TRAILING.has(c.cmd) && !c.cmd.startsWith("plugin:log"));
 
   let watching: {
     mutations: number;

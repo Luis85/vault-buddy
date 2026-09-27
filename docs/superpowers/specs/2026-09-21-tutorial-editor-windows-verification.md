@@ -573,7 +573,8 @@ restyled the whole editor to the concept bundle and added two Playwright
 gates: `tests/e2e/editorParity.spec.ts` measures every region against the
 concept in Chromium and writes side-by-side composites for screens 01–14 to
 `test-results/parity/`, and `tests/e2e/editorNoop.spec.ts` presses every
-visible control in every reachable menu and dialog. Both run Chromium over a
+visible control in the workspace states, menus and dialogs its scenario
+list (`tests/e2e/noopScenarios.ts`) names. Both run Chromium over a
 stubbed runtime; neither is WebView2, a real Windows window, a Windows
 contrast theme, Narrator or a real camera and microphone. These rows are.
 Take a screenshot for every row and compare it by eye with the concept

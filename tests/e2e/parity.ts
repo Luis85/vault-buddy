@@ -52,6 +52,14 @@ export interface OpenParityOptions {
   /** Fields merged into the sample project — an extra cue to measure
    * (visual-parity Task 19 fix round 1). */
   project?: Partial<(typeof PARITY_OPEN_RESULT)["project"]>;
+  /** Fields merged into the open's snapshot — a clean session (the
+   * recovery offer, Task 24 fix round 1). */
+  snapshot?: Partial<(typeof PARITY_OPEN_RESULT)["snapshot"]>;
+  /** The open's missing originals (the Reconnect dialog). */
+  missing?: (typeof PARITY_OPEN_RESULT)["missing"];
+  /** Replies that change call by call (`installTauriStub`) — an edit that
+   * lands (the no-op sweep's post-edit scenario). */
+  sequences?: Record<string, unknown[]>;
 }
 
 /** Opens the tutorial editor against the populated `PARITY_OPEN_RESULT`
@@ -70,9 +78,16 @@ export async function openParity(
   const saved = { ...PARITY_OPEN_RESULT.workspace, ...opts.workspace };
   const workspace = theme === null ? saved : { ...saved, theme };
   await installTauriStub(page, {
-    openResult: { ...PARITY_OPEN_RESULT, project: { ...PARITY_OPEN_RESULT.project, ...opts.project }, workspace },
+    openResult: {
+      ...PARITY_OPEN_RESULT,
+      snapshot: { ...PARITY_OPEN_RESULT.snapshot, ...opts.snapshot },
+      project: { ...PARITY_OPEN_RESULT.project, ...opts.project },
+      missing: opts.missing ?? PARITY_OPEN_RESULT.missing,
+      workspace,
+    },
     replies: { ...PARITY_REPLIES, ...opts.replies, editor_get_workspace: workspace },
     rejects: opts.rejects,
+    sequences: opts.sequences,
   });
   await page.route(`**${FIXTURE_VIDEO_URL}`, (route) =>
     route.fulfill({ contentType: "video/webm", body: readFileSync(VIDEO_FIXTURE_PATH) }),

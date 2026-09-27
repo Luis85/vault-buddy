@@ -26,6 +26,9 @@ jobs:
   frontend:
     name: Frontend (lint, quality gates, typecheck, tests, build)
     runs-on: ubuntu-latest
+    # An explicit bound (Ruling T24-2): a hung browser must fail the job in
+    # minutes, not run to GitHub's six-hour default.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -56,8 +59,32 @@ jobs:
       # suite runs, and the app ships on WebView2 anyway, so Firefox and
       # WebKit would cost minutes to prove nothing about the product.
       - run: npx playwright install --with-deps chromium
+      # Everything but the no-op sweep, which has its own job below.
       - run: npm run test:e2e
+        env:
+          E2E_SKIP_NOOP_SWEEP: "1"
       - run: npm run test:coverage
+
+  editor-noop-sweep:
+    # The tutorial editor's no-op sweep (tests/e2e/editorNoop.spec.ts,
+    # design D14; visual-parity Task 24, Ruling T24-2): every control in
+    # every scenario it lists is pressed on a freshly reloaded page, so it is
+    # long — on a 2-worker runner far longer than the rest of the e2e suite
+    # together. Its own job, parallel to `frontend`, so neither waits on the
+    # other; the same setup as `frontend`'s e2e step, then only the sweep.
+    name: Editor no-op sweep (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test tests/e2e/editorNoop.spec.ts
 
   rust-core:
     name: Rust core (fmt, clippy, tests)

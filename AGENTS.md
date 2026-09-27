@@ -3939,9 +3939,12 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
   both disables it and says why in its `title`; `DialogCloseButton` is the
   ✕ of `DialogHost` and the mixer popover. `AppButton` and `IconButton`
   above are the PANEL window's primitives — their `white/N` looks are white
-  on white in the editor's light theme — and are not used inside an editor
-  dialog: `tests/editorDialogButtons.test.ts` pins the source side and the
-  no-op sweep fails naming any `white/N` class in an open dialog.
+  on white in the editor's light theme — and are not used anywhere in the
+  editor (Task 24 fix round 1 moved the product card's restore confirm and
+  the "could not be opened" notice off `AppButton` too):
+  `tests/editorDialogButtons.test.ts` pins the source side (no editor
+  component imports a `src/components/ui` primitive that draws `white/N`)
+  and the no-op sweep fails naming any `white/N` class in an open dialog.
 - **Primitives** are presentational and each unit-tested: `IconButton`
   (icon-only; owns the focus/hover/disabled treatment; sizes `sm` = p-1,
   `md` = p-1.5), `AppButton` (primary/secondary/ghost/danger text button),
@@ -4063,25 +4066,55 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
     task that restyles a region reads its composite with its own eyes
     before reporting. The tokens test pins the concept palette in both
     themes.
-  - **`tests/e2e/editorNoop.spec.ts` — no control is a no-op (D14).** In
-    each scenario (the workspace, every inspector tab and mode, every
-    library tab, every menu and submenu, every dialog, the compact window;
-    `noopSweep.ts` / `noopProbe.ts`) it presses every visible enabled
-    `button`, `menuitem`, `tab`, `option` and `select` and requires an IPC
-    call, a DOM change, a focus move or a menu/dialog opening or closing;
-    every visible disabled control must carry a reason (`title`,
-    `aria-describedby` or `aria-description`, ruling T24-1); no open dialog
-    may draw the panel window's `white/N` buttons; and a stubbed refusal
-    must end in a visible toast in role wording, with no redaction handle.
-    Its own self-test plants a no-op and a reasonless disabled control and
-    requires the sweep to name both. What it does not reach: drag surfaces,
-    controls that exist only after a real success (a finished render, a
-    landed take), and a single-option select.
-  Both are slow by design: the whole `npm run test:e2e` took about 6
-  minutes on 11 workers when the sweep landed (visual-parity Task 24; the
-  sweep alone about 4.5) and 6.3 minutes for 179 tests at its Task 25, and
-  a loaded machine stretches it. A new editor control needs a sweep
-  scenario that reaches it; a new region, a parity test and a composite.
+  - **`tests/e2e/editorNoop.spec.ts` — no control is a no-op (D14).** It
+    sweeps exactly the scenarios `tests/e2e/noopScenarios.ts` lists, each
+    its own test: the workspace (base, a clip selected, the state after a
+    landed edit, 960×640 and its properties drawer); every inspector tab
+    for a video, an audio and a webcam clip, the multi-clip Layout and
+    Color tabs, and the track and teaching-cue inspectors; the Media,
+    Titles, Captions and Chapters tabs, the Project section, a product
+    being watched and a product's restore question; the Project, View,
+    More tools (wide and compact), Add track, Help and Edit actions menus,
+    the clip menu for a screen, an audio, a webcam and a title-card clip,
+    the multi-clip, track, lane, cue and asset menus, the clip menu's six
+    submenus and the multi-clip menu's Fades and Color submenus; and the
+    Checks (its finding and its destination picker), Save a copy, Render
+    (settings and a finished render), Review, Publish, Webcam, Mixer,
+    learning center (each tab), Frame, Rename, Open project, Discard,
+    Remove track, Reconnect, Recovery and close-guard dialogs, and the
+    guide's invitation and coach. In each (the runner is `noopSweep.ts`,
+    the in-page probe `noopProbe.ts`) it hovers and focuses every visible
+    enabled `button`, `menuitem`, `tab`, `option`, `select`, checkbox,
+    radio and `summary`, lets that settle — what hover and focus do (a
+    roving tabindex, a menu's hint line) is not the click's effect — then
+    activates it on a freshly prepared page and requires an IPC call (the
+    debounced `editor_save_workspace` / `editor_save_guide_progress` aside),
+    a DOM change on a node that was quiet before, a focus move or a
+    menu/dialog opening or closing. Every scenario proves it is idle: an
+    inert button planted in its scope must be reported as a no-op, or the
+    scenario fails. Every visible disabled control must carry a reason
+    (`title`, `aria-describedby` or `aria-description`, ruling T24-1); no
+    open dialog may draw the panel window's `white/N` buttons; and a stubbed
+    refusal must end in a visible toast in role wording, with no redaction
+    handle. Its self-tests plant a no-op, a reasonless disabled control, a
+    roving-tabindex pair and a page that answers every click, and require
+    the sweep to name each. What it does not reach: drag surfaces, a landed
+    webcam take, the close guard's render and take modes, a single-option
+    select, and the "off" direction of an already-pressed toggle (the skip
+    rule). A new editor control needs a scenario in that list that reaches
+    it.
+  Both are slow by design, the sweep most: it reloads the page after every
+  control that changed it. CI runs the sweep in its own job
+  (`editor-noop-sweep`, Ruling T24-2) and the rest of the suite in
+  `frontend`, which sets `E2E_SKIP_NOOP_SWEEP=1` (`playwright.config.ts`'s
+  `testIgnore`); a local `npm run test:e2e` runs both. Measured locally at
+  the Task 24 fix round (a 22-core machine): the suite without the sweep
+  took 4.3 minutes (109 tests) on 11 workers; the sweep alone took 5.5
+  minutes on 11 workers and 16 minutes on 2 (a GitHub runner's count — its
+  84 tests sum to about 40 minutes of single-worker time, and a runner's
+  cores are slower). A loaded machine stretches each. The CI bounds are
+  `timeout-minutes` 45 for `frontend` and 60 for the sweep. A new region
+  needs a parity test and a composite.
 - Rust unit tests sit next to the code in `src-tauri/core/`,
   `src-tauri/capture/`, `src-tauri/transcribe/`, and the shell
   (`src-tauri/src/transcription.rs` carries the queue's tests); keep new
@@ -4126,7 +4159,8 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
 
 | Job | Runner | Gates |
 | --- | --- | --- |
-| `frontend` | Linux | ESLint, LOC guard (frontend + Rust files), fallow quality ratchet, version-file agreement, `vue-tsc` typecheck + build, the **Playwright suite** against the just-built `dist/` (`tests/e2e/`, chromium only: layout, keyboard and contrast, and since the visual-parity plan the concept-parity and no-op-sweep gates — see Testing conventions), then the Vitest suite with coverage floors. The e2e step sits between the build and `test:coverage` because it needs `dist/` and must not disturb the coverage ordering |
+| `frontend` | Linux | ESLint, LOC guard (frontend + Rust files), fallow quality ratchet, version-file agreement, `vue-tsc` typecheck + build, the **Playwright suite** against the just-built `dist/` (`tests/e2e/`, chromium only: layout, keyboard and contrast, and since the visual-parity plan the concept-parity gate — see Testing conventions) minus the no-op sweep (`E2E_SKIP_NOOP_SWEEP=1`; it has its own job below), then the Vitest suite with coverage floors. The e2e step sits between the build and `test:coverage` because it needs `dist/` and must not disturb the coverage ordering. `timeout-minutes: 45` |
+| `editor-noop-sweep` | Linux (parallel to `frontend`) | The tutorial editor's no-op sweep alone (`npx playwright test tests/e2e/editorNoop.spec.ts`, design D14, Ruling T24-2): the same checkout / Node 22 / `npm ci` / `npm run build` / `playwright install --with-deps chromium` setup as `frontend`'s e2e step, then every scenario in `tests/e2e/noopScenarios.ts`. Its own job because on a 2-worker runner it outlasts the rest of the e2e suite together. `timeout-minutes: 60` |
 | `rust-core` | Linux | `cargo fmt --check` (whole workspace), clippy `-D warnings` + tests on `core`, `capture`, `transcribe`, `mcp`, `screen` — including `--features whisper` (the only place the whisper FFI tests execute) — plus `cargo machete` (unused deps), a `cargo llvm-cov` line-coverage floor (94) over `core`/`capture`/`transcribe`/`screen`, and `cargo deny check` (RustSec advisories + license policy, `src-tauri/deny.toml`). **It also installs ffmpeg**, explicitly rather than trusting the runner image, because the screen crate's render round-trip tests (`render_roundtrip.rs`, `render_graph_roundtrip.rs` — the retired `export_roundtrip.rs`'s successors, Task 59) SKIP when ffmpeg is absent — an image that quietly dropped it would turn the editor's only executable end-to-end render proof into a silent no-op with the job still green |
 | `linux-app` | Linux (after the two above) | `npx tauri build --no-bundle` — shell compile gate, never released — then **workspace clippy incl. the shell** and the **shell crate's unit tests** (`cargo test -p vault-buddy --lib`; both need the GUI libs + built `dist/` this job has) |
 | `windows-app` | Windows (after the two above) | Full `npx tauri build`, MSI/NSIS installers as artifacts; leaves updater artifacts unsigned on every PR event by design (the signing secrets are injected only on push to `main`, never on PRs — GAP-36); + `cargo test` for core/capture/transcribe/screen (incl. `--features whisper`, and `--features whisper-vulkan` for transcribe) after the build to exercise platform-sensitive code (process detection, GetKeyState, WASAPI gates, MoveFileExW fallback) |

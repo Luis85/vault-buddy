@@ -16,6 +16,11 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./tests/e2e",
+  // The no-op sweep (visual-parity Task 24) runs in its own CI job,
+  // `editor-noop-sweep` (Ruling T24-2): on a 2-worker runner it would
+  // dominate the `frontend` job. That job sets E2E_SKIP_NOOP_SWEEP=1; a
+  // local `npm run test:e2e` leaves it unset and runs everything.
+  testIgnore: process.env.E2E_SKIP_NOOP_SWEEP === "1" ? ["**/editorNoop.spec.ts"] : [],
   // The suite measures geometry, so parallel workers sharing a display are
   // fine but a retry that masks a real layout regression is not.
   retries: 0,

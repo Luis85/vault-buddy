@@ -49,6 +49,33 @@ export interface SweepResult {
 
 type ProbeWindow = Window & { __noopProbe: NoopProbe; __noisy?: Set<Node> };
 
+/** The inert control every scenario plants in its own scope. */
+const IDLE_PROOF = "noop-idle-proof";
+const NO_EFFECT = "did nothing when activated (no IPC call, DOM change, focus move or menu/dialog change)";
+
+/** Plants one inert button inside the scenario's scope (its last match —
+ * the topmost dialog, the open submenu), fixed at the top-left above
+ * everything so it can always be clicked. It must be reported as a no-op:
+ * that is the scenario's proof that it is idle — that nothing it leaves
+ * running (a debounced call, a listener, an animation) would credit an
+ * inert control with an effect. */
+async function plantIdleProof(page: Page, scope?: string): Promise<void> {
+  await page.evaluate(
+    ({ scope, id }) => {
+      const hosts = document.querySelectorAll(scope ?? "body");
+      const host = hosts[hosts.length - 1] ?? document.body;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.testid = id;
+      button.textContent = "Idle proof";
+      button.style.cssText = "position:fixed;left:0;top:0;z-index:2147483647;";
+      host.appendChild(button);
+    },
+    { scope, id: IDLE_PROOF },
+  );
+  await settle(page);
+}
+
 /** Waits until the DOM has been quiet for `quietMs` (bounded by `maxMs`).
  * A page that never goes quiet (a meter, a clock) has its still-changing
  * nodes — those that changed in the last `quietMs * 2` — recorded on
@@ -86,8 +113,15 @@ export async function settle(page: Page, quietMs = 150, maxMs = 3_000): Promise<
  * T24-1), and every enabled one must do something when activated. The page
  * is re-prepared before a control whenever the previous one changed it.
  */
-export async function sweep(page: Page, sc: SweepScenario): Promise<SweepResult> {
+export async function sweep(page: Page, scenario: SweepScenario): Promise<SweepResult> {
   await page.addInitScript(installNoopProbe);
+  const sc: SweepScenario = {
+    ...scenario,
+    prepare: async () => {
+      await scenario.prepare();
+      await plantIdleProof(page, scenario.scope);
+    },
+  };
   const result: SweepResult = { findings: [], activated: 0, disabled: 0, skipped: 0 };
   await sc.prepare();
   for (const problem of (await sc.audit?.()) ?? []) {
@@ -115,29 +149,34 @@ async function visit(page: Page, sc: SweepScenario, c: Control, dirty: boolean, 
     result.skipped++;
     return dirty;
   }
-  result.activated++;
   if (dirty) await sc.prepare();
   const outcome = await tryControl(page, c);
+  if (c.testid === IDLE_PROOF) {
+    if (outcome.problem !== NO_EFFECT) {
+      note("the scenario is not idle: an inert control planted in it was credited with an effect");
+    }
+    return outcome.changed;
+  }
+  result.activated++;
   if (outcome.problem) note(outcome.problem);
   return outcome.changed;
 }
 
-/** Finds the control again, lets hover effects settle, then activates it
- * and waits for an effect. */
+/** Finds the control again, hovers and focuses it and lets both settle —
+ * what a pointer or a focus handler does (a roving tabindex, a menu's hint
+ * line) is not the click's effect — then activates it and waits for one. */
 async function tryControl(page: Page, c: Control): Promise<{ changed: boolean; problem?: string }> {
   const found = await page.evaluate((key) => (window as unknown as ProbeWindow).__noopProbe.mark(key), c.key);
   if (!found) return { changed: true, problem: "was not on the page again after the scenario was re-prepared" };
   const target = page.locator("[data-noop-target]");
   if (c.tag !== "select") await target.hover({ timeout: 2_000 }).catch(() => undefined);
+  await target.focus({ timeout: 2_000 }).catch(() => undefined);
   await settle(page);
   await page.evaluate(() => (window as unknown as ProbeWindow).__noopProbe.watch());
   const problem = await activate(page, c);
   if (problem !== null) return { changed: true, problem };
   if (await sawEffect(page)) return { changed: true };
-  return {
-    changed: false,
-    problem: "did nothing when activated (no IPC call, DOM change, focus move or menu/dialog change)",
-  };
+  return { changed: false, problem: NO_EFFECT };
 }
 
 /** Polls for an effect for up to `EFFECT_WINDOW_MS`; true once one shows. */
