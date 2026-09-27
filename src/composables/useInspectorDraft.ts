@@ -123,6 +123,23 @@ export function percentField(opts: {
   };
 }
 
+/** Builds a SECONDS field over a stored millisecond value (visual-parity
+ * Task 14, the Clip tab): shown and typed as seconds, committed as whole
+ * milliseconds — every `EditorCommand` time is an integer Rust decodes as
+ * u64, so a finer entry is rounded rather than refused. */
+export function secondsField(opts: { value: () => number; label: string; maxMs: number }): InspectorField<number> {
+  const max = opts.maxMs / 1000;
+  const seconds = numberField({ value: () => opts.value() / 1000, label: opts.label, min: 0, max, rangeLabel: `0 and ${max} s` });
+  return {
+    value: opts.value,
+    format: (ms: number) => String(ms / 1000),
+    parse(raw: string): InspectorParseResult<number> {
+      const typed = seconds.parse(raw);
+      return typed.ok ? { ok: true, value: Math.round(typed.value * 1000) } : typed;
+    },
+  };
+}
+
 /**
  * Builds a plain trimmed-string field (Task 21, `ClipSection`'s Name field —
  * the first caller): a value getter and an inclusive character-count

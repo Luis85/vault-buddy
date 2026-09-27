@@ -4,12 +4,17 @@
  * the `.btn` (11px, 30px tall, an icon first) or, with `preset`, a
  * `.preset-row` button (10px, 29px). A refused button stays focusable with
  * its reason as the tooltip (`aria-disabled`, the track header's rule) and
- * sends nothing — a click is only emitted while `reason` is empty.
+ * sends nothing — a click is only emitted while `reason` is empty. With
+ * `pressed` it is a toggle (`aria-pressed`, the concept's `button.active`).
  */
 import type { EditorIconName } from "../icons/conceptIcons";
 import EditorIcon from "../icons/EditorIcon.vue";
 
-const props = defineProps<{ icon?: EditorIconName; preset?: boolean; reason?: string | null }>();
+const props = withDefaults(
+  defineProps<{ icon?: EditorIconName; preset?: boolean; reason?: string | null; pressed?: boolean }>(),
+  // Absent is not a toggle: no `aria-pressed` at all, never "false".
+  { icon: undefined, reason: null, pressed: undefined },
+);
 const emit = defineEmits<(e: "click") => void>();
 
 function onClick(): void {
@@ -22,8 +27,10 @@ function onClick(): void {
     type="button"
     :aria-disabled="reason ? 'true' : undefined"
     :title="reason ?? undefined"
-    class="inline-flex items-center gap-[7px] rounded-md border border-line bg-panel text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+    :aria-pressed="pressed"
+    class="inline-flex items-center gap-[7px] rounded-md border focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
     :class="[
+      pressed ? 'active border-accent/28 bg-accent-bg text-accent-ink' : 'border-line bg-panel text-fg',
       preset ? 'min-h-[29px] px-2 py-1 text-[10px]' : 'min-h-[30px] px-[9px] py-1.5 text-[11px]',
       reason ? 'cursor-not-allowed opacity-45' : 'cursor-pointer hover:bg-hover',
     ]"

@@ -46,6 +46,7 @@ import { fitZoom, msToX, TRACK_LABEL_WIDTH_PX } from "../editor/timelineLayout";
 import type { DeleteMode, Selected, Theme, Workspace } from "../editorTypes";
 import { logWarning } from "../logging";
 import { toEditorError, useEditorProjectStore } from "./editorProject";
+import { createDisclosures } from "./workspaceDisclosures";
 import { createSelection, pruneSelectedTrack } from "./workspaceSelection";
 
 const PERSIST_DEBOUNCE_MS = 750;
@@ -481,5 +482,6 @@ export const useEditorWorkspaceStore = defineStore("editorWorkspace", () => {
     ...selection,
     ...createRangeZoom(fields, persist),
     ...panels,
+    ...createDisclosures(sessionId),
   };
 });

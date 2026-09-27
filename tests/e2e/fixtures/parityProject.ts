@@ -53,7 +53,9 @@ function attach(outputMs: number, clipId: string, clipStartMs: number): { clip_i
 
 const assets: EditorOpenResult["project"]["assets"] = [
   { id: "capture", kind: "video", name: "Getting started.capture", duration_ms: 36_000 },
-  { id: "presenter", kind: "video", name: "Presenter · demo", duration_ms: 33_000 },
+  // The presenter overlay is a staged capture's synchronized webcam (asset
+  // `webcam`), which the Layout tab titles "Webcam overlay".
+  { id: "webcam", kind: "video", name: "Presenter · demo", duration_ms: 33_000 },
   { id: "detail", kind: "video", name: "Project detail.capture", duration_ms: 18_000 },
   { id: "music", kind: "audio", name: "Guide cues · synth", duration_ms: 36_000 },
   { id: "bed", kind: "audio", name: "Ambient bed · synth", duration_ms: 36_000 },
@@ -110,11 +112,15 @@ const clips: EditorOpenResult["project"]["clips"] = [
   clip("c2", "capture", "v1", C2_START, C2_LEN, "Create a project"),
   clip("c3", "capture", "v1", C3_START, C3_LEN, "Save to your vault"),
   clip("c4", "detail", "v2", 11_000, 7_200, "A closer look", { x: 0.1, y: 0.1, w: 0.5, h: 0.5 }),
-  clip("c5", "presenter", "v3", 1_500, 32_000, "Presenter · demo", {
-    x: 0.75,
-    y: 0.05,
-    w: 0.2,
-    h: 0.2,
+  // The presenter placement (screen 02's Layout tab: 77.5 / 6 / 19%), a
+  // circle square in pixels on the 16:9 canvas.
+  clip("c5", "webcam", "v3", 1_500, 32_000, "Presenter · demo", {
+    x: 0.775,
+    y: 0.06,
+    w: 0.19,
+    h: 0.3378,
+    frame_shape: "circle",
+    fit: "cover",
     fade_in_ms: 600,
     fade_out_ms: 600,
   }),

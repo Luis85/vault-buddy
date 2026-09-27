@@ -110,7 +110,7 @@ test.describe("parity 1600x1000: the media library (screen 02)", () => {
 
   test("right-clicking a row opens the asset menu, headed by its own name", async ({ page }) => {
     await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
-    await page.getByTestId("library-asset-presenter").click({ button: "right" });
+    await page.getByTestId("library-asset-webcam").click({ button: "right" });
     await expect(page.getByTestId("editor-context-menu")).toBeVisible();
     await expect(page.getByTestId("editor-context-menu-heading")).toHaveText("Presenter · demo");
   });
@@ -453,6 +453,53 @@ test.describe("parity 1600x1000: the inspector frame (screens 02, 04)", () => {
     await page.waitForTimeout(250);
     await page.screenshot({ path: "test-results/parity/built-04-inspector.png" });
     await composite(page, "04-fades.png", "test-results/parity/built-04-inspector.png", "vs-04-inspector");
+  });
+
+  // Visual-parity Task 14 (§5 Layout, Clip): screen 02's Layout tab and the
+  // Clip tab, in seconds.
+  test("the Layout tab: Webcam overlay, position in percent, Size, a 2x2 corner grid", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("clip-c5").click();
+    await page.getByTestId("inspector-tab-layout").click();
+    await expect(page.getByTestId("inspector-body").locator("h3").first()).toHaveText("Webcam overlay");
+    await expect(page.getByTestId("layout-preset-full")).toHaveText("Full frame");
+    await expect(page.getByTestId("layout-preset-pip")).toHaveText("Picture-in-picture");
+    await expect(page.getByTestId("layout-section-x")).toHaveValue("77.5");
+    await expect(page.getByTestId("layout-section-y")).toHaveValue("6");
+    await expect(page.getByTestId("layout-section-size-value")).toHaveText("19%");
+    const x = await box(page, "layout-section-x");
+    const y = await box(page, "layout-section-y");
+    expect(y.y).toBeCloseTo(x.y, 0);
+    expect(x.height).toBeGreaterThanOrEqual(34);
+    const tl = await box(page, "layout-corner-tl");
+    const tr = await box(page, "layout-corner-tr");
+    const bl = await box(page, "layout-corner-bl");
+    expect(tl.height).toBeGreaterThanOrEqual(34);
+    expect(tr.y).toBeCloseTo(tl.y, 0);
+    expect(bl.x).toBeCloseTo(tl.x, 0);
+    expect(bl.y).toBeGreaterThan(tl.y + tl.height);
+    // Nothing in the tab is wider than its column.
+    const body = await box(page, "inspector-body");
+    expect(tr.x + tr.width).toBeLessThanOrEqual(body.x + body.width + 1);
+    await expect(page.getByTestId("layout-frame-crop")).not.toHaveAttribute("open", /.*/);
+    await expect(page.getByTestId("layout-transform")).not.toHaveAttribute("open", /.*/);
+    // A click on a summary opens it; the tab remembers that for this clip.
+    await page.getByTestId("layout-frame-crop").locator("summary").click();
+    await page.getByTestId("layout-transform").locator("summary").click();
+    await expect(page.getByTestId("layout-section-mirror")).toBeVisible();
+    await expect(page.getByTestId("layout-transform-rotate")).toBeVisible();
+    await page.getByTestId("layout-transform-rotate").scrollIntoViewIfNeeded();
+    await page.getByTestId("editor-shell-inspector").screenshot({ path: "test-results/parity/built-02-layout-disclosures.png" });
+
+    await page.getByTestId("inspector-tab-clip").click();
+    await expect(page.getByTestId("inspector-body").locator("h3")).toHaveText(["Placement", "Source range"]);
+    await expect(page.getByTestId("inspector-body")).not.toContainText(/\bms\b/);
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: "test-results/parity/built-02-clip-tab.png" });
+    await composite(page, "02-workspace.png", "test-results/parity/built-02-clip-tab.png", "vs-02-clip-tab");
+    await page.getByTestId("inspector-tab-layout").click();
+    await expect(page.getByTestId("layout-frame-crop")).toHaveAttribute("open", "");
+    await expect(page.getByTestId("layout-transform")).toHaveAttribute("open", "");
   });
 
   test("the ✕ hides the inspector and gives its column to the preview", async ({ page }) => {

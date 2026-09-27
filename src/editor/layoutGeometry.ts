@@ -67,6 +67,27 @@ export function roundBox(box: NormBox): NormBox {
   return clampBox({ x: r(box.x), y: r(box.y), w: r(box.w), h: r(box.h) });
 }
 
+/** The widest a box may be while keeping its proportions (`h / w`) inside
+ * the frame — the inspector's Size range tops out here. */
+export function maxProportionalWidth(box: NormBox): number {
+  return Math.min(MAX_SIZE, box.w / box.h);
+}
+
+/** The box resized to `width` with its proportions kept (the inspector's
+ * Size, the concept's `sizeVideo`): the width stays where both sides fit
+ * the schema's range, and the corner stays put unless the frame's edge
+ * pushes it in. */
+export function sizeBox(box: NormBox, width: number): NormBox {
+  const ratio = box.h / box.w;
+  const w = clamp(width, Math.max(MIN_SIZE, MIN_SIZE / ratio), Math.min(MAX_SIZE, MAX_SIZE / ratio));
+  return clampBox({ x: box.x, y: box.y, w, h: w * ratio });
+}
+
+/** The box centred in the frame, its size unchanged. */
+export function centerBox(box: NormBox): NormBox {
+  return { ...box, x: (1 - box.w) / 2, y: (1 - box.h) / 2 };
+}
+
 /**
  * A box whose PIXEL aspect equals `sourceWidth:sourceHeight` on `canvas`:
  * `h = w × canvasW / canvasH × sourceH / sourceW`. A circle frame always
