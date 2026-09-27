@@ -404,21 +404,22 @@ export const useEditorProjectStore = defineStore("editorProject", {
     },
     /**
      * Resend the command parked in `conflictIntent` (fix round 1) — the
-     * explicit Retry affordance `execute` itself deliberately never drives
-     * on its own (R20). Clears `conflictIntent` BEFORE awaiting `execute`,
-     * not after: a double-click fires this twice back to back with no
-     * `await` between the calls, and since the clear happens synchronously
-     * at the start of the function body, the SECOND call already reads
-     * `conflictIntent` as null and returns without ever touching the port
-     * — a fresh `commandId` on a second send is exactly what Rust's
-     * commandId-keyed replay dedup cannot catch, so this is the only place
-     * that dedup has to happen. A no-op when nothing is parked.
+     * explicit Retry `execute` never drives on its own (R20). Clears it
+     * BEFORE awaiting `execute`: a double-click's second call then reads
+     * null and never touches the port — a fresh `commandId` is exactly what
+     * Rust's replay dedup cannot catch. A no-op when nothing is parked.
      */
     async retryConflict(): Promise<void> {
       const command = this.conflictIntent;
       if (!command) return;
       this.conflictIntent = null;
       await this.execute(command);
+    },
+    /** Drop a parked conflict without resending it: a dialog that owns its
+     * request's conflict (Task 21 fix round 2, Ruling T21-5) reruns the
+     * whole request itself, so no Retry may resend one step alone. */
+    clearConflict(): void {
+      this.conflictIntent = null;
     },
     /**
      * Install a successful `save()` receipt, guarded exactly like

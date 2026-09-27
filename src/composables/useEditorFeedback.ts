@@ -18,7 +18,9 @@
  *   Without that a refusal the person already moved past stayed over the
  *   timeline, and a "disk is full" outlived the save that fixed it.
  *   An error raised while a dialog renders `lastError` inline
- *   (`useInlineLastError`, ruling T7-1) is shown there and not toasted.
+ *   (`useInlineLastError`, ruling T7-1) is shown there and not toasted —
+ *   and a conflict its own request met (`ownConflicts`, Ruling T21-5) is
+ *   the dialog's, with no Retry toast.
  * - **A revision conflict** parks the edit in `conflictIntent` (never
  *   resent on its own, R20); the toast's Retry is the explicit resend
  *   (`retryConflict`). A later edit that lands clears `conflictIntent`, and
@@ -40,7 +42,7 @@ import { onScopeDispose, watch } from "vue";
 import type { EditorError } from "../editorTypes";
 import { useEditorProjectStore } from "../stores/editorProject";
 import { useNotificationsStore } from "../stores/notifications";
-import { lastErrorShownInline } from "./useInlineLastError";
+import { conflictOwnedInline, lastErrorShownInline } from "./useInlineLastError";
 
 const CONFLICT_MESSAGE = "Your edit wasn't applied because the project changed. Retry?";
 
@@ -82,7 +84,8 @@ export function useEditorFeedback() {
     (command) => {
       if (conflictToast !== null) notifications.dismiss(conflictToast);
       conflictToast = null;
-      if (!command) return;
+      // A dialog whose own request met it owns it (Ruling T21-5).
+      if (!command || conflictOwnedInline()) return;
       conflictToast = notifications.notify("warning", CONFLICT_MESSAGE, {
         action: { label: "Retry", run: () => project.retryConflict() },
       });

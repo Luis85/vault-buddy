@@ -3428,7 +3428,10 @@ rename path `src/editor/renameTutorial.ts`; since visual-parity Task 22 also
 the webcam dialog's Add to timeline, the recovery offer's and the close
 guard's choices, and Discard project with its reattach): that refusal is shown there
 and not toasted, while anything else raised meanwhile still toasts — one
-surface, never two and never none. Every insert at the playhead (the media "+", the Titles
+surface, never two and never none. With `ownConflicts` (Ruling T21-5, Save
+a copy) the dialog also owns the revision conflict its own request meets:
+no shell Retry toast, the parked command dropped (`clearConflict`), and the
+dialog's own button reruns the whole request. Every insert at the playhead (the media "+", the Titles
 cards, the asset menu) goes through `placeOnFreeTrack`: a free track of the
 kind for the whole span, else `addTrack` then the insert — except a Titles
 card needing a new TOP track, which is one `addCard{trackId: null}`.

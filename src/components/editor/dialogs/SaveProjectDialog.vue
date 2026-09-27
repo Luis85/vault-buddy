@@ -24,7 +24,9 @@
  * ONLY from a matching receipt. A refused rename is the store's
  * `lastError`, shown in that status line; the dialog claims it for the
  * rename's own round trip (`useInlineLastError`, ruling T7-1) so the shell
- * does not toast it too — and a revision conflict on it says so. A rename
+ * does not toast it too — and a revision conflict on it is the dialog's
+ * own (Ruling T21-5: no shell Retry toast, the parked rename dropped; Save
+ * copy reruns the whole save). A rename
  * that landed before the copy was dismissed or failed is stated (Ruling
  * T21-4). Escape and the backdrop close the dialog
  * except while the rename or the save is pending, whose reply the dialog
@@ -50,12 +52,14 @@ const emit = defineEmits<{ (e: "close"): void }>();
 const editorProject = useEditorProjectStore();
 const exporter = useProjectExport();
 const { state } = exporter;
-const inline = useInlineLastError(() => props.open);
+const inline = useInlineLastError(() => props.open, { ownConflicts: true });
 const format = ref<PackageFormat>(props.initialFormat);
 const name = ref("");
 const renaming = ref(false);
-/** A revision conflict met the rename (fix round 1, minor 5). */
-const conflict = ref(false);
+/** Why the rename stopped the copy when it was not an inline refusal:
+ * its own revision conflict (detected positively, fix round 2), or a
+ * refusal that said nothing (no open session). */
+const stopped = ref<"conflict" | "refused" | null>(null);
 /** The title this save renamed the tutorial to (Ruling T21-4). */
 const renamedTo = ref<string | null>(null);
 
@@ -69,7 +73,7 @@ watch(
     format.value = props.initialFormat;
     name.value = editorProject.snapshot?.title ?? "";
     exporter.reset();
-    conflict.value = false;
+    stopped.value = null;
     renamedTo.value = null;
   },
   { immediate: true },
@@ -88,7 +92,7 @@ const status = computed(() =>
     state: state.value,
     renaming: renaming.value,
     refusal: inline.error.value?.message ?? null,
-    conflict: conflict.value,
+    stopped: stopped.value,
     renamedTo: renamedTo.value,
   }),
 );
@@ -99,13 +103,13 @@ const status = computed(() =>
 async function save(): Promise<void> {
   if (reason.value) return;
   exporter.reset();
-  conflict.value = false;
+  stopped.value = null;
   renamedTo.value = null;
   renaming.value = true;
   const outcome = await inline.track(() => renameIfChanged(name.value));
   renaming.value = false;
   if (outcome === "refused") {
-    conflict.value = inline.error.value === null;
+    if (!inline.error.value) stopped.value = inline.conflict.value ? "conflict" : "refused";
     return;
   }
   if (outcome === "renamed") renamedTo.value = name.value.trim();
