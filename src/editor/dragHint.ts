@@ -32,19 +32,24 @@ export const DEFAULT_EDIT_HINT = "Callouts follow their clip.";
 
 export const DRAG_HINT_KEY: InjectionKey<Ref<string | null>> = Symbol("timeline edit hint");
 
-/** One clip's live drag, as `useTimelineDrag` holds it. */
+/** One clip's live drag, as `useTimelineDrag` holds it. The project and
+ * the moved ids are GETTERS, read only while a move is live: every clip
+ * keeps a hint computed, and an idle one must not depend on the project or
+ * the selection (fix round 1). */
 export interface ClipDragState {
-  project: Project | null;
+  project: () => Project | null;
   clip: Clip;
   /** The ids the release names (`ClipItem`'s `moveTargetClipIds`). */
-  moveIds: string[];
+  moveIds: () => string[];
   move: MovePreview | null;
   trim: TrimPreview | null;
   fade: FadePreview | null;
 }
 
 function moveHint(s: ClipDragState, deltaMs: number): string {
-  const moving = s.project ? withGroups(s.project, s.moveIds).size : s.moveIds.length;
+  const project = s.project();
+  const ids = s.moveIds();
+  const moving = project ? withGroups(project, ids).size : ids.length;
   if (moving > 1) return `Moving ${moving} clips together · tracks stay fixed · Esc cancels`;
   return `Starts at ${formatMenuTime(Math.max(0, s.clip.start_ms + deltaMs))} · release to place`;
 }

@@ -34,10 +34,20 @@
  * ABOVE the button and is `position: fixed`, placed from the button's box
  * when it opens: the timeline section clips its overflow, so an absolutely
  * placed panel would be cut off at the timeline's top edge. Its height is
- * held to the room above the button, and it scrolls past that.
+ * held to the room above the button in the window's own terms
+ * (`calc(100vh - …)`), it scrolls past that, and it is placed again on
+ * every window resize while it is open (fix round 1), so shrinking the
+ * window never strands its first rows above the top.
+ *
+ * **Escape and a revealed mixer.** Escape always gives focus back to this
+ * trigger — also when the panel was opened by a reveal (View → Audio
+ * mixer…, a before-you-share finding's "Open the mixer", the Audio tab's
+ * "Open audio mixer"). By then the opener is gone (the View menu and the
+ * Checks dialog have closed) or is not the mixer's home, and the trigger is
+ * the control that opens the panel again, so it is where focus belongs.
  */
 import type { ComponentPublicInstance } from "vue";
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useWindowDismiss } from "../../../composables/useWindowDismiss";
@@ -93,12 +103,21 @@ const VIEWPORT_MARGIN_PX = 8;
 function place(): void {
   const rect = triggerRef.value?.getBoundingClientRect();
   if (!rect) return;
+  const bottom = window.innerHeight - rect.top + PANEL_GAP_PX;
   panelStyle.value = {
     right: `${Math.max(VIEWPORT_MARGIN_PX, window.innerWidth - rect.right)}px`,
-    bottom: `${window.innerHeight - rect.top + PANEL_GAP_PX}px`,
-    maxHeight: `${Math.max(0, rect.top - PANEL_GAP_PX - VIEWPORT_MARGIN_PX)}px`,
+    bottom: `${bottom}px`,
+    maxHeight: `calc(100vh - ${bottom + VIEWPORT_MARGIN_PX}px)`,
   };
 }
+
+/** Placed again whenever the window changes size while the panel is open,
+ * and not listened for at all while it is closed. */
+watch(open, (isOpen) => {
+  if (isOpen) window.addEventListener("resize", place);
+  else window.removeEventListener("resize", place);
+});
+onBeforeUnmount(() => window.removeEventListener("resize", place));
 
 function show(): void {
   place();

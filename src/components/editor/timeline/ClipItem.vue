@@ -152,9 +152,9 @@ useSnapGuideReport(drag.snapGuideMs);
 useDragHintReport(
   computed(() =>
     clipDragHint({
-      project: editorProject.project,
+      project: () => editorProject.project,
       clip: props.clip,
-      moveIds: moveTargetClipIds(),
+      moveIds: moveTargetClipIds,
       move: drag.movePreview.value,
       trim: drag.trimPreview.value,
       fade: drag.fadePreview.value,

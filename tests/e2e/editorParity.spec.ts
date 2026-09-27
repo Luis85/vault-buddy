@@ -960,6 +960,22 @@ test.describe("parity 1600x1000: the timeline footer and status bar (screen 02, 
     await expect(page.getByTestId("mixer-toggle")).toBeFocused();
   });
 
+  // Fix round 1: a tall mixer (twenty tracks) opened in a tall window, then
+  // the window shrinks — its first rows must stay reachable.
+  test("an open mixer keeps its top in the window when the window shrinks", async ({ page }) => {
+    const tracks = Array.from({ length: 20 }, (_, i) => ({
+      id: `t${i}`, kind: "audio" as const, name: `Track ${i}`, visible: true, locked: false, muted: false, solo: false, volume: 1,
+    }));
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false, project: { tracks, clips: [], effects: [], markers: [], transitions: [], captions: null } });
+    await page.getByTestId("mixer-toggle").click();
+    await expect(page.getByTestId("mixer-popover")).toBeVisible();
+    await page.setViewportSize({ width: 1600, height: 640 });
+    await expect.poll(async () => (await box(page, "mixer-popover")).y).toBeGreaterThanOrEqual(0);
+    const p = await box(page, "mixer-popover");
+    expect(p.y + p.height).toBeLessThanOrEqual((await box(page, "mixer-toggle")).y);
+    expect(await mixerTopIsPainted(page)).toBe(true);
+  });
+
   test("the hint follows a real clip drag, and Escape puts it back", async ({ page }) => {
     await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
     // c4, alone on v2 and wholly in view (editorClips.spec.ts's own grip).

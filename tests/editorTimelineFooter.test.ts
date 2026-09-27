@@ -9,11 +9,12 @@
  */
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import TransportBar from "../src/components/editor/preview/TransportBar.vue";
 import TimelineFooter from "../src/components/editor/timeline/TimelineFooter.vue";
 import TimelineView from "../src/components/editor/timeline/TimelineView.vue";
+import { clipDragHint } from "../src/editor/dragHint";
 import { requestReveal } from "../src/editor/revealBus";
 import type { Effect, Project } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
@@ -102,6 +103,54 @@ describe("the timeline footer (§7)", () => {
     expect(toggle.attributes("aria-expanded")).toBe("true");
     expect(popover.classes()).toContain("fixed");
     expect(popover.attributes("style")).toMatch(/bottom: \d+px/);
+  });
+
+  // Fix round 1: the panel's height is held to the room above the button
+  // in the WINDOW's terms (`100vh`), and it is placed again on every window
+  // resize while open — a height frozen at open strands its first rows above
+  // the top once the window shrinks.
+  it("holds its height to the window and follows a resize while open", async () => {
+    const w = await timeline();
+    const toggle = w.get('[data-testid="mixer-toggle"]');
+    const rect = (top: number) => ({ top, bottom: top + 25, left: 1_400, right: 1_587, width: 187, height: 25, x: 1_400, y: top, toJSON: () => ({}) });
+    const box = vi.spyOn(toggle.element, "getBoundingClientRect").mockReturnValue(rect(948) as DOMRect);
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(1_000);
+    await toggle.trigger("click");
+    const style = () => w.get('[data-testid="mixer-popover"]').attributes("style") ?? "";
+    expect(style()).toContain("bottom: 56px");
+    expect(style()).toContain("max-height: calc(100vh - 64px)");
+
+    box.mockReturnValue(rect(500) as DOMRect);
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(640);
+    window.dispatchEvent(new Event("resize"));
+    await flushPromises();
+    expect(style()).toContain("bottom: 144px");
+    expect(style()).toContain("max-height: calc(100vh - 152px)");
+    vi.restoreAllMocks();
+  });
+
+  it("stops listening for resizes once it closes", async () => {
+    const w = await timeline();
+    const added = vi.spyOn(window, "addEventListener");
+    const removed = vi.spyOn(window, "removeEventListener");
+    const toggle = w.get('[data-testid="mixer-toggle"]');
+    await toggle.trigger("click");
+    const listener = added.mock.calls.find(([type]) => type === "resize")?.[1];
+    expect(listener).toBeTypeOf("function");
+    await toggle.trigger("click");
+    expect(removed).toHaveBeenCalledWith("resize", listener);
+    vi.restoreAllMocks();
+  });
+
+  it("stops listening for resizes when it unmounts open", async () => {
+    const w = await timeline();
+    const added = vi.spyOn(window, "addEventListener");
+    const removed = vi.spyOn(window, "removeEventListener");
+    await w.get('[data-testid="mixer-toggle"]').trigger("click");
+    const listener = added.mock.calls.find(([type]) => type === "resize")?.[1];
+    w.unmount();
+    expect(removed).toHaveBeenCalledWith("resize", listener);
+    vi.restoreAllMocks();
   });
 
   it("Escape closes the mixer and gives focus back to the footer's button (D16)", async () => {
@@ -193,6 +242,23 @@ describe("the edit hint follows the live drag", () => {
     await grip.trigger("pointerdown", { button: 0, clientX: 320, pointerId: 1 });
     await grip.trigger("pointermove", { clientX: 370, pointerId: 1 });
     expect(hint(w)).toBe("Resizing arrow · stays on its clip · Esc cancels");
+  });
+});
+
+// Fix round 1: every clip on the timeline keeps a hint computed, so an
+// idle one must not read the project or the selection at all — otherwise
+// each selection change re-runs every clip's hint for nothing.
+describe("clipDragHint", () => {
+  it("reads neither the project nor the selection while nothing is dragged", () => {
+    const project = vi.fn(() => sample());
+    const moveIds = vi.fn(() => ["c1"]);
+    const c = clip("c1", "capture", "v1", 0, 1_000, "One");
+    expect(clipDragHint({ project, clip: c, moveIds, move: null, trim: null, fade: null })).toBeNull();
+    expect(project).not.toHaveBeenCalled();
+    expect(moveIds).not.toHaveBeenCalled();
+    expect(clipDragHint({ project, clip: c, moveIds, move: { deltaMs: 0 }, trim: null, fade: null })).toBe(
+      "Moving 2 clips together · tracks stay fixed · Esc cancels",
+    );
   });
 });
 
