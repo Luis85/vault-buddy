@@ -15,14 +15,15 @@
  * card — a pill saying whether it "Matches this edit" (rendered by this
  * session from the edit on screen) or an "Earlier edit", the mono revision, the name,
  * the length and range, when it was made, then Watch and Publish as small
- * bordered buttons and Restore as the concept's undo icon.
+ * bordered buttons and Restore as the concept's undo icon. The restore
+ * confirm's buttons are the same small token buttons (Task 24 fix round 1:
+ * the panel's `AppButton` drew `white/N` looks the light theme hides).
  */
 import { computed } from "vue";
 
 import { rangeTimeLabel } from "../../../editor/renderRanges";
 import type { ProductDto } from "../../../editorTypes";
 import { formatDuration } from "../../../utils/formatDuration";
-import AppButton from "../../ui/AppButton.vue";
 import EditorIcon from "../icons/EditorIcon.vue";
 import ProductPlayer from "../preview/ProductPlayer.vue";
 
@@ -61,6 +62,9 @@ const media = computed(() => ({ productId: props.product.id }));
 const showPlayer = computed(() => props.watching && props.product.available);
 const SMALL_BUTTON =
   "flex min-h-[30px] items-center gap-1.5 rounded-[7px] border border-line bg-panel px-2 py-1 text-[11px] text-fg hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-40";
+/** The confirm's own action: the small button, in the primary fill. */
+const SMALL_PRIMARY =
+  "flex min-h-[30px] items-center rounded-[7px] border border-transparent bg-primary px-2 py-1 text-[11px] font-semibold text-white hover:bg-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus";
 </script>
 
 <template>
@@ -148,22 +152,22 @@ const SMALL_BUTTON =
         video stays as it is, and Undo brings your current edit back.
       </p>
       <div class="flex gap-1">
-        <AppButton
-          variant="primary"
-          size="sm"
+        <button
+          type="button"
           :data-testid="`product-restore-confirm-${id}`"
+          :class="SMALL_PRIMARY"
           @click="emit('confirm-restore')"
         >
           Restore
-        </AppButton>
-        <AppButton
-          variant="ghost"
-          size="sm"
+        </button>
+        <button
+          type="button"
           :data-testid="`product-restore-cancel-${id}`"
+          :class="SMALL_BUTTON"
           @click="emit('cancel-restore')"
         >
           Keep current edit
-        </AppButton>
+        </button>
       </div>
     </div>
 

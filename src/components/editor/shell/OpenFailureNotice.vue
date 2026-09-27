@@ -12,14 +12,19 @@
  *
  * Presentational apart from the one port call; the refusal is said in the
  * role wording Rust gives it, without its redaction handle
- * (`toEditorError`).
+ * (`toEditorError`). Its buttons are the editor's `DialogButton`s, not
+ * the panel window's `AppButton` (visual-parity Task 24 fix round 1: its
+ * `white/N` looks vanish on the light theme).
  */
 import { ref, watch } from "vue";
 
 import { toEditorError, useEditorProjectStore } from "../../../stores/editorProject";
-import AppButton from "../../ui/AppButton.vue";
+import DialogButton from "../dialogs/DialogButton.vue";
 
 const props = defineProps<{ message: string; projectId: string | null }>();
+
+/** Every button's reason while the discard is in flight (design D14). */
+const DISCARDING = "Discarding the project…";
 
 const project = useEditorProjectStore();
 const confirming = ref(false);
@@ -85,32 +90,30 @@ async function discard(): Promise<void> {
         {{ error }}
       </p>
       <div class="flex flex-wrap gap-2">
-        <AppButton
+        <DialogButton
           v-if="!confirming"
           data-testid="broken-project-discard"
-          variant="secondary"
-          :disabled="busy"
+          :reason="busy ? DISCARDING : null"
           @click="confirming = true"
         >
           Discard this project…
-        </AppButton>
+        </DialogButton>
         <template v-else>
-          <AppButton
+          <DialogButton
             data-testid="broken-project-confirm"
             variant="danger"
-            :disabled="busy"
+            :reason="busy ? DISCARDING : null"
             @click="discard"
           >
             Discard for good
-          </AppButton>
-          <AppButton
+          </DialogButton>
+          <DialogButton
             data-testid="broken-project-keep"
-            variant="ghost"
-            :disabled="busy"
+            :reason="busy ? DISCARDING : null"
             @click="confirming = false"
           >
             Keep it
-          </AppButton>
+          </DialogButton>
         </template>
       </div>
     </template>

@@ -57,6 +57,27 @@ describe("editor dialog buttons", () => {
     expect(offenders).toEqual([]);
   });
 
+  // Fix round 1 (review minor 7): outside dialogs too. Any panel-window
+  // primitive under `src/components/ui/` that draws a `white/N` literal
+  // (read from its own source, so a new one is covered) is invisible on the
+  // editor's light theme wherever the editor renders it — a product card's
+  // Restore confirm, the "could not be opened" notice.
+  it("no editor component uses a panel-window primitive that draws white/N", () => {
+    const UI = path.join(SRC, "components/ui");
+    const whiteLiteral = new Set(
+      readdirSync(UI)
+        .filter((f) => f.endsWith(".vue") && /\bwhite\/\d+/.test(readFileSync(path.join(UI, f), "utf8")))
+        .map((f) => path.join(UI, f)),
+    );
+    expect(whiteLiteral.size).toBeGreaterThan(0);
+    const editorFiles = [...vueFiles(EDITOR), path.join(SRC, "roots/EditorRoot.vue")];
+    const offenders = editorFiles
+      .filter((file) => vueImports(file).some((i) => whiteLiteral.has(i)))
+      .map((file) => path.relative(SRC, file).split(path.sep).join("/"))
+      .sort();
+    expect(offenders).toEqual([]);
+  });
+
   it("finds the dialogs it guards", () => {
     const names = insideDialogs().map((f) => path.basename(f));
     expect(names).toEqual(
