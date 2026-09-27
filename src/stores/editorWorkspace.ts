@@ -354,18 +354,6 @@ function createMutators(f: WorkspaceFields, persist: () => void, getDurationMs: 
       f.playbackRate.value = clamp(rate, PLAYBACK_RATE_RANGE);
       persist();
     },
-    toggleLibraryHidden(): void {
-      f.libraryHidden.value = !f.libraryHidden.value;
-      persist();
-    },
-    togglePropertiesHidden(): void {
-      f.propertiesHidden.value = !f.propertiesHidden.value;
-      persist();
-    },
-    togglePropertiesOpen(): void {
-      f.propertiesOpen.value = !f.propertiesOpen.value;
-      persist();
-    },
     toggleCaptionSettingsOpen(): void {
       f.captionSettingsOpen.value = !f.captionSettingsOpen.value;
       persist();

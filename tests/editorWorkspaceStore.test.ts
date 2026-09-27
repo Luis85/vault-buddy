@@ -338,15 +338,20 @@ describe("editorWorkspace — every mutator persists the field it names", () => 
       expect((await settle()).playback_rate).toBe(2.0);
       saveCalls.length = 0;
 
-      workspace.toggleLibraryHidden();
+      // The panel flags through the real D5 actions (`panelLayout.ts`):
+      // above the drawer breakpoints the toggles collapse the columns, at
+      // or below 1080 the properties toggle opens its drawer.
+      workspace.setViewport(1600, 1000);
+      workspace.toggleLibrary();
       expect((await settle()).library_hidden).toBe(true);
       saveCalls.length = 0;
 
-      workspace.togglePropertiesHidden();
+      workspace.toggleInspector();
       expect((await settle()).properties_hidden).toBe(true);
       saveCalls.length = 0;
 
-      workspace.togglePropertiesOpen();
+      workspace.setViewport(1000, 800);
+      workspace.toggleInspector();
       expect((await settle()).properties_open).toBe(true);
       saveCalls.length = 0;
 
