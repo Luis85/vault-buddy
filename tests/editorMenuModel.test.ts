@@ -37,4 +37,14 @@ describe("menu wording", () => {
     expect(hintFor({ id: "a", label: "A", danger: true })).toBe("Removes from this edit. You can undo.");
     expect(hintFor({ id: "a", label: "A" })).toBe("Enter to apply · Esc to dismiss");
   });
+
+  // Final review, Important 2: every danger item read "You can undo." —
+  // including Discard project…, which cannot be undone. An item's own hint
+  // replaces the generic line; a disabled reason still comes first.
+  it("an item's own hint replaces the generic one, after a disabled reason", () => {
+    expect(hintFor({ id: "a", label: "A", danger: true, hint: "Cannot be undone." })).toBe("Cannot be undone.");
+    expect(hintFor({ id: "a", label: "A", danger: true, hint: "Cannot be undone.", disabledReason: "Why not" })).toBe(
+      "Why not",
+    );
+  });
 });

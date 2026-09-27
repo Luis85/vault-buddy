@@ -242,6 +242,18 @@ describe("what each item does", () => {
     expect(w.find('[data-testid="save-project-dialog"]').exists()).toBe(true);
   });
 
+  // Final review, Important 2: the danger item's hint used to promise
+  // "You can undo." A discard cannot be undone; the recording stays
+  // (ADR invariant 6) — the hint says both, as DiscardProjectDialog does.
+  it("Discard project…'s hint says it asks first, cannot be undone, and keeps the recording", async () => {
+    const w = await mountRoot();
+    const menu = await openProjectMenu(w);
+    await menu.get('[data-testid="editor-project-menu-item-discard"]').trigger("focus");
+    const hint = menu.get('[data-testid="editor-project-menu-hint"]').text();
+    expect(hint).toBe("Deletes its edits and rendered videos. Asks first; this cannot be undone. Your recording stays.");
+    expect(hint).not.toMatch(/you can undo/i);
+  });
+
   it("Discard project… opens the discard confirm", async () => {
     const w = await mountRoot();
     await chooseProjectMenuItem(w, "discard");

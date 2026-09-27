@@ -13,6 +13,10 @@ export const PROJECT_MENU_HEADING = "Project";
 export const PROJECT_MENU_SUBTITLE = "Working files, originals and rendered products";
 
 const NO_PROJECT = "No project is open.";
+/** Discard project…'s hint: the generic danger line ("You can undo.") is
+ * false here. It says what `DiscardProjectDialog` says — the edits and
+ * rendered videos go, the recording stays (ADR invariant 6). */
+const DISCARD_HINT = "Deletes its edits and rendered videos. Asks first; this cannot be undone. Your recording stays.";
 
 export interface ProjectMenuContext {
   /** A session is open (rename, save a copy and discard need one). */
@@ -40,6 +44,14 @@ export function projectMenuItems(ctx: ProjectMenuContext): MenuItem[] {
     { id: "products", label: "Workspace & rendered products", icon: "layers", run: ctx.showProducts },
     { id: "saveCopy", label: "Save a copy as project file…", icon: "save", disabledReason: needsSession, run: ctx.saveCopy },
     SEPARATOR,
-    { id: "discard", label: "Discard project…", icon: "trash", danger: true, disabledReason: needsSession, run: ctx.discard },
+    {
+      id: "discard",
+      label: "Discard project…",
+      icon: "trash",
+      danger: true,
+      hint: DISCARD_HINT,
+      disabledReason: needsSession,
+      run: ctx.discard,
+    },
   ];
 }

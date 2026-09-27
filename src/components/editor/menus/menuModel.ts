@@ -21,6 +21,10 @@ export interface MenuAction {
   /** Defined makes the item a `menuitemcheckbox`; `true` shows a check. */
   checked?: boolean;
   danger?: boolean;
+  /** The hint line's text while this item has focus, in place of the
+   * generic one — for an item the generic line would misdescribe (a danger
+   * item that cannot be undone). A disabled reason still comes first. */
+  hint?: string;
   disabledReason?: string | null;
   submenu?: MenuItem[];
   run?: () => void;
@@ -53,9 +57,12 @@ export function isDisabled(item: MenuAction): boolean {
   return Boolean(item.disabledReason);
 }
 
-/** The hint line's text while `item` has focus (concept §8's four cases). */
+/** The hint line's text while `item` has focus (concept §8's four cases),
+ * or the item's own `hint`. "You can undo." is only true of an edit, so an
+ * irreversible danger item carries its own. */
 export function hintFor(item: MenuAction): string {
   if (item.disabledReason) return item.disabledReason;
+  if (item.hint) return item.hint;
   if (item.submenu) return "→ Open options";
   if (item.danger) return "Removes from this edit. You can undo.";
   return "Enter to apply · Esc to dismiss";
