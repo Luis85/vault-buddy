@@ -117,6 +117,18 @@ export function fitTimelineZoom(durationMs: number, viewportPx: number, labelPx:
   return fitZoom(Math.max(durationMs, FIT_MIN_MS), viewportPx - labelPx - FIT_END_MARGIN_PX);
 }
 
+/** "Fit this clip" / "Fit selection" (the concept's `goToSelection(true)`):
+ * the range fills the same lanes Fit uses — the timeline less the pinned
+ * label column — with the concept's own wider 80 px range margin, so the
+ * range never sits flush against the end. */
+const FIT_RANGE_MARGIN_PX = 80;
+
+/** The zoom that fits `rangeMs` into a timeline `viewportPx` wide beside a
+ * `labelPx` label column. */
+export function fitRangeZoom(rangeMs: number, viewportPx: number, labelPx: number): number {
+  return fitZoom(rangeMs, viewportPx - labelPx - FIT_RANGE_MARGIN_PX);
+}
+
 /** A clip is never drawn narrower than this (§6.5 `.clip{min-width:5px}`),
  * so the shortest one still has a body to focus and grab. */
 export const MIN_CLIP_WIDTH_PX = 5;

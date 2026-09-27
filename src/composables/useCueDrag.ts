@@ -79,10 +79,10 @@ function shiftWithin(clip: Clip, effect: Effect, ds: number): CueRange {
 /** A body drag by `rawOutputDeltaMs`: the cue's start snaps, its length stays. */
 export function cueMoveRange(clip: Clip, effect: Effect, rawOutputDeltaMs: number, opts: SnapOptions): CueStep {
   const start = outputSpan(clip, effect)[0];
-  const rawStart = start + rawOutputDeltaMs;
-  const ds = roundHalfAway((snappedMs(rawStart, opts) - start) * speedOf(clip));
+  const snapped = snappedMs(start + rawOutputDeltaMs, opts);
+  const ds = roundHalfAway((snapped - start) * speedOf(clip));
   const range = shiftWithin(clip, effect, ds);
-  return { range, guide: snapGuideFor(rawStart, outputOf(clip, range.startMs), opts) };
+  return { range, guide: snapGuideFor(snapped, outputOf(clip, range.startMs), opts) };
 }
 
 /** The source length a cue keeps at the least. */
@@ -99,15 +99,15 @@ export function cueTrimRange(
   opts: SnapOptions,
 ): CueStep {
   const [os, oe] = outputSpan(clip, effect);
-  const rawEdge = (edge === "start" ? os : oe) + rawOutputDeltaMs;
-  const src = sourceOf(clip, snappedMs(rawEdge, opts));
+  const snapped = snappedMs((edge === "start" ? os : oe) + rawOutputDeltaMs, opts);
+  const src = sourceOf(clip, snapped);
   const min = minSourceMs(clip);
   const range =
     edge === "start"
       ? { startMs: clamp(src, clip.in_ms, Math.max(clip.in_ms, effect.end_ms - min, Math.min(effect.start_ms, effect.end_ms - 1))), endMs: effect.end_ms }
       : { startMs: effect.start_ms, endMs: clamp(src, Math.min(clip.out_ms, effect.start_ms + min, Math.max(effect.end_ms, effect.start_ms + 1)), clip.out_ms) };
   const moved = edge === "start" ? range.startMs : range.endMs;
-  return { range, guide: snapGuideFor(rawEdge, outputOf(clip, moved), opts) };
+  return { range, guide: snapGuideFor(snapped, outputOf(clip, moved), opts) };
 }
 
 /** An arrow key's step of `outputDeltaMs`, kept inside the clip. */

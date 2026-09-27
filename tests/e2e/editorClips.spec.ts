@@ -147,6 +147,66 @@ test.describe("parity 1600x1000: the clips (screen 04, §6.5)", () => {
   });
 });
 
+/** The WCAG ratio of `locator`'s text colour against everything painted
+ * behind it (its own and its ancestors' backgrounds, composited) — the
+ * contrast gate's own measurement (`editorKeyboard.spec.ts`), for one
+ * element. Fails if any ancestor is faded: the text must be full colour. */
+async function textContrast(page: Page, selector: string): Promise<number> {
+  return page.evaluate((sel) => {
+    type Rgba = [number, number, number, number];
+    const ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!;
+    const parse = (c: string): Rgba => {
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillStyle = "rgba(0, 0, 0, 0)";
+      ctx.fillStyle = c;
+      ctx.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+      return [r, g, b, a / 255];
+    };
+    const over = (top: Rgba, bottom: Rgba): Rgba => {
+      const a = top[3] + bottom[3] * (1 - top[3]);
+      if (a === 0) return [0, 0, 0, 0];
+      const mix = (i: number) => (top[i] * top[3] + bottom[i] * bottom[3] * (1 - top[3])) / a;
+      return [mix(0), mix(1), mix(2), a];
+    };
+    const lum = (c: Rgba) => {
+      const f = (v: number) => {
+        const x = v / 255;
+        return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
+    };
+    const el = document.querySelector(sel)!;
+    const layers: Rgba[] = [];
+    for (let n: Element | null = el; n; n = n.parentElement) {
+      if (parseFloat(getComputedStyle(n).opacity) < 1) return 0;
+      layers.push(parse(getComputedStyle(n).backgroundColor));
+    }
+    const bg = layers.reduceRight<Rgba>((under, layer) => over(layer, under), [255, 255, 255, 1]);
+    const [hi, lo] = [lum(over(parse(getComputedStyle(el).color), bg)), lum(bg)].sort((a, b) => b - a);
+    return (hi + 0.05) / (lo + 0.05);
+  }, selector);
+}
+
+// Task 18 fix round 1 (review Important 2): with no peaks, the audio clip's
+// note is a full-colour text span that meets 4.5:1 in both themes — never
+// the faded, aria-hidden SVG text it was.
+for (const theme of ["dark", "light"] as const) {
+  test(`${theme}: without ffmpeg, the audio clip's note reads at 4.5:1`, async ({ page }) => {
+    await openParity(page, SIZE, {
+      invitation: false,
+      theme,
+      rejects: {
+        editor_media_peaks: { code: "encoderUnavailable", message: "ffmpeg is missing", retryable: false, operationId: "op-e2e" },
+      },
+    });
+    const selector = '[data-testid="clip-c6-waveform"] [data-testid="waveform-note"]';
+    await expect(page.locator(selector)).toHaveText("Install ffmpeg to see waveforms · audio still plays");
+    expect(await page.locator(selector).evaluate((el) => el.closest('[aria-hidden="true"]'))).toBeNull();
+    expect(await textContrast(page, selector)).toBeGreaterThanOrEqual(4.5);
+  });
+}
+
 test.describe("parity 960x640: the clips", () => {
   test("clips keep their 47px body and the playhead its head at the compact size", async ({ page }) => {
     await openParity(page, { width: 960, height: 640 }, { invitation: false, workspace: { playhead_ms: 2_000 } });

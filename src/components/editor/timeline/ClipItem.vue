@@ -275,6 +275,8 @@ const fadeHandles = computed(() =>
 
 /** The drawn width: never under the concept's 5 px floor. */
 const bodyWidthPx = computed(() => Math.max(previewWidthPx.value, MIN_CLIP_WIDTH_PX));
+/** The content box the bars draw in: the body less its two 1 px borders. */
+const contentWidthPx = computed(() => Math.max(bodyWidthPx.value - 2, 1));
 /** Narrower than two 9 px grips, the grips step outside the body's edges. */
 const TRIM_GRIP_PX = 9;
 const narrow = computed(() => bodyWidthPx.value < TRIM_GRIP_PX * 2);
@@ -412,7 +414,7 @@ function onKeydown(event: KeyboardEvent) {
           :asset-duration-ms="waveformAsset.duration_ms"
           :in-ms="shownInMs"
           :out-ms="shownOutMs"
-          :width-px="bodyWidthPx"
+          :width-px="contentWidthPx"
         />
       </div>
       <div

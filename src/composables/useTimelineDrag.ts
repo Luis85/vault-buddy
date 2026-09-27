@@ -94,12 +94,14 @@ export function snappedMs(rawMs: number, opts: SnapOptions): number {
  * refuse outright.
  */
 export function computeMoveDelta(clip: Clip, rawDeltaMs: number, opts: SnapOptions): number {
-  const rawNewStart = clip.start_ms + rawDeltaMs;
-  const snappedStart = snappedMs(rawNewStart, opts);
-  // Whole milliseconds: every `EditorCommand` time is an integer (Rust
-  // decodes u64/i64), and a pointer offset at a non-integer px-per-ms is not.
-  const clampedStart = Math.round(Math.max(0, snappedStart));
-  return clampedStart - clip.start_ms;
+  return moveStartFrom(snappedMs(clip.start_ms + rawDeltaMs, opts)) - clip.start_ms;
+}
+
+/** Where a moved start lands from its (possibly snapped) raw position.
+ * Whole milliseconds: every `EditorCommand` time is an integer (Rust
+ * decodes u64/i64), and a pointer offset at a non-integer px-per-ms is not. */
+function moveStartFrom(snappedStart: number): number {
+  return Math.round(Math.max(0, snappedStart));
 }
 
 /**
@@ -114,10 +116,13 @@ export function computeMoveDelta(clip: Clip, rawDeltaMs: number, opts: SnapOptio
  * never drops below `MIN_CLIP_MS` (F14).
  */
 export function computeTrimStart(clip: Clip, rawOutputDeltaMs: number, opts: SnapOptions): TrimPreview {
+  return trimStartFrom(clip, snappedMs(clip.start_ms + rawOutputDeltaMs, opts));
+}
+
+/** `computeTrimStart` from the (possibly snapped) new start. */
+function trimStartFrom(clip: Clip, snappedStart: number): TrimPreview {
   const speed = clipSpeed(clip);
   const originalEnd = clip.start_ms + clipOutputDuration(clip.in_ms, clip.out_ms, speed);
-  const rawNewStart = clip.start_ms + rawOutputDeltaMs;
-  const snappedStart = snappedMs(rawNewStart, opts);
   const minStart = Math.max(0, originalEnd - clipOutputDuration(0, clip.out_ms, speed));
   const maxStart = Math.max(minStart, originalEnd - MIN_CLIP_MS);
   const clampedStart = Math.round(Math.min(Math.max(snappedStart, minStart), maxStart));
@@ -136,10 +141,16 @@ export function computeTrimStart(clip: Clip, rawOutputDeltaMs: number, opts: Sna
  * brief scopes the preview clamp to the MINIMUM only.
  */
 export function computeTrimEnd(clip: Clip, rawOutputDeltaMs: number, opts: SnapOptions): TrimPreview {
+  return trimEndFrom(clip, snappedMs(outputEndOf(clip) + rawOutputDeltaMs, opts));
+}
+
+function outputEndOf(clip: Clip): number {
+  return clipOutputEnd({ start_ms: clip.start_ms, in_ms: clip.in_ms, out_ms: clip.out_ms, speed: clipSpeed(clip) });
+}
+
+/** `computeTrimEnd` from the (possibly snapped) new end. */
+function trimEndFrom(clip: Clip, snappedEnd: number): TrimPreview {
   const speed = clipSpeed(clip);
-  const originalEnd = clipOutputEnd({ start_ms: clip.start_ms, in_ms: clip.in_ms, out_ms: clip.out_ms, speed });
-  const rawNewEnd = originalEnd + rawOutputDeltaMs;
-  const snappedEnd = snappedMs(rawNewEnd, opts);
   const minEnd = clip.start_ms + MIN_CLIP_MS;
   const clampedEnd = Math.round(Math.max(snappedEnd, minEnd));
   const newDuration = clampedEnd - clip.start_ms;
@@ -168,27 +179,34 @@ export function computeFadeDrag(clip: Clip, edge: "in" | "out", rawDeltaMs: numb
 }
 
 /** The target a dragged edge settled on, for the dashed snap guide — `null`
- * when snapping is off or the edge caught nothing. `finalMs` is where the
- * preview put the edge after its clamps, so a clamp that pulled it off the
- * target shows no guide; within 1 ms, because a sped-up trim's end is
- * rounded through the source range. */
-export function snapGuideFor(rawMs: number, finalMs: number, opts: SnapOptions): number | null {
-  if (!opts.snapEnabled) return null;
-  const target = snap(rawMs, opts.targets, opts.thresholdPx, opts.zoom);
-  return opts.targets.includes(target) && Math.abs(target - finalMs) <= 1 ? target : null;
+ * when snapping is off or the edge caught nothing. `snappedEdgeMs` is the
+ * edge the drag ALREADY snapped (`snappedMs`, never run twice); `finalMs`
+ * is where the preview put it after its clamps, so a clamp that pulled it
+ * off the target shows no guide — within 1 ms, because a sped-up trim's end
+ * is rounded through the source range. */
+export function snapGuideFor(snappedEdgeMs: number, finalMs: number, opts: SnapOptions): number | null {
+  if (!opts.snapEnabled || !opts.targets.includes(snappedEdgeMs)) return null;
+  return Math.abs(snappedEdgeMs - finalMs) <= 1 ? snappedEdgeMs : null;
+}
+
+/** One step of a body drag: the delta, and the guide at the moved start. */
+function moveStep(clip: Clip, rawDeltaMs: number, opts: SnapOptions) {
+  const snapped = snappedMs(clip.start_ms + rawDeltaMs, opts);
+  const start = moveStartFrom(snapped);
+  return { deltaMs: start - clip.start_ms, guide: snapGuideFor(snapped, start, opts) };
 }
 
 /** One step of a trim drag: the preview, and the guide at the edge it moved. */
 function trimStep(edge: "start" | "end", clip: Clip, rawOutputDeltaMs: number, opts: SnapOptions) {
   if (edge === "start") {
-    const preview = computeTrimStart(clip, rawOutputDeltaMs, opts);
-    return { preview, guide: snapGuideFor(clip.start_ms + rawOutputDeltaMs, preview.startMs, opts) };
+    const snapped = snappedMs(clip.start_ms + rawOutputDeltaMs, opts);
+    const preview = trimStartFrom(clip, snapped);
+    return { preview, guide: snapGuideFor(snapped, preview.startMs, opts) };
   }
-  const speed = clipSpeed(clip);
-  const preview = computeTrimEnd(clip, rawOutputDeltaMs, opts);
-  const end = clipOutputEnd({ start_ms: preview.startMs, in_ms: preview.inMs, out_ms: preview.outMs, speed });
-  const rawEnd = clipOutputEnd({ start_ms: clip.start_ms, in_ms: clip.in_ms, out_ms: clip.out_ms, speed }) + rawOutputDeltaMs;
-  return { preview, guide: snapGuideFor(rawEnd, end, opts) };
+  const snapped = snappedMs(outputEndOf(clip) + rawOutputDeltaMs, opts);
+  const preview = trimEndFrom(clip, snapped);
+  const end = clipOutputEnd({ start_ms: preview.startMs, in_ms: preview.inMs, out_ms: preview.outMs, speed: clipSpeed(clip) });
+  return { preview, guide: snapGuideFor(snapped, end, opts) };
 }
 
 export interface FadePreview {
@@ -271,11 +289,9 @@ export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
     if (!moveAnchor) return;
     const ppm = pxPerMs(deps.zoom());
     const rawDeltaMs = ppm > 0 ? (clientX - moveAnchor.clientX) / ppm : 0;
-    const clip = deps.clip();
-    const opts = snapOpts();
-    const deltaMs = computeMoveDelta(clip, rawDeltaMs, opts);
-    movePreview.value = { deltaMs };
-    snapGuideMs.value = snapGuideFor(clip.start_ms + rawDeltaMs, clip.start_ms + deltaMs, opts);
+    const step = moveStep(deps.clip(), rawDeltaMs, snapOpts());
+    movePreview.value = { deltaMs: step.deltaMs };
+    snapGuideMs.value = step.guide;
   }
 
   /**

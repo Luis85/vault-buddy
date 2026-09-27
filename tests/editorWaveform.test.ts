@@ -4,8 +4,8 @@
  * `src-tauri/src/editor/media_derive.rs`); the timeline asks only for the
  * clips it actually renders (`timelineLayout.visibleClips`' window), draws
  * the peaks as the concept's rounded bars (visual-parity Task 18), and
- * turns a missing ffmpeg into the "waveform unavailable · audio still
- * plays" line rather than an empty lane. A video clip's poster is one
+ * turns a missing ffmpeg into the install hint rather than an empty lane
+ * (Task 18 fix round 1, rulings T18-1/T18-2). A video clip's poster is one
  * frame, repeated as a filmstrip.
  */
 import { clearMocks, mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
@@ -150,7 +150,7 @@ describe("the timeline's waveforms", () => {
     expect(mediaPeaks).toHaveBeenCalledWith("ses-a", "snd-near", peakBucketsFor(8_000));
   });
 
-  it("missing ffmpeg says the waveform is unavailable and the audio still plays", async () => {
+  it("missing ffmpeg shows the install hint", async () => {
     const mediaPeaks = vi.fn(() =>
       Promise.reject(
         new EditorPortError({
@@ -164,17 +164,37 @@ describe("the timeline's waveforms", () => {
     const w = await mountTimeline({ mediaPeaks });
 
     const lane = w.find('[data-testid="clip-near-waveform"]');
-    expect(lane.text()).toBe("waveform unavailable · audio still plays");
+    expect(lane.text()).toBe("Install ffmpeg to see waveforms · audio still plays");
+    expect(lane.find("path").exists()).toBe(false);
+    // Readable and read: a full-colour text span, never inside the faded,
+    // aria-hidden bar picture (review Important 2).
+    const note = lane.get('[data-testid="waveform-note"]');
+    expect(note.element.tagName).toBe("SPAN");
+    expect(note.element.closest("svg")).toBeNull();
+    expect(note.element.closest('[aria-hidden="true"]')).toBeNull();
+    expect(note.classes()).toContain("text-audio");
+    expect(note.classes().some((c) => c.startsWith("opacity-"))).toBe(false);
+  });
+
+  // A failure that says nothing about the sound itself (a decode error, a
+  // transient failure): the audio still plays, only its picture is missing.
+  it.each([
+    ["an editor error", new EditorPortError({ code: "internal", message: "x", retryable: true, operationId: "op-3" })],
+    ["an unexpected failure", new Error("boom")],
+  ])("%s says the waveform is unavailable and the audio still plays", async (_what, error) => {
+    const mediaPeaks = vi.fn(() => Promise.reject(error));
+    const w = await mountTimeline({ mediaPeaks });
+    const lane = w.find('[data-testid="clip-near-waveform"]');
+    expect(lane.get('[data-testid="waveform-note"]').text()).toBe("waveform unavailable · audio still plays");
     expect(lane.find("path").exists()).toBe(false);
   });
 
-  // Any OTHER refusal is logged, never drawn as the ffmpeg hint (which
-  // would send the user to install something they already have).
-  it("another failure draws nothing and does not claim ffmpeg is missing", async () => {
+  // A missing file (Reconnect already says so) or an asset with no sound:
+  // "audio still plays" would be false, so nothing is written, and it is
+  // never drawn as the ffmpeg hint either (ruling T18-2).
+  it.each(["sourceMissing", "unsupportedMedia"] as const)("%s draws nothing and does not claim ffmpeg is missing", async (code) => {
     const mediaPeaks = vi.fn(() =>
-      Promise.reject(
-        new EditorPortError({ code: "sourceMissing", message: "gone", retryable: false, operationId: "op-2" }),
-      ),
+      Promise.reject(new EditorPortError({ code, message: "gone", retryable: false, operationId: "op-2" })),
     );
     const w = await mountTimeline({ mediaPeaks });
     const lane = w.find('[data-testid="clip-near-waveform"]');

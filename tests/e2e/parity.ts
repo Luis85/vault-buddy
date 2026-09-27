@@ -44,6 +44,8 @@ export interface OpenParityOptions {
   /** Fields merged into the saved workspace — a selection to open on (a
    * teaching cue, which the parity project cannot select by a click). */
   workspace?: Record<string, unknown>;
+  /** Commands that reject with this `EditorError` (`installTauriStub`). */
+  rejects?: Record<string, unknown>;
 }
 
 /** Opens the tutorial editor against the populated `PARITY_OPEN_RESULT`
@@ -64,6 +66,7 @@ export async function openParity(
   await installTauriStub(page, {
     openResult: { ...PARITY_OPEN_RESULT, workspace },
     replies: { ...PARITY_REPLIES, editor_get_workspace: workspace },
+    rejects: opts.rejects,
   });
   await page.route(`**${FIXTURE_VIDEO_URL}`, (route) =>
     route.fulfill({ contentType: "video/webm", body: readFileSync(VIDEO_FIXTURE_PATH) }),

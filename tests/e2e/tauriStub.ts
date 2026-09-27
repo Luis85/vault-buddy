@@ -86,11 +86,14 @@ export interface StubOptions {
   openResult?: unknown;
   replies?: Record<string, unknown>;
   sequences?: Record<string, unknown[]>;
+  /** Commands that REJECT with this value (an `EditorError`, as Rust's
+   * refusal reaches the port) — ahead of any reply for the same command. */
+  rejects?: Record<string, unknown>;
 }
 
 export async function installTauriStub(page: Page, options: StubOptions = {}) {
   await page.addInitScript(
-    ({ base, videoUrl, imageUrl, openResult, replies, sequences }) => {
+    ({ base, videoUrl, imageUrl, openResult, replies, sequences, rejects }) => {
       const listeners = new Map<number, unknown>();
       let nextId = 1;
       // Every command the page invoked, in order — what a spec reads to
@@ -115,6 +118,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       const invoke = async (cmd: string, args?: Record<string, unknown>) => {
         invoked.push(cmd);
         calls.push({ cmd, args: args ?? null });
+        if (Object.prototype.hasOwnProperty.call(rejects, cmd)) throw rejects[cmd];
         if (Object.prototype.hasOwnProperty.call(sequences, cmd)) return sequences[cmd].shift();
         if (Object.prototype.hasOwnProperty.call(table, cmd)) return table[cmd];
         if (cmd.startsWith("plugin:event|listen")) {
@@ -147,6 +151,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       openResult: options.openResult ?? EDITOR_OPEN_RESULT,
       replies: options.replies ?? {},
       sequences: options.sequences ?? {},
+      rejects: options.rejects ?? {},
     },
   );
 }

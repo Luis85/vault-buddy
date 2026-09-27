@@ -42,7 +42,7 @@ import { markRaw, ref, shallowRef, watch } from "vue";
 import { createPanelControls, TIMELINE_DEFAULT_HEIGHT } from "../editor/panelLayout";
 import type { EditorPort } from "../editor/port";
 import { createTauriEditorPort } from "../editor/port";
-import { fitZoom, msToX, trackLabelWidthAt } from "../editor/timelineLayout";
+import { fitRangeZoom, msToX, trackLabelWidthAt } from "../editor/timelineLayout";
 import type { DeleteMode, Selected, Theme, Workspace } from "../editorTypes";
 import { logWarning } from "../logging";
 import { toEditorError, useEditorProjectStore } from "./editorProject";
@@ -381,9 +381,9 @@ function createMutators(f: WorkspaceFields, persist: () => void, getDurationMs: 
   };
 }
 
-/** The concept's fitted-range framing (`goToSelection(true)`): the lanes
- * keep an 80 px margin, and the range starts 25 px in from their left. */
-const RANGE_MARGIN_PX = 80;
+/** The concept's fitted-range framing (`goToSelection(true)`): the range
+ * fills the lanes (`timelineLayout.fitRangeZoom`, beside Fit's own rule)
+ * and starts 25 px in from their left. */
 const RANGE_LEAD_PX = 25;
 
 /** "Fit this clip" / "Fit selection" (visual-parity Task 5): zoom so the
@@ -393,8 +393,7 @@ const RANGE_LEAD_PX = 25;
 function createRangeZoom(f: WorkspaceFields, persist: () => void, windowWidth: Ref<number>) {
   return {
     zoomToRange(startMs: number, endMs: number, viewportPx: number): number {
-      const lanesPx = viewportPx - trackLabelWidthAt(windowWidth.value) - RANGE_MARGIN_PX;
-      const zoom = clamp(fitZoom(endMs - startMs, lanesPx), ZOOM_RANGE);
+      const zoom = clamp(fitRangeZoom(endMs - startMs, viewportPx, trackLabelWidthAt(windowWidth.value)), ZOOM_RANGE);
       const left = Math.max(0, Math.round(msToX(startMs, zoom) - RANGE_LEAD_PX));
       f.timelineZoom.value = zoom;
       f.timelineScrollLeft.value = left;

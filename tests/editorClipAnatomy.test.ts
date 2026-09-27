@@ -5,7 +5,7 @@
  * trim handles, the selection outline and the audio clip's bar waveform —
  * plus the lanes' "Close gap" hints, the playhead with its head and the
  * dashed snap guide a drag shows. Class-level checks here (happy-dom has
- * no layout); `tests/e2e/editorParity.spec.ts` measures the real boxes.
+ * no layout); `tests/e2e/editorClips.spec.ts` measures the real boxes.
  */
 import { clearMocks, mockConvertFileSrc } from "@tauri-apps/api/mocks";
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
@@ -278,6 +278,8 @@ describe("an audio clip (§6.5)", () => {
     expect(name.classes()).not.toContain("bottom-[5px]");
     const svg = byId(w, "clip-sound-waveform").get("svg");
     expect(svg.classes()).toEqual(expect.arrayContaining(["top-[18px]", "h-[27px]", "opacity-65"]));
+    // Drawn across the CONTENT box: the 400px body less its two 1px borders.
+    expect(svg.attributes("viewBox")).toBe("0 0 398 27");
     const bars = svg.get("path");
     expect(bars.attributes("stroke-linecap")).toBe("round");
     expect(bars.attributes("stroke-width")).toBe("1.5");
@@ -286,13 +288,13 @@ describe("an audio clip (§6.5)", () => {
     expect(count).toBe(80);
   });
 
-  it("says the waveform is unavailable and the audio still plays when there are no peaks", async () => {
+  it("without ffmpeg, names the fix and says the audio still plays", async () => {
     const mediaPeaks = vi.fn(() =>
       Promise.reject(new EditorPortError({ code: "encoderUnavailable", message: "x", retryable: false, operationId: "o" })),
     );
     const w = await mountTimeline({ mediaPeaks });
     const lane = byId(w, "clip-sound-waveform");
-    expect(lane.text()).toBe("waveform unavailable · audio still plays");
+    expect(lane.text()).toBe("Install ffmpeg to see waveforms · audio still plays");
     expect(lane.find("path").exists()).toBe(false);
   });
 });
@@ -388,10 +390,18 @@ describe("the snap guide", () => {
 // ---- extreme content ---------------------------------------------------------------
 
 describe("a 3px clip", () => {
-  it("renders with no badges, no pill and its name clipped inside the body", async () => {
+  // At the furthest zoom out (0.1: 5 px/s) a 600 ms clip is 3 px wide.
+  async function mountTiny(overrides: Partial<Clip> = {}) {
     const w = await mountTimeline({}, {
-      clips: [clip("tiny", "vid", "v1", { start_ms: 1_000, in_ms: 0, out_ms: 60, group_id: "g" })],
+      clips: [clip("tiny", "vid", "v1", { start_ms: 1_000, in_ms: 0, out_ms: 600, ...overrides })],
     });
+    useEditorWorkspaceStore().setZoom(0.1);
+    await flushPromises();
+    return w;
+  }
+
+  it("renders with no badges, no pill and its name clipped inside the body", async () => {
+    const w = await mountTiny({ group_id: "g" });
     const body = byId(w, "clip-tiny");
     expect(body.attributes("style")).toContain("width: 5px");
     expect(w.find('[data-testid="clip-tiny-badges"]').exists()).toBe(false);
@@ -403,22 +413,24 @@ describe("a 3px clip", () => {
     expect(byId(w, "clip-tiny-trim-end").classes()).toContain("left-full");
   });
 
-  it("stays reachable from the keyboard: a nudge moves it, Shift+F10 offers its trims", async () => {
-    const w = await mountTimeline({}, {
-      clips: [clip("tiny", "vid", "v1", { start_ms: 1_000, in_ms: 0, out_ms: 60 })],
-    });
+  it("stays reachable from the keyboard: a nudge moves it, and Shift+F10's Trim trims it", async () => {
+    const w = await mountTiny();
     const body = byId(w, "clip-tiny");
     expect(body.attributes("tabindex")).toBe("0");
     await body.trigger("keydown", { key: "ArrowRight" });
     await flushPromises();
     expect(executed).toEqual([{ kind: "moveClips", clipIds: ["tiny"], deltaMs: 33, trackId: null }]);
-    // With the playhead inside it, its Trim to pointer acts there.
-    useEditorWorkspaceStore().setPlayhead(1_030);
+    // With the playhead inside it, its Trim to pointer acts there — and the
+    // item really trims (Task 18 fix round 1, minor 4).
+    useEditorWorkspaceStore().setPlayhead(1_300);
     await body.trigger("keydown", { key: "F10", shiftKey: true });
     await flushPromises();
-    const trim = document.querySelector('[data-testid="editor-context-menu-item-trim"]');
-    expect(trim).not.toBeNull();
-    expect(trim?.getAttribute("aria-disabled")).not.toBe("true");
+    const trim = byId(w, "editor-context-menu-item-trim");
+    expect(trim.attributes("aria-disabled")).not.toBe("true");
+    await trim.trigger("click");
+    await byId(w, "editor-context-menu-item-trim-start").trigger("click");
+    await flushPromises();
+    expect(executed[1]).toEqual({ kind: "trimClip", clipId: "tiny", startMs: 1_300, inMs: 300, outMs: 600 });
   });
 });
 
@@ -435,6 +447,22 @@ describe("Fit (§6.3)", () => {
     await byId(w, "timeline-toolbar-fit").trigger("click");
     // 20 s of edit into (width - label - 26) px.
     expect(workspace.timelineZoom).toBeCloseTo((width - label - 26) / (0.05 * 20_000), 5);
+  });
+
+  // Task 18 fix round 1, minor 6: "Fit this clip" fits the range into the
+  // same lanes — the timeline less the label column from the one rule —
+  // keeping the concept's own 80px range margin (`goToSelection(true)`).
+  it.each([
+    [1600, 196],
+    [960, 174],
+  ])("at %ipx, Fit this clip fits it beside the %ipx label column, less 80px", async (width, label) => {
+    useEditorWorkspaceStore().setViewport(width, 1000);
+    const w = await mountTimeline({}, {}, width);
+    await byId(w, "clip-wide").trigger("contextmenu", { clientX: label + 50, clientY: 10 });
+    await byId(w, "editor-context-menu-item-fitClip").trigger("click");
+    await flushPromises();
+    // wide is 9.5 s.
+    expect(useEditorWorkspaceStore().timelineZoom).toBeCloseTo((width - label - 80) / (0.05 * 9_500), 5);
   });
 
   it("fits a short edit as if it were 15 s long, like the concept's ruler", async () => {

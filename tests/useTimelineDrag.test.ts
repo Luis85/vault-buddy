@@ -12,6 +12,7 @@ import {
   computeTrimEnd,
   computeTrimStart,
   MIN_CLIP_MS,
+  snapGuideFor,
   useTimelineDrag,
 } from "../src/composables/useTimelineDrag";
 import type { EditorCommand } from "../src/editor/editorCommandTypes";
@@ -608,6 +609,16 @@ describe("useTimelineDrag — the snap guide", () => {
     drag.beginTrim("end", 0);
     drag.updateTrim(-70 * PPM); // end 4000 -> 3930, 30 ms from 3900
     expect(drag.snapGuideMs.value).toBe(3_900);
+  });
+
+  // Fix round 1 (minor 5): the guide takes the edge the drag ALREADY snapped
+  // and never snaps it again — an edge that stopped 1 ms short of a target
+  // did not land on it, whatever a second snap would say.
+  it("snapGuideFor names only an edge that landed on a target", () => {
+    const opts = { snapEnabled: true, targets: [3_120], thresholdPx: 8, zoom: 1 };
+    expect(snapGuideFor(3_120, 3_120, opts)).toBe(3_120);
+    expect(snapGuideFor(3_119, 3_119, opts)).toBeNull();
+    expect(snapGuideFor(3_120, 3_120, { ...opts, snapEnabled: false })).toBeNull();
   });
 
   it("shows nothing with Snap off, or when a clamp pulled the edge off the target", () => {
