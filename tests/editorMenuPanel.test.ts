@@ -241,6 +241,32 @@ describe("MenuPanel — focus after choosing", () => {
     trigger.remove();
     field.remove();
   });
+
+  // Final review, Important 1 (D16): an item that opens a dialog ran while
+  // focus still sat on the menu item about to be detached, so the dialog
+  // captured that item (or `body`) as its opener, and Escape out of the
+  // dialog returned focus nowhere. The trigger has focus again BEFORE the
+  // item runs, so whatever the item opens remembers the trigger.
+  it("gives focus back to the invoker before the chosen item runs", async () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+    let focusedWhenRun: Element | null = null;
+    const w = mount(MenuPanel, {
+      attachTo: document.body,
+      props: {
+        heading: "Project",
+        anchor: { x: 0, y: 0 },
+        testid: "m",
+        items: [{ id: "rename", label: "Rename tutorial…", icon: "edit", run: () => (focusedWhenRun = document.activeElement) }],
+      },
+    });
+    await flushPromises();
+    expect(focusedId()).toBe("m-item-rename");
+    key(w.get('[data-testid="m-item-rename"]').element, "Enter");
+    expect(focusedWhenRun).toBe(trigger);
+    trigger.remove();
+  });
 });
 
 describe("MenuPanel — pointer", () => {

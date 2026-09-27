@@ -8,8 +8,9 @@
  *
  * Mounted while open (the caller's `v-if`). It remembers what had focus
  * when it opened: Escape returns focus there; choosing an item returns it
- * there only if the item did not move focus itself (Rename focuses a name
- * field); a click outside closes without touching focus, since the person
+ * there BEFORE the item runs, so a dialog the item opens gives focus back
+ * to it on Escape, and an item that moves focus itself (Rename focuses a
+ * name field) still wins; a click outside closes without touching focus, since the person
  * aimed somewhere else on purpose.
  *
  * A submenu opens on Enter or →, or after 180 ms of hover, 4px right of its
@@ -87,9 +88,13 @@ function close(returnFocus: "always" | "ifLost" | "never") {
   });
 }
 
-/** Close first, then run: an item that opens a dialog or focuses a field
- * must find the menu already gone rather than have it take focus back. */
+/** Focus back on the invoker, close, then run. The item runs with focus
+ * already on what opened the menu (D16, final review): a dialog it opens
+ * captures THAT as the control to return to on Escape — not the menu item
+ * about to be detached, nor `body`. An item that moves focus itself (Rename
+ * focuses a name field) still wins, because it runs last. */
 function choose(items: MenuItem[], index: number) {
+  invoker?.focus();
   close("ifLost");
   (items[index] as MenuAction).run?.();
 }
