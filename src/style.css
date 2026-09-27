@@ -318,8 +318,15 @@ body,
   background: transparent;
   overflow: hidden;
   user-select: none;
-  /* Render native controls (select popups, checkboxes, scrollbars) dark, so
-     option lists aren't low-contrast on the dark glass panel. */
+}
+
+/* Render native controls (select popups, checkboxes, scrollbars, the colour
+   input) dark, so option lists aren't low-contrast on the dark glass panel.
+   Set on `html` ALONE and inherited: `[data-theme="light"]` (the editor's
+   light theme, set on `html`) then wins for the whole page. Pinned on `body`
+   and `#app` as well, it kept a light editor's native controls dark (final
+   review; `tests/e2e/editorNativeControls.spec.ts`). */
+html {
   color-scheme: dark;
 }
 
@@ -396,6 +403,18 @@ body,
   .vb-guide-progress {
     forced-color-adjust: none;
     background-color: Highlight;
+  }
+  /* A teaching cue's colour swatches (`CueColorRow`): the fill IS the
+     choice, so it keeps its colour, with a system-colour edge so it reads
+     on any theme background; the chosen one is marked by an outline, since
+     the forced border colour is the same on all five (final review). */
+  .vb-swatch-fill {
+    forced-color-adjust: none;
+    border: 1px solid CanvasText;
+  }
+  .vb-swatch[aria-pressed="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: 1px;
   }
 }
 

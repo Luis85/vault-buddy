@@ -594,7 +594,7 @@ describe("EffectSection", () => {
     const w = mountSection("arr");
     const swatches = w.findAll("[data-testid^=effect-swatch-]");
     expect(swatches.map((s) => s.attributes("aria-label"))).toEqual([
-      "Set color #ffd279", "Set color #ffffff", "Set color #ac93f1", "Set color #7bd4bc", "Set color #f297a7",
+      "Set color gold", "Set color white", "Set color violet", "Set color teal", "Set color pink",
     ]);
     expect(swatches.map((s) => s.attributes("aria-pressed"))).toEqual(["true", "false", "false", "false", "false"]);
     expect(w.get('[data-testid="effect-field-color"]').attributes("aria-label")).toBe("Custom annotation color");
