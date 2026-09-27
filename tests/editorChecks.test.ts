@@ -421,7 +421,7 @@ describe("the header's Checks badge and the canvas toast", () => {
       finding({ code: "gap", severity: "info", target: { kind: "clip", id: "c2" }, action: "select" }),
     ];
     await openSession();
-    const w = mount(EditorHeader, { props: { isCompact: false, libraryOpen: false, inspectorOpen: false, theme: "dark" } });
+    const w = mount(EditorHeader, { props: { theme: "dark" } });
     await flushPromises();
     expect(w.get('[data-testid="editor-header-checks-count"]').text()).toBe("2");
     await w.get('[data-testid="editor-header-checks"]').trigger("click");
@@ -493,7 +493,7 @@ describe("the timeline scrolls a revealed object into view", () => {
 });
 
 describe("Continue to render", () => {
-  const HEADER = { isCompact: false, libraryOpen: false, inspectorOpen: false, theme: "dark" as const };
+  const HEADER = { theme: "dark" as const };
 
   it("opens the Render dialog when nothing blocks", async () => {
     findings = [finding({ code: "clipping", severity: "warning", target: { kind: "clip", id: "s1" }, action: "openAudio" })];

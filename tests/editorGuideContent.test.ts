@@ -130,14 +130,14 @@ describe("native lesson copy", () => {
       },
       save: {
         tip: "Save project stores the editable project in Vault Buddy on this computer, and unsaved edits are kept for recovery if the editor closes. A portable project file may include uncensored originals.",
-        task: "Open the menu beside Save project to see the file formats. Saving is optional.",
+        task: "Open the Project menu to save a copy as a project file. Saving is optional.",
       },
       render: {
         tip: "Rendering runs on this computer with your installed ffmpeg and adds the video to this project's Products. Publishing a product copies it, with an optional companion note, into a vault. Keep the editable project for later changes.",
       },
       products: {
         label: "Rendered products",
-        body: "Rendered videos are listed in the library's Products tab, separate from the editable project. Watch one, or restore the edit snapshot behind an earlier output.",
+        body: "Rendered videos are listed in the library's Products tab, which Project → Workspace & rendered products opens, separate from the editable project. Watch one, or restore the edit snapshot behind an earlier output.",
         task: "Look through Products, then continue.",
       },
     });

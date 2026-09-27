@@ -166,6 +166,39 @@ describe("what each item does", () => {
     expect(w.text()).toContain("That project could not be opened.");
   });
 
+  // Fix round 1: an open a newer open superseded installs nothing, so it
+  // must not hydrate or recovery-check whatever session is current then —
+  // that session is the newer open's to set up.
+  it("a superseded pick hydrates nothing and runs no recovery check", async () => {
+    let releaseB!: (r: EditorOpenResult) => void;
+    const workspaceReads: string[] = [];
+    const listProjects = vi.fn(() => Promise.resolve([CURRENT, OTHER]));
+    const w = await mountRoot({
+      openProject: (id) => {
+        if (id === "proj-b") return new Promise<EditorOpenResult>((res) => (releaseB = res));
+        if (id === "proj-c") return Promise.resolve(result("proj-c", "Third"));
+        return Promise.resolve(result("proj-a", "First"));
+      },
+      getWorkspace: (sessionId) => {
+        workspaceReads.push(sessionId);
+        return Promise.resolve({});
+      },
+      listProjects,
+    });
+    await chooseProjectMenuItem(w, "open");
+    await w.get('[data-testid="open-project-row-proj-b"]').trigger("click");
+    await flushPromises();
+    // A newer open lands first (here straight through the store).
+    await useEditorProjectStore().openProject("proj-c", false);
+    const listsBefore = listProjects.mock.calls.length;
+    releaseB(result("proj-b", "Second"));
+    await flushPromises();
+
+    expect(useEditorProjectStore().snapshot?.projectId).toBe("proj-c");
+    expect(workspaceReads).not.toContain("ses-proj-c");
+    expect(listProjects.mock.calls.length).toBe(listsBefore);
+  });
+
   it("Open a project file… asks Rust (editor_import_package)", async () => {
     const importPackage = vi.fn(() => Promise.resolve(null));
     const w = await mountRoot({ importPackage });

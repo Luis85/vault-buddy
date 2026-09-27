@@ -232,12 +232,17 @@ async function openProjectFile() {
  * shell's gate is pointed at the chosen project in the SAME tick the store
  * installs it (`openProject`'s `beforeInstall`), so the shell never drops
  * for a frame; a refused open leaves the project on screen as it was and
- * is said by the shell's refusal toast (`useEditorFeedback`). */
+ * is said by the shell's refusal toast (`useEditorFeedback`). An open a
+ * newer one superseded hydrates nothing (fix round 1). */
 async function openStoredProject(projectId: string) {
+  let installed = false;
   await editorProject.openProject(projectId, false, () => {
+    installed = true;
     requested.value = { kind: "project", value: projectId };
   });
-  if (editorProject.lastError) return;
+  // Refused, or superseded by a newer open (which installed nothing of
+  // this one's, and sets up its own session): nothing to hydrate here.
+  if (!installed || editorProject.snapshot?.projectId !== projectId) return;
   if (hydrateNewSession()) await recovery.value?.check();
 }
 

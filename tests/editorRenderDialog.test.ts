@@ -32,7 +32,7 @@ beforeEach(() => {
   mockConvertFileSrc("windows");
 });
 
-const HEADER_PROPS = { isCompact: false, libraryOpen: false, inspectorOpen: false, theme: "dark" as const };
+const HEADER_PROPS = { theme: "dark" as const };
 
 async function openDialog(extra = {}) {
   const env = await openWithRenders({ getProducts: () => Promise.resolve([product()]), ...extra });

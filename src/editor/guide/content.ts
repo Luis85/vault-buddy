@@ -137,11 +137,15 @@ type CopyOverride = Partial<Record<"label" | "body" | "tip" | "task", string>>;
  * - `fades`: there are no fade presets;
  * - `chapters`: there is no companion-note preview;
  * - `save`: Save project stores the project here, there is no download,
- *   and recovery is the native journal;
+ *   recovery is the native journal, and a copy as a project file is the
+ *   Project menu's "Save a copy as project file…" (visual-parity Task 8
+ *   retired the menu beside Save project);
  * - `render`: an ffmpeg render has no three-minute limit, lands in the
  *   project's Products, and Publish DOES write a copy into a vault;
- * - `products`: there is no Project menu — products are the library's
- *   Products tab;
+ * - `products`: the Project menu has no "workspace files" list — its
+ *   "Workspace & rendered products" opens the library's Products tab
+ *   (visual-parity Task 10 moves products into the library's Project
+ *   section and retargets that item);
  * `help` carried an override until Task 57 shipped the learning center its
  * verbatim text describes (Help's menu, chapter jumps, quick answers,
  * shortcuts); it is the concept text again.
@@ -177,14 +181,14 @@ export const LESSON_COPY_OVERRIDES: Readonly<Partial<Record<GuideStepId, CopyOve
   },
   save: {
     tip: "Save project stores the editable project in Vault Buddy on this computer, and unsaved edits are kept for recovery if the editor closes. A portable project file may include uncensored originals.",
-    task: "Open the menu beside Save project to see the file formats. Saving is optional.",
+    task: "Open the Project menu to save a copy as a project file. Saving is optional.",
   },
   render: {
     tip: "Rendering runs on this computer with your installed ffmpeg and adds the video to this project's Products. Publishing a product copies it, with an optional companion note, into a vault. Keep the editable project for later changes.",
   },
   products: {
     label: "Rendered products",
-    body: "Rendered videos are listed in the library's Products tab, separate from the editable project. Watch one, or restore the edit snapshot behind an earlier output.",
+    body: "Rendered videos are listed in the library's Products tab, which Project → Workspace & rendered products opens, separate from the editable project. Watch one, or restore the edit snapshot behind an earlier output.",
     task: "Look through Products, then continue.",
   },
 };

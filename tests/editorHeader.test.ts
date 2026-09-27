@@ -148,6 +148,33 @@ describe("the document title", () => {
     expect(w.find('[data-testid="rename-dialog"]').exists()).toBe(false);
   });
 
+  // Fix round 1: a refused rename keeps the dialog and the person's draft
+  // (the refusal itself is the shell's toast, visual-parity Task 7).
+  it("a refused rename keeps the dialog open with the draft", async () => {
+    const store = useEditorProjectStore();
+    store.setPort(
+      fakeEditorPort({
+        openStaged: () => Promise.resolve(openResult()),
+        getChecks: () => Promise.resolve([]),
+        getProducts: () => Promise.resolve([]),
+        execute: () => Promise.reject(new Error("That title cannot be used.")),
+      }),
+    );
+    await store.openStaged("base");
+    const w = mount(EditorShell, { attachTo: document.body });
+    await flushPromises();
+    await w.get('[data-testid="editor-header-title"]').trigger("click");
+    await flushPromises();
+    await w.get('[data-testid="rename-dialog-input"]').setValue("Refused name");
+    await w.get('[data-testid="rename-dialog-apply"]').trigger("click");
+    await flushPromises();
+
+    expect(w.find('[data-testid="rename-dialog"]').exists()).toBe(true);
+    expect((w.get('[data-testid="rename-dialog-input"]').element as HTMLInputElement).value).toBe("Refused name");
+    expect(w.get('[data-testid="rename-dialog-apply"]').attributes("disabled")).toBeUndefined();
+    expect(w.text()).toContain("That title cannot be used.");
+  });
+
   it("Enter in the Title field applies it", async () => {
     const executed: EditorCommand[] = [];
     const w = await openShell({ executed });
@@ -194,6 +221,17 @@ describe("what the header carries", () => {
     expect(w.get('[data-testid="editor-header-render"]').text()).toBe("Render video");
   });
 
+  // Fix round 1: a disabled Render video keeps its fill under the pointer —
+  // the hover colour is for a button that can act (the base rule's
+  // `:hover:not(:disabled)` posture).
+  it("the primary fill only takes its hover colour while enabled", async () => {
+    const w = await openShell({ snap: { durationMs: 0 } });
+    const render = w.get('[data-testid="editor-header-render"]');
+    expect(render.attributes("disabled")).toBeDefined();
+    expect(render.classes()).toContain("enabled:hover:bg-primary-hover");
+    expect(render.classes()).not.toContain("hover:bg-primary-hover");
+  });
+
   it("the Save ▾ split button is gone; its items live in the Project menu", async () => {
     const w = await openShell();
     expect(w.find('[data-testid="editor-header-save-menu-toggle"]').exists()).toBe(false);
@@ -232,5 +270,13 @@ describe("the Checks count chip (ruling T3-2)", () => {
     const chip = w.get('[data-testid="editor-header-checks-count"]');
     expect(chip.text()).toBe("2");
     expect(chip.classes()).toEqual(expect.arrayContaining(["vb-mono", "text-gold", "bg-gold-bg"]));
+  });
+
+  // Fix round 1: the chip caps like the shared CountBadge it replaced.
+  it("caps at 99+", async () => {
+    const many = Array.from({ length: 120 }, (_, i) => ({ ...finding("gap"), id: `chk-gap-${i}` }));
+    const w = await openShell({ checks: many });
+    expect(w.get('[data-testid="editor-header-checks-count"]').text()).toBe("99+");
+    expect(w.get('[data-testid="editor-header-checks"]').attributes("aria-label")).toBe("Checks, 120 to review");
   });
 });

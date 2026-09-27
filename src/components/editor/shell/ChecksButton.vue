@@ -42,6 +42,10 @@ watch(
   { immediate: true },
 );
 
+/** The chip caps at 99+ like the shared CountBadge it replaced; the
+ * button's accessible name keeps the whole number. */
+const countLabel = computed(() => (checks.toReview > 99 ? "99+" : String(checks.toReview)));
+
 const label = computed(() =>
   checks.toReview > 0 ? `Checks, ${checks.toReview} to review` : "Checks",
 );
@@ -63,7 +67,7 @@ const label = computed(() =>
       data-testid="editor-header-checks-count"
       aria-hidden="true"
       class="vb-mono rounded-[8px] bg-gold-bg px-[5px] py-[2px] text-[9px] leading-none text-gold"
-    >{{ checks.toReview }}</span>
+    >{{ countLabel }}</span>
   </HeaderButton>
   <ChecksDialog
     :open="checksDialogOpen"
