@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, type Page, test } from "@playwright/test";
 
+import { openParity } from "./parity";
 import { FIXTURE_VIDEO_URL, installTauriStub } from "./tauriStub";
 
 /**
@@ -612,6 +613,28 @@ for (const theme of ["light", "dark"] as const) {
     await page.getByTestId("learning-chapter-polish").click();
     await expect(page.getByTestId("guide-coach-task")).toHaveAttribute("data-voice", "edit");
     expect(await lowContrast(page), "coach, optional edit").toEqual([]);
+  });
+}
+
+// Visual-parity Task 25 (review focus 1): the populated sample project the
+// parity gate measures — every track kind, the Teaching layers and Captions
+// rows, cue chips, a selected clip's inspector, the timeline footer — read
+// 4.5:1 in both themes after the concept palette port. The project above
+// ("Keys") has none of that chrome to measure.
+for (const theme of ["light", "dark"] as const) {
+  test(`${theme} theme text meets 4.5:1 across the populated workspace`, async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { theme, invitation: false });
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    expect(await lowContrast(page), "workspace").toEqual([]);
+    await page.getByTestId("clip-c5").click();
+    await page.getByTestId("inspector-tab-layout").click();
+    expect(await lowContrast(page), "clip inspector").toEqual([]);
+    await page.getByTestId("timeline-cue-fx4").click();
+    await expect(page.getByTestId("inspector-title")).toHaveText("Teaching properties");
+    expect(await lowContrast(page), "cue inspector").toEqual([]);
+    await page.getByTestId("timeline-cue-fx4").click({ button: "right" });
+    await expect(page.getByRole("menu").first()).toBeVisible();
+    expect(await lowContrast(page), "cue menu").toEqual([]);
   });
 }
 

@@ -1253,3 +1253,62 @@ test.describe("parity 1600x1000: the guide (screens 10–11, §9.2–9.3)", () =
     await expect(page.getByTestId("learning-center")).not.toContainText(/this device|download/i);
   });
 });
+
+// Visual-parity Task 25 (design D1, D2, D16; review focus 1): the two
+// concept screens with no counterpart in the region tests above — the
+// workspace in the light theme (screen 13, what the View menu's "Light
+// theme" gives) and in a Windows contrast theme (screen 14) — composited
+// for review, with the facts that must survive either: the same frame, the
+// theme's own backdrop, and a selection, playhead and handles that stay
+// visible once forced colours repaint the page.
+async function frameBoxes(page: Page): Promise<number[]> {
+  return [
+    (await box(page, "editor-header")).height,
+    (await box(page, "editor-shell-library")).width,
+    (await box(page, "editor-shell-inspector")).width,
+    (await box(page, "editor-timeline")).height,
+    (await box(page, "editor-statusbar")).height,
+  ].map(Math.round);
+}
+
+test.describe("parity 1600x1000: the workspace in the light and contrast themes (screens 13–14)", () => {
+  test("light: screen 02's frame on the light palette", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { theme: "light", invitation: false });
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await page.getByTestId("clip-c5").click();
+    await page.getByTestId("inspector-tab-layout").click();
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: "test-results/parity/built-13-light.png" });
+    await composite(page, "13-light.png", "test-results/parity/built-13-light.png", "vs-13-light");
+
+    expect(await frameBoxes(page)).toEqual([56, 244, 276, 400, 25]);
+    // The concept's light --bg under the frame, and its primary behind the
+    // header's Render video.
+    await expect(page.locator(".vb-editor")).toHaveCSS("background-color", "rgb(243, 243, 247)");
+    await expect(page.getByTestId("editor-header-render")).toHaveCSS("background-color", "rgb(120, 83, 184)");
+  });
+
+  test("forced colours: the selection, a cue, the playhead and the handles keep a system colour", async ({ page }) => {
+    await openParity(
+      page,
+      { width: 1600, height: 1000 },
+      { invitation: false, workspace: { selection_clip_ids: ["c2"], selected: { type: "effect", id: "fx4" } } },
+    );
+    await page.emulateMedia({ forcedColors: "active" });
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: "test-results/parity/built-14-high-contrast.png" });
+    await composite(page, "14-high-contrast.png", "test-results/parity/built-14-high-contrast.png", "vs-14-high-contrast");
+
+    expect(await frameBoxes(page)).toEqual([56, 244, 276, 400, 25]);
+    const outline = (testid: string) =>
+      page.getByTestId(testid).evaluate((el) => getComputedStyle(el).outlineStyle);
+    expect(await outline("timeline-cue-fx4"), "the selected cue is unmarked in forced colours").not.toBe("none");
+    expect(await outline("timeline-cue-fx1"), "an unselected cue stays unmarked").toBe("none");
+    for (const testid of ["timeline-playhead", "clip-c5-fade-in-handle"]) {
+      const adjust = await page.getByTestId(testid).evaluate((el) => getComputedStyle(el).forcedColorAdjust);
+      expect(adjust, `${testid} is repainted to the page colour in forced colours`).toBe("none");
+    }
+    await expect(page.getByTestId("editor-header-save")).toBeInViewport();
+    await expect(page.getByTestId("editor-header-render")).toBeInViewport();
+  });
+});
