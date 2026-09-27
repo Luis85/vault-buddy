@@ -6,7 +6,7 @@
  * inspector in its cue state, a caption must open the Captions tab. The
  * packing and drag arithmetic have their own suite (`editorCueLanes`);
  * the heights and the pinned label column are measured in real Chromium
- * (`tests/e2e/editorParity.spec.ts`).
+ * (`tests/e2e/editorTeachingLayers.spec.ts`).
  */
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -14,7 +14,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import InspectorPanel from "../src/components/editor/inspector/InspectorPanel.vue";
 import CaptionsLibrary from "../src/components/editor/library/CaptionsLibrary.vue";
+import CaptionsRow from "../src/components/editor/timeline/CaptionsRow.vue";
 import TimelineView from "../src/components/editor/timeline/TimelineView.vue";
+import type { CaptionRow } from "../src/editor/captionRules";
 import type { EditorCommand } from "../src/editor/editorCommandTypes";
 import { revealSerial } from "../src/editor/revealBus";
 import type { Effect, Project } from "../src/editorTypes";
@@ -60,6 +62,20 @@ function sample(overrides: Partial<Project> = {}): Project {
   });
 }
 
+/** Caption rows as `captionRules.captionRows` shapes them, one a second. */
+function captionRowsOf(ids: string[]): CaptionRow[] {
+  const c = clip("c1", "capture", "v1", 0, 10_000, "One");
+  const n = (id: string) => Number(id.slice(1));
+  return ids.map((id) => ({
+    cue: { id, clip_id: "c1", start_ms: n(id) * 1_000, end_ms: n(id) * 1_000 + 500, text: `Line ${id}` },
+    clip: c,
+    startMs: n(id) * 1_000,
+    endMs: n(id) * 1_000 + 500,
+    cps: 1,
+    index: n(id),
+  }));
+}
+
 let executed: EditorCommand[] = [];
 
 beforeEach(() => {
@@ -98,7 +114,7 @@ describe("the Teaching layers row (§6.4)", () => {
   it("is 44 tall, and still there, with no cues at all", async () => {
     const empty = await timeline(sample({ effects: [] }));
     expect(empty.get('[data-testid="teaching-layers-row"]').attributes("style")).toContain("height: 44px");
-    expect(empty.findAll('[data-testid^="cue-"]')).toHaveLength(0);
+    expect(empty.findAll('[data-testid^="timeline-cue-"]')).toHaveLength(0);
   });
 
   it("pins its label cell like a track header: the text badge on accent, Teaching layers, Attached to video", async () => {
@@ -115,21 +131,21 @@ describe("the Teaching layers row (§6.4)", () => {
 
   it("draws each cue 19px tall at lane×22+3, where its clip plays it, labelled with its text or kind", async () => {
     const w = await timeline();
-    const one = w.get('[data-testid="cue-fx1"]');
+    const one = w.get('[data-testid="timeline-cue-fx1"]');
     expect(one.classes()).toContain("h-[19px]");
     expect(one.attributes("style")).toMatch(/left: 25px;.*width: 300px;.*top: 3px/);
     expect(one.text()).toBe("A little structure.");
-    const two = w.get('[data-testid="cue-fx2"]');
+    const two = w.get('[data-testid="timeline-cue-fx2"]');
     expect(two.attributes("style")).toContain("top: 25px");
     expect(two.text()).toBe("Highlight");
   });
 
   it("a zoom cue is gold and reads its factor", async () => {
     const w = await timeline();
-    const zoom = w.get('[data-testid="cue-fx3"]');
+    const zoom = w.get('[data-testid="timeline-cue-fx3"]');
     expect(zoom.text()).toBe("1.65× Focus");
     expect(zoom.classes()).toEqual(expect.arrayContaining(["bg-gold-bg", "text-gold", "border-gold"]));
-    expect(w.get('[data-testid="cue-fx1"]').classes()).toEqual(expect.arrayContaining(["bg-accent-bg", "text-accent-ink"]));
+    expect(w.get('[data-testid="timeline-cue-fx1"]').classes()).toEqual(expect.arrayContaining(["bg-accent-bg", "text-accent-ink"]));
   });
 });
 
@@ -138,20 +154,20 @@ describe("selecting a cue (the inspector's cue state)", () => {
     const inspector = mount(InspectorPanel);
     const w = await timeline();
     const before = revealSerial("inspector");
-    await w.get('[data-testid="cue-fx2"]').trigger("click");
+    await w.get('[data-testid="timeline-cue-fx2"]').trigger("click");
     await flushPromises();
     const workspace = useEditorWorkspaceStore();
     expect(workspace.selected).toEqual({ type: "effect", id: "fx2" });
     expect(workspace.selectionClipIds).toEqual(["c1"]);
     expect(revealSerial("inspector")).toBe(before + 1);
     expect(inspector.get('[data-testid="inspector-title"]').text()).toBe("Teaching properties");
-    expect(w.get('[data-testid="cue-fx2"]').attributes("aria-selected")).toBe("true");
-    expect(w.get('[data-testid="cue-fx2"]').classes()).toContain("outline-accent");
+    expect(w.get('[data-testid="timeline-cue-fx2"]').attributes("aria-selected")).toBe("true");
+    expect(w.get('[data-testid="timeline-cue-fx2"]').classes()).toContain("outline-accent");
   });
 
   it("Enter selects the focused cue too", async () => {
     const w = await timeline();
-    await w.get('[data-testid="cue-fx1"]').trigger("keydown", { key: "Enter" });
+    await w.get('[data-testid="timeline-cue-fx1"]').trigger("keydown", { key: "Enter" });
     expect(useEditorWorkspaceStore().selected).toEqual({ type: "effect", id: "fx1" });
   });
 });
@@ -159,7 +175,7 @@ describe("selecting a cue (the inspector's cue state)", () => {
 describe("moving and trimming a cue: ONE updateEffect on release", () => {
   it("a body drag previews, then sends one updateEffect with the shifted source range", async () => {
     const w = await timeline();
-    const chip = w.get('[data-testid="cue-fx1"]');
+    const chip = w.get('[data-testid="timeline-cue-fx1"]');
     await chip.trigger("pointerdown", { button: 0, clientX: 100, pointerId: 1 });
     await chip.trigger("pointermove", { clientX: 150, pointerId: 1 });
     expect(chip.attributes("style")).toContain("left: 75px");
@@ -171,7 +187,7 @@ describe("moving and trimming a cue: ONE updateEffect on release", () => {
 
   it("Escape mid-drag discards the preview and sends nothing", async () => {
     const w = await timeline();
-    const chip = w.get('[data-testid="cue-fx1"]');
+    const chip = w.get('[data-testid="timeline-cue-fx1"]');
     await chip.trigger("pointerdown", { button: 0, clientX: 100, pointerId: 1 });
     await chip.trigger("pointermove", { clientX: 150, pointerId: 1 });
     await chip.trigger("keydown", { key: "Escape" });
@@ -183,7 +199,7 @@ describe("moving and trimming a cue: ONE updateEffect on release", () => {
 
   it("the end grip trims the end only", async () => {
     const w = await timeline();
-    const grip = w.get('[data-testid="cue-fx1-grip-end"]');
+    const grip = w.get('[data-testid="timeline-cue-fx1-trim-end"]');
     await grip.trigger("pointerdown", { button: 0, clientX: 320, pointerId: 1 });
     await grip.trigger("pointermove", { clientX: 370, pointerId: 1 });
     await grip.trigger("pointerup", { clientX: 370, pointerId: 1 });
@@ -193,7 +209,7 @@ describe("moving and trimming a cue: ONE updateEffect on release", () => {
 
   it("the start grip trims the start only", async () => {
     const w = await timeline();
-    const grip = w.get('[data-testid="cue-fx2-grip-start"]');
+    const grip = w.get('[data-testid="timeline-cue-fx2-trim-start"]');
     await grip.trigger("pointerdown", { button: 0, clientX: 140, pointerId: 1 });
     await grip.trigger("pointermove", { clientX: 115, pointerId: 1 });
     await grip.trigger("pointerup", { clientX: 115, pointerId: 1 });
@@ -203,7 +219,7 @@ describe("moving and trimming a cue: ONE updateEffect on release", () => {
 
   it("→ nudges the focused cue one frame, Shift+→ one second, each ONE updateEffect", async () => {
     const w = await timeline();
-    const chip = w.get('[data-testid="cue-fx1"]');
+    const chip = w.get('[data-testid="timeline-cue-fx1"]');
     await chip.trigger("keydown", { key: "ArrowRight" });
     await flushPromises();
     await chip.trigger("keydown", { key: "ArrowLeft", shiftKey: true });
@@ -214,9 +230,29 @@ describe("moving and trimming a cue: ONE updateEffect on release", () => {
     ]);
   });
 
+  it("the nudged cue keeps focus through its own element, whatever else wears its test id", async () => {
+    // The preview's cue overlay once shared this id and came first in the
+    // document: a document query refocused IT, not the chip (fix round 1).
+    const decoy = document.createElement("span");
+    decoy.setAttribute("data-testid", "timeline-cue-fx1");
+    decoy.tabIndex = -1;
+    document.body.prepend(decoy);
+    try {
+      const w = await timeline();
+      const chip = w.get('[data-testid="timeline-cue-fx1"]');
+      (chip.element as HTMLElement).focus();
+      await chip.trigger("keydown", { key: "ArrowRight" });
+      await flushPromises();
+      expect(executed).toHaveLength(1);
+      expect(document.activeElement).toBe(chip.element);
+    } finally {
+      decoy.remove();
+    }
+  });
+
   it("a cue already at its clip's end says so instead of doing nothing", async () => {
     const w = await timeline(sample({ effects: [fx("fx1", "c1", 4_000, 10_000)] }));
-    await w.get('[data-testid="cue-fx1"]').trigger("keydown", { key: "ArrowRight" });
+    await w.get('[data-testid="timeline-cue-fx1"]').trigger("keydown", { key: "ArrowRight" });
     await flushPromises();
     expect(executed).toEqual([]);
     expect(useNotificationsStore().items.map((n) => n.message)).toContain("The cue is at the end of its clip.");
@@ -227,7 +263,7 @@ describe("moving and trimming a cue: ONE updateEffect on release", () => {
     let reachedWindow = false;
     const onWindow = () => (reachedWindow = true);
     window.addEventListener("keydown", onWindow);
-    await w.get('[data-testid="cue-fx2"]').trigger("keydown", { key: "Delete" });
+    await w.get('[data-testid="timeline-cue-fx2"]').trigger("keydown", { key: "Delete" });
     window.removeEventListener("keydown", onWindow);
     await flushPromises();
     expect(executed).toEqual([{ kind: "removeEffect", effectId: "fx2" }]);
@@ -235,10 +271,44 @@ describe("moving and trimming a cue: ONE updateEffect on release", () => {
   });
 });
 
+describe("a narrow cue (under two 7px grips)", () => {
+  // 200 ms at zoom 1 is 10 px: the grips step outside its edges, so the
+  // body stays pressable, and each still trims (fix round 1).
+  const narrow = () => sample({ effects: [fx("fxN", "c1", 2_000, 2_200)] });
+
+  it("puts its grips outside its edges and leaves the body to move it", async () => {
+    const w = await timeline(narrow());
+    expect(w.get('[data-testid="timeline-cue-fxN-trim-start"]').classes()).toContain("right-full");
+    expect(w.get('[data-testid="timeline-cue-fxN-trim-end"]').classes()).toContain("left-full");
+    const chip = w.get('[data-testid="timeline-cue-fxN"]');
+    await chip.trigger("pointerdown", { button: 0, clientX: 105, pointerId: 1 });
+    await chip.trigger("pointermove", { clientX: 130, pointerId: 1 });
+    await chip.trigger("pointerup", { clientX: 130, pointerId: 1 });
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "updateEffect", effectId: "fxN", startMs: 2_500, endMs: 2_700 }]);
+  });
+
+  it("its outside grip still trims", async () => {
+    const w = await timeline(narrow());
+    const grip = w.get('[data-testid="timeline-cue-fxN-trim-end"]');
+    await grip.trigger("pointerdown", { button: 0, clientX: 112, pointerId: 1 });
+    await grip.trigger("pointermove", { clientX: 137, pointerId: 1 });
+    await grip.trigger("pointerup", { clientX: 137, pointerId: 1 });
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "updateEffect", effectId: "fxN", startMs: 2_000, endMs: 2_700 }]);
+  });
+
+  it("a wide cue keeps its grips inside its edges", async () => {
+    const w = await timeline();
+    expect(w.get('[data-testid="timeline-cue-fx1-trim-start"]').classes()).toContain("left-0");
+    expect(w.get('[data-testid="timeline-cue-fx1-trim-end"]').classes()).toContain("right-0");
+  });
+});
+
 describe("a cue on a locked track (D14: refused visibly)", () => {
   it("says why in its title, and a drag sends nothing", async () => {
     const w = await timeline();
-    const chip = w.get('[data-testid="cue-fxL"]');
+    const chip = w.get('[data-testid="timeline-cue-fxL"]');
     expect(chip.attributes("title")).toBe("Track Locked overlay is locked");
     await chip.trigger("pointerdown", { button: 0, clientX: 820, pointerId: 1 });
     await chip.trigger("pointermove", { clientX: 900, pointerId: 1 });
@@ -250,7 +320,7 @@ describe("a cue on a locked track (D14: refused visibly)", () => {
 
   it("a key that would move or delete it toasts the reason instead", async () => {
     const w = await timeline();
-    const chip = w.get('[data-testid="cue-fxL"]');
+    const chip = w.get('[data-testid="timeline-cue-fxL"]');
     await chip.trigger("keydown", { key: "ArrowRight" });
     await chip.trigger("keydown", { key: "Delete" });
     await flushPromises();
@@ -262,7 +332,7 @@ describe("a cue on a locked track (D14: refused visibly)", () => {
 describe("the cue menu (Task 5's cueMenu)", () => {
   it("Shift+F10 on a focused cue opens it under the cue's kind; Escape gives focus back", async () => {
     const w = await timeline();
-    const chip = w.get('[data-testid="cue-fx1"]');
+    const chip = w.get('[data-testid="timeline-cue-fx1"]');
     (chip.element as HTMLElement).focus();
     await chip.trigger("keydown", { key: "F10", shiftKey: true });
     await flushPromises();
@@ -276,12 +346,12 @@ describe("the cue menu (Task 5's cueMenu)", () => {
     );
     await flushPromises();
     expect(document.querySelector('[data-testid="editor-context-menu"]')).toBeNull();
-    expect(document.activeElement?.getAttribute("data-testid")).toBe("cue-fx1");
+    expect(document.activeElement?.getAttribute("data-testid")).toBe("timeline-cue-fx1");
   });
 
   it("a right-click opens it too, and its Delete annotation removes the cue", async () => {
     const w = await timeline();
-    await w.get('[data-testid="cue-fx2"]').trigger("contextmenu", { clientX: 200, clientY: 40 });
+    await w.get('[data-testid="timeline-cue-fx2"]').trigger("contextmenu", { clientX: 200, clientY: 40 });
     await flushPromises();
     expect(heading()).toContain("Highlight");
     (document.querySelector('[data-testid="editor-context-menu-item-cue-delete"]') as HTMLElement).click();
@@ -291,7 +361,7 @@ describe("the cue menu (Task 5's cueMenu)", () => {
 
   it("the toolbar's Edit actions opens the SELECTED cue's menu", async () => {
     const w = await timeline();
-    await w.get('[data-testid="cue-fx3"]').trigger("click");
+    await w.get('[data-testid="timeline-cue-fx3"]').trigger("click");
     await w.get('[data-testid="timeline-toolbar-more"]').trigger("click");
     await flushPromises();
     expect(heading()).toContain("Zoom");
@@ -347,6 +417,23 @@ describe("the Captions row (§6.4)", () => {
     await flushPromises();
     expect(document.activeElement?.getAttribute("data-testid")).toBe("caption-cue-cap2");
     expect([first.attributes("tabindex"), second.attributes("tabindex")]).toEqual(["-1", "0"]);
+  });
+
+  it("keeps its tab stop on the same caption when the drawn captions change", async () => {
+    const row = mount(CaptionsRow, {
+      attachTo: document.body,
+      props: { rows: captionRowsOf(["k1", "k2", "k3"]), count: 3, zoom: 1, widthPx: 2_000, labelWidth: 196 },
+    });
+    await flushPromises();
+    const k2 = row.get('[data-testid="caption-cue-k2"]');
+    (row.get('[data-testid="caption-cue-k1"]').element as HTMLElement).focus();
+    await row.get('[data-testid="caption-cue-k1"]').trigger("keydown", { key: "ArrowRight" });
+    await flushPromises();
+    expect(k2.attributes("tabindex")).toBe("0");
+    // k1 scrolls out of the drawn window: the tab stop stays on k2.
+    await row.setProps({ rows: captionRowsOf(["k2", "k3"]) });
+    expect(row.get('[data-testid="caption-cue-k2"]').attributes("tabindex")).toBe("0");
+    expect(row.get('[data-testid="caption-cue-k3"]').attributes("tabindex")).toBe("-1");
   });
 
   it("is not there when the edit has no captions", async () => {

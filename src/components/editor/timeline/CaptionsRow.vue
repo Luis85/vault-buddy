@@ -11,7 +11,7 @@
  * (`checkReveal.openCaptionCue`, what a caption finding's "Open Captions"
  * does): the tab, the caption selected and the playhead on it. Captions are
  * edited in the tab, so the row is one tab stop: ←/→ (Home/End) move focus
- * between its cues (`useRovingTablist`).
+ * between its cues (`useRovingTablist`), the stop kept on a caption by id.
  *
  * `rows` are the captions to draw (`TimelineView` keeps those within a
  * screen of the viewport, as it does clips); `count` is how many the edit
@@ -41,21 +41,26 @@ const MIN_WIDTH_PX = 8;
 
 const selectedId = computed(() => (workspace.selected?.type === "caption" ? workspace.selected.id : null));
 
-/** The one cue that takes Tab (the selected one when it is drawn). */
-const focusIndex = ref(0);
-watch(
-  [selectedId, () => props.rows],
-  ([id, rows]) => {
-    const i = rows.findIndex((r) => r.cue.id === id);
-    if (i !== -1) focusIndex.value = i;
-    else if (focusIndex.value >= rows.length) focusIndex.value = Math.max(0, rows.length - 1);
-  },
-  { immediate: true },
-);
+/** The caption the arrows last moved to, by id: the drawn subset changes
+ * as the timeline scrolls, and a position in it would then name another
+ * caption. */
+const focusId = ref<string | null>(null);
+watch(selectedId, (id) => {
+  if (id !== null) focusId.value = id;
+});
+/** The one cue that takes Tab: the one moved to, else the selected one,
+ * else the first drawn. */
+const tabIndex = computed(() => {
+  for (const id of [focusId.value, selectedId.value]) {
+    const i = props.rows.findIndex((r) => r.cue.id === id);
+    if (i !== -1) return i;
+  }
+  return 0;
+});
 const roving = useRovingTablist(
   () => props.rows.length,
-  () => focusIndex.value,
-  (i) => (focusIndex.value = i),
+  () => tabIndex.value,
+  (i) => (focusId.value = props.rows[i]?.cue.id ?? null),
 );
 
 function cueStyle(row: CaptionRow) {
@@ -98,7 +103,7 @@ function cueStyle(row: CaptionRow) {
         type="button"
         role="option"
         :data-testid="`caption-cue-${row.cue.id}`"
-        :tabindex="i === focusIndex ? 0 : -1"
+        :tabindex="i === tabIndex ? 0 : -1"
         :aria-selected="row.cue.id === selectedId"
         :aria-label="`Edit caption ${row.index}: ${row.cue.text}`"
         :title="row.cue.text"

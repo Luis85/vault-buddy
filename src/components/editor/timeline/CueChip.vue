@@ -32,6 +32,8 @@ import { computed, nextTick, ref } from "vue";
 
 import { useCueDrag } from "../../../composables/useCueDrag";
 import { selectCue } from "../../../composables/useEditorMenuContext";
+import { usePointerPress } from "../../../composables/usePointerPress";
+import { clipSpanOf } from "../../../editor/actionTargets";
 import type { TeachingCue } from "../../../editor/cueLanes";
 import { cueTop } from "../../../editor/cueLanes";
 import { EFFECT_NAMES } from "../../../editor/effectFields";
@@ -78,18 +80,26 @@ const MIN_WIDTH_PX = 9;
 /** The output span to draw: the live preview's, else the committed one. */
 const span = computed<[number, number]>(() => {
   const p = drag.preview.value;
-  const c = props.cue.clip;
-  const live = p && cueOutputSpan({ start_ms: c.start_ms, in_ms: c.in_ms, out_ms: c.out_ms, speed: c.speed ?? 1 }, p.startMs, p.endMs);
+  const live = p && cueOutputSpan(clipSpanOf(props.cue.clip), p.startMs, p.endMs);
   return live ?? [props.cue.startMs, props.cue.endMs];
 });
-const style = computed(() => {
-  const left = msToX(span.value[0], props.zoom);
-  const width = Math.max(MIN_WIDTH_PX, msToX(span.value[1], props.zoom) - left);
-  return { left: `${left}px`, width: `${width}px`, top: `${cueTop(props.cue.lane)}px` };
-});
+const leftPx = computed(() => msToX(span.value[0], props.zoom));
+const widthPx = computed(() => Math.max(MIN_WIDTH_PX, msToX(span.value[1], props.zoom) - leftPx.value));
+const style = computed(() => ({ left: `${leftPx.value}px`, width: `${widthPx.value}px`, top: `${cueTop(props.cue.lane)}px` }));
 
+/** An edge grip's width; a chip narrower than two of them puts its grips
+ * just outside its edges, so its body can still be pressed to move it
+ * (`ClipItem`'s trim grips, the same rule). */
+const GRIP_PX = 7;
 /** The edge grips — none on a locked cue, which cannot be trimmed. */
-const grips = computed(() => (props.lockedReason ? [] : (["start", "end"] as const)));
+const grips = computed(() => {
+  if (props.lockedReason) return [];
+  const narrow = widthPx.value < GRIP_PX * 2;
+  return [
+    { edge: "start" as const, place: narrow ? "right-full" : "left-0" },
+    { edge: "end" as const, place: narrow ? "left-full" : "right-0" },
+  ];
+});
 
 const kindName = computed(() => EFFECT_NAMES[props.cue.effect.kind]);
 const title = computed(() => props.lockedReason ?? `${kindName.value}: ${props.cue.label}`);
@@ -102,38 +112,24 @@ const chipClass = computed(() => [
 // ---- pointer --------------------------------------------------------------------
 
 const root = ref<HTMLElement | null>(null);
-/** Pointer travel (px) below which a press-and-release is still a click. */
-const DRAG_SLOP_PX = 3;
-let pressX: number | null = null;
-let suppressNextClick = false;
+/** Primary button, pointer capture, focus, the drag-ending click
+ * swallowed — `ClipItem`'s own press plumbing. */
+const press = usePointerPress(root);
 
 function select(): void {
-  if (suppressNextClick) {
-    suppressNextClick = false;
-    return;
-  }
-  selectCue(workspace, props.cue.effect);
+  if (!press.swallowClick()) selectCue(workspace, props.cue.effect);
 }
 
-/** Primary button on an unlocked cue: capture the pointer, take focus (so
- * Escape reaches `onKeydown` mid-drag) and start the grip's drag. */
+/** A press on an unlocked cue starts the grip's drag; a locked cue only
+ * takes focus (its title says why nothing moves). */
 function onPointerDown(event: PointerEvent, grip: "move" | "start" | "end"): void {
-  if (event.button !== 0) return;
-  root.value?.focus({ preventScroll: true });
-  if (props.lockedReason) return;
-  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
-  pressX = event.clientX;
-  suppressNextClick = false;
-  drag.begin(grip, event.clientX);
+  if (press.begin(event) && !props.lockedReason) drag.begin(grip, event.clientX);
 }
 function onPointerMove(event: PointerEvent): void {
   drag.update(event.clientX);
 }
 async function onPointerUp(event: PointerEvent): Promise<void> {
-  const el = event.currentTarget as HTMLElement;
-  if (el.hasPointerCapture?.(event.pointerId)) el.releasePointerCapture?.(event.pointerId);
-  if (pressX !== null && Math.abs(event.clientX - pressX) > DRAG_SLOP_PX) suppressNextClick = true;
-  pressX = null;
+  press.end(event);
   await drag.end();
 }
 
@@ -159,8 +155,10 @@ async function nudge(event: KeyboardEvent): Promise<void> {
   const step = event.shiftKey ? SECOND_MS : frameMs.value;
   const moved = await drag.nudge(forward ? step : -step);
   if (!moved) return refuse(`The cue is at the ${forward ? "end" : "start"} of its clip.`);
+  // Through this chip's own element: a document query by test id could
+  // find another element wearing it first (the preview's cue overlay did).
   await nextTick();
-  document.querySelector<HTMLElement>(`[data-testid="cue-${props.cue.effect.id}"]`)?.focus();
+  root.value?.focus();
 }
 
 function remove(event: KeyboardEvent): void {
@@ -206,13 +204,13 @@ function onKeydown(event: KeyboardEvent): void {
 <template>
   <div
     ref="root"
-    :data-testid="`cue-${cue.effect.id}`"
+    :data-testid="`timeline-cue-${cue.effect.id}`"
     role="option"
     tabindex="0"
     :aria-selected="selected"
     :aria-label="`${kindName}: ${cue.label}`"
     :title="title"
-    class="absolute h-[19px] touch-none truncate rounded-[4px] border px-1.5 py-[2px] text-[9px] leading-[13px] whitespace-nowrap select-none focus-visible:z-[5] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+    class="absolute h-[19px] touch-none rounded-[4px] border py-[2px] text-[9px] leading-[13px] whitespace-nowrap select-none focus-visible:z-[5] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
     :class="chipClass"
     :style="style"
     @click="select"
@@ -222,16 +220,19 @@ function onKeydown(event: KeyboardEvent): void {
     @pointermove="onPointerMove"
     @pointerup="onPointerUp"
   >
+    <!-- The padding is the label's, not the chip's: a chip's box cannot be
+         narrower than its own padding, so a 9px cue would draw 14px. -->
+    <span class="pointer-events-none block truncate px-1.5">{{ cue.label }}</span>
     <span
-      v-for="edge in grips"
-      :key="edge"
-      :data-testid="`cue-${cue.effect.id}-grip-${edge}`"
+      v-for="g in grips"
+      :key="g.edge"
+      :data-testid="`timeline-cue-${cue.effect.id}-trim-${g.edge}`"
       aria-hidden="true"
       class="absolute top-0 bottom-0 w-[7px] cursor-ew-resize"
-      :class="edge === 'start' ? 'left-0' : 'right-0'"
-      @pointerdown.stop="onPointerDown($event, edge)"
+      :class="g.place"
+      @pointerdown.stop="onPointerDown($event, g.edge)"
       @pointermove.stop="onPointerMove"
       @pointerup.stop="onPointerUp"
-    />{{ cue.label }}
+    />
   </div>
 </template>

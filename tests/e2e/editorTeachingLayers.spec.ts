@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
+import { PARITY_OPEN_RESULT } from "./fixtures/parityProject";
 import { box, composite, openParity } from "./parity";
 
 /**
@@ -48,12 +49,12 @@ test.describe("parity 1600x1000: the Teaching layers and Captions rows (screen 0
     expect(row.y + row.height).toBeLessThanOrEqual(v3.y + 1);
     await expect(page.getByTestId("teaching-layers-lane").getByRole("option")).toHaveCount(6);
 
-    const one = await box(page, "cue-fx1");
-    const two = await box(page, "cue-fx2");
+    const one = await box(page, "timeline-cue-fx1");
+    const two = await box(page, "timeline-cue-fx2");
     expect(Math.round(one.height)).toBe(19);
     expect(one.y - row.y).toBeCloseTo(3, 0);
     expect(two.y - one.y).toBeCloseTo(22, 0);
-    const zoom = page.getByTestId("cue-fx5");
+    const zoom = page.getByTestId("timeline-cue-fx5");
     await expect(zoom).toHaveText("1.65× Focus");
     await expect(zoom).toHaveCSS("color", "rgb(235, 197, 130)");
 
@@ -83,19 +84,19 @@ test.describe("parity 1600x1000: the Teaching layers and Captions rows (screen 0
 
   test("a click shows Teaching properties; Shift+F10 opens the cue menu and Escape gives focus back", async ({ page }) => {
     await openParity(page, SIZE, { invitation: false });
-    await page.getByTestId("cue-fx5").click();
+    await page.getByTestId("timeline-cue-fx5").click();
     await expect(page.getByTestId("inspector-title")).toHaveText("Teaching properties");
-    await expect(page.getByTestId("cue-fx5")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("timeline-cue-fx5")).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("Shift+F10");
     await expect(page.getByTestId("editor-context-menu-heading")).toHaveText(/Zoom/);
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("editor-context-menu")).toHaveCount(0);
-    await expect(page.getByTestId("cue-fx5")).toBeFocused();
+    await expect(page.getByTestId("timeline-cue-fx5")).toBeFocused();
   });
 
   test("dragging a cue sends ONE updateEffect on release, in its clip's source time", async ({ page }) => {
     await openParity(page, SIZE, { invitation: false });
-    const cue = await box(page, "cue-fx6"); // "Ready to find.": output 24–30 s on c3 (starts 23.5 s)
+    const cue = await box(page, "timeline-cue-fx6"); // "Ready to find.": output 24–30 s on c3 (starts 23.5 s)
     const before = (await sentCommands(page)).length;
     await page.mouse.move(cue.x + cue.width / 2, cue.y + 9);
     await page.mouse.down();
@@ -106,6 +107,18 @@ test.describe("parity 1600x1000: the Teaching layers and Captions rows (screen 0
     await expect.poll(async () => (await sentCommands(page)).slice(before)).toEqual([
       { kind: "updateEffect", effectId: "fx6", startMs: 1_500, endMs: 7_500 },
     ]);
+  });
+
+  test("a cue nudged while the preview draws it keeps focus, and its test id stays unique", async ({ page }) => {
+    // 12 s is inside the arrow (fx3): the preview's overlay draws it as well.
+    await openParity(page, SIZE, { invitation: false, workspace: { playhead_ms: 12_000 } });
+    await expect(page.getByTestId("cue-fx3")).toHaveCount(1);
+    const chip = page.getByTestId("timeline-cue-fx3");
+    await chip.focus();
+    const before = (await sentCommands(page)).length;
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(async () => (await sentCommands(page)).length).toBe(before + 1);
+    await expect(chip).toBeFocused();
   });
 
   test("a caption click opens the Captions tab on that caption", async ({ page }) => {
@@ -121,5 +134,42 @@ test.describe("parity 960x640: the Teaching layers row", () => {
     await openParity(page, { width: 960, height: 640 }, { invitation: false });
     expect((await box(page, "teaching-layers-label")).width).toBeCloseTo(174, 0);
     await expect(page.getByTestId("teaching-layers-lane").getByRole("option")).toHaveCount(6);
+  });
+});
+
+// A 200 ms cue is 10 px at zoom 1, narrower than its two 7 px grips: they
+// sit outside its edges, so its body still moves it (fix round 1).
+test.describe("a narrow cue", () => {
+  const extra = PARITY_OPEN_RESULT.project.effects.concat({
+    id: "fxN", clip_id: "c3", kind: "step", start_ms: 3_000, end_ms: 3_200, x: 0.5, y: 0.5, color: "#ffffff",
+  });
+
+  test("its body moves it", async ({ page }) => {
+    await openParity(page, SIZE, { invitation: false, project: { effects: extra } });
+    const cue = await box(page, "timeline-cue-fxN");
+    expect(Math.round(cue.width)).toBe(10);
+    const before = (await sentCommands(page)).length;
+    await page.mouse.move(cue.x + cue.width / 2, cue.y + 9);
+    await page.mouse.down();
+    await page.mouse.move(cue.x + cue.width / 2 + 10, cue.y + 9);
+    await page.mouse.move(cue.x + cue.width / 2 + 25, cue.y + 9);
+    await page.mouse.up();
+    await expect.poll(async () => (await sentCommands(page)).slice(before)).toEqual([
+      { kind: "updateEffect", effectId: "fxN", startMs: 3_500, endMs: 3_700 },
+    ]);
+  });
+
+  test("its end grip, outside its edge, trims it", async ({ page }) => {
+    await openParity(page, SIZE, { invitation: false, project: { effects: extra } });
+    const cue = await box(page, "timeline-cue-fxN");
+    const before = (await sentCommands(page)).length;
+    await page.mouse.move(cue.x + cue.width + 3, cue.y + 9);
+    await page.mouse.down();
+    await page.mouse.move(cue.x + cue.width + 13, cue.y + 9);
+    await page.mouse.move(cue.x + cue.width + 28, cue.y + 9);
+    await page.mouse.up();
+    await expect.poll(async () => (await sentCommands(page)).slice(before)).toEqual([
+      { kind: "updateEffect", effectId: "fxN", startMs: 3_000, endMs: 3_700 },
+    ]);
   });
 });

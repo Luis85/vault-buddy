@@ -146,6 +146,34 @@ describe("cueTrimRange: an edge grip moves one end only", () => {
   });
 });
 
+describe("snapping a trim, and cues that do not fit their clip", () => {
+  it("a trimmed edge snaps to a target and names it for the guide", () => {
+    const opts = { ...NO_SNAP, snapEnabled: true, targets: [5_000] };
+    // The end (output 4 s) dragged to 4.95 s: 2.5 px from 5 s at zoom 1.
+    expect(cueTrimRange(fast, cue, "end", 950, opts)).toEqual({ range: { startMs: 4_000, endMs: 10_000 }, guide: 5_000 });
+    expect(cueTrimRange(fast, cue, "start", -950, { ...opts, targets: [1_000] })).toEqual({
+      range: { startMs: 2_000, endMs: 8_000 },
+      guide: 1_000,
+    });
+  });
+
+  it("an end snapped onto the clip's own end still shows the guide", () => {
+    const opts = { ...NO_SNAP, snapEnabled: true, targets: [6_000] };
+    expect(cueTrimRange(fast, cue, "end", 1_950, opts)).toEqual({ range: { startMs: 4_000, endMs: 12_000 }, guide: 6_000 });
+  });
+
+  it("a cue longer than its clip is cut to the clip on a move", () => {
+    const long = effect("fx9", "c1", 1_000, 13_000);
+    expect(cueMoveRange(fast, long, 500, NO_SNAP).range).toEqual({ startMs: 2_000, endMs: 12_000 });
+    expect(cueNudgeRange(fast, long, -33)).toEqual({ startMs: 2_000, endMs: 12_000 });
+  });
+
+  it("a cue that starts before its clip is pulled inside on its first move", () => {
+    const early = effect("fx8", "c1", 1_000, 5_000);
+    expect(cueMoveRange(fast, early, 100, NO_SNAP).range).toEqual({ startMs: 2_000, endMs: 6_000 });
+  });
+});
+
 describe("cueNudgeRange: an arrow key's move", () => {
   it("moves by the output step times the speed, clamped to the clip", () => {
     expect(cueNudgeRange(fast, cue, 33)).toEqual({ startMs: 4_066, endMs: 8_066 });

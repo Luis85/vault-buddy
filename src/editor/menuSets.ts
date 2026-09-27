@@ -70,11 +70,6 @@ function trackTargetMenu(ctx: MenuContext, trackId: string): BuiltMenu {
   return { heading: name || "Track", items: trackMenu(ctx, trackId) };
 }
 
-/** A track header opens the track menu (visual-parity Task 17, ruling P4);
- * a lane opens the gap menu ("Timeline gap"); a teaching cue the cue menu;
- * no target at all — the
- * toolbar's Edit actions with nothing selected — the editor actions, at the
- * playhead. */
 /** The menus named by an id: an asset row, a track header, a cue. */
 const MENU_BY_ID: Partial<Record<string, (ctx: MenuContext, id: string) => BuiltMenu>> = {
   asset: assetTargetMenu,
@@ -82,6 +77,10 @@ const MENU_BY_ID: Partial<Record<string, (ctx: MenuContext, id: string) => Built
   effect: cueTargetMenu,
 };
 
+/** A track header opens the track menu (visual-parity Task 17, ruling P4);
+ * a lane opens the gap menu ("Timeline gap"); a teaching cue the cue menu;
+ * no target at all — the toolbar's Edit actions with nothing selected — the
+ * editor actions, at the playhead. */
 export function contextMenuFor(ctx: MenuContext): BuiltMenu {
   const target = ctx.action.pointerTarget;
   if (target?.kind === "clip") return clipTargetMenu(ctx);

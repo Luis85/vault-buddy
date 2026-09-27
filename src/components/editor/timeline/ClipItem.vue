@@ -44,6 +44,7 @@ import type { ComponentPublicInstance } from "vue";
 import { computed, nextTick, ref } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
+import { usePointerPress } from "../../../composables/usePointerPress";
 import { useTimelineDrag } from "../../../composables/useTimelineDrag";
 import { hasPreviewSource } from "../../../editor/previewLayers";
 import { isContextMenuShortcut } from "../../../editor/shortcuts";
@@ -93,14 +94,11 @@ function label(c: Clip): string {
 /** Plain click selects only this clip; Ctrl/Cmd+click toggles it in or out
  * of the selection and Shift+click adds it (the brief's "Click selects
  * (Ctrl/Shift extends)"). Enter/Space call this with no event: plain select.
- * The click that ENDS a drag is swallowed (`suppressNextClick`) — otherwise
+ * The click that ENDS a drag is swallowed (`usePointerPress`) — otherwise
  * it would collapse the multi-clip selection the user just dragged as a
  * group down to this one clip. */
 function onSelect(event?: MouseEvent) {
-  if (suppressNextClick) {
-    suppressNextClick = false;
-    return;
-  }
+  if (press.swallowClick()) return;
   const id = props.clip.id;
   const sel = workspace.selectionClipIds;
   if (event?.ctrlKey || event?.metaKey) {
@@ -157,31 +155,10 @@ function bindRoot(el: Element | ComponentPublicInstance | null): void {
   root.value = el as HTMLElement | null;
   selectedTarget(el);
 }
-/** Pointer travel (px) below which a press-and-release is still a click. */
-const DRAG_SLOP_PX = 3;
-let press: { x: number; y: number } | null = null;
-let suppressNextClick = false;
-
-/** Shared pointerdown plumbing for the body and both handles: primary
- * button only (a right-press is the context menu's, never a drag), pointer
- * capture so a fast drag past the clip's edge keeps tracking, and focus on
- * the clip so Escape mid-drag reaches `onKeydown`. */
-function beginPress(event: PointerEvent): boolean {
-  if (event.button !== 0) return false;
-  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
-  root.value?.focus({ preventScroll: true });
-  press = { x: event.clientX, y: event.clientY };
-  suppressNextClick = false;
-  return true;
-}
-function endPress(event: PointerEvent): void {
-  const el = event.currentTarget as HTMLElement;
-  if (el.hasPointerCapture?.(event.pointerId)) el.releasePointerCapture?.(event.pointerId);
-  if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > DRAG_SLOP_PX) {
-    suppressNextClick = true;
-  }
-  press = null;
-}
+/** The body's and every handle's press plumbing (`usePointerPress`). */
+const press = usePointerPress(root);
+const beginPress = press.begin;
+const endPress = press.end;
 
 function onBodyPointerDown(event: PointerEvent) {
   if (beginPress(event)) drag.beginBodyDrag(event.clientX, event.clientY);

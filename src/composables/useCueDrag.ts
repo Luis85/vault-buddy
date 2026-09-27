@@ -19,9 +19,10 @@
 import type { Ref } from "vue";
 import { ref } from "vue";
 
+import { clipSpanOf } from "../editor/actionTargets";
 import type { EditorCommand } from "../editor/editorCommandTypes";
 import { pxPerMs } from "../editor/timelineLayout";
-import { cueOutputSpan, roundHalfAway } from "../editor/timeMap";
+import { cueOutputSpan, roundHalfAway, sourceAtClamped } from "../editor/timeMap";
 import type { Clip, Effect } from "../editorTypes";
 import type { SnapOptions } from "./useTimelineDrag";
 import { MIN_CLIP_MS, SNAP_THRESHOLD_PX, snapGuideFor, snappedMs } from "./useTimelineDrag";
@@ -48,23 +49,11 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.min(Math.max(v, lo), hi);
 }
 
-/** The source instant output `t` plays on `clip` (unclamped). */
-function sourceOf(clip: Clip, t: number): number {
-  return clip.in_ms + roundHalfAway((t - clip.start_ms) * speedOf(clip));
-}
-
-/** The output instant source `s` plays at on `clip` (unclamped). */
-function outputOf(clip: Clip, s: number): number {
-  return clip.start_ms + roundHalfAway((s - clip.in_ms) / speedOf(clip));
-}
-
-function spanOf(clip: Clip): { start_ms: number; in_ms: number; out_ms: number; speed: number } {
-  return { start_ms: clip.start_ms, in_ms: clip.in_ms, out_ms: clip.out_ms, speed: speedOf(clip) };
-}
-
-/** Where the cue paints now — its clip's start when it plays nowhere. */
-function outputSpan(clip: Clip, effect: Effect): [number, number] {
-  return cueOutputSpan(spanOf(clip), effect.start_ms, effect.end_ms) ?? [clip.start_ms, clip.start_ms];
+/** Where source range `[start, end)` paints on `clip` — its clip's start
+ * when it plays nowhere. `timeMap.cueOutputSpan`, the preview's and the
+ * render's own mapping, so a range may END on the clip's source end. */
+function outputSpan(clip: Clip, start: number, end: number): [number, number] {
+  return cueOutputSpan(clipSpanOf(clip), start, end) ?? [clip.start_ms, clip.start_ms];
 }
 
 /** `effect` shifted by `ds` source ms, kept inside the clip whole. */
@@ -78,11 +67,11 @@ function shiftWithin(clip: Clip, effect: Effect, ds: number): CueRange {
 
 /** A body drag by `rawOutputDeltaMs`: the cue's start snaps, its length stays. */
 export function cueMoveRange(clip: Clip, effect: Effect, rawOutputDeltaMs: number, opts: SnapOptions): CueStep {
-  const start = outputSpan(clip, effect)[0];
+  const start = outputSpan(clip, effect.start_ms, effect.end_ms)[0];
   const snapped = snappedMs(start + rawOutputDeltaMs, opts);
   const ds = roundHalfAway((snapped - start) * speedOf(clip));
   const range = shiftWithin(clip, effect, ds);
-  return { range, guide: snapGuideFor(snapped, outputOf(clip, range.startMs), opts) };
+  return { range, guide: snapGuideFor(snapped, outputSpan(clip, range.startMs, range.endMs)[0], opts) };
 }
 
 /** The source length a cue keeps at the least. */
@@ -98,16 +87,16 @@ export function cueTrimRange(
   rawOutputDeltaMs: number,
   opts: SnapOptions,
 ): CueStep {
-  const [os, oe] = outputSpan(clip, effect);
+  const [os, oe] = outputSpan(clip, effect.start_ms, effect.end_ms);
   const snapped = snappedMs((edge === "start" ? os : oe) + rawOutputDeltaMs, opts);
-  const src = sourceOf(clip, snapped);
+  const src = sourceAtClamped(clipSpanOf(clip), snapped);
   const min = minSourceMs(clip);
   const range =
     edge === "start"
       ? { startMs: clamp(src, clip.in_ms, Math.max(clip.in_ms, effect.end_ms - min, Math.min(effect.start_ms, effect.end_ms - 1))), endMs: effect.end_ms }
       : { startMs: effect.start_ms, endMs: clamp(src, Math.min(clip.out_ms, effect.start_ms + min, Math.max(effect.end_ms, effect.start_ms + 1)), clip.out_ms) };
-  const moved = edge === "start" ? range.startMs : range.endMs;
-  return { range, guide: snapGuideFor(snapped, outputOf(clip, moved), opts) };
+  const [finalStart, finalEnd] = outputSpan(clip, range.startMs, range.endMs);
+  return { range, guide: snapGuideFor(snapped, edge === "start" ? finalStart : finalEnd, opts) };
 }
 
 /** An arrow key's step of `outputDeltaMs`, kept inside the clip. */
