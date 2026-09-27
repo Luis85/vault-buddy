@@ -127,6 +127,31 @@ describe("TransportBar", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  // Task 24's no-op sweep (design D14): at the start, Go to start moves
+  // nothing — it says so instead, and stays focusable (`aria-disabled`, so
+  // a keyboard user's focus is not dropped when the button reaches 0).
+  it("Go to start at the start, and Go to end at the end, say why they do nothing", async () => {
+    const workspace = useEditorWorkspaceStore();
+    const setPlayhead = vi.spyOn(workspace, "setPlayhead");
+    const w = mountBar({ currentMs: 0 });
+    const start = w.get('[data-testid="transport-start"]');
+    const end = w.get('[data-testid="transport-end"]');
+    expect(start.attributes("aria-disabled")).toBe("true");
+    expect(start.attributes("title")).toBe("Already at the start.");
+    expect(start.attributes("disabled")).toBeUndefined();
+    expect(end.attributes("aria-disabled")).toBe("false");
+    await start.trigger("click");
+    expect(setPlayhead).not.toHaveBeenCalled();
+
+    await w.setProps({ currentMs: 125_000 });
+    expect(start.attributes("aria-disabled")).toBe("false");
+    expect(start.attributes("title")).toBe("Go to start (Home)");
+    expect(end.attributes("aria-disabled")).toBe("true");
+    expect(end.attributes("title")).toBe("Already at the end.");
+    await end.trigger("click");
+    expect(setPlayhead).not.toHaveBeenCalled();
+  });
+
   it("mute toggles the workspace's monitor mute, names the toggle and sends no editor command", async () => {
     const workspace = useEditorWorkspaceStore();
     const w = mountBar();

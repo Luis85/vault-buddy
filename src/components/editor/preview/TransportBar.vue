@@ -116,11 +116,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onWindowKeydown));
 
 // ---- centre: seek, play, timecode -------------------------------------------
 
+/** At either end the matching button would move nothing, so it says so
+ * (design D14) — `aria-disabled`, not `disabled`, so a keyboard user who
+ * just pressed it keeps focus on it. */
+const atStart = computed(() => props.currentMs <= 0);
+const atEnd = computed(() => props.currentMs >= props.durationMs);
 function goToStart(): void {
-  workspace.setPlayhead(0);
+  if (!atStart.value) workspace.setPlayhead(0);
 }
 function goToEnd(): void {
-  workspace.setPlayhead(props.durationMs);
+  if (!atEnd.value) workspace.setPlayhead(props.durationMs);
 }
 
 /** The concept's own `fmt(ms, decimal=true)`: `MM:SS.d`, both fields
@@ -236,9 +241,10 @@ const rowHeightClass = computed(() => (workspace.shortWindow ? "h-10" : "h-[46px
       <button
         type="button"
         data-testid="transport-start"
-        class="flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-fg-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        class="flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-fg-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus aria-disabled:cursor-default aria-disabled:opacity-50 aria-disabled:hover:text-fg-muted"
         aria-label="Go to start"
-        title="Go to start (Home)"
+        :aria-disabled="atStart"
+        :title="atStart ? 'Already at the start.' : 'Go to start (Home)'"
         @click="goToStart"
       >
         <EditorIcon name="skipBack" />
@@ -256,9 +262,10 @@ const rowHeightClass = computed(() => (workspace.shortWindow ? "h-10" : "h-[46px
       <button
         type="button"
         data-testid="transport-end"
-        class="flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-fg-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        class="flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-fg-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus aria-disabled:cursor-default aria-disabled:opacity-50 aria-disabled:hover:text-fg-muted"
         aria-label="Go to end"
-        title="Go to end (End)"
+        :aria-disabled="atEnd"
+        :title="atEnd ? 'Already at the end.' : 'Go to end (End)'"
         @click="goToEnd"
       >
         <EditorIcon name="skipForward" />
