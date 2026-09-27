@@ -105,6 +105,21 @@ describe("ProductLibrary", () => {
     expect(useEditorProjectStore().project?.title).toBe("Frozen");
   });
 
+  // Task 24 fix round 1: the no-op sweep found the restore button inert
+  // while its own question was open. It is a disclosure: it says so
+  // (`aria-expanded`), and pressing it again puts the question away.
+  it("the restore button opens and closes its question, and says which", async () => {
+    const { w } = await library([product()]);
+    const button = w.get('[data-testid="product-restore-prod-a"]');
+    expect(button.attributes("aria-expanded")).toBe("false");
+    await button.trigger("click");
+    expect(button.attributes("aria-expanded")).toBe("true");
+    expect(w.find('[data-testid="product-restore-question-prod-a"]').exists()).toBe(true);
+    await button.trigger("click");
+    expect(button.attributes("aria-expanded")).toBe("false");
+    expect(w.find('[data-testid="product-restore-question-prod-a"]').exists()).toBe(false);
+  });
+
   it("a missing product file shows unavailable but keeps its lineage", async () => {
     const missing = product({ id: "prod-m", name: "Lost file", revision: 4, available: false });
     const restoreProduct = vi.fn(() => Promise.resolve({ snapshot: openResult(8).snapshot, project: project() }));

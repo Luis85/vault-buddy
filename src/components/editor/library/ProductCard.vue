@@ -15,7 +15,9 @@
  * card — a pill saying whether it "Matches this edit" (rendered by this
  * session from the edit on screen) or an "Earlier edit", the mono revision, the name,
  * the length and range, when it was made, then Watch and Publish as small
- * bordered buttons and Restore as the concept's undo icon. The restore
+ * bordered buttons and Restore as the concept's undo icon — a disclosure
+ * for its question (`aria-expanded`; pressing it again puts the question
+ * away, Task 24 fix round 1: it was inert while the question was open). The restore
  * confirm's buttons are the same small token buttons (Task 24 fix round 1:
  * the panel's `AppButton` drew `white/N` looks the light theme hides).
  */
@@ -59,6 +61,11 @@ const createdLabel = computed(() => {
 });
 const watchTitle = computed(() => (props.product.available ? undefined : MISSING));
 const media = computed(() => ({ productId: props.product.id }));
+/** Restore is a disclosure for its question: a second press puts it away. */
+function toggleRestore(): void {
+  if (props.confirming) emit("cancel-restore");
+  else emit("ask-restore");
+}
 const showPlayer = computed(() => props.watching && props.product.available);
 const SMALL_BUTTON =
   "flex min-h-[30px] items-center gap-1.5 rounded-[7px] border border-line bg-panel px-2 py-1 text-[11px] text-fg hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-40";
@@ -129,9 +136,10 @@ const SMALL_PRIMARY =
         :data-testid="`product-restore-${id}`"
         :disabled="busy"
         :aria-label="`Restore the edit ${product.name} was rendered from`"
-        title="Restore the edit this video was rendered from"
+        :aria-expanded="confirming"
+        :title="confirming ? 'Put the restore question away' : 'Restore the edit this video was rendered from'"
         class="ml-auto flex h-8 w-8 items-center justify-center p-1.5 text-fg-muted hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-40"
-        @click="emit('ask-restore')"
+        @click="toggleRestore"
       >
         <EditorIcon
           name="undo"
