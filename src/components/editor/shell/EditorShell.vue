@@ -22,8 +22,8 @@
  * the inspector becomes an overlay drawer, at or below 860 the library
  * does too, and a window 760px tall or less shrinks the bars.
  * `useShellLayout` turns `editorWorkspace`'s panel state into those rows,
- * columns and drawer classes; every panel toggle — the header's, the
- * preview toolbar's, Focus preview — is a store action, a real grid change
+ * columns and drawer classes; every panel toggle — the preview toolbar's
+ * library/inspector toggles and Focus preview — is a store action, a real grid change
  * at every width (D5, audit finding 2). The header is a SIBLING of the
  * workspace row, never inside it, and the drawers open below the preview
  * header, so no drawer can cover "the route back".
@@ -113,9 +113,14 @@ import EditorHeader from "./EditorHeader.vue";
 import EditorStatusBar from "./EditorStatusBar.vue";
 import PreviewToolbar from "./PreviewToolbar.vue";
 
-/** Task 39: the header's "Open a project file", forwarded to `EditorRoot`,
- * which owns which project the shell is showing. */
-const emit = defineEmits<{ (e: "open-project-file"): void; (e: "discard-project"): void }>();
+/** The header's Project menu — Open project… (visual-parity Task 8), Open
+ * a project file (Task 39) and Discard project (Task 59) — forwarded to
+ * `EditorRoot`, which owns which project the shell is showing. */
+const emit = defineEmits<{
+  (e: "open-project", projectFileId: string): void;
+  (e: "open-project-file"): void;
+  (e: "discard-project"): void;
+}>();
 
 const { frameStyle, workspaceStyle, libraryClass, inspectorClass } = useShellLayout();
 
@@ -266,13 +271,9 @@ function onShellKeydown(event: KeyboardEvent) {
     @keydown="onShellKeydown"
   >
     <EditorHeader
-      :is-compact="workspace.inspectorIsDrawer"
-      :library-open="workspace.libraryVisible"
-      :inspector-open="workspace.inspectorVisible"
       :theme="workspace.theme"
-      @toggle-library="workspace.toggleLibrary()"
-      @toggle-inspector="workspace.toggleInspector()"
       @toggle-theme="toggleTheme"
+      @open-project="(id) => emit('open-project', id)"
       @open-project-file="emit('open-project-file')"
       @discard-project="emit('discard-project')"
     />

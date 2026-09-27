@@ -1,241 +1,144 @@
 <script setup lang="ts">
 /**
- * The tutorial editor's application header (Task 16, F-48; SCREENS-AND-
- * INTERACTIONS.md §02: "The application header owns project title/status,
- * project menu, Help, Checks, Save project and Render video"). It owns
- * project-scoped command surface — everything else (preview tools, timeline,
- * inspector) is a later task's own row/panel per that same section's
- * "persistent command ownership" rule.
+ * The tutorial editor's application header (Task 16, F-48; visual-parity
+ * Task 8: design D6, D7, D8, D10; concept spec §2, screens 01–02). Left to
+ * right: the brand (`BrandMark`), the **Project** menu
+ * (`ProjectMenuButton`), the document title — a button that opens Rename
+ * tutorial, its pencil showing on hover and focus — and the actions: the
+ * save state (`SaveStateIndicator`), Help, Checks, **Save project**
+ * (bordered) and **Render video** (primary). 14px gaps (8 at or below
+ * 1350px wide), 16px padding, on
+ * `panel` with a `line` rule below; its height is the frame's first grid
+ * row (56, or 52 in a short window).
  *
- * Reads `editorProject` DIRECTLY rather than taking title/duration/vault/
- * dirty as props: those are exactly the store's own committed truth (R14),
- * and prop-drilling them through `EditorShell` would just be a second copy
- * of state the store already owns for no benefit — the same reasoning
- * `ScreenCaptureBar` reads `screenCapture` directly rather than through
- * `ActionPanel` props. The layout-only bits this component does NOT own —
- * compact/theme/drawer-open — stay props from `EditorShell`, because those
- * are view state (ARCHITECTURE-AND-STACK.md's `editorWorkspace` boundary),
- * never `editorProject`'s.
+ * Save project keeps its native meaning (D8): it commits the session to the
+ * project store through `useProjectSave`, the one path Ctrl+S and the
+ * status bar share; its disabled reason shows beside it (R20). The Save ▾
+ * split button is gone: its copies, Open a project file and Discard moved
+ * into the Project menu (D6/D7), whose "Save a copy as project file…" opens
+ * `SaveProjectDialog` from here. The destination vault's id is no longer
+ * shown (the concept shows none; Render and Publish name the vault).
  *
- * `editor-shell-title` / `editor-shell-duration` / `editor-shell-vault` keep
- * their EXACT testids from Task 15's temporary shell bar (`EditorRoot.vue`,
- * pre-Task-16) — `tests/editorRoot.test.ts` and
- * `tests/screenCaptureEditHandoff.test.ts` assert them directly and are not
- * Task 16's files to rewrite ("keeping ... every existing editor test
- * green").
+ * The theme toggle stays here, as a sun/moon icon, until the View menu's
+ * "Light theme" replaces it (ruling P5). The library/inspector drawer
+ * toggles left the header: the preview toolbar's panel toggles open the
+ * drawers at every width (design D5).
+ *
+ * Reads `editorProject` directly rather than taking title/dirty as props:
+ * those are the store's own committed truth (R14). The theme is view state
+ * and stays a prop from `EditorShell`.
  *
  * **Guide targets (Task 55; ADR R18):** the header row is `projectbar`, and
  * Save project is `header.save` (Help, Checks and Render video bind their
  * own, in their own components — `GuideHelpButton` also says "Session only"
  * when guide progress cannot be stored).
  */
-import { computed, nextTick, ref } from "vue";
+import { computed, ref } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useProjectSave } from "../../../composables/useProjectSave";
-import { SAVE_TEXT_MAX_WIDTH } from "../../../editor/panelLayout";
-import type { EditorCommand, PackageFormat } from "../../../editorTypes";
+import { HEADER_COMPACT_MAX_WIDTH } from "../../../editor/panelLayout";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
-import { formatDuration } from "../../../utils/formatDuration";
-import AppButton from "../../ui/AppButton.vue";
-import IconButton from "../../ui/IconButton.vue";
+import RenameDialog from "../dialogs/RenameDialog.vue";
 import SaveProjectDialog from "../dialogs/SaveProjectDialog.vue";
-import SaveProjectMenu from "../menus/SaveProjectMenu.vue";
+import EditorIcon from "../icons/EditorIcon.vue";
+import BrandMark from "./BrandMark.vue";
 import ChecksButton from "./ChecksButton.vue";
 import GuideHelpButton from "./GuideHelpButton.vue";
+import HeaderButton from "./HeaderButton.vue";
+import ProjectMenuButton from "./ProjectMenuButton.vue";
 import RenderVideoButton from "./RenderVideoButton.vue";
+import SaveStateIndicator from "./SaveStateIndicator.vue";
 
-const props = defineProps<{
-  isCompact: boolean;
-  libraryOpen: boolean;
-  inspectorOpen: boolean;
-  theme: "dark" | "light";
-}>();
+const props = defineProps<{ theme: "dark" | "light" }>();
 const emit = defineEmits<{
-  (e: "toggle-library"): void;
-  (e: "toggle-inspector"): void;
   (e: "toggle-theme"): void;
+  (e: "open-project", projectFileId: string): void;
   (e: "open-project-file"): void;
   (e: "discard-project"): void;
 }>();
 
 const editorProject = useEditorProjectStore();
-const workspace = useEditorWorkspaceStore();
 const projectbarTarget = useGuideTarget("projectbar");
 const saveTarget = useGuideTarget("header.save");
 
+/** §1.4: at or below 1350px wide the header closes up to 8px gaps. */
+const workspace = useEditorWorkspaceStore();
+const gap = computed(() => (workspace.viewportWidth > HEADER_COMPACT_MAX_WIDTH ? "gap-3.5" : "gap-2"));
+
 const title = computed(() => editorProject.snapshot?.title ?? "Untitled");
-const durationLabel = computed(() => formatDuration(editorProject.durationMs));
-const vault = computed(() => editorProject.project?.destination.vault ?? null);
-
-/**
- * Save/Render's disabled reasons carry a visible reason string next to the
- * button (R20: "a disabled control carries a reason string") rather than
- * relying on a hover-only `title` attribute nobody sees on a touch device or
- * without hovering — the `TaskSubtasks.vue` `disabledReason` precedent.
- * Save's rule and action are `useProjectSave`'s, shared with the status
- * bar's recovery slot (visual-parity Task 4).
- */
 const { disabledReason: saveDisabledReason, save: onSave } = useProjectSave();
-/** Render video (Task 47) is `RenderVideoButton` — its own component, with
- * its own disabled reason and the Render dialog; a render's errors never
- * reach `saveError` below (Task 46's carry). */
-
-/**
- * Status text (Task 16's own brief: "Saved, Unsaved changes, Saving…, Save
- * failed"), derived every render from the store's own fields — never a
- * timer (this task's mutation check: faking "Saved" from a `setTimeout`
- * must read wrong against a receipt that has not actually landed yet).
- * "Save failed" reads the store's save-only `saveError` (Task 39): the
- * shared `lastError` is also set by a refused edit or open, which is not a
- * failed save.
- */
-const status = computed<string>(() => {
-  if (editorProject.saving) return "Saving…";
-  if (editorProject.saveError) return "Save failed";
-  return editorProject.dirty ? "Unsaved changes" : "Saved";
-});
-
-/** The concept drops the save text at or below 1350px (§1.4) — but never
- * a failed save, which must stay visible at every width (ruling T4-1). */
-const showSaveText = computed(
-  () => workspace.viewportWidth > SAVE_TEXT_MAX_WIDTH || editorProject.saveError !== null,
-);
 
 /** The theme toggle names the theme it switches TO. */
 const themeToggle = computed(() =>
   props.theme === "light"
-    ? { label: "Switch to dark theme", glyph: "🌙" }
-    : { label: "Switch to light theme", glyph: "☀️" },
+    ? { label: "Switch to dark theme", icon: "moon" as const }
+    : { label: "Switch to light theme", icon: "sun" as const },
 );
 
-const editingTitle = ref(false);
-const titleDraft = ref("");
-const titleInput = ref<HTMLInputElement | null>(null);
-
-function startRename() {
-  titleDraft.value = title.value;
-  editingTitle.value = true;
-  void nextTick(() => titleInput.value?.focus());
-}
-function commitRename() {
-  if (!editingTitle.value) return;
-  editingTitle.value = false;
-  const next = titleDraft.value.trim();
-  if (!next || next === title.value) return;
-  const command: EditorCommand = { kind: "rename", title: next };
-  void editorProject.execute(command);
-}
-function cancelRename() {
-  editingTitle.value = false;
-}
-function onTitleEnter() {
-  commitRename();
-  titleInput.value?.blur();
-}
-
-/** Task 39: the Save project menu. A copy opens `SaveProjectDialog` on the
- * chosen format; opening a project file and (Task 59) discarding the
- * project are `EditorRoot`'s (it owns which project the shell is showing,
- * and a discard unmounts this header). */
-const packageDialogOpen = ref(false);
-const packageFormat = ref<PackageFormat>("portable");
-function onSaveMenu(item: "save" | "portable" | "lightweight" | "open" | "discard") {
-  if (item === "save") onSave();
-  else if (item === "open") emit("open-project-file");
-  else if (item === "discard") emit("discard-project");
-  else {
-    packageFormat.value = item;
-    packageDialogOpen.value = true;
-  }
-}
+const renameOpen = ref(false);
+const copyOpen = ref(false);
 </script>
 
 <template>
   <header
     :ref="projectbarTarget"
     data-testid="editor-header"
-    class="flex min-w-0 items-center gap-2 overflow-hidden border-b border-line bg-panel px-4"
+    class="flex min-w-0 items-center overflow-hidden border-b border-line bg-panel px-4"
+    :class="gap"
   >
-    <IconButton
-      v-if="props.isCompact"
-      label="Library"
-      title="Library"
-      data-testid="editor-header-library-toggle"
-      :aria-expanded="props.libraryOpen"
-      @click="emit('toggle-library')"
-    >
-      📁
-    </IconButton>
+    <BrandMark />
+    <ProjectMenuButton
+      @open-project="(id) => emit('open-project', id)"
+      @open-project-file="emit('open-project-file')"
+      @rename="renameOpen = true"
+      @save-copy="copyOpen = true"
+      @discard-project="emit('discard-project')"
+    />
 
-    <input
-      v-if="editingTitle"
-      ref="titleInput"
-      v-model="titleDraft"
-      data-testid="editor-header-title-input"
-      aria-label="Project title"
-      class="min-w-0 flex-1 rounded-control border border-focus bg-raised px-2 py-1 text-sm text-fg focus:outline-none"
-      @keydown.enter="onTitleEnter"
-      @keydown.esc="cancelRename"
-      @blur="commitRename"
-    >
-    <button
-      v-else
-      type="button"
-      data-testid="editor-shell-title"
-      class="min-w-0 max-w-[24ch] shrink cursor-pointer truncate rounded-control px-1 text-left text-sm font-medium text-fg hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      title="Rename project"
-      @click="startRename"
-    >
-      {{ title }}
-    </button>
+    <div class="flex min-w-0 flex-1">
+      <button
+        type="button"
+        data-testid="editor-header-title"
+        title="Rename tutorial"
+        class="group flex min-w-0 max-w-full items-center gap-1.5 border-transparent bg-transparent px-1.5 text-left text-sm font-semibold tracking-[-0.1px] text-fg"
+        @click="renameOpen = true"
+      >
+        <span class="truncate">{{ title }}</span>
+        <EditorIcon
+          name="edit"
+          :size="13"
+          class="shrink-0 text-fg-muted opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
+        />
+      </button>
+    </div>
 
-    <span
-      data-testid="editor-shell-duration"
-      class="text-micro text-fg-subtle"
-    >{{ durationLabel }}</span>
-    <!-- Hidden at or below 1350px (§1.4) unless a save failed; the status
-         bar's centre slot says it too. A failed save carries its reason
-         here (audit finding 7); the toast says it once. -->
-    <span
-      v-show="showSaveText"
-      data-testid="editor-header-status"
-      class="shrink-0 text-micro text-fg-subtle"
-      :title="editorProject.saveError?.message"
-    >{{ status }}</span>
-    <span
-      v-if="vault"
-      data-testid="editor-shell-vault"
-      class="text-micro text-fg-subtle"
-    >{{ vault }}</span>
-
-    <div class="ml-auto flex shrink-0 items-center gap-2">
-      <GuideHelpButton />
-      <ChecksButton />
-      <IconButton
-        :label="themeToggle.label"
+    <div class="flex shrink-0 items-center gap-[7px]">
+      <SaveStateIndicator />
+      <button
+        type="button"
         data-testid="editor-header-theme-toggle"
+        :aria-label="themeToggle.label"
+        :title="themeToggle.label"
+        class="flex h-8 w-8 shrink-0 items-center justify-center border-transparent bg-transparent p-1.5 text-fg-muted"
         @click="emit('toggle-theme')"
       >
-        {{ themeToggle.glyph }}
-      </IconButton>
-      <AppButton
+        <EditorIcon :name="themeToggle.icon" />
+      </button>
+      <GuideHelpButton />
+      <ChecksButton />
+      <HeaderButton
         :ref="saveTarget"
-        variant="secondary"
-        size="sm"
+        icon="save"
+        variant="bordered"
         data-testid="editor-header-save"
         :disabled="Boolean(saveDisabledReason)"
-        :title="saveDisabledReason ?? undefined"
+        :title="saveDisabledReason ?? 'Save project (Ctrl+S)'"
         @click="onSave"
       >
         Save project
-      </AppButton>
-      <SaveProjectMenu
-        :disabled="!editorProject.sessionId"
-        :save-disabled-reason="saveDisabledReason"
-        @choose="onSaveMenu"
-      />
+      </HeaderButton>
       <span
         v-if="saveDisabledReason"
         data-testid="editor-header-save-reason"
@@ -244,20 +147,14 @@ function onSaveMenu(item: "save" | "portable" | "lightweight" | "open" | "discar
       <RenderVideoButton />
     </div>
 
-    <IconButton
-      v-if="props.isCompact"
-      label="Inspector"
-      title="Inspector"
-      data-testid="editor-header-inspector-toggle"
-      :aria-expanded="props.inspectorOpen"
-      @click="emit('toggle-inspector')"
-    >
-      ⚙️
-    </IconButton>
+    <RenameDialog
+      :open="renameOpen"
+      @close="renameOpen = false"
+    />
     <SaveProjectDialog
-      :open="packageDialogOpen"
-      :initial-format="packageFormat"
-      @close="packageDialogOpen = false"
+      :open="copyOpen"
+      initial-format="portable"
+      @close="copyOpen = false"
     />
   </header>
 </template>

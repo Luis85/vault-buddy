@@ -180,7 +180,7 @@ describe("an error toast lives as long as its error (fix round 1)", () => {
     await store.save();
     await flushPromises();
 
-    expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Saved");
+    expect(w.get('[data-testid="editor-header-save-state"]').text()).toBe("Saved");
     expect(toasts()).toEqual([]);
   });
 
@@ -197,7 +197,7 @@ describe("an error toast lives as long as its error (fix round 1)", () => {
     await flushPromises();
 
     expect(store.lastError).toBeNull();
-    expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Save failed");
+    expect(w.get('[data-testid="editor-header-save-state"]').text()).toBe("Save failed");
     expect(toasts("error").map((t) => t.message)).toEqual(["The disk is full."]);
   });
 
@@ -280,7 +280,7 @@ describe("a failed save", () => {
     await store.save();
     await flushPromises();
 
-    const status = w.get('[data-testid="editor-header-status"]');
+    const status = w.get('[data-testid="editor-header-save-state"]');
     expect(status.text()).toBe("Save failed");
     expect(status.attributes("title")).toBe("The disk is full.");
     expect(toasts().map((t) => t.message)).toEqual(["The disk is full."]);
@@ -361,11 +361,19 @@ describe("a disabled shortcut", () => {
   });
 
   it("an S typed into a text field says nothing", async () => {
-    const { w } = await openShell();
+    const store = useEditorProjectStore();
+    store.setPort(fakeEditorPort({ openStaged: () => Promise.resolve(openResult()) }));
+    await store.openStaged("cap");
+    // A field in the shell itself: the header's rename field sits in a
+    // dialog now (visual-parity Task 8), which owns its keys anyway.
+    const w = mount(EditorShell, {
+      attachTo: document.body,
+      slots: { library: '<input data-testid="probe-field" aria-label="Probe field">' },
+    });
+    await flushPromises();
     useEditorWorkspaceStore().select(["c1"]);
     useEditorWorkspaceStore().setPlayhead(1_500);
-    await w.get('[data-testid="editor-shell-title"]').trigger("click");
-    const input = w.get('[data-testid="editor-header-title-input"]');
+    const input = w.get('[data-testid="probe-field"]');
     input.element.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true, cancelable: true }));
     await flushPromises();
 

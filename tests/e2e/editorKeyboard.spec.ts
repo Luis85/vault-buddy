@@ -82,7 +82,12 @@ const FRESH_PROGRESS = {
   active: false, collapsed: false, completed: false, preferences: { dimming: true, motion: "system" },
 };
 
-async function openEditor(page: Page, theme: "dark" | "light", size = { width: 1280, height: 820 }) {
+async function openEditor(
+  page: Page,
+  theme: "dark" | "light",
+  size = { width: 1280, height: 820 },
+  extraReplies: Record<string, unknown> = {},
+) {
   const workspace = { playhead_ms: 3000, theme };
   await installTauriStub(page, {
     openResult: {
@@ -101,6 +106,7 @@ async function openEditor(page: Page, theme: "dark" | "light", size = { width: 1
       editor_get_checks: [],
       editor_get_products: [],
       editor_save_project: { sessionId: "ses-keys", savedRevision: 5, projectFileId: "project-keys" },
+      ...extraReplies,
     },
     sequences: { editor_execute: EDITS.map((e) => structuredClone(e)) },
   });
@@ -125,6 +131,16 @@ async function tabTo(page: Page, testid: string, limit = 200) {
     seen.push(await focusedTestId(page));
   }
   throw new Error(`Tab never reached ${testid}; focus visited ${seen.filter(Boolean).join(", ")}`);
+}
+
+/** Press ArrowDown inside an open menu until `testid` has focus — menu
+ * items are one Tab stop, walked with the arrows. */
+async function arrowTo(page: Page, testid: string, limit = 20) {
+  for (let i = 0; i < limit; i++) {
+    if ((await focusedTestId(page)) === testid) return;
+    await page.keyboard.press("ArrowDown");
+  }
+  throw new Error(`ArrowDown never reached ${testid}`);
 }
 
 /** Press Tab until a button has focus. */
@@ -409,8 +425,8 @@ for (const theme of ["light", "dark"] as const) {
 
     // The portable row is selected (the dialog opens on the format the
     // menu item named); the lightweight row is only tinted under the pointer.
-    await page.getByTestId("editor-header-save-menu-toggle").click();
-    await page.getByTestId("editor-header-menu-portable").click();
+    await page.getByTestId("editor-header-project-menu").click();
+    await page.getByTestId("editor-project-menu-item-saveCopy").click();
     await expect(page.getByTestId("save-project-originals-warning")).toBeVisible();
     await page.mouse.move(0, 0);
     await expectTint(SUBTLE_ROWS[0]);
@@ -438,6 +454,9 @@ for (const theme of ["light", "dark"] as const) {
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
     await tabTo(page, "clip-body");
     await page.keyboard.press("Enter");
+    // Render video is enabled here, so its white label on the primary fill
+    // is measured with the rest (ruling T3-1).
+    await expect(page.getByTestId("editor-header-render")).toBeEnabled();
     expect(await lowContrast(page)).toEqual([]);
 
     // An open menu is a surface too.
@@ -447,17 +466,32 @@ for (const theme of ["light", "dark"] as const) {
     expect(await lowContrast(page)).toEqual([]);
     await page.keyboard.press("Escape");
 
-    // A dialog is a surface too (review I-2/F-M4): the Save menu's
-    // "Save a portable copy…" item opens SaveProjectDialog, whose "includes
+    // A dialog is a surface too (review I-2/F-M4): the Project menu's
+    // "Save a copy as project file…" opens SaveProjectDialog, whose "includes
     // your original recordings" warning was the one literal palette text
     // class left under src/components/editor/** — it measured ~1.05:1 in
     // the light theme before the fix (11.7:1 in dark, which is why only
     // light theme caught it).
-    await tabTo(page, "editor-header-save-menu-toggle");
+    await tabTo(page, "editor-header-project-menu");
     await page.keyboard.press("Enter");
-    await tabTo(page, "editor-header-menu-portable");
+    await arrowTo(page, "editor-project-menu-item-saveCopy");
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("save-project-originals-warning")).toBeVisible();
+    expect(await lowContrast(page)).toEqual([]);
+  });
+}
+
+// Ruling T3-2: the Checks count is the concept's gold chip (§2
+// `#issueCount`), mono 9px gold on gold-bg — it replaced a shared badge
+// that read 2.2:1 — and it only renders with findings, so this run has one.
+const WARNING = {
+  id: "chk-gap-c1", severity: "warning", code: "gap", message: "A gap", target: { kind: "clip", id: "intro" }, action: null,
+};
+for (const theme of ["light", "dark"] as const) {
+  test(`${theme} theme Checks count chip reads 4.5:1`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    await openEditor(page, theme, undefined, { editor_get_checks: [WARNING] });
+    await expect(page.getByTestId("editor-header-checks-count")).toHaveText("1");
     expect(await lowContrast(page)).toEqual([]);
   });
 }

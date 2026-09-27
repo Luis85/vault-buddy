@@ -3421,6 +3421,18 @@ says a matched-but-disabled shortcut's registry reason, at most once per
 cards, the asset menu) goes through `placeOnFreeTrack`: a free track of the
 kind for the whole span, else `addTrack` then the insert — except a Titles
 card needing a new TOP track, which is one `addCard{trackId: null}`.
+The header (visual-parity Task 8; design D6/D7) is the concept's: the CSS
+brand mark, the **Project** menu (`ProjectMenuButton` over `MenuPanel`,
+items from `src/editor/projectMenu.ts`: Open project… — a picker over
+`editor_list_projects` minus the open project, omitted when there is none
+or the list fails; Open a project file…; Rename tutorial…; Workspace &
+rendered products — `revealWorkspaceProducts`, shared with the status bar;
+Save a copy as project file…; Discard project…), the title (a click opens
+`RenameDialog`), the save state as a dot and words (`SaveStateIndicator`)
+and icon buttons (`HeaderButton`). The Save ▾ split button is gone and the
+vault id is no longer shown. Opening another project is `EditorRoot`'s
+`openStoredProject`, which points its gate at the new project inside
+`editorProject.openProject`'s `beforeInstall` (same tick as the install).
 The tutorial editor's OWN shortcuts (Task 21) are deliberately NOT a second
 `window` listener: `EditorShell.vue` binds one `@keydown` on its root, routes
 it through `shortcuts.ts`' `shouldHandle` (text fields, and anything inside an
@@ -3681,7 +3693,7 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
   `hover:bg-white/10` under `src/components/editor/**` — 33 files,
   `grep -rl "hover:bg-white/10" src/components/editor` measured, not the
   brief's stale 30 — read as designed on the dark stage but at ~1.1:1 on
-  the light theme's white/near-white panels; `SaveProjectMenu.vue`'s
+  the light theme's white/near-white panels; `SaveProjectMenu.vue`'s (retired by visual-parity Task 8)
   literal `border-white/10 bg-white/5` toggle chip converted to
   `border-line bg-raised` the same pass, for the same reason. This is an
   EDITOR-only token: the panel window's own white-opacity glass

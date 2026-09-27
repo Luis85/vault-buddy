@@ -5,6 +5,9 @@
  * opens. Split out of `EditorHeader` so the header's own template stays
  * under the complexity ratchet.
  *
+ * Visual-parity Task 8 (concept spec §2): the concept's `.primary` — the
+ * video icon and white 600 on `--color-primary` (`HeaderButton`).
+ *
  * Disabled — with its reason visible next to it, R20 — only when there is
  * nothing to render. The dialog's range default is the selected clips'
  * output span (the one in/out range this editor has), frozen the moment the
@@ -26,8 +29,8 @@ import type { RenderRange } from "../../../editorTypes";
 import { useEditorJobsStore } from "../../../stores/editorJobs";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
-import AppButton from "../../ui/AppButton.vue";
 import RenderDialog from "../dialogs/RenderDialog.vue";
+import HeaderButton from "./HeaderButton.vue";
 
 const editorProject = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
@@ -75,17 +78,17 @@ onReveal("render", onRender);
 </script>
 
 <template>
-  <AppButton
+  <HeaderButton
     :ref="renderTarget"
+    icon="video"
     variant="primary"
-    size="sm"
     data-testid="editor-header-render"
     :disabled="Boolean(reason)"
     :title="title"
     @click="onRender"
   >
     Render video
-  </AppButton>
+  </HeaderButton>
   <span
     v-if="reason"
     data-testid="editor-header-render-reason"

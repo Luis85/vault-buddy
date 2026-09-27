@@ -117,7 +117,7 @@ describe("EditorRoot — never reads a vault id from the screenCapture store", (
     // if both happened to agree, reading the wrong one would render the
     // right text for the wrong reason.
     const screenCapture = useScreenCaptureStore();
-    screenCapture.$patch({ vaultId: "vault-b" });
+    screenCapture.$patch({ vaultId: "vault-zz" });
 
     const editorProject = useEditorProjectStore();
     editorProject.setPort(
@@ -134,7 +134,9 @@ describe("EditorRoot — never reads a vault id from the screenCapture store", (
     const w = mount(EditorRoot);
     await flushPromises();
 
-    expect(w.get('[data-testid="editor-shell-vault"]').text()).toBe("vault-a");
-    expect(w.text()).not.toContain("vault-b");
+    // The header no longer shows the vault id (visual-parity design D6):
+    // the destination the editor will publish to is the store's.
+    expect(editorProject.project?.destination.vault).toBe("vault-a");
+    expect(w.text()).not.toContain("vault-zz");
   });
 });

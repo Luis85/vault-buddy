@@ -71,10 +71,12 @@
   --color-gold-bg: #493d2c;
   --color-accent-bg: #393049;
   --color-accent-ink: #dacdff;
-  --color-primary: #8b6ad4;
-  /* `.primary:hover{background:#9475d8}` — unconditional in the concept,
-     so light keeps it too. */
-  --color-primary-hover: #9475d8;
+  /* Concept --primary #8b6ad4 carries white 11px/600 labels at 4.11:1;
+     every channel x0.945 reaches 4.54:1 (visual-parity Task 8, ruling
+     T3-1). The concept's hover (#9475d8, both themes) reads 3.62:1, so the
+     hover darkens instead: 5.13:1 here, 6.80:1 in light. */
+  --color-primary: #8364c8;
+  --color-primary-hover: #7a5cbd;
   --color-ring: #d4c1ff;
   --color-guide-edge: #ac8feb;
   --color-guide-dim: rgba(10, 11, 18, 0.52);
@@ -132,6 +134,7 @@
   --color-accent-ink: #603696;
   --color-accent-bg: #ece5f8;
   --color-primary: #7853b8;
+  --color-primary-hover: #6a48a6;
   --color-danger: #b63854;
   --color-danger-fg: #a4304b;
   --color-focus: #7853b8;

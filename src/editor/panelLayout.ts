@@ -27,8 +27,8 @@ import { computed } from "vue";
 const INSPECTOR_DRAWER_MAX_WIDTH = 1080;
 /** At or below this width the library is an overlay drawer too (§1.4). */
 const LIBRARY_DRAWER_MAX_WIDTH = 860;
-/** At or below this width the header drops its save text (§1.4). */
-export const SAVE_TEXT_MAX_WIDTH = 1350;
+/** At or below this width the header drops its wordmark and save text (§1.4). */
+export const HEADER_COMPACT_MAX_WIDTH = 1350;
 /** At or below this height the frame's bars shrink (§1.4, "≤760h"). */
 const SHORT_WINDOW_MAX_HEIGHT = 760;
 

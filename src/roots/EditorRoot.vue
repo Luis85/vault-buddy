@@ -228,6 +228,19 @@ async function openProjectFile() {
   if (hydrateNewSession()) await recovery.value?.check();
 }
 
+/** Visual-parity Task 8: the header's Project menu → Open project…. The
+ * shell's gate is pointed at the chosen project in the SAME tick the store
+ * installs it (`openProject`'s `beforeInstall`), so the shell never drops
+ * for a frame; a refused open leaves the project on screen as it was and
+ * is said by the shell's refusal toast (`useEditorFeedback`). */
+async function openStoredProject(projectId: string) {
+  await editorProject.openProject(projectId, false, () => {
+    requested.value = { kind: "project", value: projectId };
+  });
+  if (editorProject.lastError) return;
+  if (hydrateNewSession()) await recovery.value?.check();
+}
+
 /** Task 59 fix round 1: a REFUSED discard left the Rust session live while
  * the store forgot it, so the project is reopened (Rust reuses the live
  * session) and the shell's gate pointed at it. `true` when a session is
@@ -323,6 +336,7 @@ onBeforeUnmount(() => {
          open. -->
     <EditorShell
       v-if="sessionMatchesRequest"
+      @open-project="openStoredProject"
       @open-project-file="openProjectFile"
       @discard-project="discardOpen = true"
     >

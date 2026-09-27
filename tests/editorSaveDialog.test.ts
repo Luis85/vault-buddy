@@ -15,6 +15,7 @@ import EditorShell from "../src/components/editor/shell/EditorShell.vue";
 import { EditorPortError } from "../src/editor/port";
 import type { EditorError, EditorOpenResult, PackageFormat, PackageReceipt } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
+import { chooseProjectMenuItem, openProjectMenu } from "./helpers/editorMount";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
 
 enableAutoUnmount(afterEach);
@@ -173,7 +174,7 @@ describe("SaveProjectDialog", () => {
   });
 });
 
-describe("EditorHeader — Save project menu", () => {
+describe("EditorHeader — the Project menu's save items", () => {
   // Task 16 minor, carried: "Save failed" came from the store's SHARED
   // `lastError`, so a refused EDIT read as a failed save.
   it("an edit refusal does not read Save failed; a save refusal does", async () => {
@@ -185,80 +186,70 @@ describe("EditorHeader — Save project menu", () => {
     await store.execute({ kind: "rename", title: "x" });
     await flushPromises();
     expect(store.lastError?.message).toBe("No such clip");
-    expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Unsaved changes");
+    expect(w.get('[data-testid="editor-header-save-state"]').text()).toBe("Unsaved changes");
 
     await store.save();
     await flushPromises();
-    expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Save failed");
+    expect(w.get('[data-testid="editor-header-save-state"]').text()).toBe("Save failed");
   });
 
-  it("opens the dialog with the chosen format and forwards Open a project file", async () => {
-    await openStore({});
+  // Visual-parity Task 8 (design D6/D7): the Save ▾ split button's items
+  // moved into the header's Project menu. "Save a copy as project file…"
+  // opens this dialog (portable first, the radios pick the format); Open a
+  // project file and Discard project are `EditorRoot`'s, so the shell only
+  // forwards them.
+  it("the Project menu opens the dialog and forwards Open a project file and Discard", async () => {
+    await openStore({ listProjects: () => Promise.resolve([]) });
     const w = mount(EditorShell, { attachTo: document.body });
-    await w.get('[data-testid="editor-header-save-menu-toggle"]').trigger("click");
-    const items = w.findAll('[role="menuitem"]').map((i) => i.text());
-    expect(items).toEqual([
-      "Save",
-      "Save a portable copy…",
-      "Save a lightweight copy…",
-      "Open a project file…",
-      "Discard project…",
-    ]);
-
-    await w.get('[data-testid="editor-header-menu-lightweight"]').trigger("click");
-    await flushPromises();
+    await chooseProjectMenuItem(w, "saveCopy");
     expect(
-      (w.get('[data-testid="save-project-format-lightweight"]').element as HTMLInputElement).checked,
+      (w.get('[data-testid="save-project-format-portable"]').element as HTMLInputElement).checked,
     ).toBe(true);
+    await w.get('[data-testid="save-project-format-lightweight"]').setValue(true);
+    expect(w.get('[data-testid="save-project-confirm"]').text()).toBe("Save lightweight copy…");
 
     await w.get('[data-testid="save-project-cancel"]').trigger("click");
-    await w.get('[data-testid="editor-header-save-menu-toggle"]').trigger("click");
-    await w.get('[data-testid="editor-header-menu-open"]').trigger("click");
+    await chooseProjectMenuItem(w, "openFile");
     expect(w.emitted("open-project-file")).toHaveLength(1);
 
-    // Task 59: Discard project is EditorRoot's (a discard unmounts this
-    // shell), so the shell only forwards it.
-    await w.get('[data-testid="editor-header-save-menu-toggle"]').trigger("click");
-    await w.get('[data-testid="editor-header-menu-discard"]').trigger("click");
+    await chooseProjectMenuItem(w, "discard");
     expect(w.emitted("discard-project")).toHaveLength(1);
+  });
+
+  // The old split button's own Save item was a second path to Save project
+  // (fix round 1 had to disable it while a save ran). The Project menu has
+  // none: Save project is the header button, Ctrl+S and the status bar,
+  // all through `useProjectSave`.
+  it("the Project menu has no second Save item", async () => {
+    await openStore({ listProjects: () => Promise.resolve([]) });
+    const w = mount(EditorShell, { attachTo: document.body });
+    const menu = await openProjectMenu(w);
+    const labels = menu.findAll('[role="menuitem"]').map((i) => i.text());
+    expect(labels.filter((l) => /^Save /.test(l))).toEqual(["Save a copy as project file…"]);
   });
 });
 
-describe("SaveProjectMenu (fix round 1)", () => {
-  // Review Minor: the header's own Save button is disabled with "Saving..."
-  // while a save is in flight; the menu's Save item was a second, enabled
-  // path to the same command (R20: a disabled control has no back door).
-  it("disables the menu's Save item while a save is in flight, with the header's reason", async () => {
-    const pendingSave = deferred<never>();
-    const store = await openStore({ save: () => pendingSave.promise });
-    const w = mount(EditorShell, { attachTo: document.body });
-    const saving = store.save();
-    await flushPromises();
-    await w.get('[data-testid="editor-header-save-menu-toggle"]').trigger("click");
-    const item = w.get('[data-testid="editor-header-menu-save"]');
-    expect(item.attributes("disabled")).toBeDefined();
-    expect(item.attributes("title")).toBe(w.get('[data-testid="editor-header-save-reason"]').text());
-    pendingSave.reject(portError("internal", "stop"));
-    await saving;
-  });
-
-  // Review Minor: Escape was stopped at the menu's root even while it was
-  // CLOSED, so the shell's own Escape handling never saw it.
+describe("the Project menu and Escape", () => {
+  // Carried from the Save menu's fix round 1: Escape was stopped at the
+  // menu's root even while it was CLOSED, so the shell's own Escape
+  // handling never saw it.
   it("lets Escape through while closed and consumes it only to close an open menu", async () => {
-    await openStore({});
+    await openStore({ listProjects: () => Promise.resolve([]) });
     const w = mount(EditorShell, { attachTo: document.body });
     const seen = vi.fn();
     document.addEventListener("keydown", seen);
     try {
-      const toggle = w.get('[data-testid="editor-header-save-menu-toggle"]');
-      await toggle.trigger("keydown", { key: "Escape" });
+      const trigger = w.get('[data-testid="editor-header-project-menu"]');
+      await trigger.trigger("keydown", { key: "Escape" });
       expect(seen).toHaveBeenCalledTimes(1);
 
-      await toggle.trigger("click");
-      expect(w.find('[role="menu"]').exists()).toBe(true);
-      await toggle.trigger("keydown", { key: "Escape" });
-      expect(w.find('[role="menu"]').exists()).toBe(false);
+      (trigger.element as HTMLElement).focus();
+      const menu = await openProjectMenu(w);
+      await menu.get('[role="menuitem"]').trigger("keydown", { key: "Escape" });
+      await flushPromises();
+      expect(w.find('[data-testid="editor-project-menu"]').exists()).toBe(false);
       expect(seen).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(trigger.element);
     } finally {
       document.removeEventListener("keydown", seen);
     }

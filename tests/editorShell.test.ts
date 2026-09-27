@@ -122,12 +122,12 @@ describe("EditorShell — status text", () => {
     await store.openStaged("cap one");
     const w = mount(EditorShell);
 
-    expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Unsaved changes");
+    expect(w.get('[data-testid="editor-header-save-state"]').text()).toBe("Unsaved changes");
 
     await store.save();
     await flushPromises();
 
-    expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Saved");
+    expect(w.get('[data-testid="editor-header-save-state"]').text()).toBe("Saved");
   });
 
   it("reads Saving… while the save round trip is outstanding", async () => {
@@ -145,12 +145,12 @@ describe("EditorShell — status text", () => {
 
     const saving = store.save();
     await flushPromises();
-    expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Saving…");
+    expect(w.get('[data-testid="editor-header-save-state"]').text()).toBe("Saving…");
 
     resolveSave({ sessionId: "ses-a", savedRevision: 2, projectFileId: "project-a" });
     await saving;
     await flushPromises();
-    expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Saved");
+    expect(w.get('[data-testid="editor-header-save-state"]').text()).toBe("Saved");
   });
 
   // Concept spec §1.4: the header drops its save text at or below 1350px
@@ -158,13 +158,13 @@ describe("EditorShell — status text", () => {
   it("shows the save text above 1350px and hides it at 1350px", () => {
     setViewportWidth(1351);
     const wide = mount(EditorShell, { attachTo: document.body });
-    expect(wide.get('[data-testid="editor-header-status"]').isVisible()).toBe(true);
+    expect(wide.get('[data-testid="editor-header-save-state"]').isVisible()).toBe(true);
     wide.unmount();
 
     setActivePinia(createPinia());
     setViewportWidth(1350);
     const narrow = mount(EditorShell, { attachTo: document.body });
-    expect(narrow.get('[data-testid="editor-header-status"]').isVisible()).toBe(false);
+    expect(narrow.get('[data-testid="editor-header-save-state"]').isVisible()).toBe(false);
   });
 
   // Ruling T4-1: a refused save is never hidden, whatever the width — at
@@ -184,24 +184,34 @@ describe("EditorShell — status text", () => {
     );
     await store.openStaged("cap one");
     const w = mount(EditorShell, { attachTo: document.body });
-    expect(w.get('[data-testid="editor-header-status"]').isVisible()).toBe(false);
+    expect(w.get('[data-testid="editor-header-save-state"]').isVisible()).toBe(false);
 
     await store.save();
     await flushPromises();
 
-    const header = w.get('[data-testid="editor-header-status"]');
+    const header = w.get('[data-testid="editor-header-save-state"]');
     expect(header.isVisible()).toBe(true);
     expect(header.text()).toBe("Save failed");
     expect(w.get('[data-testid="editor-statusbar-recovery"]').text()).toBe("Save failed");
   });
 });
 
+/** The shell with a text field of its own in the library slot: the
+ * dispatcher's text-field rule is about a field IN the shell (a field in a
+ * dialog or menu is the dialog's, whatever the key). */
+function mountWithField() {
+  return mount(EditorShell, {
+    attachTo: document.body,
+    slots: { library: '<input data-testid="probe-field" aria-label="Probe field" value="Old">' },
+  });
+}
+
 function setViewportHeight(height: number) {
   Object.defineProperty(window, "innerHeight", { writable: true, configurable: true, value: height });
 }
 
 describe("EditorShell — the frame (visual-parity Task 4; design D4, D5)", () => {
-  it("at or below 1080px the inspector is a closed drawer; the header's toggle opens it and the header stays", async () => {
+  it("at or below 1080px the inspector is a closed drawer; the preview toolbar's toggle opens it and the header stays", async () => {
     setViewportWidth(960);
     // `isVisible()` reads `getComputedStyle`, which happy-dom only resolves
     // for a node actually attached to `document` (the `TabGroup.vue`
@@ -210,15 +220,15 @@ describe("EditorShell — the frame (visual-parity Task 4; design D4, D5)", () =
     // would make this test pass against BOTH a working and a broken drawer.
     const w = mount(EditorShell, { attachTo: document.body });
 
-    const toggle = w.get('[data-testid="editor-header-inspector-toggle"]');
-    expect(toggle.attributes("aria-expanded")).toBe("false");
+    const toggle = w.get('[data-testid="preview-toolbar-toggleInspector"]');
+    expect(toggle.attributes("aria-pressed")).toBe("false");
     expect(w.get('[data-testid="editor-shell-inspector"]').isVisible()).toBe(false);
     // The library is still a column at this width.
     expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(true);
 
     await toggle.trigger("click");
 
-    expect(toggle.attributes("aria-expanded")).toBe("true");
+    expect(toggle.attributes("aria-pressed")).toBe("true");
     expect(w.get('[data-testid="editor-shell-inspector"]').isVisible()).toBe(true);
     // Opening the drawer must never remove or hide the header — "the route
     // back".
@@ -229,10 +239,10 @@ describe("EditorShell — the frame (visual-parity Task 4; design D4, D5)", () =
     setViewportWidth(820);
     const w = mount(EditorShell, { attachTo: document.body });
 
-    const toggle = w.get('[data-testid="editor-header-library-toggle"]');
+    const toggle = w.get('[data-testid="preview-toolbar-toggleLibrary"]');
     expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(false);
     await toggle.trigger("click");
-    expect(toggle.attributes("aria-expanded")).toBe("true");
+    expect(toggle.attributes("aria-pressed")).toBe("true");
     expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(true);
   });
 
@@ -273,10 +283,12 @@ describe("EditorShell — the frame (visual-parity Task 4; design D4, D5)", () =
     setViewportWidth(960);
     const w = mount(EditorShell, { attachTo: document.body });
 
-    await w.get('[data-testid="editor-header-inspector-toggle"]').trigger("click");
+    await w.get('[data-testid="preview-toolbar-toggleInspector"]').trigger("click");
+    expect(w.get('[data-testid="editor-shell-inspector"]').isVisible()).toBe(true);
     await w.get('[data-testid="preview-toolbar-focusPreview"]').trigger("click");
 
-    expect(w.get('[data-testid="editor-header-inspector-toggle"]').attributes("aria-expanded")).toBe("false");
+    expect(w.get('[data-testid="preview-toolbar-toggleInspector"]').attributes("aria-pressed")).toBe("false");
+    expect(w.get('[data-testid="editor-shell-inspector"]').isVisible()).toBe(false);
   });
 
   it("the rows are 56 / workspace / 8 / timeline / 25, and 52 / … / 23 in a window 760px tall or less", () => {
@@ -366,10 +378,8 @@ describe("EditorShell — keyboard shortcut dispatcher (Task 21)", () => {
       }),
     );
     await store.openStaged("cap one");
-    const w = mount(EditorShell, { attachTo: document.body });
-
-    await w.get('[data-testid="editor-shell-title"]').trigger("click");
-    const input = w.get('[data-testid="editor-header-title-input"]');
+    const w = mountWithField();
+    const input = w.get('[data-testid="probe-field"]');
     await input.trigger("keydown", { key: "z", ctrlKey: true });
     await flushPromises();
 
@@ -385,10 +395,8 @@ describe("EditorShell — keyboard shortcut dispatcher (Task 21)", () => {
     const store = useEditorProjectStore();
     store.setPort(fakePort({ openStaged: () => Promise.resolve(openResult({ snapshot: snapshot({ title: "Old" }) })) }));
     await store.openStaged("cap one");
-    const w = mount(EditorShell, { attachTo: document.body });
-
-    await w.get('[data-testid="editor-shell-title"]').trigger("click");
-    const input = w.get('[data-testid="editor-header-title-input"]');
+    const w = mountWithField();
+    const input = w.get('[data-testid="probe-field"]');
     await input.trigger("keydown", { key: "F1" });
     await flushPromises();
 
@@ -403,10 +411,8 @@ describe("EditorShell — keyboard shortcut dispatcher (Task 21)", () => {
     const store = useEditorProjectStore();
     store.setPort(fakePort({ openStaged: () => Promise.resolve(openResult({ snapshot: snapshot({ title: "Old" }) })) }));
     await store.openStaged("cap one");
-    const w = mount(EditorShell, { attachTo: document.body });
-
-    await w.get('[data-testid="editor-shell-title"]').trigger("click");
-    const input = w.get('[data-testid="editor-header-title-input"]');
+    const w = mountWithField();
+    const input = w.get('[data-testid="probe-field"]');
     await input.trigger("keydown", { key: "?" });
     await flushPromises();
 
@@ -599,8 +605,8 @@ describe("EditorShell — the clipboard across a session change (fix round 1)", 
   });
 });
 
-describe("EditorHeader — inline rename", () => {
-  it("renames through the rename command on Enter, and leaves the title untouched on Escape", async () => {
+describe("EditorHeader — Rename tutorial (visual-parity Task 8)", () => {
+  it("renames through the rename command on Apply, and leaves the title untouched on Cancel", async () => {
     const store = useEditorProjectStore();
     const executed: unknown[] = [];
     store.setPort(
@@ -616,24 +622,24 @@ describe("EditorHeader — inline rename", () => {
       }),
     );
     await store.openStaged("cap one");
-    const w = mount(EditorShell);
+    const w = mount(EditorShell, { attachTo: document.body });
 
-    await w.get('[data-testid="editor-shell-title"]').trigger("click");
-    const input = w.get('[data-testid="editor-header-title-input"]');
-    await input.setValue("New title");
-    await input.trigger("keydown.enter");
+    await w.get('[data-testid="editor-header-title"]').trigger("click");
+    await w.get('[data-testid="rename-dialog-input"]').setValue("New title");
+    await w.get('[data-testid="rename-dialog-apply"]').trigger("click");
     await flushPromises();
 
     expect(executed).toEqual([{ kind: "rename", title: "New title" }]);
-    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("New title");
+    expect(w.get('[data-testid="editor-header-title"]').text()).toBe("New title");
 
-    // Escape discards the draft without calling execute again.
-    await w.get('[data-testid="editor-shell-title"]').trigger("click");
-    await w.get('[data-testid="editor-header-title-input"]').setValue("Discarded");
-    await w.get('[data-testid="editor-header-title-input"]').trigger("keydown.esc");
+    // Cancel discards the draft without calling execute again.
+    await w.get('[data-testid="editor-header-title"]').trigger("click");
+    await w.get('[data-testid="rename-dialog-input"]').setValue("Discarded");
+    await w.get('[data-testid="rename-dialog-cancel"]').trigger("click");
+    await flushPromises();
 
     expect(executed).toHaveLength(1);
-    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("New title");
+    expect(w.get('[data-testid="editor-header-title"]').text()).toBe("New title");
   });
 });
 

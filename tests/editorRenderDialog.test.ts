@@ -198,7 +198,7 @@ describe("RenderDialog — completion", () => {
     expect(useEditorProjectStore().saveError).toBeNull();
     expect(useEditorProjectStore().lastError).toBeNull();
     expect(useEditorJobsStore().lastError).toBeNull();
-    expect(header.get('[data-testid="editor-header-status"]').text()).toBe("Saved");
+    expect(header.get('[data-testid="editor-header-save-state"]').text()).toBe("Saved");
   });
 });
 

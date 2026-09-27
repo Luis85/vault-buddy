@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, type Page, test } from "@playwright/test";
 
+import { previewTool } from "./parity";
 import { FIXTURE_VIDEO_URL, installTauriStub } from "./tauriStub";
 
 /**
@@ -66,21 +67,18 @@ test("no horizontal page scroll at 960x640", async ({ page }) => {
 
 // Visual-parity Task 4 (design D4, D5; concept spec §1.4): the inspector
 // becomes an overlay drawer at or below 1080px wide, the library at or
-// below 860px. Each drawer toggle is a real control, the drawer opens
+// below 860px. Each drawer toggle is a real control (the preview
+// toolbar's, visual-parity Task 8 — the header's left), the drawer opens
 // BELOW the preview header (so the toggles that close it stay reachable),
 // and the header — "the route back" — is never covered.
 test("at or below 1080px the inspector is a real drawer and the header stays on screen", async ({ page }) => {
   await openEditor(page, { width: 960, height: 640 });
 
-  const toggle = page.getByTestId("editor-header-inspector-toggle");
-  await expect(toggle).toBeVisible();
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByTestId("editor-shell-inspector")).toBeHidden();
   await expect(page.getByTestId("editor-shell-library")).toBeVisible();
 
-  await toggle.click();
+  await previewTool(page, "toggleInspector");
 
-  await expect(toggle).toHaveAttribute("aria-expanded", "true");
   const drawer = page.getByTestId("editor-shell-inspector");
   await expect(drawer).toBeVisible();
   expect((await drawer.boundingBox())!.width).toBeCloseTo(276, 0);
@@ -92,9 +90,8 @@ test("at or below 1080px the inspector is a real drawer and the header stays on 
 test("at or below 860px the library is a 250px drawer under the preview header", async ({ page }) => {
   await openEditor(page, { width: 840, height: 640 });
 
-  const toggle = page.getByTestId("editor-header-library-toggle");
   await expect(page.getByTestId("editor-shell-library")).toBeHidden();
-  await toggle.click();
+  await previewTool(page, "toggleLibrary");
 
   const drawer = page.getByTestId("editor-shell-library");
   await expect(drawer).toBeVisible();
@@ -111,11 +108,11 @@ test("at or below 860px the library is a 250px drawer under the preview header",
 // reply for `editor_save_project`, so the port refuses the save.
 test("1280x820: a failed save is visible in the header and the status bar", async ({ page }) => {
   await openEditor(page, { width: 1280, height: 820 });
-  await expect(page.getByTestId("editor-header-status")).toBeHidden();
+  await expect(page.getByTestId("editor-header-save-state")).toBeHidden();
 
   await page.getByTestId("editor-header-save").click();
 
-  const header = page.getByTestId("editor-header-status");
+  const header = page.getByTestId("editor-header-save-state");
   await expect(header).toBeVisible();
   await expect(header).toHaveText("Save failed");
   const recovery = page.getByTestId("editor-statusbar-recovery");

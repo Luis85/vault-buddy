@@ -14,24 +14,21 @@
  *   ruling T4-1: a refusal is never invisible), its role-worded reason in
  *   the tooltip. A click saves the project through the header's own path
  *   (`useProjectSave`).
- * - right: how many products this project has rendered; a click opens the
- *   library on them. Until the library's Project section exists (Task 10)
- *   that is the Products tab, through the same reveal a Checks finding
- *   uses (`revealBus`).
+ * - right: how many products this project has rendered; a click shows
+ *   them through `revealWorkspaceProducts`, the helper the header's
+ *   Project menu uses too.
  */
 import { computed, watch } from "vue";
 
 import { useProjectSave } from "../../../composables/useProjectSave";
 import { withoutRedactionHandles } from "../../../editor/errorCopy";
-import { requestReveal } from "../../../editor/revealBus";
+import { revealWorkspaceProducts } from "../../../editor/revealProducts";
 import { useEditorProductsStore } from "../../../stores/editorProducts";
 import { useEditorProjectStore } from "../../../stores/editorProject";
-import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import EditorIcon from "../icons/EditorIcon.vue";
 
 const editorProject = useEditorProjectStore();
 const products = useEditorProductsStore();
-const workspace = useEditorWorkspaceStore();
 const { disabledReason, save } = useProjectSave();
 
 /** The ledger is read once per session here, since the library's products
@@ -59,11 +56,6 @@ const productsLabel = computed(() => {
   const n = products.current.length;
   return `${n} rendered ${n === 1 ? "video" : "videos"} · Workspace & rendered products`;
 });
-
-function openProducts(): void {
-  workspace.setLibraryTab("products");
-  requestReveal("library");
-}
 </script>
 
 <template>
@@ -96,7 +88,7 @@ function openProducts(): void {
       data-testid="editor-statusbar-products"
       class="status-slot"
       title="Show your rendered products in the library"
-      @click="openProducts"
+      @click="revealWorkspaceProducts"
     >
       {{ productsLabel }}
     </button>

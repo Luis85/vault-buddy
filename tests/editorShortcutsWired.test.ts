@@ -203,16 +203,15 @@ describe("every listed shortcut", () => {
     expect(first.defaultPrevented).toBe(true);
     expect(second.defaultPrevented).toBe(true);
     expect(saves).toBe(1);
-    expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Saving…");
+    expect(w.get('[data-testid="editor-header-save-state"]').text()).toBe("Saving…");
     saveResolve?.();
     await flushPromises();
-    expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Saved");
+    expect(w.get('[data-testid="editor-header-save-state"]').text()).toBe("Saved");
   });
 
   it("Ctrl+S and Ctrl+E in a text field are the field's", async () => {
     const w = await mountEditor();
-    await w.get('[data-testid="editor-shell-title"]').trigger("click");
-    const input = w.get('[data-testid="editor-header-title-input"]').element;
+    const input = w.get('[data-testid="library-search"]').element;
 
     const save = press(input, "ctrl+s");
     const review = press(input, "ctrl+e");

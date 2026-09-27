@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { box, composite, openParity } from "./parity";
+import { box, composite, openParity, previewTool } from "./parity";
 
 /**
  * Concept-parity checks for the tutorial editor's UI port
@@ -25,6 +25,66 @@ test.describe("parity 1600x1000", () => {
     // §1.3: the splitter row and the default timeline height.
     expect((await box(page, "editor-splitter")).height).toBeCloseTo(8, 0);
     expect((await box(page, "editor-timeline")).height).toBeCloseTo(400, 0);
+  });
+});
+
+// Task 8 (screens 01–02, concept spec §2): the header, with the welcome
+// invitation over it as a fresh vault opens it.
+test.describe("parity 1600x1000: the header (screen 01)", () => {
+  test("brand, Project menu, title, save state and actions sit where §2 puts them", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 });
+    await expect(page.getByTestId("guide-invitation")).toBeVisible();
+    await page.screenshot({ path: "test-results/parity/built-01-welcome.png" });
+    await composite(page, "01-welcome.png", "test-results/parity/built-01-welcome.png", "vs-01-welcome");
+
+    const header = await box(page, "editor-header");
+    expect(header.height).toBeCloseTo(56, 0);
+    // §2: the CSS mark is 29x31, 16px in from the left, centred on the row.
+    const mark = await box(page, "editor-header-brand-mark");
+    expect(mark.width).toBeCloseTo(29, 0);
+    expect(mark.height).toBeCloseTo(31, 0);
+    expect(mark.x).toBeCloseTo(16, 0);
+    expect(Math.abs(mark.y + mark.height / 2 - 28)).toBeLessThanOrEqual(1);
+    await expect(page.getByTestId("editor-header-wordmark")).toBeVisible();
+    // Brand → Project → title, left to right, 14px apart.
+    const brand = await box(page, "editor-header-brand");
+    const project = await box(page, "editor-header-project-menu");
+    const title = await box(page, "editor-header-title");
+    expect(Math.abs(project.x - (brand.x + brand.width) - 14)).toBeLessThanOrEqual(3);
+    expect(title.x).toBeGreaterThan(project.x + project.width);
+    await expect(page.getByTestId("editor-header-title")).toHaveText("Create your first project");
+    // The actions are 34px tall, Render video last, 16px from the right.
+    for (const id of ["editor-header-help", "editor-header-checks", "editor-header-save", "editor-header-render"]) {
+      expect((await box(page, id)).height, id).toBeCloseTo(34, 0);
+    }
+    const render = await box(page, "editor-header-render");
+    expect(Math.abs(render.x + render.width - (1600 - 16))).toBeLessThanOrEqual(1);
+    // The sample project carries unsaved edits, as screen 01's does ("Save
+    // project needed", D10's "Unsaved changes") — a gold dot.
+    await expect(page.getByTestId("editor-header-save-state")).toHaveText("Unsaved changes");
+    const dot = page.getByTestId("editor-header-save-dot");
+    expect(await dot.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe("rgb(235, 197, 130)");
+    await expect(page.getByTestId("editor-header")).not.toContainText("vault-e2e");
+  });
+
+  test("the Project menu opens under its trigger with the native items", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("editor-header-project-menu").click();
+    const menu = page.getByTestId("editor-project-menu");
+    await expect(menu).toBeVisible();
+    await expect(menu.locator('[role="menuitem"]')).toHaveText([
+      "Open project…",
+      "Open a project file…",
+      "Rename tutorial…",
+      "Workspace & rendered products",
+      "Save a copy as project file…",
+      "Discard project…",
+    ]);
+    const trigger = await box(page, "editor-header-project-menu");
+    const panel = await box(page, "editor-project-menu");
+    expect(panel.width).toBeCloseTo(282, 0);
+    expect(Math.abs(panel.x - trigger.x)).toBeLessThanOrEqual(1);
+    expect(panel.y).toBeGreaterThanOrEqual(trigger.y + trigger.height);
   });
 });
 
@@ -87,6 +147,9 @@ test.describe("parity 960x640 (12-compact)", () => {
     await page.screenshot({ path: "test-results/parity/built-12-compact.png" });
     await composite(page, "12-compact.png", "test-results/parity/built-12-compact.png", "vs-12-compact");
     expect((await box(page, "editor-header")).height).toBeCloseTo(52, 0);
+    // §1.4: the wordmark is gone at or below 1350px; the mark stays.
+    await expect(page.getByTestId("editor-header-wordmark")).toBeHidden();
+    await expect(page.getByTestId("editor-header-brand-mark")).toBeVisible();
     expect((await box(page, "preview-toolbar")).height).toBeCloseTo(44, 0);
     expect((await box(page, "transport-bar")).height).toBeCloseTo(40, 0);
     expect(Math.abs((await box(page, "editor-timeline")).height - 270)).toBeLessThanOrEqual(2);
@@ -103,18 +166,6 @@ test.describe("parity 960x640 (12-compact)", () => {
     expect((await box(page, "timeline-label-column")).width).toBeCloseTo(174, 0);
   });
 });
-
-/** Activates a preview-toolbar control whether it sits in the row or, at
- * this width, in its More menu. Task 11 re-points this at the View menu. */
-async function previewTool(page: Page, id: string): Promise<void> {
-  const inline = page.getByTestId(`preview-toolbar-${id}`);
-  if (await inline.isVisible()) {
-    await inline.click();
-    return;
-  }
-  await page.getByTestId("preview-toolbar-more").click();
-  await page.getByTestId("preview-toolbar-more-menu").getByTestId(`preview-toolbar-${id}`).click();
-}
 
 async function collapsed(page: Page, testId: string): Promise<boolean> {
   const b = await page.getByTestId(testId).boundingBox();
@@ -156,7 +207,9 @@ const CONCEPT_TOKENS: [role: string, token: string, dark: string, light: string]
   ["--stage", "--color-stage", "#131419", "#e8e7ef"],
   ["--line", "--color-line", "#353640", "#dcdce5"],
   ["--hover", "--color-hover", "#30303c", "#eeebf5"],
-  ["--primary", "--color-primary", "#8b6ad4", "#7853b8"],
+  // Dark: the concept's #8b6ad4 darkened (every channel x0.945) so white
+  // 11px/600 labels reach 4.54:1 (visual-parity Task 8, ruling T3-1).
+  ["--primary", "--color-primary", "#8364c8", "#7853b8"],
   ["--accent", "--color-accent", "#b6a2f5", "#7250ad"],
   ["--accent-bg", "--color-accent-bg", "#393049", "#ece5f8"],
   ["--accent-ink", "--color-accent-ink", "#dacdff", "#603696"],

@@ -1,5 +1,5 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { flushPromises, mount } from "@vue/test-utils";
+import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 
 import EditorRoot from "../../src/roots/EditorRoot.vue";
 
@@ -44,4 +44,21 @@ export async function open(requests?: (string | null)[]) {
   const w = mount(EditorRoot, { attachTo: document.body });
   await flushPromises();
   return w;
+}
+
+/** Opens the header's Project menu (visual-parity Task 8, design D7) and
+ * returns it. The trigger lists the stored projects before the menu opens,
+ * so a flush follows the click. */
+export async function openProjectMenu(w: VueWrapper) {
+  await w.get('[data-testid="editor-header-project-menu"]').trigger("click");
+  await flushPromises();
+  return w.get('[data-testid="editor-project-menu"]');
+}
+
+/** Opens the Project menu and chooses its item `id` (`open`, `openFile`,
+ * `rename`, `products`, `saveCopy`, `discard`). */
+export async function chooseProjectMenuItem(w: VueWrapper, id: string): Promise<void> {
+  const menu = await openProjectMenu(w);
+  await menu.get(`[data-testid="editor-project-menu-item-${id}"]`).trigger("click");
+  await flushPromises();
 }

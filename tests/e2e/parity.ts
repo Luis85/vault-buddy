@@ -81,6 +81,20 @@ export async function openParity(
   }
 }
 
+/** Activates a preview-toolbar control whether it sits in the row or, at a
+ * narrow width, in its More menu — the library and inspector toggles, which
+ * open the drawers since the header's own toggles left (visual-parity Task
+ * 8). Task 11 re-points this at the View menu. */
+export async function previewTool(page: Page, id: string): Promise<void> {
+  const inline = page.getByTestId(`preview-toolbar-${id}`);
+  if (await inline.isVisible()) {
+    await inline.click();
+    return;
+  }
+  await page.getByTestId("preview-toolbar-more").click();
+  await page.getByTestId("preview-toolbar-more-menu").getByTestId(`preview-toolbar-${id}`).click();
+}
+
 /** A real bounding box for `data-testid="<testId>"`, or a named failure —
  * never a bare `null` a caller could forward into a `toBeCloseTo` and get a
  * confusing "NaN" failure three lines away. */

@@ -184,13 +184,16 @@ export const useEditorProjectStore = defineStore("editorProject", {
      * superseded it didn't pan out would be exactly the "silent success"
      * R20 forbids). A failure keeps whatever was open before (which may be
      * nothing) and surfaces `lastError` — it never blanks a working
-     * session over a picker mis-click.
+     * session over a picker mis-click. `beforeInstall` runs in the same
+     * tick as a successful install (`importProjectPackage`'s contract, for
+     * `EditorRoot`'s gate), never on a refusal.
      */
-    async openWith(run: () => Promise<EditorOpenResult>): Promise<void> {
+    async openWith(run: () => Promise<EditorOpenResult>, beforeInstall?: () => void): Promise<void> {
       const generation = this.beginOpen();
       try {
         const result = await run();
         if (generation !== this.generation) return;
+        beforeInstall?.();
         this.install(result);
       } catch (e) {
         if (generation !== this.generation) return;
@@ -217,8 +220,8 @@ export const useEditorProjectStore = defineStore("editorProject", {
       this.missing = result.missing;
       this.sourceBase = result.sourceBase;
     },
-    openProject(id: string, useRecovery: boolean): Promise<void> {
-      return this.openWith(() => this.port.openProject(id, useRecovery));
+    openProject(id: string, useRecovery: boolean, beforeInstall?: () => void): Promise<void> {
+      return this.openWith(() => this.port.openProject(id, useRecovery), beforeInstall);
     },
     /**
      * Task 15: `EditorRoot` calls this UNCONDITIONALLY on every base it

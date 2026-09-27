@@ -176,13 +176,13 @@ describe("capture -> cut -> save -> reopen (Task 21 acceptance)", () => {
     expect(clipboardFragment.value?.fragment.clips.map((c) => c.id)).toEqual(["intro"]);
     // The timeline renders Rust's canned reply, not a local edit.
     expect(w.find('[data-testid="clip-intro"]').exists()).toBe(false);
-    expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Unsaved changes");
+    expect(w.get('[data-testid="editor-header-save-state"]').text()).toBe("Unsaved changes");
 
     // Save through the header's own button.
     await w.get('[data-testid="editor-header-save"]').trigger("click");
     await flushPromises();
     expect(fake.saves).toEqual([{ sessionId: "ses-a", expectedRevision: 2 }]);
-    expect(w.get('[data-testid="editor-header-status"]').text()).toBe("Saved");
+    expect(w.get('[data-testid="editor-header-save-state"]').text()).toBe("Saved");
 
     // Reopen: a brand-new window (fresh Pinia) over the same fake "disk".
     w.unmount();
@@ -192,7 +192,7 @@ describe("capture -> cut -> save -> reopen (Task 21 acceptance)", () => {
     expect(reopened.find('[data-testid="clip-intro"]').exists()).toBe(false);
     const body = reopened.get('[data-testid="clip-body"]');
     expect(body.attributes("aria-label")).toBe("Clip body, 0:00–0:02");
-    expect(reopened.get('[data-testid="editor-header-status"]').text()).toBe("Saved");
+    expect(reopened.get('[data-testid="editor-header-save-state"]').text()).toBe("Saved");
     expect(fake.sent).toHaveLength(1); // reopening sent no command of its own
   });
 });

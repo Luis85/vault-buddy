@@ -44,7 +44,7 @@ import EditorRoot from "../src/roots/EditorRoot.vue";
 import { useEditorJobsStore } from "../src/stores/editorJobs";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
-import { open } from "./helpers/editorMount";
+import { chooseProjectMenuItem, open } from "./helpers/editorMount";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
 
 enableAutoUnmount(afterEach);
@@ -212,11 +212,11 @@ describe("EditorRoot", () => {
       }),
     );
     const w = await open(["cap one", "cap two"]);
-    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("Capture A");
+    expect(w.get('[data-testid="editor-header-title"]').text()).toBe("Capture A");
     listeners["editor:open"]();
     await flushPromises();
     expect(opened).toEqual(["cap one", "cap two"]);
-    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("Capture B");
+    expect(w.get('[data-testid="editor-header-title"]').text()).toBe("Capture B");
   });
 
   // A drain that comes back empty means "nothing new", never "close what you
@@ -233,28 +233,6 @@ describe("EditorRoot", () => {
     await flushPromises();
     expect(w.find('[data-testid="editor-shell"]').exists()).toBe(true);
     expect(w.find('[data-testid="editor-empty"]').exists()).toBe(false);
-  });
-
-  // Fix round 1: the shell's duration must use the shared
-  // `src/utils/formatDuration.ts` (h:mm:ss, negative-clamped), not a local
-  // mm:ss-only copy that overflows past an hour — 2h read "120:00" instead
-  // of "2:00:00" before this fix.
-  it("renders the shell's duration past an hour as h:mm:ss, not overflowed mm:ss", async () => {
-    const store = useEditorProjectStore();
-    store.setPort(
-      fakeEditorPort({
-        openStaged: (base) =>
-          Promise.resolve(
-            openResultFixture({
-              sourceBase: base,
-              snapshot: snapshotFixture({ durationMs: 7_200_000 }), // 2h
-            }),
-          ),
-      }),
-    );
-    const w = await open();
-
-    expect(w.get('[data-testid="editor-shell-duration"]').text()).toBe("2:00:00");
   });
 
   it("opens the stashed base through editor_open_staged", async () => {
@@ -450,7 +428,7 @@ describe("EditorRoot", () => {
     // this test names — see `editorProjectStore.test.ts` for the guard's
     // own isolated pin.
     expect(calls).toEqual(["cap one"]);
-    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("Tutorial");
+    expect(w.get('[data-testid="editor-header-title"]').text()).toBe("Tutorial");
   });
 
   // ---- Hardening Task 16 (F-M1): a re-drain of the capture already
@@ -544,7 +522,7 @@ describe("EditorRoot", () => {
     listeners["editor:open"]();
     await flushPromises();
 
-    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("Tutorial");
+    expect(w.get('[data-testid="editor-header-title"]').text()).toBe("Tutorial");
     expect(jobsStore.jobs["job-1"]).toBeUndefined();
   });
 
@@ -625,8 +603,10 @@ describe("EditorRoot", () => {
       }),
     );
     const w = await open(["cap one", "cap two"]);
-    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("Capture A");
-    expect(w.get('[data-testid="editor-shell-vault"]').text()).toBe("vault-a");
+    expect(w.get('[data-testid="editor-header-title"]').text()).toBe("Capture A");
+    // The destination vault is the project's own (the header no longer
+    // shows its id, visual-parity design D6).
+    expect(useEditorProjectStore().project?.destination.vault).toBe("vault-a");
 
     listeners["editor:open"]();
     await flushPromises();
@@ -672,8 +652,10 @@ describe("EditorRoot", () => {
     await flushPromises();
 
     expect(w.find('[data-testid="editor-shell"]').exists()).toBe(true);
-    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("My Tutorial");
-    expect(w.get('[data-testid="editor-shell-vault"]').text()).toBe("vault-a");
+    expect(w.get('[data-testid="editor-header-title"]').text()).toBe("My Tutorial");
+    // The destination vault is the project's own (the header no longer
+    // shows its id, visual-parity design D6).
+    expect(useEditorProjectStore().project?.destination.vault).toBe("vault-a");
     // The empty-window line must not show beside a real, open session.
     expect(w.find('[data-testid="editor-empty"]').exists()).toBe(false);
   });
@@ -706,7 +688,7 @@ describe("EditorRoot", () => {
     );
   });
 
-  // ---- Task 39: "Open a project file" from the header's Save menu. The
+  // ---- Task 39: "Open a project file" from the header's Project menu. The
   // shell's gate names the project this root opened, so the import must set
   // that id in the SAME tick the store installs the imported session — or
   // the shell (and the menu that asked) vanishes. ----
@@ -734,8 +716,7 @@ describe("EditorRoot", () => {
     mockIPC((cmd) => (cmd === "take_editor_request" ? { kind: "project", value: "proj1" } : undefined));
     const w = mount(EditorRoot, { attachTo: document.body });
     await flushPromises();
-    await w.get('[data-testid="editor-header-save-menu-toggle"]').trigger("click");
-    await w.get('[data-testid="editor-header-menu-open"]').trigger("click");
+    await chooseProjectMenuItem(w, "openFile");
     await flushPromises();
     return w;
   }
@@ -754,7 +735,7 @@ describe("EditorRoot", () => {
     const w = await openFromMenu();
 
     expect(w.find('[data-testid="editor-shell"]').exists()).toBe(true);
-    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("Imported");
+    expect(w.get('[data-testid="editor-header-title"]').text()).toBe("Imported");
     expect(store.snapshot?.projectId).toBe("imported1");
     expect(reads).toEqual(["ses-a", "ses-b"]);
   });
@@ -770,13 +751,12 @@ describe("EditorRoot", () => {
       ),
     );
     const w = await openFromMenu();
-    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("First");
+    expect(w.get('[data-testid="editor-header-title"]').text()).toBe("First");
     expect(store.snapshot?.projectId).toBe("proj1");
     expect(w.text()).toContain(message);
 
     store.setPort(importPort(() => Promise.resolve(null)));
-    await w.get('[data-testid="editor-header-save-menu-toggle"]').trigger("click");
-    await w.get('[data-testid="editor-header-menu-open"]').trigger("click");
+    await chooseProjectMenuItem(w, "openFile");
     await flushPromises();
     expect(store.snapshot?.projectId).toBe("proj1");
   });
@@ -798,8 +778,10 @@ describe("EditorRoot", () => {
     );
     const w = await open();
 
-    expect(w.get('[data-testid="editor-shell-title"]').text()).toBe("Tutorial");
-    expect(w.get('[data-testid="editor-shell-vault"]').text()).toBe("vault-a");
+    expect(w.get('[data-testid="editor-header-title"]').text()).toBe("Tutorial");
+    // The destination vault is the project's own (the header no longer
+    // shows its id, visual-parity design D6).
+    expect(useEditorProjectStore().project?.destination.vault).toBe("vault-a");
     expect(w.find('[data-testid="editor-shell"]').exists()).toBe(true);
     expect(w.find('[data-testid="editor-empty"]').exists()).toBe(false);
   });
@@ -830,8 +812,7 @@ describe("EditorRoot", () => {
 
   async function askToDiscard() {
     const w = await open();
-    await w.get('[data-testid="editor-header-save-menu-toggle"]').trigger("click");
-    await w.get('[data-testid="editor-header-menu-discard"]').trigger("click");
+    await chooseProjectMenuItem(w, "discard");
     await flushPromises();
     return w;
   }

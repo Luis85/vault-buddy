@@ -1,6 +1,6 @@
 /**
  * Portable and lightweight project files (Task 39; F-40; SCREENS 08): the
- * two round trips behind the header's Save project menu. Both dialogs are
+ * two round trips behind the header's Project menu. Both dialogs are
  * Rust's own — no path ever crosses this webview — and both go through
  * `editorProject`'s injected port (`invoke` lives only in `port.ts`).
  *

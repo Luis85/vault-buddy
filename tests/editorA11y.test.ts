@@ -176,7 +176,7 @@ async function everySurface(w: VueWrapper, check: () => string[]): Promise<strin
   }
   workspace.setSelected({ type: "effect", id: "cue-1" });
   await run();
-  for (const toggle of ["editor-header-help", "editor-header-save-menu-toggle", "timeline-toolbar-more", "mixer-toggle", "track-header-v1-menu"]) {
+  for (const toggle of ["editor-header-help", "editor-header-project-menu", "timeline-toolbar-more", "mixer-toggle", "track-header-v1-menu"]) {
     const el = w.find(`[data-testid="${toggle}"]`);
     expect(el.exists(), `${toggle} is rendered`).toBe(true);
     await el.trigger("click");
@@ -231,7 +231,7 @@ async function escapeFrom(w: VueWrapper, toggle: string, menu: string): Promise<
 describe("menus and dialogs return focus", () => {
   it.each([
     ["editor-header-help", '[role="menu"][aria-label="Help"]'],
-    ["editor-header-save-menu-toggle", '[data-testid="editor-header-save-menu"], [role="menu"][aria-label="Save project"]'],
+    ["editor-header-project-menu", '[data-testid="editor-project-menu"]'],
     ["timeline-toolbar-more", '[data-testid="editor-context-menu"]'],
     ["mixer-toggle", '[data-testid="mixer-popover"]'],
     ["track-header-v1-menu", '[data-testid="track-header-v1-menu-list"]'],

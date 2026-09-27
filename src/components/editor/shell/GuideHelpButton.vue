@@ -17,17 +17,22 @@
  * content — to a new file; a toast says where it landed). There is
  * deliberately no item for anything not built yet. The menu closes on a
  * choice, on Escape (focus back on Help) and on a pointer press outside it
- * — `SaveProjectMenu`'s behaviour.
+ * — the behaviour Task 39's Save menu had.
+ *
+ * Visual-parity Task 8 (concept spec §2 `.guide-help-button`): the book
+ * icon in the accent colour, and a 5px gold dot after the label while a
+ * walkthrough is paused part way, so Help says there is a lesson to come
+ * back to (F1 resumes it).
  */
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
 import { toEditorError, useEditorProjectStore } from "../../../stores/editorProject";
 import { useNotificationsStore } from "../../../stores/notifications";
-import AppButton from "../../ui/AppButton.vue";
 import type { LearningTab } from "../guide/LearningCenter.vue";
 import LearningCenter from "../guide/LearningCenter.vue";
+import HeaderButton from "./HeaderButton.vue";
 
 type HelpItem = "center" | "resume" | "shortcuts" | "diagnostics";
 
@@ -39,6 +44,8 @@ const ITEMS: readonly { id: HelpItem; label: string; testid: string }[] = [
 ];
 
 const onboarding = useEditorOnboardingStore();
+/** A walkthrough stopped part way: a lesson to resume, the coach not up. */
+const paused = computed(() => onboarding.progress.currentStepId !== null && !onboarding.progress.active);
 const helpTarget = useGuideTarget("header.help");
 
 const open = ref(false);
@@ -96,10 +103,10 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onPointerDown)
     class="relative"
     @keydown.esc="onEscape"
   >
-    <AppButton
+    <HeaderButton
       :ref="helpTarget"
-      variant="ghost"
-      size="sm"
+      icon="book"
+      icon-class="text-accent"
       data-testid="editor-header-help"
       aria-haspopup="menu"
       :aria-expanded="open"
@@ -107,7 +114,13 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onPointerDown)
       @click="open = !open"
     >
       Help
-    </AppButton>
+      <span
+        v-if="paused"
+        data-testid="editor-header-help-resume-dot"
+        aria-hidden="true"
+        class="h-[5px] w-[5px] rounded-full bg-gold"
+      />
+    </HeaderButton>
     <div
       v-if="open"
       role="menu"
