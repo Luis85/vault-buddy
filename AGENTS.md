@@ -3420,11 +3420,13 @@ once neither `lastError` nor `saveError` holds the object any more, turns a
 when a later edit clears it), dismisses both when the shell unmounts, and
 says a matched-but-disabled shortcut's registry reason, at most once per
 1.5 s per reason, while the keydown still bubbles; Copy confirms itself in
-`clipboard.ts`. A dialog that prints `lastError` beside its own control
-claims it while on screen (`useInlineLastError`, ruling T7-1 — the Checks
-dialog's destination picker, the Save a copy dialog's rename): an error
-raised then is shown there and not toasted, so one surface says it, never
-two and never none. Every insert at the playhead (the media "+", the Titles
+`clipboard.ts`. A dialog that prints its own request's refusal beside its
+control claims `lastError` for that request's round trip only
+(`useInlineLastError(...).track`, ruling T7-1 — the Checks dialog's
+destination picker, the Save a copy dialog's rename, both through the one
+rename path `src/editor/renameTutorial.ts`): that refusal is shown there
+and not toasted, while anything else raised meanwhile still toasts — one
+surface, never two and never none. Every insert at the playhead (the media "+", the Titles
 cards, the asset menu) goes through `placeOnFreeTrack`: a free track of the
 kind for the whole span, else `addTrack` then the insert — except a Titles
 card needing a new TOP track, which is one `addCard{trackId: null}`.

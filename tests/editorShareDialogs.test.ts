@@ -22,11 +22,14 @@ import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import ChecksDestination from "../src/components/editor/dialogs/ChecksDestination.vue";
 import ChecksDialog from "../src/components/editor/dialogs/ChecksDialog.vue";
 import PublishDialog from "../src/components/editor/dialogs/PublishDialog.vue";
 import RenderDialog from "../src/components/editor/dialogs/RenderDialog.vue";
 import SaveProjectDialog from "../src/components/editor/dialogs/SaveProjectDialog.vue";
 import type { EditorPort } from "../src/editor/port";
+import { EditorPortError } from "../src/editor/port";
+import { renameIfChanged } from "../src/editor/renameTutorial";
 import type { CheckFinding, PackageReceipt } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useNotificationsStore } from "../src/stores/notifications";
@@ -224,6 +227,83 @@ describe("Save a copy as project file (§9.5, screen 08; D8)", () => {
     expect(w.get('[data-testid="save-project-status"]').text()).toBe("Saved to Walkthrough.vbproject.zip");
   });
 
+  // Fix round 1 (Ruling T21-4): a rename kept after the copy did not land
+  // is said, never silent.
+  function renamingExecute() {
+    return vi.fn((req: { expectedRevision: number }) =>
+      Promise.resolve({
+        snapshot: { ...openResult().snapshot, revision: req.expectedRevision + 1, title: "Atlas" },
+        project: openResult().project,
+      }),
+    ) as unknown as EditorPort["execute"];
+  }
+  const RENAMED = "The tutorial was renamed to “Atlas”. Undo restores the old name.";
+
+  it("a rename then a dismissed file dialog says the rename was kept", async () => {
+    const { w } = await openSave({ execute: renamingExecute(), exportPackage: () => Promise.resolve(null) });
+    await w.get('[data-testid="save-project-name"]').setValue("Atlas");
+    await w.get('[data-testid="save-project-confirm"]').trigger("click");
+    await flushPromises();
+    const status = w.get('[data-testid="save-project-status"]').text();
+    expect(status).toContain("Nothing was saved");
+    expect(status).toContain(RENAMED);
+  });
+
+  it("a rename then a failed export says the rename was kept", async () => {
+    const exportPackage = () =>
+      Promise.reject(new EditorPortError({ code: "writeDenied", message: "Disk says no.", retryable: false, operationId: "o" }));
+    const { w } = await openSave({ execute: renamingExecute(), exportPackage });
+    await w.get('[data-testid="save-project-name"]').setValue("Atlas");
+    await w.get('[data-testid="save-project-confirm"]').trigger("click");
+    await flushPromises();
+    const status = w.get('[data-testid="save-project-status"]');
+    expect(status.attributes("role")).toBe("alert");
+    expect(status.text()).toContain("Disk says no.");
+    expect(status.text()).toContain(RENAMED);
+  });
+
+  it("no rename, no renamed sentence", async () => {
+    const { w } = await openSave({ exportPackage: () => Promise.resolve(null) });
+    await w.get('[data-testid="save-project-confirm"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="save-project-status"]').text()).not.toContain("renamed");
+  });
+
+  // Fix round 1 (minor 4): the rename phase says what it is doing.
+  it("the rename phase shows its reason in the status line", async () => {
+    let release!: () => void;
+    const execute = vi.fn(
+      (req: { expectedRevision: number }) =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({ snapshot: { ...openResult().snapshot, revision: req.expectedRevision + 1, title: "Atlas" }, project: openResult().project });
+        }),
+    ) as unknown as EditorPort["execute"];
+    const { w } = await openSave({ execute });
+    await w.get('[data-testid="save-project-name"]').setValue("Atlas");
+    await w.get('[data-testid="save-project-confirm"]').trigger("click");
+    await flushPromises();
+    const status = w.get('[data-testid="save-project-status"]');
+    expect(status.text()).toBe("Preparing the project file…");
+    expect(status.attributes("aria-live")).toBe("polite");
+    release();
+    await flushPromises();
+  });
+
+  // Fix round 1 (minor 5): a conflict on the rename is not a blank dialog.
+  it("a revision conflict on the rename says so", async () => {
+    const execute = () =>
+      Promise.reject(new EditorPortError({ code: "revisionConflict", message: "changed", retryable: true, operationId: "o" }));
+    const { w, exportPackage } = await openSave({ execute, getSnapshot: () => Promise.resolve(openResult()) } as Partial<EditorPort>);
+    await w.get('[data-testid="save-project-name"]').setValue("Atlas");
+    await w.get('[data-testid="save-project-confirm"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="save-project-status"]').text()).toBe(
+      "The project changed while saving the copy. Try again.",
+    );
+    expect(exportPackage).not.toHaveBeenCalled();
+  });
+
   it("an empty name cannot be saved, and says why", async () => {
     const { w, exportPackage } = await openSave();
     await w.get('[data-testid="save-project-name"]').setValue("   ");
@@ -280,6 +360,31 @@ describe("Render a video (§9.6, screen 09)", () => {
     expect(w.text()).not.toContain("vault-b");
   });
 
+  // Fix round 1 (minor 6): no fallback flash while the list loads.
+  it("while the vault list loads the destination is a neutral placeholder, never the fallback", async () => {
+    let answer!: (v: { id: string; name: string }[]) => void;
+    const { w } = await openRender({ listVaults: () => new Promise((resolve) => (answer = resolve)) });
+    const value = w.get('[data-testid="render-dialog-destination-vault"]');
+    expect(value.text()).toBe("…");
+    expect(value.attributes("aria-busy")).toBe("true");
+    expect(w.text()).not.toContain("the capture's vault");
+    answer([{ id: "vault-b", name: "Knowledge vault" }]);
+    await flushPromises();
+    expect(value.text()).toBe("Knowledge vault");
+    expect(value.attributes("aria-busy")).toBe("false");
+  });
+
+  // Fix round 1 (minor 7): the profile's length is what will be rendered.
+  it("with a review range ticked the profile shows the range's length", async () => {
+    const { w } = await openRender();
+    const profile = () => w.get('[data-testid="render-dialog-profile-length"]').text();
+    expect(profile()).toMatch(/^0:12\.5 /);
+    await w.get('[data-testid="render-dialog-scope-range"]').setValue(true);
+    await w.get('[data-testid="render-dialog-range-start"]').setValue("2");
+    await w.get('[data-testid="render-dialog-range-end"]').setValue("5.5");
+    expect(profile()).toMatch(/^0:03\.5 /);
+  });
+
   it("the quality radios live in the profile card with the canvas size — no browser review label (D10)", async () => {
     const { w } = await openRender();
     const profile = w.get('[data-testid="render-dialog-profile"]');
@@ -325,6 +430,17 @@ describe("Render a video (§9.6, screen 09)", () => {
     expect(save).toHaveBeenCalledTimes(1);
   });
 
+  // Fix round 1 (minor 4): the save's reason is on screen, not title-only.
+  it("while a save runs, Save project instead's reason is in the footer's status", async () => {
+    const save = vi.fn(() => new Promise<never>(() => {}));
+    const { w } = await openRender({ save });
+    void useEditorProjectStore().save();
+    await flushPromises();
+    const line = w.get('[data-testid="render-dialog-save-reason"]');
+    expect(line.text()).toBe("Saving…");
+    expect(line.attributes("aria-live")).toBe("polite");
+  });
+
   it("the completion line names the vault a publish goes to", async () => {
     const { w, deliver } = await openRender();
     await w.get('[data-testid="render-dialog-start"]').trigger("click");
@@ -349,5 +465,42 @@ describe("Publish to vault", () => {
     expect(footerLabels(w)).toEqual(["Cancel", "Publish"]);
     expect(w.get('[data-testid="publish-start"]').classes()).toContain("bg-primary");
     expect(w.text()).not.toContain("vault-b");
+  });
+});
+
+describe("the destination picker and the one rename path (fix round 1)", () => {
+  // Minor 4: "Setting the destination…" is on screen while it runs.
+  it("Checks' destination picker says it is setting the destination", async () => {
+    let release!: () => void;
+    const execute = vi.fn(
+      (req: { expectedRevision: number }) =>
+        new Promise((resolve) => {
+          release = () => resolve({ snapshot: { ...openResult().snapshot, revision: req.expectedRevision + 1 }, project: openResult().project });
+        }),
+    ) as unknown as EditorPort["execute"];
+    await openWithRenders({ execute, listVaults: () => Promise.resolve([{ id: "vault-1", name: "Notes" }]) });
+    const w = mount(ChecksDestination);
+    await flushPromises();
+    await w.get('[data-testid="checks-destination-vault"]').setValue("vault-1");
+    await w.get('[data-testid="checks-destination-save"]').trigger("click");
+    await flushPromises();
+    const line = w.get('[data-testid="checks-destination-status"]');
+    expect(line.text()).toBe("Setting the destination…");
+    expect(line.attributes("aria-live")).toBe("polite");
+    release();
+    await flushPromises();
+  });
+
+  // Minor 8: Save a copy and the Rename dialog share one rename path.
+  it("renameIfChanged trims, skips an unchanged or empty title, and sends one rename otherwise", async () => {
+    const execute = vi.fn((req: { expectedRevision: number }) =>
+      Promise.resolve({ snapshot: { ...openResult().snapshot, revision: req.expectedRevision + 1 }, project: openResult().project }),
+    );
+    await openWithRenders({ execute: execute as unknown as EditorPort["execute"] });
+    expect(await renameIfChanged("  Walkthrough ")).toBe("unchanged");
+    expect(await renameIfChanged("   ")).toBe("empty");
+    expect(execute).not.toHaveBeenCalled();
+    expect(await renameIfChanged(" Atlas ")).toBe("renamed");
+    expect(execute.mock.calls.map((c) => (c[0] as unknown as { command: unknown }).command)).toEqual([{ kind: "rename", title: "Atlas" }]);
   });
 });

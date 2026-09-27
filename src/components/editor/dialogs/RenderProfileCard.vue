@@ -4,7 +4,8 @@
  * §9.6 `.render-profile`): the concept's card, with its browser-only label
  * and limits replaced by the native truth (design D10) — the canvas size
  * and frame rate the render uses, an MP4 made by ffmpeg on this PC, the
- * project's length — and the native quality radios in the card, since
+ * render's length (the review range's, when one is ticked — fix round 1)
+ * — and the native quality radios in the card, since
  * quality is the one output choice a native render offers.
  */
 import { computed } from "vue";
@@ -38,7 +39,10 @@ const size = computed(() => `${props.canvas.width} × ${props.canvas.height} · 
       Output
     </span>
     <b class="text-[13px] font-semibold text-fg">{{ size }}</b>
-    <small class="text-[11px] text-fg-muted">{{ rangeTimeLabel(durationMs) }} · rendered with ffmpeg on this PC</small>
+    <small
+      data-testid="render-dialog-profile-length"
+      class="text-[11px] text-fg-muted"
+    >{{ rangeTimeLabel(durationMs) }} · rendered with ffmpeg on this PC</small>
     <fieldset class="mt-1 grid grid-cols-3 gap-2 max-[560px]:grid-cols-1">
       <legend class="sr-only">
         Quality

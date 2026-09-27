@@ -6,10 +6,12 @@
  * command; a refused rename leaves the dialog open with the draft, and the
  * refusal is said by the shell's feedback toast (visual-parity Task 7).
  * An unchanged title closes without sending anything; an empty one cannot
- * be applied, and Apply says why.
+ * be applied, and Apply says why. The rename itself is `renameIfChanged`,
+ * the path Save a copy's Project name shares (Task 21 fix round 1).
  */
 import { computed, ref, watch } from "vue";
 
+import { renameIfChanged } from "../../../editor/renameTutorial";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
@@ -34,14 +36,10 @@ const reason = computed(() => (next.value ? null : "A title can't be empty."));
 
 async function apply(): Promise<void> {
   if (reason.value || busy.value) return;
-  if (next.value === editorProject.snapshot?.title) {
-    emit("close");
-    return;
-  }
   busy.value = true;
-  const ok = await editorProject.execute({ kind: "rename", title: next.value });
+  const outcome = await renameIfChanged(draft.value);
   busy.value = false;
-  if (ok) emit("close");
+  if (outcome !== "refused") emit("close");
 }
 
 function cancel(): void {

@@ -20,10 +20,13 @@ defineProps<{
   blocking: CheckFinding[];
   revision: number;
   title: string;
-  /** The destination vault's name, or `null` when none is set. */
+  /** The destination vault's name ("…" while it loads), or `null` when
+   * none is set. */
   vaultName: string | null;
+  vaultBusy: boolean;
   folder: string;
   canvas: { width: number; height: number; fps: number };
+  /** How long the render will be: the range, when one is chosen. */
   durationMs: number;
 }>();
 const emit = defineEmits<{ (e: "review-checks"): void }>();
@@ -113,7 +116,11 @@ const FIELD = "flex min-w-0 flex-col gap-[5px] text-[10px] text-fg-secondary";
   >
     <div class="flex min-w-0 flex-col gap-[5px]">
       <dt>Destination vault</dt>
-      <dd class="truncate text-xs text-fg">
+      <dd
+        data-testid="render-dialog-destination-vault"
+        :aria-busy="vaultBusy"
+        class="truncate text-xs text-fg"
+      >
         {{ vaultName ?? "Not chosen yet" }}
       </dd>
     </div>

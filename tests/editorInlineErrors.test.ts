@@ -13,7 +13,7 @@
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { defineComponent, h, ref } from "vue";
+import { defineComponent, h } from "vue";
 
 import ChecksDestination from "../src/components/editor/dialogs/ChecksDestination.vue";
 import SaveProjectDialog from "../src/components/editor/dialogs/SaveProjectDialog.vue";
@@ -76,12 +76,11 @@ describe("an error shown inline is not also toasted (T7-1)", () => {
     expect(errorToasts()).toEqual(["That vault is gone again."]);
   });
 
-  it("an error raised while the surface is inactive is not claimed", async () => {
+  it("an error raised while the surface has no request of its own in flight is not claimed", async () => {
     await open();
-    const active = ref(false);
     const Surface = defineComponent({
       setup() {
-        const inline = useInlineLastError(() => active.value);
+        const inline = useInlineLastError();
         return () => h("p", inline.error.value?.message ?? "");
       },
     });
@@ -89,6 +88,33 @@ describe("an error shown inline is not also toasted (T7-1)", () => {
     await useEditorProjectStore().execute({ kind: "rename", title: "x" });
     await flushPromises();
     expect(w.text()).toBe("");
+    expect(errorToasts()).toEqual(["That vault is gone."]);
+  });
+
+  // Fix round 1 (minor 2): only the surface's OWN request is claimed — a
+  // background refusal while the dialog sits idle still toasts.
+  it("a background error while Save a copy is open but idle toasts and is not shown inline", async () => {
+    await open();
+    const w = mount(SaveProjectDialog, { props: { open: true, initialFormat: "portable" }, attachTo: document.body });
+    await flushPromises();
+    await useEditorProjectStore().execute({ kind: "rename", title: "elsewhere" });
+    await flushPromises();
+    expect(errorToasts()).toEqual(["That vault is gone."]);
+    expect(w.get('[data-testid="save-project-status"]').text()).toBe("");
+  });
+
+  // Fix round 1 (minor 3): the dialog stays mounted when closed.
+  it("a refusal after Save a copy was closed (still mounted) toasts", async () => {
+    await open();
+    const w = mount(SaveProjectDialog, { props: { open: true, initialFormat: "portable" }, attachTo: document.body });
+    await flushPromises();
+    await w.get('[data-testid="save-project-name"]').setValue("Atlas");
+    await w.get('[data-testid="save-project-confirm"]').trigger("click");
+    await flushPromises();
+    expect(errorToasts()).toEqual([]);
+    await w.setProps({ open: false });
+    await useEditorProjectStore().execute({ kind: "rename", title: "later" });
+    await flushPromises();
     expect(errorToasts()).toEqual(["That vault is gone."]);
   });
 

@@ -8,36 +8,13 @@
  * - A portable file carries the originals — also the parts trimmed or
  *   covered — so it says so, in the gold warning; a lightweight one lists
  *   every original as missing elsewhere.
- * - The status is derived from the export's own state, never a timer, so
- *   "Saved to" can only follow a receipt. `refusal` is a refused rename
- *   (the dialog's inline `lastError`), which stops the copy before it
- *   starts.
+ * - The status line is `saveCopyStatus.saveCopyLine`'s (pure, tested on
+ *   its own), announced politely — an alert when it is a failure.
  */
-import { computed } from "vue";
-
-import type { ExportState } from "../../../composables/useProjectPackage";
+import type { SaveCopyLine } from "../../../editor/saveCopyStatus";
 import type { PackageFormat } from "../../../editorTypes";
 
-const props = defineProps<{ format: PackageFormat; state: ExportState; refusal: string | null }>();
-
-function statusOf(s: ExportState): { text: string; alert: boolean } {
-  switch (s.phase) {
-    case "pending":
-      return { text: "Preparing the project file…", alert: false };
-    case "success":
-      return { text: `Saved to ${s.fileName}`, alert: false };
-    case "failure":
-      return { text: `The project file was not saved. ${s.message}`, alert: true };
-    case "cancelled":
-      return { text: "Nothing was saved — the file dialog was closed.", alert: false };
-    default:
-      return { text: "", alert: false };
-  }
-}
-
-const status = computed(() =>
-  props.refusal ? { text: `The copy was not saved. ${props.refusal}`, alert: true } : statusOf(props.state),
-);
+defineProps<{ format: PackageFormat; status: SaveCopyLine }>();
 </script>
 
 <template>
@@ -60,6 +37,7 @@ const status = computed(() =>
   <p
     data-testid="save-project-status"
     :role="status.alert ? 'alert' : 'status'"
+    aria-live="polite"
     class="min-h-4 text-xs break-words"
     :class="status.alert ? 'text-danger-fg' : 'text-fg-secondary'"
   >

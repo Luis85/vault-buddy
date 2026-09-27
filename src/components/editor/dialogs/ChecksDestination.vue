@@ -8,9 +8,10 @@
  * picks a vault per publish and never writes it back.
  *
  * A refused edit is the store's `lastError`, and this picker prints it
- * beside its own Save — so while it is on screen it claims `lastError`
- * (`useInlineLastError`, ruling T7-1) and the shell's feedback watcher
- * does not toast the same refusal a second time.
+ * beside its own Save — so for that edit's round trip it claims
+ * `lastError` (`useInlineLastError`, ruling T7-1) and the shell's feedback
+ * watcher does not toast the same refusal a second time. While the edit
+ * runs, its reason is on screen too, not only in Save's tooltip (D14).
  */
 import { computed, onMounted, ref } from "vue";
 
@@ -24,7 +25,7 @@ const emit = defineEmits<{ (e: "done"): void; (e: "cancel"): void }>();
 
 const editorProject = useEditorProjectStore();
 const destination = editorProject.project?.destination;
-const inline = useInlineLastError(() => true);
+const inline = useInlineLastError();
 
 const vaults = ref<VaultChoice[]>([]);
 const vaultId = ref(destination?.vault ?? "");
@@ -51,13 +52,14 @@ async function save(): Promise<void> {
   if (reason.value) return;
   saving.value = true;
   listError.value = null;
-  inline.clear();
-  const ok = await editorProject.execute({
-    kind: "setDestination",
-    vaultId: vaultId.value,
-    folder: folder.value.trim(),
-    dated: dated.value,
-  });
+  const ok = await inline.track(() =>
+    editorProject.execute({
+      kind: "setDestination",
+      vaultId: vaultId.value,
+      folder: folder.value.trim(),
+      dated: dated.value,
+    }),
+  );
   saving.value = false;
   if (ok) emit("done");
 }
@@ -93,6 +95,13 @@ async function save(): Promise<void> {
         data-testid="checks-destination-reason"
         class="text-[10px] text-fg-muted"
       >Choose a vault first.</span>
+      <span
+        v-else
+        data-testid="checks-destination-status"
+        role="status"
+        aria-live="polite"
+        class="text-[10px] text-fg-muted"
+      >{{ reason ?? "" }}</span>
       <DialogButton
         data-testid="checks-destination-cancel"
         @click="emit('cancel')"

@@ -19,11 +19,14 @@
  * says where they stay instead of offering a box that could not be
  * honoured (design D14).
  *
- * The status line (`SaveCopyStatus`) reports pending, success, failure and
- * cancel, and says "Saved to <file name>" ONLY from a matching receipt. A
- * refused rename is the store's `lastError`, shown in that status line;
- * this dialog claims it while open (`useInlineLastError`, ruling T7-1) so
- * the shell does not toast it too. Escape and the backdrop close the dialog
+ * The status line (`saveCopyStatus.saveCopyLine`) reports the rename,
+ * pending, success, failure and cancel, and says "Saved to <file name>"
+ * ONLY from a matching receipt. A refused rename is the store's
+ * `lastError`, shown in that status line; the dialog claims it for the
+ * rename's own round trip (`useInlineLastError`, ruling T7-1) so the shell
+ * does not toast it too — and a revision conflict on it says so. A rename
+ * that landed before the copy was dismissed or failed is stated (Ruling
+ * T21-4). Escape and the backdrop close the dialog
  * except while the rename or the save is pending, whose reply the dialog
  * still owes the user. Every Rust message renders as text, never markup.
  */
@@ -31,6 +34,8 @@ import { computed, ref, watch } from "vue";
 
 import { useInlineLastError } from "../../../composables/useInlineLastError";
 import { useProjectExport } from "../../../composables/useProjectPackage";
+import { renameIfChanged } from "../../../editor/renameTutorial";
+import { PREPARING, saveCopyLine } from "../../../editor/saveCopyStatus";
 import type { PackageFormat } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import EditorIcon from "../icons/EditorIcon.vue";
@@ -49,10 +54,13 @@ const inline = useInlineLastError(() => props.open);
 const format = ref<PackageFormat>(props.initialFormat);
 const name = ref("");
 const renaming = ref(false);
+/** A revision conflict met the rename (fix round 1, minor 5). */
+const conflict = ref(false);
+/** The title this save renamed the tutorial to (Ruling T21-4). */
+const renamedTo = ref<string | null>(null);
 
 /** What every copy keeps (concept §9.5 `.project-save-checklist`). */
 const KEPT = ["All tracks & clips", "Fades & teaching layers", "Mixer & chapter markers", "Playhead & workspace layout"];
-const PREPARING = "Preparing the project file…";
 
 watch(
   () => props.open,
@@ -61,6 +69,8 @@ watch(
     format.value = props.initialFormat;
     name.value = editorProject.snapshot?.title ?? "";
     exporter.reset();
+    conflict.value = false;
+    renamedTo.value = null;
   },
   { immediate: true },
 );
@@ -73,18 +83,32 @@ const reason = computed<string | null>(() => {
   return name.value.trim() ? null : "Give the project a name.";
 });
 
-/** Rename first when the name changed; the copy is of what is on screen. */
+const status = computed(() =>
+  saveCopyLine({
+    state: state.value,
+    renaming: renaming.value,
+    refusal: inline.error.value?.message ?? null,
+    conflict: conflict.value,
+    renamedTo: renamedTo.value,
+  }),
+);
+
+/** Rename first when the name changed (`renameIfChanged`, the Rename
+ * dialog's own path); the copy is of what is on screen. A rename that
+ * lands stays — it is undoable — and is said if the copy then does not. */
 async function save(): Promise<void> {
   if (reason.value) return;
-  inline.clear();
   exporter.reset();
-  const title = name.value.trim();
-  if (title !== editorProject.snapshot?.title) {
-    renaming.value = true;
-    const ok = await editorProject.execute({ kind: "rename", title });
-    renaming.value = false;
-    if (!ok) return;
+  conflict.value = false;
+  renamedTo.value = null;
+  renaming.value = true;
+  const outcome = await inline.track(() => renameIfChanged(name.value));
+  renaming.value = false;
+  if (outcome === "refused") {
+    conflict.value = inline.error.value === null;
+    return;
   }
+  if (outcome === "renamed") renamedTo.value = name.value.trim();
   await exporter.run(format.value);
 }
 
@@ -177,8 +201,7 @@ function close(): void {
 
       <SaveCopyStatus
         :format="format"
-        :state="state"
-        :refusal="inline.error.value?.message ?? null"
+        :status="status"
       />
     </div>
 

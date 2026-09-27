@@ -70,7 +70,9 @@ const products = useEditorProductsStore();
 const checks = useEditorChecksStore();
 const projectSave = useProjectSave();
 /** Looked up only while the dialog is open: it stays mounted, closed. */
-const vaultName = useVaultName(() => (props.open ? (editorProject.project?.destination.vault ?? "") : ""));
+const { label: vaultName, busy: vaultBusy } = useVaultName(() =>
+  props.open ? (editorProject.project?.destination.vault ?? "") : "",
+);
 const canvas = computed(() => editorProject.project?.canvas ?? { width: 0, height: 0, fps: 0 });
 
 const nameDraft = ref<string | null>(null);
@@ -157,6 +159,12 @@ const startReason = computed<string | null>(() => {
   return null;
 });
 
+/** What the render will be as long as: the range, when one is chosen. */
+const outputMs = computed(() => {
+  const range = scope.value === "range" ? chosenRange.value : null;
+  return range ? range.endMs - range.startMs : durationMs.value;
+});
+
 const showForm = computed(() => jobId.value === null && !refusal.value);
 const productId = computed(() => (job.value && isComplete(job.value) ? (job.value.terminal?.productId ?? null) : null));
 
@@ -216,6 +224,11 @@ const facts = computed(() => ({
 /** Save project instead: the header's Save project, then out of the way.
  * Never while a start is in flight — that render still needs following. */
 const saveInsteadReason = computed(() => (busy.value ? "Starting the render…" : projectSave.disabledReason.value));
+/** Save project instead's reason when Render's own line does not already
+ * say it — on screen, not only in the tooltip (D14, fix round 1). */
+const saveOnlyReason = computed(() =>
+  saveInsteadReason.value === startReason.value ? null : saveInsteadReason.value,
+);
 function saveInstead(): void {
   if (saveInsteadReason.value) return;
   projectSave.save();
@@ -263,9 +276,10 @@ function showProducts(): void {
           :revision="facts.revision"
           :title="facts.title"
           :vault-name="vaultName"
+          :vault-busy="vaultBusy"
           :folder="facts.folder"
           :canvas="canvas"
-          :duration-ms="durationMs"
+          :duration-ms="outputMs"
           @review-checks="reviewChecks"
         />
       </template>
@@ -294,11 +308,18 @@ function showProducts(): void {
       v-if="showForm"
       #footer
     >
-      <span
-        v-if="startReason"
-        data-testid="render-dialog-start-reason"
-        class="mr-auto text-[10px] text-fg-muted"
-      >{{ startReason }}</span>
+      <span class="mr-auto flex flex-col text-[10px] text-fg-muted">
+        <span
+          data-testid="render-dialog-start-reason"
+          role="status"
+          aria-live="polite"
+        >{{ startReason ?? "" }}</span>
+        <span
+          data-testid="render-dialog-save-reason"
+          role="status"
+          aria-live="polite"
+        >{{ saveOnlyReason ?? "" }}</span>
+      </span>
       <DialogButton
         data-testid="render-dialog-save-instead"
         :reason="saveInsteadReason"
