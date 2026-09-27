@@ -23,10 +23,15 @@
  * icon in the accent colour, and a 5px gold dot after the label while a
  * walkthrough is paused part way, so Help says there is a lesson to come
  * back to (F1 resumes it).
+ *
+ * Visual-parity Task 11: the preview header's View menu asks for the
+ * shortcut table ("Keyboard shortcuts & help…") through the reveal bus —
+ * the learning center stays this component's.
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
+import { onReveal } from "../../../editor/revealBus";
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
 import { toEditorError, useEditorProjectStore } from "../../../stores/editorProject";
 import { useNotificationsStore } from "../../../stores/notifications";
@@ -81,6 +86,10 @@ function choose(item: HelpItem): void {
   centerTab.value = item === "shortcuts" ? "shortcuts" : "walkthrough";
   centerOpen.value = true;
 }
+
+/** The View menu's "Keyboard shortcuts & help…" (visual-parity Task 11):
+ * the learning center, on its Shortcuts tab — this button owns it. */
+onReveal("shortcuts", () => choose("shortcuts"));
 
 function onEscape(event: KeyboardEvent): void {
   if (!open.value) return;

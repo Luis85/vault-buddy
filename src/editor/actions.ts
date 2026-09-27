@@ -40,10 +40,11 @@
  * needs an extra user choice (which of the four canvas presets) this
  * table cannot pre-build — `resolveActions` still gates it (its own
  * `RESOLVERS` entry, `resolveProjectGated`: enabled whenever a project is
- * open), but Task 32's ratio control in `PreviewToolbar.vue` sends
- * `setCanvas` directly, never through `commandFor`. `commandFor` returns
- * `null` for all of these — a caller must special-case them (see
- * `PreviewToolbar.vue`'s `onActivate`), never send a `null` command to
+ * open), but the preview header's Frame dialog (`FrameDialog.vue`, which
+ * replaced Task 32's ratio select) sends `setCanvas` directly, never
+ * through `commandFor`. `commandFor` returns `null` for all of these — a
+ * caller must special-case them (the preview header drives its panel
+ * toggles, Review and the ratio itself), never send a `null` command to
  * Rust.
  *
  * **`copy`/`paste` and the clipboard.** `ActionContext` carries the

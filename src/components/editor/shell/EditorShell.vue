@@ -10,7 +10,8 @@
  * named regions (`library`, `preview-toolbar`, `preview`, `inspector`,
  * `timeline`) so the grid, the responsive collapse and the header were all
  * real and testable before there was anything to put in them. Task 17
- * filled `preview-toolbar` with a real `PreviewToolbar` (below); later
+ * filled `preview-toolbar` with a real toolbar, which visual-parity Task 11
+ * replaced with `PreviewHeader` (below); later
  * tasks fill the four REMAINING region slots (`library`, `preview`,
  * `inspector`, `timeline`) with real content.
  *
@@ -62,7 +63,7 @@
  * `tests/e2e/editorShell.spec.ts` contract).
  *
  * **`NotificationHost` (Task 32 fix round 1).** The editor window had no
- * toast surface at all until `PreviewToolbar`'s ratio control needed one —
+ * toast surface at all until the preview toolbar's ratio control needed one —
  * mounted here, once, the same `useNotificationsStore`/`NotificationHost`
  * pair `ActionPanel.vue` already uses in the panel window (each webview
  * gets its own Pinia instance, AGENTS.md's window model, so this is a
@@ -111,7 +112,7 @@ import GuideInvitation from "../guide/GuideInvitation.vue";
 import TimelineSplitter from "../timeline/TimelineSplitter.vue";
 import EditorHeader from "./EditorHeader.vue";
 import EditorStatusBar from "./EditorStatusBar.vue";
-import PreviewToolbar from "./PreviewToolbar.vue";
+import PreviewHeader from "./PreviewHeader.vue";
 
 /** The header's Project menu — Open project… (visual-parity Task 8), Open
  * a project file (Task 39) and Discard project (Task 59) — forwarded to
@@ -147,8 +148,9 @@ onBeforeUnmount(() => {
  * component's own job shrinks to the one thing that stays view-local:
  * applying `document.documentElement`'s `data-theme`, which
  * `src/style.css`'s `[data-theme]` blocks read. The seed is no longer the
- * OS preference: the editor opens dark (visual-parity design D1). The
- * editor window is its own webview, so this touches no other window.
+ * OS preference: the editor opens dark (visual-parity design D1), and the
+ * switch is the preview header's View → Light theme (Task 11). The editor
+ * window is its own webview, so this touches no other window.
  */
 const workspace = useEditorWorkspaceStore();
 watch(
@@ -158,9 +160,6 @@ watch(
   },
   { immediate: true },
 );
-function toggleTheme() {
-  workspace.toggleTheme();
-}
 
 // ---- keyboard shortcut dispatcher (Task 21) --------------------------------
 
@@ -271,8 +270,6 @@ function onShellKeydown(event: KeyboardEvent) {
     @keydown="onShellKeydown"
   >
     <EditorHeader
-      :theme="workspace.theme"
-      @toggle-theme="toggleTheme"
       @open-project="(id) => emit('open-project', id)"
       @open-project-file="emit('open-project-file')"
       @discard-project="emit('discard-project')"
@@ -299,16 +296,10 @@ function onShellKeydown(event: KeyboardEvent) {
         data-testid="editor-shell-preview"
         class="col-start-2 row-start-1 flex min-h-0 min-w-0 flex-col overflow-hidden bg-stage"
       >
-        <!-- The preview's one header row (§4.1). `PreviewToolbar` owns the
-             `data-testid="preview-toolbar"` row itself, so the Playwright
-             "exactly one row" count holds on its root. -->
-        <PreviewToolbar
-          :library-open="workspace.libraryVisible"
-          :inspector-open="workspace.inspectorVisible"
-          @toggle-library="workspace.toggleLibrary()"
-          @toggle-inspector="workspace.toggleInspector()"
-          @focus-preview="workspace.toggleFocusPreview()"
-        />
+        <!-- The preview's one header row (§4.1, visual-parity Task 11).
+             `PreviewHeader` owns the `data-testid="preview-header"` row
+             and drives the panel toggles and the theme itself. -->
+        <PreviewHeader />
         <div class="flex min-h-0 grow flex-col text-micro text-fg-subtle">
           <slot name="preview">
             Preview — filled by the root (`PreviewSurface`, Task 22).

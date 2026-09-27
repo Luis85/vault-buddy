@@ -28,10 +28,18 @@
  * plus teaching cues (below); it does not show captions or transitions, and
  * its sync is element-seek accurate, not frame accurate.
  *
- * `clientToCanvas` (`editor/previewGeometry.ts`, pure and tested) maps a
- * pointer on the stage into output-canvas pixels, undoing the letterbox;
- * the result is emitted as `canvas-pointerdown` for the canvas tools that
- * arrive in later tasks.
+ * **Clicking the picture selects** (visual-parity Task 11; design D15, the
+ * no-op audit's finding 5 — this used to emit a `canvas-pointerdown` nobody
+ * listened to): a primary press on the stage maps the pointer into the
+ * canvas (`cueGeometry.pointerToCanvas`, which undoes the letterbox and an
+ * active zoom) and selects the topmost visible clip under it
+ * (`stageHit.clipAtPoint`); a press on no picture clears the selection. The
+ * layout box and the cue handles are siblings drawn over the stage, so a
+ * press on them never reaches it: their own drags win on their own areas.
+ *
+ * **The stage's frame** (§4.2): 14px/20px of `stage` around the canvas
+ * (10px/14px in a window 760px tall or less), the canvas itself on the
+ * concept's near-black with a 6px radius and a soft shadow.
  *
  * **Layout handles** (Task 31): `LayoutHandles` is a SIBLING of the stage
  * in one shared wrapper, never inside it — the stage is where the picture
@@ -49,17 +57,17 @@
  * full-frame clip stays reachable. An active zoom cue scales the media
  * layers and the cue overlay alike (`cueGeometry.activeZoom`), clipped to
  * the canvas frame so a zoom never spills into the letterbox; it follows
- * the controller's 10 Hz time, so the ramp steps rather than glides. A
- * click on the bare stage drops a cue selection.
+ * the controller's 10 Hz time, so the ramp steps rather than glides.
  */
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
-import { activeCues, activeZoom } from "../../../editor/cueGeometry";
+import { activeCues, activeZoom, pointerToCanvas } from "../../../editor/cueGeometry";
 import { EditorPortError } from "../../../editor/port";
 import type { AudioContextLike } from "../../../editor/previewController";
 import { PreviewController } from "../../../editor/previewController";
-import { clientToCanvas, containRect } from "../../../editor/previewGeometry";
+import { containRect } from "../../../editor/previewGeometry";
+import { clipAtPoint } from "../../../editor/stageHit";
 import type { Effect, Project } from "../../../editorTypes";
 import { logWarning } from "../../../logging";
 import { useEditorProjectStore } from "../../../stores/editorProject";
@@ -75,10 +83,6 @@ const props = defineProps<{
    * the controller creates a real `AudioContext` on first use. */
   createAudioContext?: () => AudioContextLike | null;
 }>();
-const emit = defineEmits<{
-  (e: "canvas-pointerdown", point: { x: number; y: number }): void;
-}>();
-
 const editorProject = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
 
@@ -244,79 +248,89 @@ function togglePlay(): void {
   else controller.play();
 }
 
+/** D15: select the topmost visible clip under a primary press, or clear
+ * the selection (and any selected cue) on empty stage. */
 function onPointerDown(event: PointerEvent): void {
-  if (workspace.selected?.type === "effect") workspace.setSelected(null);
   const el = stageRef.value;
-  if (!el) return;
-  emit("canvas-pointerdown", clientToCanvas(event, el.getBoundingClientRect(), canvas.value));
+  const project = editorProject.project;
+  if (event.button !== 0 || !el || !project) return;
+  const point = pointerToCanvas(event, el.getBoundingClientRect(), canvas.value, zoom.value);
+  const hit = clipAtPoint(project, currentMs.value, point);
+  workspace.select(hit ? [hit] : []);
+  workspace.setSelected(null);
 }
 </script>
 
 <template>
   <div
     data-testid="preview-surface"
-    class="flex min-h-0 grow flex-col gap-1"
+    class="flex min-h-0 grow flex-col"
   >
-    <div class="relative min-h-0 w-full grow basis-0">
-      <div
-        ref="stageRef"
-        data-testid="preview-stage"
-        class="absolute inset-0 overflow-hidden rounded-control bg-stage"
-        @pointerdown="onPointerDown"
-      >
+    <div
+      class="min-h-0 w-full grow basis-0 bg-stage"
+      :class="workspace.shortWindow ? 'px-3.5 py-2.5' : 'px-5 py-3.5'"
+    >
+      <div class="relative h-full w-full">
         <div
-          data-testid="preview-canvas-frame"
-          class="absolute bg-black"
-          :style="{
-            left: `${frame.left}px`,
-            top: `${frame.top}px`,
-            width: `${frame.width}px`,
-            height: `${frame.height}px`,
-          }"
-        />
-        <div
-          class="absolute inset-0"
-          :style="zoomClip"
+          ref="stageRef"
+          data-testid="preview-stage"
+          class="absolute inset-0 overflow-hidden"
+          @pointerdown="onPointerDown"
         >
           <div
-            ref="layerHostRef"
-            data-testid="preview-layers"
+            data-testid="preview-canvas-frame"
+            class="absolute rounded-[6px] bg-canvas shadow-[var(--editor-canvas-shadow)]"
+            :style="{
+              left: `${frame.left}px`,
+              top: `${frame.top}px`,
+              width: `${frame.width}px`,
+              height: `${frame.height}px`,
+            }"
+          />
+          <div
             class="absolute inset-0"
-            :style="layersStyle"
+            :style="zoomClip"
+          >
+            <div
+              ref="layerHostRef"
+              data-testid="preview-layers"
+              class="absolute inset-0"
+              :style="layersStyle"
+            />
+          </div>
+          <CueOverlay
+            :project="editorProject.project"
+            :time-ms="currentMs"
+            :frame="frame"
+            :zoom="zoom"
+            :draft="cueDraft"
+          />
+          <CaptionOverlay
+            :project="editorProject.project"
+            :time-ms="currentMs"
+            :frame="frame"
           />
         </div>
-        <CueOverlay
-          :project="editorProject.project"
-          :time-ms="currentMs"
+        <LayoutHandles
           :frame="frame"
+          :canvas="canvas"
           :zoom="zoom"
-          :draft="cueDraft"
+          @preview="onLayoutPreview"
         />
-        <CaptionOverlay
-          :project="editorProject.project"
-          :time-ms="currentMs"
+        <CueHandles
           :frame="frame"
+          :canvas="canvas"
+          :time-ms="currentMs"
+          :zoom="zoom"
+          @preview="cueDraft = $event"
         />
       </div>
-      <LayoutHandles
-        :frame="frame"
-        :canvas="canvas"
-        :zoom="zoom"
-        @preview="onLayoutPreview"
-      />
-      <CueHandles
-        :frame="frame"
-        :canvas="canvas"
-        :time-ms="currentMs"
-        :zoom="zoom"
-        @preview="cueDraft = $event"
-      />
     </div>
     <p
       v-if="unavailable.length > 0"
       data-testid="preview-unavailable"
       role="status"
-      class="text-micro text-danger-fg"
+      class="px-3 text-micro text-danger-fg"
     >
       Not shown in the preview (media unavailable): {{ unavailable.join(", ") }}
     </p>

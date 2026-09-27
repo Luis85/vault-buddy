@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import RenderDialog from "../src/components/editor/dialogs/RenderDialog.vue";
 import EditorHeader from "../src/components/editor/shell/EditorHeader.vue";
-import PreviewToolbar from "../src/components/editor/shell/PreviewToolbar.vue";
+import PreviewHeader from "../src/components/editor/shell/PreviewHeader.vue";
 import { EditorPortError } from "../src/editor/port";
 import { revealSerial } from "../src/editor/revealBus";
 import { useEditorJobsStore } from "../src/stores/editorJobs";
@@ -230,15 +230,15 @@ describe("EditorHeader — Render video", () => {
   });
 });
 
-describe("PreviewToolbar — Review (F18)", () => {
+describe("the preview header's Review (F18)", () => {
   async function review(select: string[], playheadMs: number) {
     const mediaUrl = vi.fn(() => Promise.resolve("C:\\data\\cache\\review-job-0.mp4"));
     const env = await openWithRenders({ mediaUrl });
     const workspace = useEditorWorkspaceStore();
     workspace.select(select);
     workspace.setPlayhead(playheadMs);
-    const w = mount(PreviewToolbar, { props: { overflowCount: 0 } });
-    await w.get('[data-testid="preview-toolbar-render"]').trigger("click");
+    const w = mount(PreviewHeader);
+    await w.get('[data-testid="preview-review"]').trigger("click");
     await flushPromises();
     return { ...env, w, mediaUrl };
   }

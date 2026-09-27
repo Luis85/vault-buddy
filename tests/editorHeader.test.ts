@@ -13,7 +13,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import EditorShell from "../src/components/editor/shell/EditorShell.vue";
 import type { CheckFinding, EditorCommand, EditorOpenResult, EditorSnapshot, Project } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
-import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
 
 enableAutoUnmount(afterEach);
@@ -238,23 +237,19 @@ describe("what the header carries", () => {
     expect(w.find('[data-testid="editor-header-project-menu"]').exists()).toBe(true);
   });
 
-  it("the theme toggle is an icon, not an emoji, and still switches the theme (ruling P5)", async () => {
+  it("the theme toggle left the header for the View menu's Light theme (ruling P5)", async () => {
     const w = await openShell();
-    const toggle = w.get('[data-testid="editor-header-theme-toggle"]');
-    expect(toggle.find("svg").exists()).toBe(true);
-    expect(toggle.text()).toBe("");
-    expect(toggle.attributes("aria-label")).toBe("Switch to light theme");
-    await toggle.trigger("click");
-    expect(useEditorWorkspaceStore().theme).toBe("light");
+    expect(w.find('[data-testid="editor-header-theme-toggle"]').exists()).toBe(false);
+    expect(w.get('[data-testid="editor-header"]').find('[aria-label$="theme"]').exists()).toBe(false);
   });
 
-  it("the library and inspector toggles left the header; the preview toolbar opens the drawers", async () => {
+  it("the library and inspector toggles left the header; the preview header opens the drawers", async () => {
     setViewportWidth(960);
     const w = await openShell();
     expect(w.find('[data-testid="editor-header-library-toggle"]').exists()).toBe(false);
     expect(w.find('[data-testid="editor-header-inspector-toggle"]').exists()).toBe(false);
     expect(w.get('[data-testid="editor-shell-inspector"]').isVisible()).toBe(false);
-    await w.get('[data-testid="preview-toolbar-toggleInspector"]').trigger("click");
+    await w.get('[data-testid="preview-properties-toggle"]').trigger("click");
     expect(w.get('[data-testid="editor-shell-inspector"]').isVisible()).toBe(true);
   });
 });

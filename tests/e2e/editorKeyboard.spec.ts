@@ -182,8 +182,8 @@ test("keyboard-only journey completes", async ({ page }) => {
   await page.keyboard.press("Delete");
   await expect(page.getByTestId("clip-body")).toHaveCount(0);
 
-  // Add a text cue from the preview toolbar with Enter, then type its text.
-  await tabTo(page, "preview-toolbar-addText");
+  // Add a text cue from the preview header's tool strip with Enter, then type its text.
+  await tabTo(page, "preview-tool-text");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("effect-section")).toBeVisible();
   await tabTo(page, "effect-field-text");
@@ -313,7 +313,7 @@ async function lowContrast(page: Page): Promise<string[]> {
       const id = el.closest("[data-testid]")?.getAttribute("data-testid") ?? el.tagName;
       return ratio < 4.5 ? `${id} "${text.slice(0, 30)}" ${ratio.toFixed(2)}:1` : null;
     };
-    const roots = ["editor-header", "editor-shell-library", "editor-shell-inspector", "editor-timeline", "editor-statusbar", "preview-toolbar"]
+    const roots = ["editor-header", "editor-shell-library", "editor-shell-inspector", "editor-timeline", "editor-statusbar", "preview-header"]
       .map((id) => document.querySelector(`[data-testid="${id}"]`))
       .concat(Array.from(document.querySelectorAll('[role="menu"]')))
       .concat(Array.from(document.querySelectorAll('[role="dialog"]')))

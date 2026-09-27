@@ -279,16 +279,65 @@ describe("PreviewSurface", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("a pointer on the stage is reported in output-canvas pixels, letterbox undone", async () => {
-    const { w } = await mountSurface(() => Promise.resolve("C:\\x\\cap.mp4"));
-    const stage = w.get('[data-testid="preview-stage"]').element as HTMLElement;
-    stage.getBoundingClientRect = () => ({ left: 20, top: 10, width: 800, height: 600, right: 820, bottom: 610, x: 20, y: 10, toJSON: () => ({}) });
-    // 1280x720 in 800x600 letterboxes to 800x450 at top 75: the stage's
-    // centre is the canvas centre.
-    await w.get('[data-testid="preview-stage"]').trigger("pointerdown", { clientX: 420, clientY: 310 });
-    const [[point]] = w.emitted("canvas-pointerdown") as [[{ x: number; y: number }]];
-    expect(point.x).toBeCloseTo(640, 6);
-    expect(point.y).toBeCloseTo(360, 6);
+  // Visual-parity Task 11 (design D15, no-op audit finding 5): the stage
+  // click used to emit a `canvas-pointerdown` nothing listened to. It now
+  // selects the TOPMOST visible clip under the pointer — mapped through the
+  // letterbox — and an empty spot clears the selection.
+  describe("clicking the picture selects (D15)", () => {
+    const LAYERED: Project = {
+      ...PROJECT,
+      tracks: [
+        { id: "v1", kind: "video", name: "Webcam", visible: true, locked: false, muted: false, solo: false, volume: 1 },
+        { id: "v2", kind: "video", name: "Screen", visible: true, locked: false, muted: false, solo: false, volume: 1 },
+      ],
+      clips: [
+        { ...PROJECT.clips[0], id: "c1", track_id: "v2" },
+        { ...PROJECT.clips[0], id: "c2", track_id: "v1", x: 0.75, y: 0.05, w: 0.2, h: 0.2 },
+      ],
+    };
+
+    /** 1280x720 in an 800x600 stage at (20, 10) letterboxes to 800x450 at
+     * top 75: canvas fraction (fx, fy) is client (20 + 800fx, 85 + 450fy). */
+    async function surface() {
+      const { w } = await mountSurface(() => Promise.resolve("C:\\x\\cap.mp4"), LAYERED);
+      const stage = w.get('[data-testid="preview-stage"]').element as HTMLElement;
+      stage.getBoundingClientRect = () => ({ left: 20, top: 10, width: 800, height: 600, right: 820, bottom: 610, x: 20, y: 10, toJSON: () => ({}) });
+      const click = (fx: number, fy: number) =>
+        w.get('[data-testid="preview-stage"]').trigger("pointerdown", { button: 0, clientX: 20 + 800 * fx, clientY: 85 + 450 * fy });
+      return { w, click, workspace: useEditorWorkspaceStore() };
+    }
+
+    it("a click over c1 alone selects c1; over the picture-in-picture selects the clip on top", async () => {
+      const { click, workspace } = await surface();
+      await click(0.5, 0.5);
+      expect(workspace.selectionClipIds).toEqual(["c1"]);
+      await click(0.85, 0.15);
+      expect(workspace.selectionClipIds).toEqual(["c2"]);
+    });
+
+    it("a click outside every layer clears the selection and any selected cue", async () => {
+      const { click, workspace } = await surface();
+      workspace.select(["c1"]);
+      workspace.setSelected({ type: "effect", id: "fx" });
+      await click(0.5, -0.1); // the letterbox bar above the picture
+      expect(workspace.selectionClipIds).toEqual([]);
+      expect(workspace.selected).toBeNull();
+    });
+
+    it("a hidden track's clip is not under the pointer", async () => {
+      const hidden: Project = { ...LAYERED, tracks: [{ ...LAYERED.tracks[0], visible: false }, LAYERED.tracks[1]] };
+      const { w } = await mountSurface(() => Promise.resolve("C:\\x\\cap.mp4"), hidden);
+      const stage = w.get('[data-testid="preview-stage"]').element as HTMLElement;
+      stage.getBoundingClientRect = () => ({ left: 20, top: 10, width: 800, height: 600, right: 820, bottom: 610, x: 20, y: 10, toJSON: () => ({}) });
+      await w.get('[data-testid="preview-stage"]').trigger("pointerdown", { button: 0, clientX: 20 + 800 * 0.85, clientY: 85 + 450 * 0.15 });
+      expect(useEditorWorkspaceStore().selectionClipIds).toEqual(["c1"]);
+    });
+
+    it("a secondary-button press selects nothing", async () => {
+      const { w, workspace } = await surface();
+      await w.get('[data-testid="preview-stage"]').trigger("pointerdown", { button: 2, clientX: 420, clientY: 310 });
+      expect(workspace.selectionClipIds).toEqual([]);
+    });
   });
 
   it("a new session rebuilds the preview and asks for media under the new session id", async () => {

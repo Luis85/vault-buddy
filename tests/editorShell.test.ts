@@ -206,12 +206,20 @@ function mountWithField() {
   });
 }
 
+/** View → Focus preview (visual-parity Task 11: the toggle lives in the
+ * preview header's View menu). */
+async function focusPreview(w: ReturnType<typeof mount>): Promise<void> {
+  await w.get('[data-testid="preview-view-menu"]').trigger("click");
+  await flushPromises();
+  await w.get('[data-testid="preview-view-panel-item-focusPreview"]').trigger("click");
+}
+
 function setViewportHeight(height: number) {
   Object.defineProperty(window, "innerHeight", { writable: true, configurable: true, value: height });
 }
 
 describe("EditorShell — the frame (visual-parity Task 4; design D4, D5)", () => {
-  it("at or below 1080px the inspector is a closed drawer; the preview toolbar's toggle opens it and the header stays", async () => {
+  it("at or below 1080px the inspector is a closed drawer; the preview header's properties toggle opens it and the header stays", async () => {
     setViewportWidth(960);
     // `isVisible()` reads `getComputedStyle`, which happy-dom only resolves
     // for a node actually attached to `document` (the `TabGroup.vue`
@@ -220,7 +228,7 @@ describe("EditorShell — the frame (visual-parity Task 4; design D4, D5)", () =
     // would make this test pass against BOTH a working and a broken drawer.
     const w = mount(EditorShell, { attachTo: document.body });
 
-    const toggle = w.get('[data-testid="preview-toolbar-toggleInspector"]');
+    const toggle = w.get('[data-testid="preview-properties-toggle"]');
     expect(toggle.attributes("aria-pressed")).toBe("false");
     expect(w.get('[data-testid="editor-shell-inspector"]').isVisible()).toBe(false);
     // The library is still a column at this width.
@@ -239,14 +247,14 @@ describe("EditorShell — the frame (visual-parity Task 4; design D4, D5)", () =
     setViewportWidth(820);
     const w = mount(EditorShell, { attachTo: document.body });
 
-    const toggle = w.get('[data-testid="preview-toolbar-toggleLibrary"]');
+    const toggle = w.get('[data-testid="preview-library-toggle"]');
     expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(false);
     await toggle.trigger("click");
     expect(toggle.attributes("aria-pressed")).toBe("true");
     expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(true);
   });
 
-  it("above 1080px (1081) there is no header toggle, and the preview toolbar's library toggle collapses the column", async () => {
+  it("above 1080px (1081) there is no header toggle, and the preview header's library toggle collapses the column", async () => {
     setViewportWidth(1081);
     const w = mount(EditorShell, { attachTo: document.body });
 
@@ -259,18 +267,18 @@ describe("EditorShell — the frame (visual-parity Task 4; design D4, D5)", () =
       "grid-template-columns: var(--editor-sidebar) minmax(0,1fr) var(--editor-inspector)",
     );
 
-    await w.get('[data-testid="preview-toolbar-toggleLibrary"]').trigger("click");
+    await w.get('[data-testid="preview-library-toggle"]').trigger("click");
 
     expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(false);
     expect(workspace.attributes("style")).toContain("grid-template-columns: 0px minmax(0,1fr) var(--editor-inspector)");
-    expect(w.get('[data-testid="preview-toolbar-toggleLibrary"]').attributes("aria-pressed")).toBe("false");
+    expect(w.get('[data-testid="preview-library-toggle"]').attributes("aria-pressed")).toBe("false");
   });
 
   it("Focus preview collapses both columns at full width", async () => {
     setViewportWidth(1440);
     const w = mount(EditorShell, { attachTo: document.body });
 
-    await w.get('[data-testid="preview-toolbar-focusPreview"]').trigger("click");
+    await focusPreview(w);
 
     expect(w.get('[data-testid="editor-shell-library"]').isVisible()).toBe(false);
     expect(w.get('[data-testid="editor-shell-inspector"]').isVisible()).toBe(false);
@@ -283,11 +291,11 @@ describe("EditorShell — the frame (visual-parity Task 4; design D4, D5)", () =
     setViewportWidth(960);
     const w = mount(EditorShell, { attachTo: document.body });
 
-    await w.get('[data-testid="preview-toolbar-toggleInspector"]').trigger("click");
+    await w.get('[data-testid="preview-properties-toggle"]').trigger("click");
     expect(w.get('[data-testid="editor-shell-inspector"]').isVisible()).toBe(true);
-    await w.get('[data-testid="preview-toolbar-focusPreview"]').trigger("click");
+    await focusPreview(w);
 
-    expect(w.get('[data-testid="preview-toolbar-toggleInspector"]').attributes("aria-pressed")).toBe("false");
+    expect(w.get('[data-testid="preview-properties-toggle"]').attributes("aria-pressed")).toBe("false");
     expect(w.get('[data-testid="editor-shell-inspector"]').isVisible()).toBe(false);
   });
 
@@ -309,10 +317,10 @@ describe("EditorShell — the frame (visual-parity Task 4; design D4, D5)", () =
 });
 
 describe("EditorShell — regions", () => {
-  it("renders every region of the frame and exactly one preview toolbar row", () => {
+  it("renders every region of the frame and exactly one preview header row", () => {
     const w = mount(EditorShell);
 
-    expect(w.findAll('[data-testid="preview-toolbar"]')).toHaveLength(1);
+    expect(w.findAll('[data-testid="preview-header"]')).toHaveLength(1);
     const regions = [
       "editor-header", "editor-shell-library", "editor-shell-preview", "editor-shell-inspector",
       "editor-splitter", "editor-timeline", "editor-statusbar",
@@ -682,5 +690,34 @@ describe("EditorShell — guide progress storage", () => {
     await flushPromises();
 
     expect(w.find('[data-testid="editor-header-guide-session-only"]').exists()).toBe(false);
+  });
+});
+
+describe("EditorShell — the View menu's theme and help (visual-parity Task 11; design D1, ruling P5)", () => {
+  it("switches data-theme and the workspace's saved theme; the header has no theme toggle", async () => {
+    delete document.documentElement.dataset.theme;
+    const w = mount(EditorShell, { attachTo: document.body });
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(w.find('[data-testid="editor-header-theme-toggle"]').exists()).toBe(false);
+    await w.get('[data-testid="preview-view-menu"]').trigger("click");
+    await flushPromises();
+    await w.get('[data-testid="preview-view-panel-item-lightTheme"]').trigger("click");
+    await flushPromises();
+    expect(useEditorWorkspaceStore().theme).toBe("light");
+    expect(document.documentElement.dataset.theme).toBe("light");
+    await w.get('[data-testid="preview-view-menu"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="preview-view-panel-item-lightTheme"]').attributes("aria-checked")).toBe("true");
+  });
+
+  it("Keyboard shortcuts & help… opens the learning center on its Shortcuts tab", async () => {
+    const w = mount(EditorShell, { attachTo: document.body });
+    expect(w.find('[data-testid="learning-center"]').exists()).toBe(false);
+    await w.get('[data-testid="preview-view-menu"]').trigger("click");
+    await flushPromises();
+    await w.get('[data-testid="preview-view-panel-item-help"]').trigger("click");
+    await flushPromises();
+    expect(w.find('[data-testid="learning-center"]').exists()).toBe(true);
+    expect(w.get('[data-testid="learning-tab-shortcuts"]').attributes("aria-selected")).toBe("true");
   });
 });

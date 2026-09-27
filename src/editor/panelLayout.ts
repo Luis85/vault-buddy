@@ -102,6 +102,12 @@ function toggleFocus(s: PanelState): PanelState {
   return { ...s, focusPreview: !s.focusPreview, libraryDrawerOpen: false, propertiesOpen: false };
 }
 
+/** "Reset panel layout" (the concept's `resetView`): both panels back in
+ * their columns, every drawer closed, Focus preview off. */
+function resetLayout(): PanelState {
+  return { libraryHidden: false, propertiesHidden: false, propertiesOpen: false, libraryDrawerOpen: false, focusPreview: false };
+}
+
 /** A finding or a guide lesson asks for a panel: show it, never hide it. */
 function revealLibrary(s: PanelState, width: number): PanelState {
   return setLibrary(s, width, true);
@@ -162,6 +168,7 @@ export function createPanelControls(r: PanelRefs, persist: () => void) {
     toggleLibrary: () => apply(toggleLibrary),
     toggleInspector: () => apply(toggleInspector),
     toggleFocusPreview: () => apply((s) => toggleFocus(s)),
+    resetPanelLayout: () => apply(resetLayout),
     revealLibrary: () => apply(revealLibrary),
     revealInspector: () => apply(revealInspector),
     setTimelineHeight(height: number): void {

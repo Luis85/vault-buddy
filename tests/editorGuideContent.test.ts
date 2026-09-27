@@ -19,7 +19,7 @@ import { defineComponent, h } from "vue";
 vi.mock("@tauri-apps/api/event", () => ({ listen: () => Promise.resolve(() => {}) }));
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
-import PreviewToolbar from "../src/components/editor/shell/PreviewToolbar.vue";
+import PreviewHeader from "../src/components/editor/shell/PreviewHeader.vue";
 import { useGuideOverflow, useGuideTarget } from "../src/composables/useGuideTarget";
 import {
   CONTENT_REVISION,
@@ -274,15 +274,10 @@ describe("every lesson's target in the mounted editor", () => {
     expect(resolve("library.import")?.element.getAttribute("data-testid")).toBe("library-tab-media");
   });
 
-  it("the teaching tools point at More once the arrow has overflowed", async () => {
-    const w = mount(PreviewToolbar, { props: { overflowCount: 11 }, attachTo: document.body });
+  it("the teaching tools point at the strip, where the Arrow always stays (visual-parity Task 11)", () => {
+    const w = mount(PreviewHeader, { attachTo: document.body });
     expect(resolve("preview.toolstrip")).toEqual({
-      element: w.get('[data-testid="preview-toolbar-more"]').element,
-      revealed: "overflow",
-    });
-    await w.setProps({ overflowCount: 0 });
-    expect(resolve("preview.toolstrip")).toEqual({
-      element: w.get('[data-testid="preview-toolbar"]').element,
+      element: w.get('[data-testid="preview-toolstrip"]').element,
       revealed: "direct",
     });
   });

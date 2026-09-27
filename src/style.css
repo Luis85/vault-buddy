@@ -106,6 +106,10 @@
   --color-card-eyebrow: #c5b2e9;
   --color-card-outro-eyebrow: #b8dacf;
   --color-card-blank-ink: #b9abc9;
+  /* The preview canvas under the picture (concept spec §4.2,
+     `.canvas-wrap{background:#17151f}`): the same in both themes, like the
+     card canvases above — it stands for the rendered video's own black. */
+  --color-canvas: #17151f;
 
   /* Editor shell region sizes (the CONTRACT's 244/276, the concept's
      runtime values). Not a Tailwind namespace, so no utility class is
@@ -124,6 +128,9 @@
   /* Every menu's edge and lift (concept §8 `.context-panel`, Task 5). */
   --color-menu-edge: color-mix(in srgb, var(--color-line) 65%, var(--color-fg-muted));
   --editor-menu-shadow: 0 16px 55px #0006, 0 2px 6px #0003;
+  /* The preview canvas's lift and hairline edge (§4.2, `.canvas-wrap`'s
+     `box-shadow:0 8px 28px #0003` and `outline:1px solid #0002`). */
+  --editor-canvas-shadow: 0 8px 28px #0003, 0 0 0 1px #0002;
 }
 
 /* Tutorial editor light theme. The concept's `[data-theme=light]` values,

@@ -20,7 +20,7 @@ import RenderDialog from "../src/components/editor/dialogs/RenderDialog.vue";
 import LibraryPanel from "../src/components/editor/library/LibraryPanel.vue";
 import EditorHeader from "../src/components/editor/shell/EditorHeader.vue";
 import MixerPopover from "../src/components/editor/shell/MixerPopover.vue";
-import PreviewToolbar from "../src/components/editor/shell/PreviewToolbar.vue";
+import PreviewHeader from "../src/components/editor/shell/PreviewHeader.vue";
 import TimelineView from "../src/components/editor/timeline/TimelineView.vue";
 import NotificationHost from "../src/components/NotificationHost.vue";
 import { revealFinding } from "../src/editor/checkReveal";
@@ -432,9 +432,11 @@ describe("the header's Checks badge and the canvas toast", () => {
 
   it("the ratio toast offers to open Checks", async () => {
     await openSession();
-    const toolbar = mount(PreviewToolbar, { props: { overflowCount: 0 } });
+    const header = mount(PreviewHeader, { attachTo: document.body });
     const host = mount(NotificationHost);
-    await toolbar.get('[data-testid="preview-toolbar-ratio"]').setValue("720x1280");
+    await header.get('[data-testid="preview-ratio"]').trigger("click");
+    await flushPromises();
+    await header.get('[data-testid="frame-choice-720x1280"]').trigger("click");
     await flushPromises();
     const notifications = useNotificationsStore();
     expect(notifications.items).toHaveLength(1);

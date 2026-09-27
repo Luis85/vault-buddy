@@ -254,6 +254,86 @@ test.describe("the context menu from the keyboard", () => {
   });
 });
 
+// Task 11 (screen 02, concept spec §4.1–4.2, §11; design D15): the preview
+// header — panel toggle, Preview and the ratio button left, the tool strip
+// centred, Review / View / properties right — and the stage around the
+// canvas; a click on the picture selects the clip under it.
+test.describe("parity 1600x1000: the preview header and stage (screen 02)", () => {
+  test("48px header with the tool strip centred; the canvas is 692x389 at (438,118)", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.screenshot({ path: "test-results/parity/built-02-preview.png" });
+    await composite(page, "02-workspace.png", "test-results/parity/built-02-preview.png", "vs-02-preview");
+
+    const header = await box(page, "preview-header");
+    expect(header.height).toBeCloseTo(48, 0);
+    expect(header.x).toBeCloseTo(244, 0);
+    expect(header.width).toBeCloseTo(1080, 0);
+    // Left: the toggle 12px in, then "Preview", then the mono ratio.
+    const toggle = await box(page, "preview-library-toggle");
+    expect(toggle.x - header.x).toBeCloseTo(12, 0);
+    await expect(page.getByTestId("preview-heading")).toHaveText("Preview");
+    await expect(page.getByTestId("preview-ratio")).toHaveText("16:9");
+    const ratio = await box(page, "preview-ratio");
+    // Right: the properties toggle ends 12px from the header's right edge.
+    const props = await box(page, "preview-properties-toggle");
+    expect(Math.abs(props.x + props.width - (header.x + header.width - 12))).toBeLessThanOrEqual(1);
+    const review = await box(page, "preview-review");
+    // The strip sits centred in the room between the two groups.
+    const strip = await box(page, "preview-toolstrip");
+    const room = (ratio.x + ratio.width + review.x) / 2;
+    expect(Math.abs(strip.x + strip.width / 2 - room)).toBeLessThanOrEqual(2);
+    for (const id of ["preview-tool-text", "preview-tool-arrow", "preview-tool-highlight", "preview-tool-zoom", "preview-more-tools"]) {
+      expect((await box(page, id)).height, id).toBeCloseTo(32, 0);
+    }
+    await expect(page.getByTestId("preview-more-tools")).toHaveText("More tools");
+
+    // §4.2: 14px/20px of stage around the fitted canvas.
+    const canvas = await box(page, "preview-canvas-frame");
+    expect(Math.abs(canvas.width - 692)).toBeLessThanOrEqual(2);
+    expect(Math.abs(canvas.height - 389)).toBeLessThanOrEqual(2);
+    expect(Math.abs(canvas.x - 438)).toBeLessThanOrEqual(2);
+    expect(Math.abs(canvas.y - 118)).toBeLessThanOrEqual(2);
+  });
+
+  test("the View menu opens under its trigger with the view items", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("preview-view-menu").click();
+    const menu = page.getByTestId("preview-view-panel");
+    await expect(menu).toBeVisible();
+    await expect(menu.locator('[role^="menuitem"]')).toHaveText([
+      "Show media library",
+      "Show properties",
+      "Focus preview",
+      "Reset panel layout",
+      "Light theme",
+      "Audio mixer…",
+      "Keyboard shortcuts & help…",
+    ]);
+    expect((await box(page, "preview-view-panel")).width).toBeCloseTo(282, 0);
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(page.getByTestId("preview-view-menu")).toBeFocused();
+  });
+
+  test("Light theme from the View menu turns the editor light", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("preview-view-menu").click();
+    await page.getByTestId("preview-view-panel-item-lightTheme").click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  });
+
+  test("clicking the picture selects the clip under it; the empty stage clears it (D15)", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    const canvas = await box(page, "preview-canvas-frame");
+    // At 00:00 only c1, the screen recording, is on screen.
+    await page.mouse.click(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2);
+    await expect(page.getByTestId("clip-c1")).toHaveAttribute("aria-selected", "true");
+    // The stage beside the canvas is no picture.
+    await page.mouse.click(canvas.x - 60, canvas.y + canvas.height / 2);
+    await expect(page.getByTestId("clip-c1")).toHaveAttribute("aria-selected", "false");
+  });
+});
+
 test.describe("parity 960x640 (12-compact)", () => {
   test("frame: header 52, preview header 44, transport 40, timeline 270, status 23", async ({ page }) => {
     await openParity(page, { width: 960, height: 640 }, { invitation: false });
@@ -263,7 +343,7 @@ test.describe("parity 960x640 (12-compact)", () => {
     // §1.4: the wordmark is gone at or below 1350px; the mark stays.
     await expect(page.getByTestId("editor-header-wordmark")).toBeHidden();
     await expect(page.getByTestId("editor-header-brand-mark")).toBeVisible();
-    expect((await box(page, "preview-toolbar")).height).toBeCloseTo(44, 0);
+    expect((await box(page, "preview-header")).height).toBeCloseTo(44, 0);
     expect((await box(page, "transport-bar")).height).toBeCloseTo(40, 0);
     expect(Math.abs((await box(page, "editor-timeline")).height - 270)).toBeLessThanOrEqual(2);
     expect((await box(page, "editor-statusbar")).height).toBeCloseTo(23, 0);

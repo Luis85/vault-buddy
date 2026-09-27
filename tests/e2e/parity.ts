@@ -81,18 +81,24 @@ export async function openParity(
   }
 }
 
-/** Activates a preview-toolbar control whether it sits in the row or, at a
- * narrow width, in its More menu — the library and inspector toggles, which
- * open the drawers since the header's own toggles left (visual-parity Task
- * 8). Task 11 re-points this at the View menu. */
-export async function previewTool(page: Page, id: string): Promise<void> {
-  const inline = page.getByTestId(`preview-toolbar-${id}`);
-  if (await inline.isVisible()) {
-    await inline.click();
+/** Drives one of the preview header's panel controls (visual-parity Task
+ * 11): the library and properties toggles — which open the drawers at a
+ * narrow width, since the header's own toggles left (Task 8) — and Focus
+ * preview, which lives in the View menu. */
+export async function previewTool(
+  page: Page,
+  id: "toggleLibrary" | "toggleInspector" | "focusPreview",
+): Promise<void> {
+  if (id === "toggleLibrary") {
+    await page.getByTestId("preview-library-toggle").click();
     return;
   }
-  await page.getByTestId("preview-toolbar-more").click();
-  await page.getByTestId("preview-toolbar-more-menu").getByTestId(`preview-toolbar-${id}`).click();
+  if (id === "toggleInspector") {
+    await page.getByTestId("preview-properties-toggle").click();
+    return;
+  }
+  await page.getByTestId("preview-view-menu").click();
+  await page.getByTestId("preview-view-panel-item-focusPreview").click();
 }
 
 /** A real bounding box for `data-testid="<testId>"`, or a named failure —

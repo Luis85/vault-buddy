@@ -19,14 +19,13 @@
  * `SaveProjectDialog` from here. The destination vault's id is no longer
  * shown (the concept shows none; Render and Publish name the vault).
  *
- * The theme toggle stays here, as a sun/moon icon, until the View menu's
- * "Light theme" replaces it (ruling P5). The library/inspector drawer
- * toggles left the header: the preview toolbar's panel toggles open the
- * drawers at every width (design D5).
+ * The theme toggle left too: the preview header's View menu carries
+ * "Light theme" (ruling P5, visual-parity Task 11). The library/inspector
+ * drawer toggles left the header: the preview header's panel toggles open
+ * the drawers at every width (design D5).
  *
  * Reads `editorProject` directly rather than taking title/dirty as props:
- * those are the store's own committed truth (R14). The theme is view state
- * and stays a prop from `EditorShell`.
+ * those are the store's own committed truth (R14).
  *
  * **Guide targets (Task 55; ADR R18):** the header row is `projectbar`, and
  * Save project is `header.save` (Help, Checks and Render video bind their
@@ -51,9 +50,7 @@ import ProjectMenuButton from "./ProjectMenuButton.vue";
 import RenderVideoButton from "./RenderVideoButton.vue";
 import SaveStateIndicator from "./SaveStateIndicator.vue";
 
-const props = defineProps<{ theme: "dark" | "light" }>();
 const emit = defineEmits<{
-  (e: "toggle-theme"): void;
   (e: "open-project", projectFileId: string): void;
   (e: "open-project-file"): void;
   (e: "discard-project"): void;
@@ -69,13 +66,6 @@ const gap = computed(() => (workspace.viewportWidth > HEADER_COMPACT_MAX_WIDTH ?
 
 const title = computed(() => editorProject.snapshot?.title ?? "Untitled");
 const { disabledReason: saveDisabledReason, save: onSave } = useProjectSave();
-
-/** The theme toggle names the theme it switches TO. */
-const themeToggle = computed(() =>
-  props.theme === "light"
-    ? { label: "Switch to dark theme", icon: "moon" as const }
-    : { label: "Switch to light theme", icon: "sun" as const },
-);
 
 const renameOpen = ref(false);
 const copyOpen = ref(false);
@@ -116,16 +106,6 @@ const copyOpen = ref(false);
 
     <div class="flex shrink-0 items-center gap-[7px]">
       <SaveStateIndicator />
-      <button
-        type="button"
-        data-testid="editor-header-theme-toggle"
-        :aria-label="themeToggle.label"
-        :title="themeToggle.label"
-        class="flex h-8 w-8 shrink-0 items-center justify-center border-transparent bg-transparent p-1.5 text-fg-muted"
-        @click="emit('toggle-theme')"
-      >
-        <EditorIcon :name="themeToggle.icon" />
-      </button>
       <GuideHelpButton />
       <ChecksButton />
       <HeaderButton

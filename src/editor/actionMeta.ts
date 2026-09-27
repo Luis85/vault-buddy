@@ -121,8 +121,8 @@ export const ACTION_KIND: Partial<Record<ActionId, string>> = {
   // extra user choice (which of the four presets) this table cannot
   // pre-build, so it is resolved by its own `RESOLVERS` entry
   // (`resolveProjectGated`, `actions.ts`) and sends `setCanvas` directly
-  // from `PreviewToolbar.vue`'s own ratio control -- never through
-  // `commandFor`/`BUILDERS`. See that file's module doc.
+  // from the preview header's Frame dialog (`FrameDialog.vue`, visual-
+  // parity Task 11) -- never through `commandFor`/`BUILDERS`.
 };
 
 /** The human-readable shortcut shown beside an action's label/tooltip —
@@ -209,8 +209,8 @@ export const SHORTCUT_DISPLAY: Partial<Record<ActionId, string>> = {
  * calls `editorProject.execute` directly, the `AudioSection`/
  * `MixerPopover` precedent), and `ratio` — the one `ActionId` that used to
  * name `setCanvas` here purely to stay gated — now has its own `RESOLVERS`
- * entry and sends `setCanvas` directly from its ratio control in
- * `PreviewToolbar.vue`, never through `commandFor`. **Task 34 removed
+ * entry and sends `setCanvas` directly from the preview header's Frame
+ * dialog (`FrameDialog.vue`), never through `commandFor`. **Task 34 removed
  * `addEffect`/`updateEffect`/`removeEffect`**, and Task 35 gave them their
  * consumers: the seven teaching tools map to `addEffect` through
  * `cueActions.ts`'s resolver/builder pair, while `updateEffect`/

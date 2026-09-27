@@ -2,7 +2,7 @@
  * Teaching cues in the editor window (Task 35; F-27–F-33): the preview
  * overlay (`CueOverlay.vue`), its separate handles layer (`CueHandles.vue`),
  * the effect inspector (`EffectSection.vue`), the seven teaching-tool
- * actions (`cueActions.ts`, sent from `PreviewToolbar.vue`) and how
+ * actions (`cueActions.ts`, sent from the preview header's `Toolstrip.vue`) and how
  * `PreviewSurface.vue` layers all of it against Task 31's `LayoutHandles`.
  *
  * Fixtures are asymmetric (the "fixture flaw" rule): a speed-2 clip whose
@@ -20,7 +20,7 @@ import InspectorPanel from "../src/components/editor/inspector/InspectorPanel.vu
 import CueHandles from "../src/components/editor/preview/CueHandles.vue";
 import CueOverlay from "../src/components/editor/preview/CueOverlay.vue";
 import PreviewSurface from "../src/components/editor/preview/PreviewSurface.vue";
-import PreviewToolbar from "../src/components/editor/shell/PreviewToolbar.vue";
+import PreviewHeader from "../src/components/editor/shell/PreviewHeader.vue";
 import { baseActionContext } from "../src/editor/actionContext";
 import { commandFor, resolveActions } from "../src/editor/actions";
 import { arrowPath, IDENTITY_ZOOM } from "../src/editor/cueGeometry";
@@ -416,8 +416,8 @@ describe("teaching-tool actions", () => {
     const ws = useEditorWorkspaceStore();
     ws.select(["c1"]);
     ws.setPlayhead(2_000);
-    const w = mount(PreviewToolbar, { props: { overflowCount: 0 } });
-    await w.get('[data-testid="preview-toolbar-addText"]').trigger("click");
+    const w = mount(PreviewHeader, { attachTo: document.body });
+    await w.get('[data-testid="preview-tool-text"]').trigger("click");
     await flushPromises();
     expect(executed).toEqual([
       { kind: "addEffect", clipId: "c1", effectKind: "text", startMs: 2_500, endMs: 8_500, props: {} },
@@ -687,8 +687,10 @@ describe("teaching cues — edges", () => {
     const ws = useEditorWorkspaceStore();
     ws.select(["c1"]);
     ws.setPlayhead(2_000);
-    const w = mount(PreviewToolbar, { props: { overflowCount: 0 } });
-    await w.get('[data-testid="preview-toolbar-addMask"]').trigger("click");
+    const w = mount(PreviewHeader, { attachTo: document.body });
+    await w.get('[data-testid="preview-more-tools"]').trigger("click");
+    await flushPromises();
+    await w.get('[data-testid="preview-more-tools-panel-item-addMask"]').trigger("click");
     await flushPromises();
     expect(ws.selected).toBeNull();
   });
@@ -698,8 +700,8 @@ describe("teaching cues — edges", () => {
     const ws = useEditorWorkspaceStore();
     ws.select(["c1"]);
     ws.setPlayhead(2_000);
-    const w = mount(PreviewToolbar, { props: { overflowCount: 0 } });
-    await w.get('[data-testid="preview-toolbar-addHighlight"]').trigger("click");
+    const w = mount(PreviewHeader, { attachTo: document.body });
+    await w.get('[data-testid="preview-tool-highlight"]').trigger("click");
     await flushPromises();
     expect(executed).toHaveLength(1);
     expect(ws.selected).toBeNull();

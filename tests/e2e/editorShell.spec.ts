@@ -45,7 +45,7 @@ test("exactly one preview toolbar row at 960x640", async ({ page }) => {
   // A placeholder until Task 17 replaces its content — the wrapper itself
   // is what SCREENS-AND-INTERACTIONS.md §02/§12 pins ("one preview toolbar
   // row"), so a later task that fills it in must keep exactly one.
-  await expect(page.getByTestId("preview-toolbar")).toHaveCount(1);
+  await expect(page.getByTestId("preview-header")).toHaveCount(1);
 });
 
 test("no horizontal page scroll at 960x640", async ({ page }) => {
@@ -82,7 +82,7 @@ test("at or below 1080px the inspector is a real drawer and the header stays on 
   const drawer = page.getByTestId("editor-shell-inspector");
   await expect(drawer).toBeVisible();
   expect((await drawer.boundingBox())!.width).toBeCloseTo(276, 0);
-  const toolbar = (await page.getByTestId("preview-toolbar").boundingBox())!;
+  const toolbar = (await page.getByTestId("preview-header").boundingBox())!;
   expect((await drawer.boundingBox())!.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height - 1);
   await expect(page.getByTestId("editor-header")).toBeInViewport();
 });
@@ -98,7 +98,7 @@ test("at or below 860px the library is a 250px drawer under the preview header",
   const b = (await drawer.boundingBox())!;
   expect(b.x).toBeCloseTo(0, 0);
   expect(b.width).toBeCloseTo(250, 0);
-  const toolbar = (await page.getByTestId("preview-toolbar").boundingBox())!;
+  const toolbar = (await page.getByTestId("preview-header").boundingBox())!;
   expect(b.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height - 1);
   await expect(page.getByTestId("editor-header")).toBeInViewport();
 });
@@ -153,6 +153,6 @@ for (const size of [
       return m.scrollWidth - m.clientWidth;
     });
     expect(sideways, `the editor overflowed sideways by ${sideways}px at ${label}`).toBeLessThanOrEqual(0);
-    await expect(page.getByTestId("preview-toolbar")).toHaveCount(1);
+    await expect(page.getByTestId("preview-header")).toHaveCount(1);
   });
 }
