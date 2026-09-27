@@ -76,6 +76,15 @@ const problem = computed<string | null>(() => {
 function close(): void {
   if (!busy.value) emit("close");
 }
+
+/** Why the ✕ is disabled right now, or `null` while it isn't — computed
+ * here rather than inline in the template so the dialog's own markup stays
+ * a flat read of one value (fallow's template complexity gate treats a
+ * whole `<template>` as one function). */
+const closeReason = computed<string | null>(() => {
+  if (!busy.value) return null;
+  return starting.value ? "Starting the review…" : "A review is running.";
+});
 </script>
 
 <template>
@@ -83,32 +92,22 @@ function close(): void {
     :open="open"
     label="Review the rendered range"
     :closable="!busy"
+    close-testid="review-dialog-close"
+    :close-reason="closeReason"
     @close="close"
   >
+    <template #title>
+      Review
+    </template>
+    <template #subtitle>
+      This range, rendered for real. A review is not saved as a product, and
+      your project is not changed.
+    </template>
+
     <div
       data-testid="review-dialog"
-      class="flex w-[32rem] max-w-full flex-col gap-3"
+      class="flex flex-col gap-3"
     >
-      <header class="flex items-start justify-between gap-2">
-        <div>
-          <h2 class="text-sm font-semibold text-fg">
-            Review
-          </h2>
-          <p class="text-xs text-fg-muted">
-            This range, rendered for real. A review is not saved as a product, and
-            your project is not changed.
-          </p>
-        </div>
-        <AppButton
-          variant="ghost"
-          size="sm"
-          data-testid="review-dialog-close"
-          :disabled="busy"
-          @click="close"
-        >
-          Close
-        </AppButton>
-      </header>
       <RenderProgress
         v-if="job && !media"
         :job="job"

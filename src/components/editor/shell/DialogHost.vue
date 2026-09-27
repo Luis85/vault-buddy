@@ -30,11 +30,26 @@
  * confirm stacked on a dialog keeps the coach suspended until the last one
  * closes. Focus goes back to the opener exactly as before — the coach does
  * not take it on resume.
+ *
+ * **Shared chrome** (visual-parity Task 6; concept-spec §9): four named
+ * slots — `title`, `subtitle`, the default (body) and `footer` — over one
+ * header/body/footer frame. The header (and its ✕) render ONLY when a
+ * caller supplies `title`, so a bare confirm built straight from the
+ * default slot (this file's own generic tests) renders exactly as before —
+ * no header, no ✕, the slot content's own first control keeps initial
+ * focus. The body is the only region that scrolls (`overflow-y-auto`);
+ * header and footer are `shrink-0` flex siblings, never inside it, so
+ * neither can scroll out of view. The ✕'s accessible name is always the
+ * literal "Close" — `closeReason` only changes its tooltip, so a refusal
+ * (a publish or render in flight) is a disabled button with a reason, never
+ * a silently vanished one.
  */
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import { isTopDialog, nextDialogId, popDialog, pushDialog } from "../../../editor/dialogs";
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
+import IconButton from "../../ui/IconButton.vue";
+import EditorIcon from "../icons/EditorIcon.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -45,8 +60,20 @@ const props = withDefaults(
      * irreversible operation (a render/export in flight) passes `false` and
      * offers its own explicit way out instead. */
     closable?: boolean;
+    /** The dialog's own width in px (concept §9's shared chrome: `560`
+     * default, `680` checks, `960` webcam, `660` session, `870` learning
+     * center); always clamped to `95vw` so it never overflows a narrow
+     * window. */
+    width?: number;
+    /** The `data-testid` on the header's ✕ button — each migrated dialog
+     * keeps the testid its own former close control carried. */
+    closeTestid?: string;
+    /** Why the ✕ is disabled right now (`closable === false`), shown as its
+     * `title` tooltip so a caller's refusal is never a silent no-op. The
+     * accessible name stays the literal "Close" either way. */
+    closeReason?: string | null;
   }>(),
-  { closable: true },
+  { closable: true, width: 560, closeTestid: "dialog-close", closeReason: null },
 );
 const emit = defineEmits<{
   (e: "close"): void;
@@ -158,7 +185,7 @@ function onBackdrop(): void {
   <div
     v-if="open"
     data-testid="dialog-host"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-backdrop backdrop-blur-sm"
     @mousedown.self="onBackdrop"
   >
     <div
@@ -168,10 +195,50 @@ function onBackdrop(): void {
       :aria-label="label"
       data-testid="dialog-host-content"
       tabindex="-1"
-      class="max-h-[90vh] max-w-[90vw] overflow-y-auto rounded-control border border-line bg-panel p-4 text-fg focus:outline-none"
+      :style="{ width: `${width}px`, maxWidth: '95vw' }"
+      class="flex max-h-[90dvh] flex-col overflow-hidden rounded-[13px] border border-line bg-panel text-fg shadow-[var(--editor-shadow)] focus:outline-none"
       @keydown="onKeydown"
     >
-      <slot />
+      <header
+        v-if="$slots.title"
+        class="flex shrink-0 items-start justify-between gap-3 border-b border-line px-5 pb-[13px] pt-[18px]"
+      >
+        <div class="min-w-0">
+          <h2 class="text-base font-semibold leading-[1.4] text-fg">
+            <slot name="title" />
+          </h2>
+          <p
+            v-if="$slots.subtitle"
+            class="mt-0.5 text-[11px] text-fg-muted"
+          >
+            <slot name="subtitle" />
+          </p>
+        </div>
+        <IconButton
+          label="Close"
+          :title="closeReason ?? undefined"
+          :data-testid="closeTestid"
+          :disabled="!closable"
+          class="h-8 w-8 shrink-0"
+          @click="requestClose"
+        >
+          <EditorIcon name="x" />
+        </IconButton>
+      </header>
+
+      <div
+        data-testid="dialog-host-body"
+        class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5"
+      >
+        <slot />
+      </div>
+
+      <footer
+        v-if="$slots.footer"
+        class="sticky bottom-0 flex shrink-0 items-center justify-end gap-2 border-t border-line bg-panel px-5 py-[13px] shadow-[0_-7px_12px_color-mix(in_srgb,var(--color-panel)_85%,transparent)]"
+      >
+        <slot name="footer" />
+      </footer>
     </div>
   </div>
 </template>

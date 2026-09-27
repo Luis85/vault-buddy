@@ -132,6 +132,84 @@ describe("DialogHost", () => {
     expect(w.emitted("close")).toHaveLength(1);
   });
 
+  // Task 6 (visual-parity, concept-spec §9 shared dialog chrome): the header
+  // (title/subtitle/close) and footer are named slots over one frame, and
+  // the footer sits OUTSIDE the body's own scroll region.
+  it("renders the shared chrome: title, subtitle, a close icon button and a footer outside the scrolling body", async () => {
+    const w = mount(DialogHost, {
+      attachTo: document.body,
+      props: { open: true, label: "Chrome dialog" },
+      slots: {
+        title: "Save project",
+        subtitle: "Keep the workspace.",
+        default: `<p data-testid="chrome-body">Body content</p>`,
+        footer: `<button data-testid="chrome-footer-btn">Save</button>`,
+      },
+    });
+    await flushPromises();
+
+    const header = w.get("header");
+    const title = header.get("h2");
+    expect(title.text()).toBe("Save project");
+    expect(title.classes()).toEqual(expect.arrayContaining(["text-base", "font-semibold"]));
+    expect(header.text()).toContain("Keep the workspace.");
+
+    const close = header.get('button[aria-label="Close"]');
+    expect(close.find("svg").exists()).toBe(true);
+
+    const body = w.get('[data-testid="dialog-host-body"]');
+    expect(body.get('[data-testid="chrome-body"]').text()).toBe("Body content");
+    // The footer is not part of the scrolling body.
+    expect(body.element.querySelector("footer")).toBeNull();
+
+    const footer = w.get("footer");
+    expect(footer.find('[data-testid="chrome-footer-btn"]').exists()).toBe(true);
+    expect(footer.element.parentElement).toBe(w.get('[data-testid="dialog-host-content"]').element);
+  });
+
+  it("omits the header entirely when no title is given — a bare confirm keeps today's chrome", () => {
+    const w = mountDialog(true);
+    expect(w.find("header").exists()).toBe(false);
+    expect(w.find('button[aria-label="Close"]').exists()).toBe(false);
+  });
+
+  it("defaults the width to 560px and applies a caller's own width, always clamped to 95vw", () => {
+    const bare = mount(DialogHost, {
+      props: { open: true, label: "x" },
+      slots: { default: "<div />" },
+    });
+    const bareContent = bare.get('[data-testid="dialog-host-content"]').element as HTMLElement;
+    expect(bareContent.style.width).toBe("560px");
+    expect(bareContent.style.maxWidth).toBe("95vw");
+
+    const wide = mount(DialogHost, {
+      props: { open: true, label: "x", width: 960 },
+      slots: { default: "<div />" },
+    });
+    const wideContent = wide.get('[data-testid="dialog-host-content"]').element as HTMLElement;
+    expect(wideContent.style.width).toBe("960px");
+    expect(wideContent.style.maxWidth).toBe("95vw");
+  });
+
+  it("carries a caller's own testid on the close button, so a migrated dialog keeps its former close testid", () => {
+    const w = mount(DialogHost, {
+      props: { open: true, label: "x", closeTestid: "checks-close" },
+      slots: { title: "Before you share", default: "<div />" },
+    });
+    expect(w.find('[data-testid="checks-close"]').exists()).toBe(true);
+    expect(w.find('[data-testid="dialog-close"]').exists()).toBe(false);
+  });
+
+  it("keeps the ✕'s accessible name literally 'Close' but disables it with a reason when the dialog refuses to close", () => {
+    const w = mount(DialogHost, {
+      props: { open: true, label: "x", closable: false, closeReason: "A render is running." },
+      slots: { title: "Render a video", default: "<div />" },
+    });
+    const close = w.get('button[aria-label="Close"]');
+    expect(close.attributes("disabled")).toBeDefined();
+    expect(close.attributes("title")).toBe("A render is running.");
+  });
+
   it("only the top-of-stack dialog answers Escape, and the stack unwinds on close", async () => {
     const outer = mountDialog(true);
     await flushPromises();

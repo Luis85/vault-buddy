@@ -43,16 +43,19 @@ defineExpose({ check: recovery.check });
   <DialogHost
     :open="offer !== null"
     label="Unsaved changes from last time"
+    :width="660"
     :closable="false"
+    close-reason="Choose Resume or Discard first."
   >
+    <template #title>
+      Unsaved changes from last time
+    </template>
+
     <div
       v-if="offer"
       data-testid="recovery-dialog"
       class="flex w-96 max-w-full flex-col gap-3"
     >
-      <h2 class="text-sm font-semibold text-fg">
-        Unsaved changes from last time
-      </h2>
       <p class="text-sm text-fg-secondary">
         “{{ offer.title }}” (last saved {{ savedAt }}) has changes that were never
         saved. Resume them, or discard them and continue from the saved project.
@@ -70,29 +73,33 @@ defineExpose({ check: recovery.check });
           {{ failure }}
         </p>
       </div>
-      <div class="flex flex-wrap justify-end gap-2">
-        <AppButton
-          variant="danger"
-          :disabled="busy"
-          @click="recovery.discard"
-        >
-          Discard
-        </AppButton>
-        <AppButton
-          v-if="resumeFailed"
-          :disabled="busy"
-          @click="recovery.openSaved"
-        >
-          Open saved project
-        </AppButton>
-        <AppButton
-          v-else
-          :disabled="busy"
-          @click="recovery.resume"
-        >
-          Resume
-        </AppButton>
-      </div>
     </div>
+
+    <template
+      v-if="offer"
+      #footer
+    >
+      <AppButton
+        variant="danger"
+        :disabled="busy"
+        @click="recovery.discard"
+      >
+        Discard
+      </AppButton>
+      <AppButton
+        v-if="resumeFailed"
+        :disabled="busy"
+        @click="recovery.openSaved"
+      >
+        Open saved project
+      </AppButton>
+      <AppButton
+        v-else
+        :disabled="busy"
+        @click="recovery.resume"
+      >
+        Resume
+      </AppButton>
+    </template>
   </DialogHost>
 </template>

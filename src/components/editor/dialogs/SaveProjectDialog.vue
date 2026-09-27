@@ -75,22 +75,21 @@ function close(): void {
     :open="open"
     label="Save a project file"
     :closable="!pending"
+    :close-reason="pending ? 'Preparing the project file…' : null"
     @close="close"
   >
+    <template #title>
+      Save a project file
+    </template>
+    <template #subtitle>
+      Keep an editable copy outside the editor. Nothing is rendered or flattened, and
+      your original media is never changed.
+    </template>
+
     <div
       data-testid="save-project-dialog"
-      class="flex w-[30rem] max-w-full flex-col gap-3"
+      class="flex flex-col gap-3"
     >
-      <header class="sticky -top-4 z-10 -mx-4 -mt-4 border-b border-line bg-panel px-4 pb-3 pt-4">
-        <h2 class="text-sm font-semibold text-fg">
-          Save a project file
-        </h2>
-        <p class="text-xs text-fg-muted">
-          Keep an editable copy outside the editor. Nothing is rendered or flattened, and
-          your original media is never changed.
-        </p>
-      </header>
-
       <fieldset class="flex flex-col gap-2">
         <legend class="sr-only">
           Project file format
@@ -167,24 +166,24 @@ function close(): void {
       >
         {{ status.text }}
       </p>
-
-      <footer class="sticky -bottom-4 -mx-4 -mb-4 flex justify-end gap-2 border-t border-line bg-panel px-4 pb-4 pt-3">
-        <AppButton
-          variant="ghost"
-          data-testid="save-project-cancel"
-          :disabled="pending"
-          @click="close"
-        >
-          Keep editing
-        </AppButton>
-        <AppButton
-          data-testid="save-project-confirm"
-          :disabled="pending"
-          @click="save"
-        >
-          {{ confirmLabel }}
-        </AppButton>
-      </footer>
     </div>
+
+    <template #footer>
+      <AppButton
+        variant="ghost"
+        data-testid="save-project-cancel"
+        :disabled="pending"
+        @click="close"
+      >
+        Keep editing
+      </AppButton>
+      <AppButton
+        data-testid="save-project-confirm"
+        :disabled="pending"
+        @click="save"
+      >
+        {{ confirmLabel }}
+      </AppButton>
+    </template>
   </DialogHost>
 </template>

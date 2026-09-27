@@ -45,7 +45,6 @@ import {
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import { useFfmpegStore } from "../../../stores/ffmpeg";
-import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
 import WebcamCloseConfirm from "./WebcamCloseConfirm.vue";
 import WebcamControls from "./WebcamControls.vue";
@@ -179,32 +178,23 @@ onBeforeUnmount(() => {
   <DialogHost
     :open="open"
     label="Webcam"
+    :width="960"
     :closable="!busy"
+    close-testid="webcam-close"
+    :close-reason="busy ? 'Finishing the take…' : null"
     @close="requestClose"
   >
+    <template #title>
+      Webcam
+    </template>
+    <template #subtitle>
+      Record yourself as a presenter over your screen. The take becomes its own clip you can move and resize.
+    </template>
+
     <div
       data-testid="webcam-dialog"
-      class="flex w-[32rem] max-w-full flex-col gap-3 text-xs text-fg-secondary"
+      class="flex flex-col gap-3 text-xs text-fg-secondary"
     >
-      <header class="flex items-start justify-between gap-2">
-        <div>
-          <h2 class="text-sm font-semibold text-fg">
-            Webcam
-          </h2>
-          <p class="text-fg-muted">
-            Record yourself as a presenter over your screen. The take becomes its own clip you can move and resize.
-          </p>
-        </div>
-        <AppButton
-          variant="ghost"
-          size="sm"
-          data-testid="webcam-close"
-          :disabled="busy"
-          @click="requestClose"
-        >
-          Close
-        </AppButton>
-      </header>
       <p
         v-if="view.problem"
         role="alert"

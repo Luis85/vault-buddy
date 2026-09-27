@@ -66,9 +66,10 @@
  * mounted here, once, the same `useNotificationsStore`/`NotificationHost`
  * pair `ActionPanel.vue` already uses in the panel window (each webview
  * gets its own Pinia instance, AGENTS.md's window model, so this is a
- * distinct store from the panel's). The root below gains `relative` so the
- * host's own `absolute inset-x-3 bottom-3` anchors to this shell rather
- * than whatever positioned ancestor happens to sit further up the tree.
+ * distinct store from the panel's). Since visual-parity Task 6 it is passed
+ * `variant="editor"` — concept-spec §9.12's fixed, centred, bottom-anchored
+ * toast, restyled ONLY here; the panel window's own bottom-left stack keeps
+ * its exact look under the component's default `variant="panel"`.
  *
  * **Guide progress (Task 55)** is read once per window when the shell first
  * mounts (`editorOnboarding.load()` — idempotent, and it never throws: an
@@ -320,7 +321,7 @@ function onShellKeydown(event: KeyboardEvent) {
 
     <EditorStatusBar />
 
-    <NotificationHost />
+    <NotificationHost variant="editor" />
     <GuideInvitation />
     <GuideCoach ref="coach" />
   </div>

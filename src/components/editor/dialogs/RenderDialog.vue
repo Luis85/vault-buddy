@@ -193,32 +193,21 @@ function reviewChecks(): void {
     :open="open"
     label="Render a video"
     :closable="!busy"
+    close-testid="render-dialog-close"
+    :close-reason="busy ? (starting ? 'Starting the render…' : 'A render is running.') : null"
     @close="close"
   >
+    <template #title>
+      Render a video
+    </template>
+    <template #subtitle>
+      A finished video from your editable workspace.
+    </template>
+
     <div
       data-testid="render-dialog"
-      class="flex w-[32rem] max-w-full flex-col gap-3"
+      class="flex flex-col gap-3"
     >
-      <header class="sticky -top-4 z-10 -mx-4 -mt-4 flex items-start justify-between border-b border-line bg-panel px-4 pb-3 pt-4">
-        <div>
-          <h2 class="text-sm font-semibold text-fg">
-            Render a video
-          </h2>
-          <p class="text-xs text-fg-muted">
-            A finished video from your editable workspace.
-          </p>
-        </div>
-        <AppButton
-          variant="ghost"
-          size="sm"
-          data-testid="render-dialog-close"
-          :disabled="busy"
-          @click="close"
-        >
-          Close
-        </AppButton>
-      </header>
-
       <template v-if="showForm">
         <RenderSettingsForm
           v-model:name="name"
@@ -231,22 +220,6 @@ function reviewChecks(): void {
           :blocking="checks.blocking"
           @review-checks="reviewChecks"
         />
-        <div class="flex items-center justify-end gap-2">
-          <span
-            v-if="startReason"
-            data-testid="render-dialog-start-reason"
-            class="text-micro text-fg-subtle"
-          >{{ startReason }}</span>
-          <AppButton
-            variant="primary"
-            size="sm"
-            data-testid="render-dialog-start"
-            :disabled="Boolean(startReason)"
-            @click="start"
-          >
-            Render video
-          </AppButton>
-        </div>
       </template>
       <RenderOutcome
         v-else
@@ -266,5 +239,25 @@ function reviewChecks(): void {
         @close="publishOpen = false"
       />
     </div>
+
+    <template
+      v-if="showForm"
+      #footer
+    >
+      <span
+        v-if="startReason"
+        data-testid="render-dialog-start-reason"
+        class="text-micro text-fg-subtle"
+      >{{ startReason }}</span>
+      <AppButton
+        variant="primary"
+        size="sm"
+        data-testid="render-dialog-start"
+        :disabled="Boolean(startReason)"
+        @click="start"
+      >
+        Render video
+      </AppButton>
+    </template>
   </DialogHost>
 </template>

@@ -85,15 +85,17 @@ async function confirm(): Promise<void> {
     :open="props.open"
     label="Discard project"
     :closable="!busy"
+    :close-reason="busy ? 'Discarding the project…' : null"
     @close="dismiss"
   >
+    <template #title>
+      Discard this project?
+    </template>
+
     <div
       data-testid="discard-project-dialog"
       class="flex w-96 max-w-full flex-col gap-3"
     >
-      <h2 class="text-sm font-semibold text-fg">
-        Discard this project?
-      </h2>
       <p class="text-sm text-fg-secondary">
         Its edits, rendered videos and review files are deleted from this computer.
         Videos you published into a vault stay there, and the recording stays in
@@ -106,24 +108,25 @@ async function confirm(): Promise<void> {
       >
         {{ error }}
       </p>
-      <div class="flex flex-wrap justify-end gap-2">
-        <AppButton
-          variant="ghost"
-          data-testid="discard-project-cancel"
-          :disabled="busy"
-          @click="dismiss"
-        >
-          Cancel
-        </AppButton>
-        <AppButton
-          variant="danger"
-          data-testid="discard-project-confirm"
-          :disabled="busy || !project.sessionId"
-          @click="confirm"
-        >
-          Discard project
-        </AppButton>
-      </div>
     </div>
+
+    <template #footer>
+      <AppButton
+        variant="ghost"
+        data-testid="discard-project-cancel"
+        :disabled="busy"
+        @click="dismiss"
+      >
+        Cancel
+      </AppButton>
+      <AppButton
+        variant="danger"
+        data-testid="discard-project-confirm"
+        :disabled="busy || !project.sessionId"
+        @click="confirm"
+      >
+        Discard project
+      </AppButton>
+    </template>
   </DialogHost>
 </template>

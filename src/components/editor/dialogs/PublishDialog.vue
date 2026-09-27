@@ -183,33 +183,22 @@ function close(): void {
     :open="open"
     label="Publish to vault"
     :closable="!publishing"
+    close-testid="publish-close"
+    :close-reason="publishing ? 'Publishing…' : null"
     @close="close"
   >
+    <template #title>
+      Publish to vault
+    </template>
+    <template #subtitle>
+      A copy of “{{ productName }}” goes into your vault. The rendered video
+      and your project stay as they are.
+    </template>
+
     <div
       data-testid="publish-dialog"
-      class="flex w-[28rem] max-w-full flex-col gap-3"
+      class="flex flex-col gap-3"
     >
-      <header class="flex items-start justify-between gap-2">
-        <div>
-          <h2 class="text-sm font-semibold text-fg">
-            Publish to vault
-          </h2>
-          <p class="text-xs text-fg-muted">
-            A copy of “{{ productName }}” goes into your vault. The rendered video
-            and your project stay as they are.
-          </p>
-        </div>
-        <AppButton
-          variant="ghost"
-          size="sm"
-          data-testid="publish-close"
-          :disabled="publishing"
-          @click="close"
-        >
-          Close
-        </AppButton>
-      </header>
-
       <div
         v-if="receipt"
         data-testid="publish-result"

@@ -74,22 +74,21 @@ function close(): void {
     :open="open"
     label="Reconnect missing media"
     :closable="!busy"
+    :close-reason="busy ? 'Checking the chosen files…' : null"
     @close="close"
   >
+    <template #title>
+      Reconnect missing media
+    </template>
+    <template #subtitle>
+      Choose the original files. A file is reconnected only when it is clearly the
+      original; anything less clear waits for your choice. Your edits are kept.
+    </template>
+
     <div
       data-testid="reconnect-dialog"
-      class="flex w-[32rem] max-w-full flex-col gap-3"
+      class="flex flex-col gap-3"
     >
-      <header class="sticky -top-4 z-10 -mx-4 -mt-4 border-b border-line bg-panel px-4 pb-3 pt-4">
-        <h2 class="text-sm font-semibold text-fg">
-          Reconnect missing media
-        </h2>
-        <p class="text-xs text-fg-muted">
-          Choose the original files. A file is reconnected only when it is clearly the
-          original; anything less clear waits for your choice. Your edits are kept.
-        </p>
-      </header>
-
       <ul
         class="flex flex-col gap-2"
         aria-label="Missing originals"
@@ -134,23 +133,23 @@ function close(): void {
       >
         {{ statusText }}
       </p>
-
-      <footer class="sticky -bottom-4 -mx-4 -mb-4 flex justify-end gap-2 border-t border-line bg-panel px-4 pb-4 pt-3">
-        <AppButton
-          variant="ghost"
-          :disabled="busy"
-          @click="close"
-        >
-          Close
-        </AppButton>
-        <AppButton
-          data-testid="reconnect-find-all"
-          :disabled="findAllDisabled"
-          @click="reconnect.run(findAllIds, false)"
-        >
-          Find all…
-        </AppButton>
-      </footer>
     </div>
+
+    <template #footer>
+      <AppButton
+        variant="ghost"
+        :disabled="busy"
+        @click="close"
+      >
+        Close
+      </AppButton>
+      <AppButton
+        data-testid="reconnect-find-all"
+        :disabled="findAllDisabled"
+        @click="reconnect.run(findAllIds, false)"
+      >
+        Find all…
+      </AppButton>
+    </template>
   </DialogHost>
 </template>

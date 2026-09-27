@@ -105,29 +105,30 @@ function restart(): void {
   <DialogHost
     :open="open"
     label="Help and learning center"
+    :width="870"
+    close-testid="learning-close"
     @close="emit('close')"
   >
+    <template #title>
+      Help and learning center
+    </template>
+
     <div
       data-testid="learning-center"
-      class="flex w-[40rem] max-w-full flex-col gap-3"
+      class="flex flex-col gap-3"
     >
-      <header class="flex flex-wrap items-center gap-3">
-        <div class="flex min-w-0 flex-1 flex-col gap-1">
-          <h2 class="text-sm font-semibold text-fg">
-            Help and learning center
-          </h2>
-          <p
-            data-testid="learning-progress"
-            class="text-xs text-fg-muted"
-          >
-            {{ onboarding.reviewedCount }} / {{ total }} lessons read
-            <span
-              v-if="onboarding.hasFinished"
-              data-testid="learning-finished"
-              class="ml-1 text-success"
-            >· You have read every lesson</span>
-          </p>
-        </div>
+      <div class="flex flex-wrap items-center gap-3">
+        <p
+          data-testid="learning-progress"
+          class="min-w-0 flex-1 text-xs text-fg-muted"
+        >
+          {{ onboarding.reviewedCount }} / {{ total }} lessons read
+          <span
+            v-if="onboarding.hasFinished"
+            data-testid="learning-finished"
+            class="ml-1 text-success"
+          >· You have read every lesson</span>
+        </p>
         <AppButton
           size="sm"
           data-testid="learning-resume"
@@ -135,15 +136,7 @@ function restart(): void {
         >
           {{ resumeLabel }}
         </AppButton>
-        <AppButton
-          size="sm"
-          variant="ghost"
-          data-testid="learning-close"
-          @click="emit('close')"
-        >
-          Close
-        </AppButton>
-      </header>
+      </div>
 
       <div
         role="tablist"

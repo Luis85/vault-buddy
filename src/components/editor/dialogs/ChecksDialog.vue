@@ -72,31 +72,21 @@ function continueToRender(): void {
   <DialogHost
     :open="open"
     label="Before you share"
+    :width="680"
+    close-testid="checks-close"
     @close="emit('close')"
   >
+    <template #title>
+      Before you share
+    </template>
+    <template #subtitle>
+      Actionable checks, not a quality score.
+    </template>
+
     <div
       data-testid="checks-dialog"
-      class="flex w-[34rem] max-w-full flex-col gap-3"
+      class="flex flex-col gap-3"
     >
-      <header class="flex items-start justify-between gap-2">
-        <div>
-          <h2 class="text-sm font-semibold text-fg">
-            Before you share
-          </h2>
-          <p class="text-xs text-fg-muted">
-            Actionable checks, not a quality score.
-          </p>
-        </div>
-        <AppButton
-          variant="ghost"
-          size="sm"
-          data-testid="checks-close"
-          @click="emit('close')"
-        >
-          Close
-        </AppButton>
-      </header>
-
       <ChecksDestination
         v-if="choosing"
         @done="destinationSet"
@@ -108,31 +98,35 @@ function continueToRender(): void {
           No automatic speech transcription, content review or privacy detection
           is performed. This is not an accessibility certification.
         </p>
-        <div class="flex items-center justify-end gap-2">
-          <span
-            v-if="renderReason"
-            data-testid="checks-render-reason"
-            class="text-micro text-fg-subtle"
-          >{{ renderReason }}</span>
-          <AppButton
-            variant="secondary"
-            size="sm"
-            data-testid="checks-back"
-            @click="emit('close')"
-          >
-            Back to edit
-          </AppButton>
-          <AppButton
-            variant="primary"
-            size="sm"
-            data-testid="checks-render"
-            :disabled="Boolean(renderReason)"
-            @click="continueToRender"
-          >
-            Continue to render
-          </AppButton>
-        </div>
       </template>
     </div>
+
+    <template
+      v-if="!choosing"
+      #footer
+    >
+      <span
+        v-if="renderReason"
+        data-testid="checks-render-reason"
+        class="text-micro text-fg-subtle"
+      >{{ renderReason }}</span>
+      <AppButton
+        variant="secondary"
+        size="sm"
+        data-testid="checks-back"
+        @click="emit('close')"
+      >
+        Back to edit
+      </AppButton>
+      <AppButton
+        variant="primary"
+        size="sm"
+        data-testid="checks-render"
+        :disabled="Boolean(renderReason)"
+        @click="continueToRender"
+      >
+        Continue to render
+      </AppButton>
+    </template>
   </DialogHost>
 </template>
