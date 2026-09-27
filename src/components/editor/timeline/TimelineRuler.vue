@@ -24,6 +24,14 @@
  * its children, which ARIA makes presentational (a marker inside would
  * lose its role and name). Their `pointerdown` still stops at them, so a
  * press can never reach the ruler and seek to the pointer instead.
+ *
+ * **The playhead's head** (visual-parity Task 18, concept spec §6.5): an
+ * 11 × 10 accent pentagon in the ruler's lower band, centred on the
+ * playhead, where `TimelineView`'s line begins. It lives HERE, in the
+ * sticky ruler, so it stays in view however far the lanes scroll down, and
+ * below the ruler's own pinned label cell, so it slides under it sideways.
+ * Decorative (the slider already carries the playhead's value); it keeps
+ * `vb-playhead`, so a Windows contrast theme paints it Highlight.
  */
 import { computed, ref } from "vue";
 
@@ -47,6 +55,8 @@ const editorProject = useEditorProjectStore();
 const addTrackOpen = ref(false);
 
 const ticks = computed(() => rulerTicks(pxPerMs(props.zoom) * 1000, props.widthPx));
+/** The head's left edge: 5 px left of the 1 px line, so it centres on it. */
+const headLeftPx = computed(() => msToX(workspace.playheadMs, props.zoom) - 5);
 const markers = computed(() =>
   chapterRows(editorProject.project).map((row) => ({
     id: row.marker.id,
@@ -152,6 +162,12 @@ function onKeydown(event: KeyboardEvent) {
           :style="{ left: `${t.x}px` }"
         >{{ t.label }}</span>
       </div>
+      <span
+        data-testid="timeline-playhead-head"
+        aria-hidden="true"
+        class="vb-playhead pointer-events-none absolute top-[22px] z-[1] h-[10px] w-[11px] bg-accent [clip-path:polygon(0_0,100%_0,100%_60%,50%_100%,0_60%)]"
+        :style="{ left: `${headLeftPx}px` }"
+      />
       <button
         v-for="m in markers"
         :key="m.id"

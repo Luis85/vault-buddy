@@ -22,6 +22,13 @@
  * theme), its clips at 40 % while a video track is hidden, and the accent
  * wash while an accepted asset drag is over it.
  *
+ * **Gap hints** (visual-parity Task 18, concept spec §6.5): every gap wider
+ * than 70 px (`gaps`, which `TimelineView` works out with the lane menu's
+ * own `trackEdits.gapsOnTrack` and never offers on a locked track) holds a
+ * dashed "Close gap" button, faint (16 %) until the lane is hovered or
+ * holds focus; a click asks `TimelineView` to send the lane menu's own
+ * `closeGapCommand` for that gap.
+ *
  * **A locked track's clip body is `pointer-events-none`** — Rust's own
  * `ensure_unlocked`-shaped refusal (`core::editor::commands::tracks`) means
  * a drag/trim/select that started here could only end in a rejected
@@ -46,7 +53,9 @@ import { isContextMenuShortcut } from "../../../editor/shortcuts";
 import { LANE_HEIGHT_PX, msToX, pxPerMs } from "../../../editor/timelineLayout";
 import { clipOutputEnd } from "../../../editor/timeMap";
 import { draggedAssetId, draggedAssetKind, dropRefusalReason, trackAccepts } from "../../../editor/trackCompat";
+import type { Gap } from "../../../editor/trackEdits";
 import type { Asset, AssetKind, Clip, ClipSpan, Track } from "../../../editorTypes";
+import EditorIcon from "../icons/EditorIcon.vue";
 import ClipItem from "./ClipItem.vue";
 import TrackHeader from "./TrackHeader.vue";
 
@@ -67,6 +76,8 @@ const props = defineProps<{
    * without this component needing to know why. */
   trackIndex: number;
   trackOrder: string[];
+  /** The gaps wide enough for a "Close gap" hint (§6.5); none when absent. */
+  gaps?: Gap[];
 }>();
 const emit = defineEmits<{
   (e: "context-menu", payload: { clip: Clip; clientX: number; clientY: number; atPlayhead?: boolean }): void;
@@ -78,6 +89,8 @@ const emit = defineEmits<{
    * resolves `clientX` into a snapped `startMs` and sends the `insertClip`
    * (this component knows neither scroll position nor the label offset). */
   (e: "asset-drop", payload: { assetId: string; trackId: string; clientX: number }): void;
+  /** A gap hint was pressed: close that gap on this track. */
+  (e: "close-gap", payload: { trackId: string; gap: Gap }): void;
 }>();
 
 // ---- native drag-and-drop (Task 26) ----------------------------------------
@@ -179,6 +192,17 @@ function leftOf(clip: Clip): number {
 function widthOf(clip: Clip): number {
   return msToX(clipOutputEnd(spanOf(clip)), props.zoom) - leftOf(clip);
 }
+
+/** A gap hint sits 4 px in from each end of its gap (the concept's own). */
+const GAP_INSET_PX = 4;
+function gapStyle(gap: Gap) {
+  const left = msToX(gap.start, props.zoom);
+  const width = msToX(gap.end, props.zoom) - left;
+  return { left: `${left + GAP_INSET_PX}px`, width: `${width - GAP_INSET_PX * 2}px` };
+}
+function gapLabel(gap: Gap): string {
+  return `Close ${((gap.end - gap.start) / 1000).toFixed(1)} second gap on ${props.track.name}`;
+}
 </script>
 
 <template>
@@ -206,7 +230,7 @@ function widthOf(clip: Clip): number {
     <div
       :data-testid="`track-lane-body-${track.id}`"
       :title="bodyTitle"
-      class="relative"
+      class="group/lane relative"
       :class="laneClass"
       :style="laneStyle"
       @contextmenu="onLaneContextMenu"
@@ -216,6 +240,22 @@ function widthOf(clip: Clip): number {
         :data-testid="`track-lane-empty-${track.id}`"
         class="pointer-events-none absolute top-[18px] left-4 text-[10px] text-fg-muted"
       >Drop {{ track.kind }} here · or add from Media</span>
+      <button
+        v-for="gap in gaps ?? []"
+        :key="gap.start"
+        type="button"
+        :data-testid="`lane-gap-${track.id}-${gap.start}`"
+        :aria-label="gapLabel(gap)"
+        title="Close this gap on this track only"
+        class="absolute top-4 z-[1] flex h-[25px] min-h-[25px] items-center gap-1 overflow-hidden rounded-[4px] border border-dashed border-line bg-panel p-[3px] text-[9px] whitespace-nowrap text-fg-muted opacity-16 transition-opacity duration-[120ms] group-hover/lane:opacity-100 group-focus-within/lane:opacity-100 hover:border-accent hover:bg-accent-bg hover:text-accent-ink focus-visible:opacity-100 motion-reduce:transition-none"
+        :style="gapStyle(gap)"
+        @click="emit('close-gap', { trackId: track.id, gap })"
+      >
+        <EditorIcon
+          name="gap"
+          :size="12"
+        />Close gap
+      </button>
       <ClipItem
         v-for="clip in sortedClips"
         :key="clip.id"

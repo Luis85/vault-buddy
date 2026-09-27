@@ -1,72 +1,63 @@
 <script setup lang="ts">
 /**
- * One clip's visual (Task 20; F-04, F-14, F-26;
- * SCREENS-AND-INTERACTIONS.md §03: "Clips show media type, selected state,
- * trims and gold fade controls"). Presentational and absolutely positioned
- * by its caller (`TrackLane.vue` supplies `leftPx`/`widthPx` in CONTENT
- * space, `timelineLayout.ts`'s own convention) — this component never reads
- * zoom or scroll itself.
+ * One clip's visual (Task 20; F-04, F-14, F-26). Presentational and
+ * absolutely positioned by its caller (`TrackLane.vue` supplies
+ * `leftPx`/`widthPx` in CONTENT space); it never reads zoom or scroll.
  *
- * Selection is a direct store write (`editorWorkspace.select`, the
- * `PreviewHeader`/`InspectorPanel` precedent of components calling a store
- * directly rather than emitting purely upward) — the only thing this
- * component bubbles UP is "open a context menu here", because the ONE
- * `ContextMenu` instance lives at `TimelineView.vue`, several components
- * away. Right-click and Shift+F10/Menu (SCREENS-AND-INTERACTIONS.md §03:
- * "The same actions are reachable from … Shift+F10") funnel into the SAME
- * `context-menu` emit shape so `TimelineView` has one handler, not two.
+ * Selection is a direct store write (`editorWorkspace.select`); the only
+ * thing this component bubbles UP is "open a context menu here", because
+ * the ONE `ContextMenu` lives at `TimelineView.vue`. Right-click and
+ * Shift+F10/Menu funnel into the SAME `context-menu` emit.
  *
- * Drag/trim (Task 21; F-07..F-11): the clip BODY drags to move it, and the
- * two handles trim it — each is a self-contained pointer-capture lifecycle
- * (`TimelineRuler.vue`'s own `setPointerCapture`/`releasePointerCapture`
- * pattern, mirrored here so a fast drag past this clip's own edge keeps
- * tracking instead of going silent), delegating every bit of the actual
- * interaction MATH to `useTimelineDrag` — this component only owns the DOM
- * plumbing (capture, `clientX`/`clientY`, focus) the composable's own doc
- * says stays here. Pointer-up sends exactly ONE `moveClips`/`trimClip`;
- * Escape mid-drag discards the preview with nothing sent. ←/→ (optionally
- * with Shift for the 1s step) nudge the FOCUSED clip by one `moveClips`
- * per keypress and restore focus to it after the projection re-renders —
- * `nextTick` plus a re-query by the clip's own STABLE `data-testid` key,
- * because the async round trip to Rust can, in principle, let Vue swap the
- * underlying DOM node out from under a captured element reference.
+ * Drag/trim (Task 21; F-07..F-11): the BODY drags to move the clip, the
+ * trim handles trim it and the gold fade handles (Task 29; F-17, F-18) set
+ * its fades — each a self-contained pointer-capture lifecycle (so a fast
+ * drag past the clip's edge keeps tracking) whose MATH is
+ * `useTimelineDrag`'s; this component owns only the DOM plumbing. A
+ * release sends exactly ONE `moveClips`/`trimClip`/`setFades`; Escape
+ * discards the preview with nothing sent. ←/→ (Shift: 1 s) nudge the
+ * FOCUSED clip by one `moveClips` per key and give focus back after the
+ * re-render — `nextTick` plus a re-query by the clip's STABLE
+ * `data-testid`, since Vue may swap the node during the round trip.
  *
- * The two GOLD FADE HANDLES (Task 29; F-17, F-18) follow the exact same
- * pointer-capture lifecycle as the trim handles above, never a second drag
- * model: preview during the drag (`drag.fadePreview`), exactly ONE
- * `setFades` on release, Escape discards. They are always rendered (a fade
- * has to be CREATED from zero, so the grab target must exist before there
- * is anything to see) while the gold WEDGE beside each one — the visual
- * indicator of how much fade there is — stays gated on a nonzero value, the
- * behaviour `editorTimelineView.test.ts`'s own "renders a fade wedge only
- * for a nonzero fade" test already pins.
+ * **Anatomy (visual-parity Task 18, concept spec §6.5).** The body is 47 px
+ * tall at top 5 of the 68 px row, radius 5, its kind's fill and edge, and
+ * never narrower than 5 px; a selected clip has a 2 px accent OUTLINE (an
+ * outline, not a box-shadow ring, so a Windows contrast theme keeps it).
+ * Inside a clipped content layer: the filmstrip or the bar waveform, the
+ * name (bottom-left with a 10 px glyph; an audio clip's at the top), the
+ * chips (`ClipBadges`) and the fade shape (`ClipFadeShape`, a nonzero fade
+ * only). Outside it, so they can ride the edges: the fade handles — 13 px
+ * gold circles on the TOP edge at the knees, always there because a fade
+ * is CREATED from zero — and the trim handles — 9 × 33 grips with a 2 px
+ * ink bar, which a clip narrower than two grips moves outside its own
+ * edges so both stay grabbable. Both show on hover or while selected and
+ * keep `vb-handle`. A move or trim that snaps reports its target to
+ * `TimelineView`'s dashed guide (`snapGuide.ts`).
  *
- * `role="option"`, not `role="button"` (fix round 1, finding 3): `aria-
- * selected` is only a valid ARIA attribute on a handful of roles (option,
- * row, tab, gridcell, …) and `button` is not one of them —
- * `SearchHitRow.vue`'s own `role="option"` + `:aria-selected` is this
- * repo's existing precedent for exactly this "one of several selectable
- * items" shape. Because this element is a `<div>`, not a native `<button>`,
- * Enter/Space activation has to be wired by hand
- * (`TranscriptionSummary.vue`'s `@keydown.enter`/`@keydown.space.prevent`
- * precedent, folded into the same `onKeydown` this component already uses
- * for Shift+F10/Menu) — without it a keyboard user who tabs to a clip can
- * open its context menu but has no way to select it.
+ * `role="option"` (fix round 1, finding 3): `aria-selected` is valid on an
+ * option, not on a button (`SearchHitRow.vue`'s precedent). A `<div>` has
+ * no native activation, so Enter/Space select it in `onKeydown`, beside
+ * Shift+F10/Menu.
  */
 import type { ComponentPublicInstance } from "vue";
-import { computed, nextTick, ref } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useTimelineDrag } from "../../../composables/useTimelineDrag";
 import { hasPreviewSource } from "../../../editor/previewLayers";
 import { isContextMenuShortcut } from "../../../editor/shortcuts";
-import { msToX, snapTargets as computeSnapTargets } from "../../../editor/timelineLayout";
-import { clipOutputEnd } from "../../../editor/timeMap";
+import { SNAP_GUIDE_KEY } from "../../../editor/snapGuide";
+import { MIN_CLIP_WIDTH_PX, msToX, snapTargets as computeSnapTargets } from "../../../editor/timelineLayout";
+import { clipOutputDuration, clipOutputEnd } from "../../../editor/timeMap";
 import { trackAccepts } from "../../../editor/trackCompat";
 import type { Clip, ClipSpan } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import { formatDuration } from "../../../utils/formatDuration";
+import EditorIcon from "../icons/EditorIcon.vue";
+import ClipBadges from "./ClipBadges.vue";
+import ClipFadeShape from "./ClipFadeShape.vue";
 import ClipThumbnail from "./ClipThumbnail.vue";
 import ClipWaveform from "./ClipWaveform.vue";
 
@@ -156,6 +147,15 @@ const drag = useTimelineDrag({
   execute: (command) => editorProject.execute(command),
 });
 
+/** The dashed guide `TimelineView` draws while this clip's drag snaps. */
+const snapGuide = inject(SNAP_GUIDE_KEY, null);
+watch(drag.snapGuideMs, (ms) => {
+  if (snapGuide) snapGuide.value = ms;
+});
+onBeforeUnmount(() => {
+  if (snapGuide && drag.snapGuideMs.value !== null) snapGuide.value = null;
+});
+
 const root = ref<HTMLElement | null>(null);
 /** The guide's `clip.selected` (Task 55): this clip, while it is selected. */
 const selectedTarget = useGuideTarget("clip.selected", { active: () => props.selected });
@@ -211,11 +211,7 @@ async function onTrimPointerUp(event: PointerEvent) {
   await drag.endTrim();
 }
 
-// ---- fade handles (Task 29; F-17, F-18) ------------------------------------
-// The trim handles' own pointer-capture lifecycle, reused rather than a
-// second drag model (the brief's own instruction): `beginPress` captures
-// the pointer and focuses the clip so Escape mid-drag reaches `onKeydown`,
-// exactly as the body/trim handlers above already do.
+// ---- fade handles (Task 29; F-17, F-18): the trim handles' lifecycle -------
 
 function onFadePointerDown(event: PointerEvent, edge: "in" | "out") {
   if (beginPress(event)) drag.beginFade(edge, event.clientX);
@@ -249,16 +245,10 @@ const previewWidthPx = computed(() => {
   return end - start;
 });
 
-// ---- fade wedges (Task 29) --------------------------------------------------
-// The gold wedge's WIDTH is proportional to the fade duration it shows
-// (`msToX`, the same output-time-to-px scale `previewWidthPx` above uses),
-// clamped to at most half the clip's own current width so two wedges can
-// never overlap, and floored at a small minimum so even a very short fade
-// stays grabbable/visible. Driven by the LIVE drag preview (falling back to
-// the committed clip value) so dragging a fade handle from zero grows the
-// wedge as the user watches, exactly like `previewLeftPx`/`previewWidthPx`
-// do for a body/trim drag.
-const MIN_FADE_WEDGE_PX = 6;
+// ---- fades (Task 29; §6.5) -----------------------------------------------
+// The knees as percentages of the body, from the LIVE drag preview (falling
+// back to the committed clip), so dragging a handle from zero grows the
+// gold shape under it as the user watches. Each knee stays on its own half.
 
 const previewFadeInMs = computed(() =>
   drag.fadePreview.value?.edge === "in" ? drag.fadePreview.value.ms : props.clip.fade_in_ms,
@@ -266,9 +256,52 @@ const previewFadeInMs = computed(() =>
 const previewFadeOutMs = computed(() =>
   drag.fadePreview.value?.edge === "out" ? drag.fadePreview.value.ms : props.clip.fade_out_ms,
 );
-function fadeWedgeWidthPx(ms: number): number {
-  return Math.min(previewWidthPx.value / 2, Math.max(msToX(ms, props.zoom), MIN_FADE_WEDGE_PX));
+/** The body's output length now (a live trim previews its own range). */
+const shownDurationMs = computed(() => {
+  const tp = drag.trimPreview.value;
+  const c = props.clip;
+  return clipOutputDuration(tp?.inMs ?? c.in_ms, tp?.outMs ?? c.out_ms, c.speed ?? 1);
+});
+function pct(ms: number): number {
+  return Math.round(Math.min(50, (ms * 100) / Math.max(1, shownDurationMs.value)) * 100) / 100;
 }
+const fadeInPct = computed(() => pct(previewFadeInMs.value));
+const fadeOutPct = computed(() => 100 - pct(previewFadeOutMs.value));
+/** Both fade handles: where each sits, and what its title says. */
+const fadeHandles = computed(() =>
+  (["in", "out"] as const).map((edge) => {
+    const ms = edge === "in" ? previewFadeInMs.value : previewFadeOutMs.value;
+    return {
+      edge,
+      left: `${edge === "in" ? fadeInPct.value : fadeOutPct.value}%`,
+      title: `Fade ${edge}: ${(ms / 1000).toFixed(1)}s. Drag, or use Fades properties.`,
+    };
+  }),
+);
+
+/** The drawn width: never under the concept's 5 px floor. */
+const bodyWidthPx = computed(() => Math.max(previewWidthPx.value, MIN_CLIP_WIDTH_PX));
+/** Narrower than two 9 px grips, the grips step outside the body's edges. */
+const TRIM_GRIP_PX = 9;
+const narrow = computed(() => bodyWidthPx.value < TRIM_GRIP_PX * 2);
+/** Hover or selection shows the handles (§11). */
+const handleShown = computed(() => (props.selected ? "opacity-100" : "opacity-0 group-hover:opacity-100"));
+/** Both trim grips: inside the body's edges, or just outside a narrow one. */
+const trimHandles = computed(() => [
+  { edge: "start" as const, place: narrow.value ? "right-full" : "left-0", bar: "left-[2px]" },
+  { edge: "end" as const, place: narrow.value ? "left-full" : "right-0", bar: "right-[2px]" },
+]);
+/** The body's colours by kind, and the selection outline over them. */
+const bodyClass = computed(() => [
+  props.assetKind === "audio" ? "border-clip-audio-edge bg-audio-bg text-audio" : "border-clip-video-edge bg-video-bg text-video",
+  props.selected ? "z-[4] outline-2 outline-offset-0 outline-accent" : "z-[2]",
+]);
+/** A video clip's name sits bottom-left over the picture; an audio clip's
+ * at the top, above its bars, in its own colour. */
+const nameClass = computed(() =>
+  props.assetKind === "audio" ? "top-[3px] text-audio" : "bottom-[5px] text-fg [text-shadow:0_1px_var(--color-panel)]",
+);
+const glyph = computed(() => (props.assetKind === "audio" ? "music" : "video"));
 
 // ---- derived media (Task 28) -----------------------------------------------
 
@@ -279,7 +312,7 @@ const asset = computed(() => editorProject.project?.assets.find((a) => a.id === 
  * waveform follows the handle instead of stretching the committed range. */
 const shownInMs = computed(() => drag.trimPreview.value?.inMs ?? props.clip.in_ms);
 const shownOutMs = computed(() => drag.trimPreview.value?.outMs ?? props.clip.out_ms);
-/** Narrower than this, a poster frame is noise over the clip's name. */
+/** Narrower than this, a filmstrip is noise over the clip's name. */
 const THUMBNAIL_MIN_WIDTH_PX = 48;
 /** An audio clip's asset, for its waveform lane (`null`: no lane) — only
  * when it has a real file to decode: a synthesized builtin would be refused
@@ -288,15 +321,13 @@ const waveformAsset = computed(() => {
   const a = asset.value;
   return a && props.assetKind === "audio" && hasPreviewSource(a) ? a : null;
 });
-/** A video clip's asset when it has a real file to cut a poster frame
- * from and the clip is wide enough to show one (`null`: no poster). */
+/** A video clip's asset when it has a real file to cut a frame from and
+ * the clip is wide enough to show one (`null`: no filmstrip). */
 const posterAsset = computed(() => {
   const a = asset.value;
   const fits = previewWidthPx.value >= THUMBNAIL_MIN_WIDTH_PX;
   return a && props.assetKind === "video" && fits && hasPreviewSource(a) ? a : null;
 });
-/** The waveform's drawing width: the lane is inset 4 px on each side. */
-const waveformWidthPx = computed(() => Math.max(previewWidthPx.value - 8, 1));
 
 const NUDGE_FRAME_MS = 33;
 const NUDGE_SECOND_MS = 1_000;
@@ -307,21 +338,16 @@ async function onNudge(event: KeyboardEvent) {
   const deltaMs = event.key === "ArrowLeft" ? -amount : amount;
   const el = event.currentTarget as HTMLElement;
   await drag.nudge(deltaMs);
-  // Stable key (`TrackLane.vue`'s `v-for` keys by `clip.id`, unchanged by a
-  // move) usually keeps `el` itself the live element across the re-render —
-  // the re-query below is the belt for the case it does not (e.g. the clip
-  // briefly leaves `visibleClips`' virtualization window mid-round-trip).
+  // The stable key usually keeps `el` live; the re-query covers a clip that
+  // briefly left the virtualization window mid-round-trip.
   await nextTick();
   const restored =
     document.querySelector<HTMLElement>(`[data-testid="clip-${props.clip.id}"]`) ?? el;
   restored?.focus();
 }
 
-/** Cancels any in-progress body/trim/fade preview and reports whether one
- * was actually active -- extracted out of `onKeydown`'s own Escape branch
- * (fallow complexity: three previews `||`'d together there pushed that
- * function's cyclomatic count over the ratchet) so the keydown dispatcher
- * stays a flat table of single-condition branches. */
+/** Cancels any body/trim/fade preview; whether one was active (kept out of
+ * `onKeydown` so its branches stay flat, for the complexity ratchet). */
 function cancelActiveDrag(): boolean {
   const active = drag.movePreview.value !== null || drag.trimPreview.value !== null || drag.fadePreview.value !== null;
   drag.cancelBodyDrag();
@@ -365,12 +391,9 @@ function onKeydown(event: KeyboardEvent) {
     tabindex="0"
     :aria-selected="selected"
     :aria-label="label(clip)"
-    class="absolute top-1 bottom-1 flex items-center overflow-hidden rounded border px-1 text-micro cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-    :class="[
-      assetKind === 'audio' ? 'bg-audio-bg border-audio text-audio' : 'bg-video-bg border-video text-video',
-      selected ? 'ring-2 ring-accent' : '',
-    ]"
-    :style="{ left: `${previewLeftPx}px`, width: `${Math.max(previewWidthPx, 2)}px` }"
+    class="group absolute top-[5px] h-[47px] cursor-grab touch-none rounded-[5px] border select-none focus-visible:z-[5] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+    :class="bodyClass"
+    :style="{ left: `${previewLeftPx}px`, width: `${bodyWidthPx}px` }"
     @click="onSelect"
     @contextmenu.prevent="onContextMenu"
     @keydown="onKeydown"
@@ -379,76 +402,92 @@ function onKeydown(event: KeyboardEvent) {
     @pointerup="onBodyPointerUp"
   >
     <div
-      v-if="previewFadeInMs > 0"
-      :data-testid="`clip-${clip.id}-fade-in`"
-      class="pointer-events-none absolute inset-y-0 left-0 bg-gold/40"
-      :style="{ width: `${fadeWedgeWidthPx(previewFadeInMs)}px`, clipPath: 'polygon(0 100%, 100% 100%, 0 0)' }"
-    />
-    <div
-      v-if="previewFadeOutMs > 0"
-      :data-testid="`clip-${clip.id}-fade-out`"
-      class="pointer-events-none absolute inset-y-0 right-0 bg-gold/40"
-      :style="{ width: `${fadeWedgeWidthPx(previewFadeOutMs)}px`, clipPath: 'polygon(0 100%, 100% 100%, 100% 0)' }"
-    />
-    <!-- Always-visible drag handles (never gated on a nonzero fade, unlike
-         the wedge above): a fade has to be CREATED from zero somehow, so
-         the grab target exists even when there is nothing to see yet. -->
-    <span
-      :data-testid="`clip-${clip.id}-fade-in-handle`"
-      class="vb-handle absolute -top-0.5 left-0 z-10 h-2 w-2 -translate-x-0.5 cursor-ew-resize rounded-full bg-gold"
-      @pointerdown.stop="onFadePointerDown($event, 'in')"
-      @pointermove.stop="onFadePointerMove"
-      @pointerup.stop="onFadePointerUp"
-    />
-    <span
-      :data-testid="`clip-${clip.id}-fade-out-handle`"
-      class="vb-handle absolute -top-0.5 right-0 z-10 h-2 w-2 translate-x-0.5 cursor-ew-resize rounded-full bg-gold"
-      @pointerdown.stop="onFadePointerDown($event, 'out')"
-      @pointermove.stop="onFadePointerMove"
-      @pointerup.stop="onFadePointerUp"
-    />
-    <!-- F-26 (Task 28): the waveform of an audio clip, and a poster frame
-         for a video clip whose asset has a real file. Both mount only with
-         this ClipItem, i.e. only for a clip the timeline keeps visible. -->
-    <div
-      v-if="waveformAsset"
-      :data-testid="`clip-${clip.id}-waveform`"
-      class="pointer-events-none absolute inset-x-1 bottom-0.5 h-3 rounded bg-audio-bg/60"
+      :data-testid="`clip-${clip.id}-content`"
+      class="pointer-events-none absolute inset-0 overflow-hidden rounded-[4px]"
     >
-      <ClipWaveform
-        :asset-id="waveformAsset.id"
-        :asset-duration-ms="waveformAsset.duration_ms"
-        :in-ms="shownInMs"
-        :out-ms="shownOutMs"
-        :width-px="waveformWidthPx"
+      <!-- F-26 (Task 28): the bars of an audio clip, and the filmstrip of a
+           video clip whose asset has a real file. Both mount only with this
+           ClipItem, i.e. only for a clip the timeline keeps visible. -->
+      <div
+        v-if="waveformAsset"
+        :data-testid="`clip-${clip.id}-waveform`"
+        class="absolute inset-0"
+      >
+        <ClipWaveform
+          :asset-id="waveformAsset.id"
+          :asset-duration-ms="waveformAsset.duration_ms"
+          :in-ms="shownInMs"
+          :out-ms="shownOutMs"
+          :width-px="bodyWidthPx"
+        />
+      </div>
+      <div
+        v-else-if="posterAsset"
+        :data-testid="`clip-${clip.id}-thumbnail`"
+        class="absolute inset-0"
+      >
+        <ClipThumbnail
+          :clip-id="clip.id"
+          :asset-id="posterAsset.id"
+          :at-ms="clip.in_ms"
+        />
+      </div>
+
+      <span
+        :data-testid="`clip-${clip.id}-name`"
+        class="absolute right-[6px] left-[9px] z-[3] truncate text-[10px] font-[550]"
+        :class="nameClass"
+      ><EditorIcon
+        :name="glyph"
+        :size="10"
+        class="mr-1 inline align-[-1px]"
+      />{{ clip.name }}</span>
+
+      <ClipBadges
+        :clip="clip"
+        :asset="asset"
+        :kind="assetKind"
+        :width-px="bodyWidthPx"
+        :duration-ms="shownDurationMs"
       />
-    </div>
-    <div
-      v-else-if="posterAsset"
-      :data-testid="`clip-${clip.id}-thumbnail`"
-      class="pointer-events-none absolute inset-y-0 left-1"
-    >
-      <ClipThumbnail
-        :asset-id="posterAsset.id"
-        :at-ms="clip.in_ms"
+      <ClipFadeShape
+        :clip-id="clip.id"
+        :fade-in-pct="fadeInPct"
+        :fade-out-pct="fadeOutPct"
       />
     </div>
 
-    <span class="pointer-events-none relative z-10 truncate">{{ clip.name }}</span>
+    <!-- Always there (a fade has to be CREATED from zero, so the grab target
+         exists before there is anything to see); shown on hover/selection. -->
+    <span
+      v-for="h in fadeHandles"
+      :key="h.edge"
+      :data-testid="`clip-${clip.id}-fade-${h.edge}-handle`"
+      :title="h.title"
+      class="vb-handle absolute -top-1 z-[8] h-[13px] w-[13px] -translate-x-1/2 cursor-ew-resize rounded-full border-2 border-panel bg-gold"
+      :class="handleShown"
+      :style="{ left: h.left }"
+      @pointerdown.stop="onFadePointerDown($event, h.edge)"
+      @pointermove.stop="onFadePointerMove"
+      @pointerup.stop="onFadePointerUp"
+    />
 
     <span
-      :data-testid="`clip-${clip.id}-trim-start`"
-      class="vb-handle absolute inset-y-0 left-0 w-1 cursor-ew-resize bg-track"
-      @pointerdown.stop="onTrimPointerDown($event, 'start')"
+      v-for="t in trimHandles"
+      :key="t.edge"
+      :data-testid="`clip-${clip.id}-trim-${t.edge}`"
+      :title="`Trim ${t.edge}; the exact range is in Clip properties`"
+      class="absolute top-[10px] z-[7] h-[33px] w-[9px] cursor-ew-resize"
+      :class="[handleShown, t.place]"
+      @pointerdown.stop="onTrimPointerDown($event, t.edge)"
       @pointermove.stop="onTrimPointerMove"
       @pointerup.stop="onTrimPointerUp"
-    />
-    <span
-      :data-testid="`clip-${clip.id}-trim-end`"
-      class="vb-handle absolute inset-y-0 right-0 w-1 cursor-ew-resize bg-track"
-      @pointerdown.stop="onTrimPointerDown($event, 'end')"
-      @pointermove.stop="onTrimPointerMove"
-      @pointerup.stop="onTrimPointerUp"
-    />
+    >
+      <span
+        :data-testid="`clip-${clip.id}-trim-${t.edge}-bar`"
+        class="vb-handle absolute top-1.5 bottom-1.5 w-[2px] rounded-[2px] bg-fg"
+        :class="t.bar"
+      />
+    </span>
   </div>
 </template>

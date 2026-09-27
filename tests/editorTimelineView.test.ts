@@ -396,7 +396,7 @@ describe("TimelineView — virtualization", () => {
     const w = mount(TimelineView, { props: { viewportWidth: 500 } });
     await flushPromises();
 
-    const rendered = w.findAll('[data-testid^="clip-m"]');
+    const rendered = w.findAll('[data-testid^="clip-m"][role="option"]');
     expect(rendered.length).toBeLessThan(manyClips.length);
     // The very first clip (near scrollLeft 0) must still be there.
     expect(w.find('[data-testid="clip-m0"]').exists()).toBe(true);

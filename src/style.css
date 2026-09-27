@@ -82,12 +82,13 @@
   --color-guide-dim: rgba(10, 11, 18, 0.52);
   /* A non-token literal in the concept (dialog backdrop), both themes. */
   --color-backdrop: #080711aa;
-  /* Task 14 fix round 1 (review Important): the trim handles' and progress
-     tracks' boundary tint — a static UI-component edge (WCAG 1.4.11 wants
+  /* Task 14 fix round 1 (review Important): the progress tracks' boundary
+     tint (and the trim handles', until visual-parity Task 18 drew those as
+     the concept's ink bars) — a static UI-component edge (WCAG 1.4.11 wants
      ~3:1), not a hover. No concept counterpart; the dark value is the
      `bg-white/10` it replaced, and `[data-theme="light"]` overrides it with
-     slate-900 at 55% (3.65:1 on `video-bg`, the tightest backdrop, as
-     `tests/e2e/editorKeyboard.spec.ts` measures it). */
+     slate-900 at 55% (3.65:1 on `video-bg`, the tightest backdrop it ever
+     sat on). */
   --color-track: rgb(255 255 255 / 0.1);
   /* GAP-206's recorded residual: the lighter hover for rows that carried
      `bg-white/5` (the Save project dialog's format rows, the learning
@@ -113,6 +114,18 @@
   /* A locked lane's hatch (§6.4, `#8888880b`): neutral grey at 4 %, the
      same in both themes. */
   --color-lock-hatch: #8888880b;
+  /* A clip's edge (§6.5 `.clip`, `.audio .clip`): its kind's colour mixed
+     into its own fill, so it follows the theme with the pair. */
+  --color-clip-video-edge: color-mix(in srgb, var(--color-video) 48%, var(--color-video-bg));
+  --color-clip-audio-edge: color-mix(in srgb, var(--color-audio) 46%, var(--color-audio-bg));
+  /* A clip's chips (§6.5): the length pill (`.clip-duration`, #16141a80,
+     white) and the badges (`.clip-badges`, #24202dc9, #f1eaff) — concept
+     literals over the picture, the same in both themes but the pill,
+     which light darkens to keep its white text at 4.5:1 over `video-bg`. */
+  --color-clip-pill: #16141a80;
+  --color-clip-pill-ink: #ffffff;
+  --color-clip-badge: #24202dc9;
+  --color-clip-badge-ink: #f1eaff;
   /* The colour treatments' sample picture (concept spec §5 `.filter-tile`):
      a gradient, a lilac shape and "Aa", filtered per treatment — a picture,
      so the same in both themes. */
@@ -183,6 +196,7 @@
   --color-gold-bg: #f7ecd8;
   --color-track: rgb(15 23 42 / 0.55);
   --color-hover-subtle: rgb(15 23 42 / 0.05);
+  --color-clip-pill: #16141a99;
 }
 
 /* Tutorial editor dark theme: the concept's text/accent/ring values for the

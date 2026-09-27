@@ -1,24 +1,27 @@
 <script setup lang="ts">
 /**
- * One audio clip's waveform (Task 28; F-26): the peaks Rust derived for
- * the clip's ASSET (`editor_media_peaks`, via the `mediaDerived` memo, so
- * every clip of one recording shares one decode), drawn as ONE SVG
- * polyline over the clip's own source range (`waveform.waveformPoints`).
+ * One audio clip's waveform (Task 28; F-26; visual-parity Task 18, concept
+ * spec §6.5): the peaks Rust derived for the clip's ASSET
+ * (`editor_media_peaks`, via the `mediaDerived` memo, so every clip of one
+ * recording shares one decode), drawn as the concept's rounded bars over
+ * the clip's own source range (`waveform.waveformBars`) in a 27 px band
+ * 18 px from the clip's top, at 65 %, in the clip's own colour.
  *
  * It exists only while its `ClipItem` does, and `TrackLane` renders only
  * the clips `timelineLayout.visibleClips` keeps — so a clip scrolled far
  * off screen never asks for a decode at all.
  *
- * A missing ffmpeg is not an empty lane: `encoderUnavailable` shows the
- * install hint (R20 — nothing is faked, and nothing silently absent). Any
- * other refusal (a moved file, an asset with no sound) draws nothing and is
- * logged, rather than wrongly telling the user to install ffmpeg.
+ * A missing ffmpeg is not an empty band: `encoderUnavailable` says so in
+ * the concept's words, "waveform unavailable · audio still plays" (the
+ * preview plays the sound without ffmpeg). Any other refusal (a moved
+ * file, an asset with no sound) draws nothing and is logged — the audio
+ * would NOT play there, so the sentence would be untrue.
  */
 import { computed, onMounted, ref, watch } from "vue";
 
 import { loadPeaks, mediaVersion } from "../../../editor/mediaDerived";
 import { EditorPortError } from "../../../editor/port";
-import { peakBucketsFor, waveformPoints } from "../../../editor/waveform";
+import { peakBucketsFor, waveformBars } from "../../../editor/waveform";
 import { logWarning } from "../../../logging";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 
@@ -29,9 +32,6 @@ const props = defineProps<{
   outMs: number;
   widthPx: number;
 }>();
-
-/** The lane's drawing height — `ClipItem`'s `h-3` slot. */
-const HEIGHT_PX = 12;
 
 const editorProject = useEditorProjectStore();
 const peaks = ref<number[] | null>(null);
@@ -63,30 +63,33 @@ onMounted(load);
 // `mediaVersion`: a reconnect replaced the asset's file (Task 40).
 watch(() => [props.assetId, props.assetDurationMs, editorProject.sessionId, mediaVersion(props.assetId)], load);
 
-const points = computed(() =>
-  peaks.value
-    ? waveformPoints(peaks.value, props.assetDurationMs, props.inMs, props.outMs, props.widthPx, HEIGHT_PX)
-    : "",
+const width = computed(() => Math.max(props.widthPx, 1));
+const bars = computed(() =>
+  peaks.value ? waveformBars(peaks.value, props.assetDurationMs, props.inMs, props.outMs, width.value) : "",
 );
 </script>
 
 <template>
-  <span
-    v-if="ffmpegMissing"
-    class="block truncate text-micro leading-3 text-fg-subtle"
-  >Install ffmpeg to see waveforms</span>
   <svg
-    v-else-if="points"
-    class="block h-full w-full"
-    :viewBox="`0 0 ${Math.max(widthPx, 1)} ${HEIGHT_PX}`"
+    v-if="ffmpegMissing || bars"
+    class="absolute top-[18px] left-0 h-[27px] w-full opacity-65"
+    :viewBox="`0 0 ${width} 27`"
     preserveAspectRatio="none"
     aria-hidden="true"
   >
-    <polyline
-      :points="points"
-      class="fill-audio/40 stroke-audio"
-      stroke-width="1"
-      vector-effect="non-scaling-stroke"
+    <text
+      v-if="ffmpegMissing"
+      x="8"
+      y="18"
+      fill="currentColor"
+      font-size="8"
+    >waveform unavailable · audio still plays</text>
+    <path
+      v-else
+      :d="bars"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
     />
   </svg>
 </template>

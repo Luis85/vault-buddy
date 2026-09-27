@@ -3,8 +3,10 @@
  * both (`editor_media_peaks` / `editor_media_thumbnail`,
  * `src-tauri/src/editor/media_derive.rs`); the timeline asks only for the
  * clips it actually renders (`timelineLayout.visibleClips`' window), draws
- * the peaks as ONE SVG polyline per clip, and turns a missing ffmpeg into
- * the install hint rather than an empty lane.
+ * the peaks as the concept's rounded bars (visual-parity Task 18), and
+ * turns a missing ffmpeg into the "waveform unavailable · audio still
+ * plays" line rather than an empty lane. A video clip's poster is one
+ * frame, repeated as a filmstrip.
  */
 import { clearMocks, mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
@@ -18,7 +20,7 @@ import { decodeMediaPeaks } from "../src/editor/decode";
 import { clearMediaDerivedForTest, loadPeaks, loadThumbnail } from "../src/editor/mediaDerived";
 import type { EditorPort } from "../src/editor/port";
 import { createTauriEditorPort, EditorPortError } from "../src/editor/port";
-import { peakBucketsFor, waveformPoints } from "../src/editor/waveform";
+import { peakBucketsFor, waveformBars } from "../src/editor/waveform";
 import type { Asset, Clip, EditorOpenResult, Project, Track } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { fakeEditorPort } from "./helpers/fakeEditorPort";
@@ -137,9 +139,9 @@ describe("the timeline's waveforms", () => {
     );
     const w = await mountTimeline({ mediaPeaks });
 
-    const near = w.find('[data-testid="clip-near-waveform"] polyline');
+    const near = w.find('[data-testid="clip-near-waveform"] path');
     expect(near.exists()).toBe(true);
-    expect((near.attributes("points") ?? "").split(" ").length).toBeGreaterThan(2);
+    expect((near.attributes("d") ?? "").split("M").length - 1).toBeGreaterThan(2);
     // The far clip is outside the virtualization window: no ClipItem, so no
     // waveform — and no decode was ever asked for.
     expect(w.find('[data-testid="clip-far"]').exists()).toBe(false);
@@ -148,7 +150,7 @@ describe("the timeline's waveforms", () => {
     expect(mediaPeaks).toHaveBeenCalledWith("ses-a", "snd-near", peakBucketsFor(8_000));
   });
 
-  it("missing ffmpeg shows the install hint", async () => {
+  it("missing ffmpeg says the waveform is unavailable and the audio still plays", async () => {
     const mediaPeaks = vi.fn(() =>
       Promise.reject(
         new EditorPortError({
@@ -162,8 +164,8 @@ describe("the timeline's waveforms", () => {
     const w = await mountTimeline({ mediaPeaks });
 
     const lane = w.find('[data-testid="clip-near-waveform"]');
-    expect(lane.text()).toBe("Install ffmpeg to see waveforms");
-    expect(lane.find("polyline").exists()).toBe(false);
+    expect(lane.text()).toBe("waveform unavailable · audio still plays");
+    expect(lane.find("path").exists()).toBe(false);
   });
 
   // Any OTHER refusal is logged, never drawn as the ffmpeg hint (which
@@ -178,34 +180,47 @@ describe("the timeline's waveforms", () => {
     const lane = w.find('[data-testid="clip-near-waveform"]');
     expect(lane.exists()).toBe(true);
     expect(lane.text()).toBe("");
-    expect(lane.find("polyline").exists()).toBe(false);
+    expect(lane.find("path").exists()).toBe(false);
   });
 });
 
 // ---- the pure geometry ------------------------------------------------------
 
-describe("waveformPoints", () => {
+describe("waveformBars", () => {
   // Asymmetric peaks over an 8-bucket asset; the clip uses source 2..6 s of
   // 8 s, i.e. buckets 2..5 — a clip reading from the wrong end would draw
   // the zeros instead.
   const peaks = [0, 0, 1, 0.5, 0.25, 1, 0, 0];
 
-  it("draws the clip's own source range, top envelope then bottom", () => {
-    const points = waveformPoints(peaks, 8_000, 2_000, 6_000, 40, 10);
-    expect(points).toBe("5,0 15,2.5 25,3.8 35,0 35,10 25,6.3 15,7.5 5,10");
+  it("draws the clip's own source range as bars about 5px apart, centred on y 13", () => {
+    // 40 px: 8 bars, 5 px apart from x 2; the loudest bucket reaches 10 px
+    // either side of y 13.
+    const d = waveformBars(peaks, 8_000, 2_000, 6_000, 40);
+    expect(d).toBe(
+      "M2.0 3.0v20.0 M7.0 3.0v20.0 M12.0 8.0v10.0 M17.0 8.0v10.0 M22.0 10.5v5.0 M27.0 10.5v5.0 M32.0 3.0v20.0 M37.0 3.0v20.0",
+    );
   });
 
-  it("never emits more columns than pixels", () => {
+  it("draws at most 130 bars and folds the buckets each covers to their max", () => {
     const many = Array.from({ length: 4_000 }, (_, i) => (i % 7) / 7);
-    const points = waveformPoints(many, 200_000, 0, 200_000, 50, 12).split(" ");
-    expect(points.length).toBe(100);
+    const bars = (d: string) => d.split(" M").length;
+    expect(bars(waveformBars(many, 200_000, 0, 200_000, 2_000))).toBe(130);
+    // 10 bars over 4000 buckets: each still reaches the loudest (6/7).
+    const narrow = waveformBars(many, 200_000, 0, 200_000, 50);
+    expect(bars(narrow)).toBe(10);
+    expect(narrow.split(" M").every((bar) => bar.endsWith("v20.0"))).toBe(true);
+  });
+
+  it("scales near-silence against a floor, never up to full height", () => {
+    const quiet = waveformBars([0.01, 0.01], 1_000, 0, 1_000, 25);
+    expect(quiet.split(" M")[0]).toBe("M2.0 10.5v5.0");
   });
 
   it("is empty when there is nothing to draw", () => {
-    expect(waveformPoints([], 8_000, 0, 8_000, 40, 10)).toBe("");
-    expect(waveformPoints(peaks, 8_000, 3_000, 3_000, 40, 10)).toBe("");
-    expect(waveformPoints(peaks, 8_000, 0, 8_000, 0, 10)).toBe("");
-    expect(waveformPoints(peaks, 0, 0, 0, 40, 10)).toBe("");
+    expect(waveformBars([], 8_000, 0, 8_000, 40)).toBe("");
+    expect(waveformBars(peaks, 8_000, 3_000, 3_000, 40)).toBe("");
+    expect(waveformBars(peaks, 8_000, 0, 8_000, 0)).toBe("");
+    expect(waveformBars(peaks, 0, 0, 0, 40)).toBe("");
   });
 
   it("asks for a bounded bucket count", () => {
@@ -274,19 +289,19 @@ describe("ClipWaveform's own lifecycle", () => {
     const w = mount(ClipWaveform, { props: { ...props, assetId: "old" } });
     await w.setProps({ assetId: "new" });
     await flushPromises();
-    const drawn = w.find("polyline").attributes("points");
-    expect(drawn).toContain(",0 "); // full-height peaks
+    const drawn = w.find("path").attributes("d");
+    expect(drawn).toContain("v20.0"); // full-height peaks
 
     slow.resolve([0, 0, 0, 0]);
     await flushPromises();
-    expect(w.find("polyline").attributes("points")).toBe(drawn);
+    expect(w.find("path").attributes("d")).toBe(drawn);
 
     await w.setProps({ assetId: "older" });
     await w.setProps({ assetId: "new" });
     slower.reject(new EditorPortError({ code: "encoderUnavailable", message: "x", retryable: false, operationId: "o" }));
     await flushPromises();
     expect(w.text()).toBe("");
-    expect(w.find("polyline").attributes("points")).toBe(drawn);
+    expect(w.find("path").attributes("d")).toBe(drawn);
   });
 
   it("asks nothing without an open session", async () => {
@@ -304,7 +319,7 @@ describe("ClipWaveform's own lifecycle", () => {
 describe("the timeline's poster frames", () => {
   const PATH = "C:\\data\\editor-projects\\project-a\\cache\\vid-0.jpg";
   // A 4 s video clip (200 px at the default zoom), a 0.5 s one (25 px, too
-  // narrow for a poster) and a synthesized title card with no file at all.
+  // narrow for a filmstrip) and a synthesized title card with no file at all.
   const withVideo: Partial<Project> = {
     assets: [asset("vid", "video", 9_000), { ...asset("card-1", "video", 3_000), builtin: "card" }],
     tracks: [track("v1", "video")],
@@ -315,14 +330,14 @@ describe("the timeline's poster frames", () => {
     ],
   };
 
-  it("shows one frame for a wide clip with a real file, through the asset protocol", async () => {
+  it("repeats one frame for a wide clip with a real file, through the asset protocol", async () => {
     mockConvertFileSrc("windows");
     const mediaThumbnail = vi.fn(() => Promise.resolve(PATH));
     const w = await mountTimeline({ mediaThumbnail }, withVideo);
 
-    const img = w.find('[data-testid="clip-wide-thumbnail"] img');
-    expect(img.exists()).toBe(true);
-    expect(img.attributes("src")).toContain("asset.localhost");
+    const film = w.find('[data-testid="clip-wide-thumbnail"] [data-testid="clip-wide-film"]');
+    expect(film.exists()).toBe(true);
+    expect(film.attributes("style")).toContain("asset.localhost");
     expect(mediaThumbnail).toHaveBeenCalledTimes(1);
     expect(mediaThumbnail).toHaveBeenCalledWith("ses-a", "vid", 1_000);
     expect(w.find('[data-testid="clip-narrow-thumbnail"]').exists()).toBe(false);
@@ -356,7 +371,7 @@ describe("the timeline's poster frames", () => {
     first.unmount();
     const second = mount(TimelineView, { props: { viewportWidth: 400 } });
     await flushPromises();
-    expect(second.find('[data-testid="clip-wide-thumbnail"] img').exists()).toBe(true);
+    expect(second.find('[data-testid="clip-wide-film"]').exists()).toBe(true);
     expect(mediaThumbnail).toHaveBeenCalledTimes(2);
   });
 
@@ -373,13 +388,13 @@ describe("the timeline's poster frames", () => {
         : Promise.resolve(PATH),
     );
     await openWith({ mediaThumbnail }, withVideo);
-    const w = mount(ClipThumbnail, { props: { assetId: "vid", atMs: 1_000 } });
+    const w = mount(ClipThumbnail, { props: { clipId: "wide", assetId: "vid", atMs: 1_000 } });
     await w.setProps({ atMs: 2_000 });
     await flushPromises();
-    expect(w.find("img").exists()).toBe(true);
+    expect(w.find('[data-testid="clip-wide-film"]').exists()).toBe(true);
     rejectOld(new EditorPortError({ code: "sourceMissing", message: "x", retryable: false, operationId: "o" }));
     await flushPromises();
-    expect(w.find("img").exists()).toBe(true);
+    expect(w.find('[data-testid="clip-wide-film"]').exists()).toBe(true);
   });
 
   it("draws no frame when Rust cannot make one", async () => {
@@ -390,7 +405,7 @@ describe("the timeline's poster frames", () => {
       );
       const w = await mountTimeline({ mediaThumbnail }, withVideo);
       expect(w.find('[data-testid="clip-wide-thumbnail"]').exists()).toBe(true);
-      expect(w.find('[data-testid="clip-wide-thumbnail"] img').exists()).toBe(false);
+      expect(w.find('[data-testid="clip-wide-film"]').exists()).toBe(false);
       w.unmount();
     }
   });

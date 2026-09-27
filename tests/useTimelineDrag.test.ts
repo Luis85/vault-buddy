@@ -568,3 +568,59 @@ describe("MIN_CLIP_MS matches core::editor::limits", () => {
     expect(MIN_CLIP_MS).toBe(rustLimit("MIN_CLIP_MS"));
   });
 });
+
+// Visual-parity Task 18 (concept spec §6.5): "drag shows a dashed gold snap
+// guide" — the target the dragged edge settled on, and only while it does.
+describe("useTimelineDrag — the snap guide", () => {
+  function deps(targets: number[], snapEnabled = true, c: Clip = clip()) {
+    return {
+      clip: () => c,
+      zoom: () => 1,
+      snapEnabled: () => snapEnabled,
+      snapTargets: () => targets,
+      moveTargetClipIds: () => ["c1"],
+      trackOrder: () => ["v1"] as const,
+      trackIndex: () => 0,
+      trackAccepts: () => true,
+      execute: vi.fn(),
+    };
+  }
+
+  it("names the target a moved start snapped onto, and clears on release", async () => {
+    const drag = useTimelineDrag(deps([3_120, 9_000]));
+    drag.beginBodyDrag(0, 0);
+    drag.updateBodyDrag(90 * PPM); // start 3090, 30 ms from 3120
+    expect(drag.snapGuideMs.value).toBe(3_120);
+    drag.updateBodyDrag(1_000 * PPM); // 4000: nothing within 160 ms
+    expect(drag.snapGuideMs.value).toBeNull();
+    drag.updateBodyDrag(90 * PPM);
+    await drag.endBodyDrag(0);
+    expect(drag.snapGuideMs.value).toBeNull();
+  });
+
+  it("names a trimmed start's or end's target, and clears on Escape", () => {
+    const drag = useTimelineDrag(deps([3_120, 3_900]));
+    drag.beginTrim("start", 0);
+    drag.updateTrim(90 * PPM);
+    expect(drag.snapGuideMs.value).toBe(3_120);
+    drag.cancelTrim();
+    expect(drag.snapGuideMs.value).toBeNull();
+    drag.beginTrim("end", 0);
+    drag.updateTrim(-70 * PPM); // end 4000 -> 3930, 30 ms from 3900
+    expect(drag.snapGuideMs.value).toBe(3_900);
+  });
+
+  it("shows nothing with Snap off, or when a clamp pulled the edge off the target", () => {
+    const off = useTimelineDrag(deps([3_120], false));
+    off.beginBodyDrag(0, 0);
+    off.updateBodyDrag(90 * PPM);
+    expect(off.snapGuideMs.value).toBeNull();
+    // The 100 ms minimum pulls a start trim back off a target too close to
+    // the clip's end (4000): the edge is not on the target, so no guide.
+    const clamped = useTimelineDrag(deps([3_950]));
+    clamped.beginTrim("start", 0);
+    clamped.updateTrim(940 * PPM); // 3940 -> snaps to 3950, clamped to 3900
+    expect(clamped.trimPreview.value?.startMs).toBe(3_900);
+    expect(clamped.snapGuideMs.value).toBeNull();
+  });
+});

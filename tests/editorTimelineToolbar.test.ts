@@ -266,8 +266,9 @@ describe("the timeline toolbar (§6.2)", () => {
     const w = mount(TimelineView, { props: { viewportWidth: 1200 } });
     await flushPromises();
     await byId(w, "timeline-toolbar-fit").trigger("click");
-    // fitZoom(60_000, 1200) = 1200 / (BASE_PX_PER_MS * 60_000) = 0.4.
-    expect(workspace.timelineZoom).toBeCloseTo(0.4, 5);
+    // The lanes beside the 196px label column, less the 26px end margin
+    // (§6.3): (1200 - 196 - 26) / (BASE_PX_PER_MS * 60_000).
+    expect(workspace.timelineZoom).toBeCloseTo(978 / 3_000, 5);
     expect(workspace.timelineScrollLeft).toBe(0);
   });
 });

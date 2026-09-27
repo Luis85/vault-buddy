@@ -33,17 +33,33 @@
  * (`insertClip`) — two separate `editorProject.execute` calls, so Undo
  * sees two labelled steps, never one merged "add track and clip" edit
  * Rust has no single command for.
+ *
+ * **Playhead, snap guide, gap hints, Fit (visual-parity Task 18, concept
+ * spec §6.3, §6.5).** Everything below the toolbar sits in one content
+ * layer as tall as the rows, so the playhead — a 1 px accent line from the
+ * ruler's foot down (its pentagon head is the ruler's own) — and the dashed
+ * gold snap guide a snapping drag shows (`snapGuide.ts`) run the full
+ * height. Both are stacked ABOVE the clips and the locked hatch (z-12) and
+ * BELOW the pinned label cells (z-15) and the sticky ruler (z-20), so
+ * scrolled sideways they slide under the label column instead of painting
+ * over the track names. Each unlocked lane gets its gaps wider than 70 px
+ * (`trackEdits.gapsOnTrack`, the lane menu's own) for its "Close gap"
+ * hints, which send the lane menu's own `closeGapCommand`. Fit fits the
+ * edit into the lanes as the concept does: the timeline's width less the
+ * label column and a 26 px margin, a short edit counted as 15 s.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, provide, ref } from "vue";
 
 import type { TimelineViewOps } from "../../../composables/useEditorMenuContext";
 import { SNAP_THRESHOLD_PX, snappedMs } from "../../../composables/useTimelineDrag";
 import { baseActionContext } from "../../../editor/actionContext";
 import type { PointerTarget } from "../../../editor/actions";
 import { onReveal, revealedTimelineMs } from "../../../editor/revealBus";
+import { SNAP_GUIDE_KEY } from "../../../editor/snapGuide";
 import {
-  fitZoom,
+  fitTimelineZoom,
   LANE_HEIGHT_PX,
+  msToX,
   pxPerMs,
   revealScrollLeft,
   snapTargets,
@@ -52,7 +68,7 @@ import {
   xToMs,
 } from "../../../editor/timelineLayout";
 import { draggedAssetId, draggedAssetKind } from "../../../editor/trackCompat";
-import { addTrackThenInsert } from "../../../editor/trackEdits";
+import { addTrackThenInsert, closeGapCommand, type Gap, gapsOnTrack } from "../../../editor/trackEdits";
 import type { Asset, Clip } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
@@ -163,6 +179,31 @@ const clipsByTrack = computed(() => {
   return map;
 });
 
+// ---- the snap guide and the gap hints (§6.5) ---------------------------------
+
+/** The snap target a dragging clip's edge sits on (`snapGuide.ts`). */
+const snapGuideMs = ref<number | null>(null);
+provide(SNAP_GUIDE_KEY, snapGuideMs);
+
+/** A gap narrower than this shows no hint (the concept's own). */
+const GAP_HINT_MIN_PX = 70;
+const gapsByTrack = computed(() => {
+  const p = editorProject.project;
+  const map = new Map<string, Gap[]>();
+  for (const t of tracks.value) {
+    if (!p || t.locked) continue;
+    const wide = gapsOnTrack(p, t.id).filter((g) => msToX(g.end - g.start, workspace.timelineZoom) > GAP_HINT_MIN_PX);
+    map.set(t.id, wide);
+  }
+  return map;
+});
+
+/** The lane menu's own "Close this gap" command, for the pressed hint. */
+async function onCloseGap(payload: { trackId: string; gap: Gap }) {
+  const p = editorProject.project;
+  if (p) await editorProject.execute(closeGapCommand(p, payload.trackId, payload.gap));
+}
+
 // ---- fit -------------------------------------------------------------------
 
 function applyScrollLeft(left: number) {
@@ -171,7 +212,7 @@ function applyScrollLeft(left: number) {
 }
 
 function onFit() {
-  const zoom = fitZoom(editorProject.durationMs, effectiveViewportWidth.value);
+  const zoom = fitTimelineZoom(editorProject.durationMs, effectiveViewportWidth.value, labelPx.value);
   workspace.setZoom(zoom);
   workspace.setTimelineScroll(0, workspace.timelineScrollTop);
   applyScrollLeft(0);
@@ -329,44 +370,57 @@ async function onBelowLanesDrop(event: DragEvent) {
       class="vb-thin-scroll relative min-h-0 flex-1 overflow-auto"
       @scroll="onScroll"
     >
-      <TimelineRuler
-        :zoom="workspace.timelineZoom"
-        :width-px="contentWidthPx"
-        :label-width="labelPx"
-      />
       <div
-        data-testid="timeline-playhead"
-        class="vb-playhead pointer-events-none absolute top-0 bottom-0 z-30 w-px bg-accent"
-        :style="{ left: `${labelPx + pxPerMs(workspace.timelineZoom) * workspace.playheadMs}px` }"
-      />
-      <TrackLane
-        v-for="(track, i) in tracks"
-        :key="track.id"
-        :track="track"
-        :badge="badges[track.id]"
-        :clips="clipsByTrack.get(track.id) ?? []"
-        :assets="editorProject.project?.assets ?? []"
-        :selected-clip-ids="workspace.selectionClipIds"
-        :zoom="workspace.timelineZoom"
-        :width-px="contentWidthPx"
-        :label-width="labelPx"
-        :track-index="i"
-        :track-order="orderedTrackIds"
-        @context-menu="onClipContextMenu"
-        @lane-context-menu="onLaneContextMenu"
-        @track-context-menu="onTrackContextMenu"
-        @asset-drop="onAssetDrop"
-      />
-      <!-- Multi-track placement (Task 26): dropping a library asset here
-           mints a track of its own kind first, then inserts onto it -- the
-           one drop target with no existing lane to accept/refuse against. -->
-      <div
-        data-testid="timeline-below-lanes"
-        class="relative"
-        :style="{ width: `${contentWidthPx + labelPx}px`, height: `${LANE_HEIGHT_PX}px` }"
-        @dragover="onBelowLanesDragOver"
-        @drop="onBelowLanesDrop"
-      />
+        data-testid="timeline-content"
+        class="relative w-max min-w-full"
+      >
+        <TimelineRuler
+          :zoom="workspace.timelineZoom"
+          :width-px="contentWidthPx"
+          :label-width="labelPx"
+        />
+        <div
+          data-testid="timeline-playhead"
+          class="vb-playhead pointer-events-none absolute top-8 bottom-0 z-[12] w-px bg-accent"
+          :style="{ left: `${labelPx + pxPerMs(workspace.timelineZoom) * workspace.playheadMs}px` }"
+        />
+        <div
+          v-if="snapGuideMs !== null"
+          data-testid="timeline-snap-guide"
+          class="pointer-events-none absolute top-8 bottom-0 z-[12] border-l border-dashed border-gold"
+          :style="{ left: `${labelPx + msToX(snapGuideMs, workspace.timelineZoom)}px` }"
+        />
+        <TrackLane
+          v-for="(track, i) in tracks"
+          :key="track.id"
+          :track="track"
+          :badge="badges[track.id]"
+          :clips="clipsByTrack.get(track.id) ?? []"
+          :assets="editorProject.project?.assets ?? []"
+          :selected-clip-ids="workspace.selectionClipIds"
+          :zoom="workspace.timelineZoom"
+          :width-px="contentWidthPx"
+          :label-width="labelPx"
+          :track-index="i"
+          :track-order="orderedTrackIds"
+          :gaps="gapsByTrack.get(track.id) ?? []"
+          @context-menu="onClipContextMenu"
+          @lane-context-menu="onLaneContextMenu"
+          @track-context-menu="onTrackContextMenu"
+          @asset-drop="onAssetDrop"
+          @close-gap="onCloseGap"
+        />
+        <!-- Multi-track placement (Task 26): dropping a library asset here
+             mints a track of its own kind first, then inserts onto it -- the
+             one drop target with no existing lane to accept/refuse against. -->
+        <div
+          data-testid="timeline-below-lanes"
+          class="relative"
+          :style="{ width: `${contentWidthPx + labelPx}px`, height: `${LANE_HEIGHT_PX}px` }"
+          @dragover="onBelowLanesDragOver"
+          @drop="onBelowLanesDrop"
+        />
+      </div>
     </div>
 
     <ContextMenu

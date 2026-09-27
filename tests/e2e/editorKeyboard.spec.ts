@@ -242,7 +242,7 @@ test("forced colors keep selection visible", async ({ page }) => {
   expect((await outline(page, "clip-intro")).style, "an unselected clip stays unmarked").toBe("none");
 
   // The playhead and a clip's trim/fade handles keep their own colour.
-  for (const testid of ["timeline-playhead", "clip-body-trim-start", "clip-body-fade-in-handle"]) {
+  for (const testid of ["timeline-playhead", "timeline-playhead-head", "clip-body-trim-start-bar", "clip-body-fade-in-handle"]) {
     const adjust = await page
       .getByTestId(testid)
       .evaluate((el) => ({ adjust: getComputedStyle(el).forcedColorAdjust, bg: getComputedStyle(el).backgroundColor }));
@@ -393,7 +393,9 @@ test("light theme trim handles meet 3:1 against the clip (WCAG 1.4.11)", async (
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await tabTo(page, "clip-body");
   await page.keyboard.press("Enter");
-  const ratio = await boundaryContrast(page, "clip-body-trim-start");
+  // The grip's visible part is its ink bar (§6.5); the 9px grip around it
+  // is a transparent hit area.
+  const ratio = await boundaryContrast(page, "clip-body-trim-start-bar");
   expect(ratio, "the trim handle is not distinguishable from the clip body in light theme").toBeGreaterThanOrEqual(3);
 });
 

@@ -18,7 +18,9 @@
  * consumer — its own module doc says so): `computeMoveDelta`/`computeTrimStart`/
  * `computeTrimEnd` all snap the DRAGGED EDGE (never the delta directly) against
  * `deps.snapTargets()` when `deps.snapEnabled()` is true, so the toolbar's Snap
- * toggle finally changes something.
+ * toggle finally changes something. Where the dragged edge settles ON a
+ * target, `snapGuideMs` names it for the timeline's dashed gold guide
+ * (visual-parity Task 18, concept spec §6.5).
  *
  * **The 100 ms minimum is enforced HERE too**, mirroring
  * `core::editor::limits::MIN_CLIP_MS` (F14) — a trim preview that ignored it
@@ -165,6 +167,30 @@ export function computeFadeDrag(clip: Clip, edge: "in" | "out", rawDeltaMs: numb
   return Math.round(Math.min(Math.max(start + signedDelta, 0), limit));
 }
 
+/** The target a dragged edge settled on, for the dashed snap guide — `null`
+ * when snapping is off or the edge caught nothing. `finalMs` is where the
+ * preview put the edge after its clamps, so a clamp that pulled it off the
+ * target shows no guide; within 1 ms, because a sped-up trim's end is
+ * rounded through the source range. */
+function snapGuideFor(rawMs: number, finalMs: number, opts: SnapOptions): number | null {
+  if (!opts.snapEnabled) return null;
+  const target = snap(rawMs, opts.targets, opts.thresholdPx, opts.zoom);
+  return opts.targets.includes(target) && Math.abs(target - finalMs) <= 1 ? target : null;
+}
+
+/** One step of a trim drag: the preview, and the guide at the edge it moved. */
+function trimStep(edge: "start" | "end", clip: Clip, rawOutputDeltaMs: number, opts: SnapOptions) {
+  if (edge === "start") {
+    const preview = computeTrimStart(clip, rawOutputDeltaMs, opts);
+    return { preview, guide: snapGuideFor(clip.start_ms + rawOutputDeltaMs, preview.startMs, opts) };
+  }
+  const speed = clipSpeed(clip);
+  const preview = computeTrimEnd(clip, rawOutputDeltaMs, opts);
+  const end = clipOutputEnd({ start_ms: preview.startMs, in_ms: preview.inMs, out_ms: preview.outMs, speed });
+  const rawEnd = clipOutputEnd({ start_ms: clip.start_ms, in_ms: clip.in_ms, out_ms: clip.out_ms, speed }) + rawOutputDeltaMs;
+  return { preview, guide: snapGuideFor(rawEnd, end, opts) };
+}
+
 export interface FadePreview {
   edge: "in" | "out";
   ms: number;
@@ -200,6 +226,8 @@ export interface TimelineDragDeps {
 export interface UseTimelineDrag {
   movePreview: Ref<MovePreview | null>;
   trimPreview: Ref<TrimPreview | null>;
+  /** The snap target the dragged edge sits on, while a move or trim does. */
+  snapGuideMs: Ref<number | null>;
   beginBodyDrag: (clientX: number, clientY: number) => void;
   updateBodyDrag: (clientX: number) => void;
   endBodyDrag: (clientY: number) => Promise<void>;
@@ -219,6 +247,7 @@ export interface UseTimelineDrag {
 export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
   const movePreview = ref<MovePreview | null>(null);
   const trimPreview = ref<TrimPreview | null>(null);
+  const snapGuideMs = ref<number | null>(null);
 
   function snapOpts(): SnapOptions {
     return {
@@ -242,7 +271,11 @@ export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
     if (!moveAnchor) return;
     const ppm = pxPerMs(deps.zoom());
     const rawDeltaMs = ppm > 0 ? (clientX - moveAnchor.clientX) / ppm : 0;
-    movePreview.value = { deltaMs: computeMoveDelta(deps.clip(), rawDeltaMs, snapOpts()) };
+    const clip = deps.clip();
+    const opts = snapOpts();
+    const deltaMs = computeMoveDelta(clip, rawDeltaMs, opts);
+    movePreview.value = { deltaMs };
+    snapGuideMs.value = snapGuideFor(clip.start_ms + rawDeltaMs, clip.start_ms + deltaMs, opts);
   }
 
   /**
@@ -278,6 +311,7 @@ export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
     const trackId = clipIds.length === 1 ? targetTrackFor(clip, clientY) : null;
     moveAnchor = null;
     movePreview.value = null;
+    snapGuideMs.value = null;
     if (deltaMs === 0 && trackId === null) return;
     await deps.execute({ kind: "moveClips", clipIds, deltaMs, trackId });
   }
@@ -285,6 +319,7 @@ export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
   function cancelBodyDrag(): void {
     moveAnchor = null;
     movePreview.value = null;
+    snapGuideMs.value = null;
   }
 
   // ---- trim -------------------------------------------------------------
@@ -303,11 +338,9 @@ export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
     if (!trimEdge) return;
     const ppm = pxPerMs(deps.zoom());
     const rawOutputDeltaMs = ppm > 0 ? (clientX - trimStartClientX) / ppm : 0;
-    const clip = deps.clip();
-    trimPreview.value =
-      trimEdge === "start"
-        ? computeTrimStart(clip, rawOutputDeltaMs, snapOpts())
-        : computeTrimEnd(clip, rawOutputDeltaMs, snapOpts());
+    const step = trimStep(trimEdge, deps.clip(), rawOutputDeltaMs, snapOpts());
+    trimPreview.value = step.preview;
+    snapGuideMs.value = step.guide;
   }
 
   async function endTrim(): Promise<void> {
@@ -316,6 +349,7 @@ export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
     const preview = trimPreview.value;
     trimEdge = null;
     trimPreview.value = null;
+    snapGuideMs.value = null;
     if (!preview) return;
     if (preview.startMs === clip.start_ms && preview.inMs === clip.in_ms && preview.outMs === clip.out_ms) {
       return;
@@ -332,6 +366,7 @@ export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
   function cancelTrim(): void {
     trimEdge = null;
     trimPreview.value = null;
+    snapGuideMs.value = null;
   }
 
   // ---- fade handles (Task 29; F-17, F-18) --------------------------------
@@ -394,6 +429,7 @@ export function useTimelineDrag(deps: TimelineDragDeps): UseTimelineDrag {
   return {
     movePreview,
     trimPreview,
+    snapGuideMs,
     beginBodyDrag,
     updateBodyDrag,
     endBodyDrag,

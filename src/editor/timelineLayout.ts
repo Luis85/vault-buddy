@@ -104,6 +104,23 @@ export function fitZoom(durationMs: number, viewportPx: number): number {
   return viewportPx / (BASE_PX_PER_MS * durationMs);
 }
 
+/** The concept's fitted scale (§6.3: `pps = (scrollWidth − label − 26) /
+ * max(duration, 15 s) × zoom`): the lanes' width is the timeline's less
+ * the pinned label column and a 26 px end margin, and a short edit is laid
+ * out as if it ran 15 s, so a 2 s edit never fills the whole width. */
+const FIT_END_MARGIN_PX = 26;
+const FIT_MIN_MS = 15_000;
+
+/** The zoom Fit sets for an edit of `durationMs` on a timeline
+ * `viewportPx` wide beside a `labelPx` label column. */
+export function fitTimelineZoom(durationMs: number, viewportPx: number, labelPx: number): number {
+  return fitZoom(Math.max(durationMs, FIT_MIN_MS), viewportPx - labelPx - FIT_END_MARGIN_PX);
+}
+
+/** A clip is never drawn narrower than this (§6.5 `.clip{min-width:5px}`),
+ * so the shortest one still has a body to focus and grab. */
+export const MIN_CLIP_WIDTH_PX = 5;
+
 /** Clip edges (start and, via the shared time-mapping table, the speed-
  * aware output end), marker output positions and the playhead itself —
  * exactly the Behavior section's own list. A marker's `source_ms` is SOURCE

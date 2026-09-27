@@ -325,14 +325,14 @@ describe("the timeline after a reconnect", () => {
 
   it("a mounted waveform asks again and draws the replacement's peaks, and only its own", async () => {
     const mediaPeaks = vi.fn((_s: string, assetId: string) =>
-      Promise.resolve(assetId === "a-talk" && mediaPeaks.mock.calls.length > 2 ? [1, 1, 1, 1] : [0.1, 0.1, 0.1, 0.1]),
+      Promise.resolve(assetId === "a-talk" && mediaPeaks.mock.calls.length > 2 ? [1, 0.2, 1, 0.2] : [0.1, 0.1, 0.1, 0.1]),
     );
     await openStore(vi.fn<Relink>().mockResolvedValue(replacedTalk()), [TALK, LOGO], { mediaPeaks });
     const lane = { assetDurationMs: 62_500, inMs: 0, outMs: 62_500, widthPx: 4 };
     const talk = mount(ClipWaveform, { props: { ...lane, assetId: "a-talk" } });
     mount(ClipWaveform, { props: { ...lane, assetId: "a-logo" } });
     await flushPromises();
-    const before = talk.get("polyline").attributes("points");
+    const before = talk.get("path").attributes("d");
     expect(mediaPeaks).toHaveBeenCalledTimes(2);
 
     await useMediaReconnect().run(["a-talk"], true);
@@ -340,7 +340,7 @@ describe("the timeline after a reconnect", () => {
 
     expect(mediaPeaks).toHaveBeenCalledTimes(3);
     expect(mediaPeaks.mock.calls[2][1]).toBe("a-talk");
-    expect(talk.get("polyline").attributes("points")).not.toBe(before);
+    expect(talk.get("path").attributes("d")).not.toBe(before);
   });
 
   // A detached-audio asset plays its video's sound: its waveform is stale
@@ -367,16 +367,16 @@ describe("the timeline after a reconnect", () => {
         : Promise.reject(new EditorPortError({ code: "sourceMissing", message: "gone", retryable: false, operationId: "op" })),
     );
     await openStore(vi.fn<Relink>().mockResolvedValue(replacedTalk()), [TALK, LOGO], { mediaThumbnail });
-    const w = mount(ClipThumbnail, { props: { assetId: "a-talk", atMs: 1_000 } });
+    const w = mount(ClipThumbnail, { props: { clipId: "c-talk", assetId: "a-talk", atMs: 1_000 } });
     await flushPromises();
-    expect(w.find("img").exists()).toBe(false);
+    expect(w.find('[data-testid="clip-c-talk-film"]').exists()).toBe(false);
 
     found = true;
     await useMediaReconnect().run(["a-talk"], true);
     await flushPromises();
 
     expect(mediaThumbnail).toHaveBeenCalledTimes(2);
-    expect(w.find("img").attributes("src")).toContain("a-talk-1000.jpg");
+    expect(w.get('[data-testid="clip-c-talk-film"]').attributes("style")).toContain("a-talk-1000.jpg");
   });
 });
 
