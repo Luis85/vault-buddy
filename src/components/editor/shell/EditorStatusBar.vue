@@ -13,7 +13,8 @@
  *   failed" whenever the last save was refused (`editorProject.saveError`,
  *   ruling T4-1: a refusal is never invisible), its role-worded reason in
  *   the tooltip. A click saves the project through the header's own path
- *   (`useProjectSave`).
+ *   (`useProjectSave`), so it is disabled, saying "Saving…", while a save
+ *   is in flight — never a second save.
  * - right: how many products this project has rendered; a click shows
  *   them through `revealWorkspaceProducts`, the helper the header's
  *   Project menu uses too.
@@ -49,7 +50,7 @@ const recovery = computed(() => {
  * click does. */
 const recoveryTitle = computed(() => {
   const failure = editorProject.saveError;
-  return disabledReason.value ?? (failure ? withoutRedactionHandles(failure.message) : "Save project");
+  return disabledReason.value ?? (failure ? withoutRedactionHandles(failure.message) : "Save project (Ctrl+S)");
 });
 
 const productsLabel = computed(() => {

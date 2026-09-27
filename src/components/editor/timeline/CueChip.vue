@@ -36,6 +36,7 @@ import { usePointerPress } from "../../../composables/usePointerPress";
 import { clipSpanOf } from "../../../editor/actionTargets";
 import type { TeachingCue } from "../../../editor/cueLanes";
 import { cueTop } from "../../../editor/cueLanes";
+import { cueDragHint, useDragHintReport } from "../../../editor/dragHint";
 import { EFFECT_NAMES } from "../../../editor/effectFields";
 import { isContextMenuShortcut } from "../../../editor/shortcuts";
 import { useSnapGuideReport } from "../../../editor/snapGuide";
@@ -69,8 +70,10 @@ const drag = useCueDrag({
   execute: (command) => editorProject.execute(command),
 });
 
-/** The dashed guide `TimelineView` draws while this cue's edge snaps. */
+/** The dashed guide `TimelineView` draws while this cue's edge snaps, and
+ * the footer's line for the drag. */
 useSnapGuideReport(drag.snapGuideMs);
+useDragHintReport(computed(() => cueDragHint(props.cue.effect.kind, drag.grip.value)));
 
 // ---- geometry -------------------------------------------------------------------
 

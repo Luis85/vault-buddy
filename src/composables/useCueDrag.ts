@@ -119,6 +119,8 @@ export interface CueDragDeps {
 export interface UseCueDrag {
   /** The source range to draw while a drag is live. */
   preview: Ref<CueRange | null>;
+  /** Which grip is being dragged, while one is (the footer's edit hint). */
+  grip: Readonly<Ref<CueGrip | null>>;
   snapGuideMs: Ref<number | null>;
   begin: (grip: CueGrip, clientX: number) => void;
   update: (clientX: number) => void;
@@ -140,7 +142,7 @@ function updateCommand(effect: Effect, range: CueRange): EditorCommand {
 export function useCueDrag(deps: CueDragDeps): UseCueDrag {
   const preview = ref<CueRange | null>(null);
   const snapGuideMs = ref<number | null>(null);
-  let grip: CueGrip | null = null;
+  const grip = ref<CueGrip | null>(null);
   let anchorX = 0;
 
   function snapOpts(): SnapOptions {
@@ -148,27 +150,28 @@ export function useCueDrag(deps: CueDragDeps): UseCueDrag {
   }
 
   function begin(next: CueGrip, clientX: number): void {
-    grip = next;
+    grip.value = next;
     anchorX = clientX;
     const e = deps.effect();
     preview.value = { startMs: e.start_ms, endMs: e.end_ms };
   }
 
   function update(clientX: number): void {
-    if (!grip) return;
+    const active = grip.value;
+    if (!active) return;
     const ppm = pxPerMs(deps.zoom());
     const raw = ppm > 0 ? (clientX - anchorX) / ppm : 0;
     const step =
-      grip === "move"
+      active === "move"
         ? cueMoveRange(deps.clip(), deps.effect(), raw, snapOpts())
-        : cueTrimRange(deps.clip(), deps.effect(), grip, raw, snapOpts());
+        : cueTrimRange(deps.clip(), deps.effect(), active, raw, snapOpts());
     preview.value = step.range;
     snapGuideMs.value = step.guide;
   }
 
   function cancel(): boolean {
-    const active = grip !== null;
-    grip = null;
+    const active = grip.value !== null;
+    grip.value = null;
     preview.value = null;
     snapGuideMs.value = null;
     return active;
@@ -189,5 +192,5 @@ export function useCueDrag(deps: CueDragDeps): UseCueDrag {
     return true;
   }
 
-  return { preview, snapGuideMs, begin, update, end, cancel, nudge };
+  return { preview, grip, snapGuideMs, begin, update, end, cancel, nudge };
 }

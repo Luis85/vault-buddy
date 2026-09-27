@@ -67,6 +67,7 @@ import { EditorPortError } from "../../../editor/port";
 import type { AudioContextLike } from "../../../editor/previewController";
 import { PreviewController } from "../../../editor/previewController";
 import { containRect } from "../../../editor/previewGeometry";
+import { clearPreviewPeakReader, setPreviewPeakReader } from "../../../editor/previewPeak";
 import { onReveal, requestedPlaybackMs } from "../../../editor/revealBus";
 import { clipAtPoint } from "../../../editor/stageHit";
 import type { Effect, Project } from "../../../editorTypes";
@@ -188,12 +189,14 @@ function measure(): void {
 onMounted(() => {
   measure();
   createController();
+  setPreviewPeakReader(readPeak);
   if (typeof ResizeObserver === "function" && stageRef.value) {
     observer = new ResizeObserver(() => measure());
     observer.observe(stageRef.value);
   }
 });
 onBeforeUnmount(() => {
+  clearPreviewPeakReader(readPeak);
   observer?.disconnect();
   controller?.destroy();
   controller = null;
@@ -244,7 +247,9 @@ function onLayoutPreview(preview: Project | null): void {
   controller?.setProject(preview ?? editorProject.project);
 }
 
-/** The mixer's peak meter reads the live controller, never a copy. */
+/** The transport's and the mixer's peak meters read the live controller,
+ * never a copy — the mixer (in the timeline footer) through
+ * `previewPeak.ts`, registered on mount. */
 function readPeak(): number | null {
   return controller?.readPeak() ?? null;
 }

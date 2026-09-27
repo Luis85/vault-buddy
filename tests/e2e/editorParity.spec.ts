@@ -341,9 +341,8 @@ test.describe("parity 1600x1000: the preview header and stage (screen 02)", () =
 // Task 12 (screen 02, concept spec §4.3; design D10): the transport row —
 // monitor mute, peak meter and rate left; seek/Play/timecode centred; the
 // D10 canvas badge right. "Audio mixer" and "Sound" (Task 27's own labelled
-// controls) leave this row; the mixer's own icon-only trigger stays in it
-// only until Task 20's timeline footer gives it a real home (TransportBar's
-// own module doc says why).
+// controls) leave this row; since Task 20 the mixer opens from the timeline
+// footer (ruling T12-1).
 test.describe("parity 1600x1000: the transport (screen 02, §4.3)", () => {
   test("46px row; left mute/meter/rate, centre seek/Play/timecode, right the D10 badge", async ({ page }) => {
     await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
@@ -895,4 +894,105 @@ test("type and frame: the editor opens dark at 12px Segoe UI on --bg", async ({ 
  * case D1 is about. */
 async function installDarkByDefault(page: Page): Promise<void> {
   await openParity(page, { width: 1600, height: 1000 }, { invitation: false, theme: null, osScheme: "light" });
+}
+
+/** Whether the mixer panel's top edge is really painted where its box
+ * says — not cut off by the timeline section's clipped overflow, which a
+ * bounding box alone would never show. */
+function mixerTopIsPainted(page: Page): Promise<boolean> {
+  return page.getByTestId("mixer-popover").evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return document.elementFromPoint(r.left + r.width / 2, r.top + 6)?.closest('[data-testid="mixer-popover"]') === el;
+  });
+}
+
+// Task 20 (screen 02, concept spec §7; design D10, ruling T12-1): the
+// timeline footer — the live edit hint left, "Audio mixer" with the audio-
+// track count right — over the 25 px status bar. The mixer's one trigger
+// lives here now, and its panel must clear the timeline's clipped edge.
+test.describe("parity 1600x1000: the timeline footer and status bar (screen 02, §7)", () => {
+  test("footer 27 over status 25; hint left, Audio mixer with its count right", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.screenshot({ path: "test-results/parity/built-02-footer.png" });
+    await composite(page, "02-workspace.png", "test-results/parity/built-02-footer.png", "vs-02-footer");
+
+    const footer = await box(page, "timeline-footer");
+    const status = await box(page, "editor-statusbar");
+    expect(footer.height).toBeCloseTo(27, 0);
+    expect(status.height).toBeCloseTo(25, 0);
+    // The footer is the timeline's last row, right on the status bar.
+    expect(footer.y + footer.height).toBeCloseTo(status.y, 0);
+    await expect(page.getByTestId("timeline-footer-hint")).toHaveText("Callouts follow their clip.");
+    expect(await page.getByTestId("timeline-footer").evaluate((el) => getComputedStyle(el).fontSize)).toBe("10px");
+
+    const audioTracks = PARITY_OPEN_RESULT.project.tracks.filter((t) => t.kind === "audio").length;
+    await expect(page.getByTestId("mixer-toggle-count")).toHaveText(String(audioTracks));
+    const mixer = await box(page, "mixer-toggle");
+    expect(footer.x + footer.width - (mixer.x + mixer.width)).toBeLessThanOrEqual(14);
+    // The transport row keeps no mixer of its own.
+    await expect(page.getByTestId("transport-bar").locator('[data-action="mixer"]')).toHaveCount(0);
+
+    await expect(page.getByTestId("editor-statusbar-local")).toHaveText("Local only. No media is uploaded.");
+    // The sample project opens unsaved; the centre slot runs Save project
+    // (its receipt and "All changes saved" are editorKeyboard.spec.ts's).
+    const recovery = page.getByTestId("editor-statusbar-recovery");
+    await expect(recovery).toHaveText("Unsaved changes are journaled for recovery");
+    await expect(recovery).toHaveAttribute("title", "Save project (Ctrl+S)");
+    await recovery.click();
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __invoked: string[] }).__invoked.filter((c) => c === "editor_save_project").length))
+      .toBe(1);
+    await expect(page.getByTestId("editor-statusbar-products")).toHaveText(/rendered videos? · Workspace & rendered products$/);
+  });
+
+  test("Audio mixer opens its whole panel above itself; Escape gives focus back", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("mixer-toggle").click();
+    const panel = page.getByTestId("mixer-popover");
+    await expect(panel).toBeVisible();
+    const p = await box(page, "mixer-popover");
+    const toggle = await box(page, "mixer-toggle");
+    expect(p.y + p.height).toBeLessThanOrEqual(toggle.y);
+    expect(p.y).toBeGreaterThanOrEqual(0);
+    expect(await mixerTopIsPainted(page)).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(panel).toHaveCount(0);
+    await expect(page.getByTestId("mixer-toggle")).toBeFocused();
+  });
+
+  test("the hint follows a real clip drag, and Escape puts it back", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    // c4, alone on v2 and wholly in view (editorClips.spec.ts's own grip).
+    const clip = await box(page, "clip-c4");
+    const hint = page.getByTestId("timeline-footer-hint");
+    await page.mouse.move(clip.x + 40, clip.y + 20);
+    await page.mouse.down();
+    await page.mouse.move(clip.x + 60, clip.y + 20);
+    await page.mouse.move(clip.x + 100, clip.y + 20);
+    await expect(hint).toHaveText(/^Starts at \d\d:\d\d\.\d · release to place$/);
+    await page.keyboard.press("Escape");
+    await expect(hint).toHaveText("Callouts follow their clip.");
+    await page.mouse.up();
+  });
+});
+
+// Ruling T12-1: a before-you-share finding's "Open the mixer" (the View
+// menu's Audio mixer… asks the same reveal) opens the footer's panel at the
+// drawer breakpoints too.
+for (const size of [{ width: 1080, height: 760 }, { width: 860, height: 640 }, { width: 960, height: 640 }]) {
+  test(`the mixer opens from its reveal at ${size.width}x${size.height}, inside the window`, async ({ page }) => {
+    await openParity(page, size, { invitation: false });
+    const footer = await box(page, "timeline-footer");
+    expect(footer.height).toBeCloseTo(27, 0);
+    const mixer = await box(page, "mixer-toggle");
+    expect(mixer.x + mixer.width).toBeLessThanOrEqual(size.width);
+    await page.getByTestId("preview-view-menu").click();
+    await page.getByTestId("preview-view-panel-item-mixer").click();
+    const panel = await box(page, "mixer-popover");
+    expect(panel.x).toBeGreaterThanOrEqual(0);
+    expect(panel.y).toBeGreaterThanOrEqual(0);
+    expect(panel.x + panel.width).toBeLessThanOrEqual(size.width);
+    expect(panel.y + panel.height).toBeLessThanOrEqual(mixer.y);
+    expect(await mixerTopIsPainted(page)).toBe(true);
+  });
 }

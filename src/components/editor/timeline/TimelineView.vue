@@ -58,6 +58,10 @@
  * cue's right-click or Shift+F10 opens the cue menu in the one
  * `ContextMenu`, and with a cue selected the toolbar's Edit actions opens
  * that cue's menu rather than its clip's.
+ *
+ * **The footer (visual-parity Task 20, concept spec §7)** sits under the
+ * lanes: the edit hint the dragged clip or cue reports (`dragHint.ts`,
+ * provided here like the snap guide) and the Audio mixer.
  */
 import { computed, onBeforeUnmount, onMounted, provide, ref } from "vue";
 
@@ -67,6 +71,7 @@ import { baseActionContext } from "../../../editor/actionContext";
 import type { PointerTarget } from "../../../editor/actions";
 import { captionRows } from "../../../editor/captionRules";
 import { laneCount, teachingCues } from "../../../editor/cueLanes";
+import { DRAG_HINT_KEY } from "../../../editor/dragHint";
 import { onReveal, revealedTimelineMs } from "../../../editor/revealBus";
 import { SNAP_GUIDE_KEY } from "../../../editor/snapGuide";
 import {
@@ -89,6 +94,7 @@ import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import ContextMenu from "../menus/ContextMenu.vue";
 import CaptionsRow from "./CaptionsRow.vue";
 import TeachingLayersRow from "./TeachingLayersRow.vue";
+import TimelineFooter from "./TimelineFooter.vue";
 import TimelineRuler from "./TimelineRuler.vue";
 import TimelineToolbar from "./TimelineToolbar.vue";
 import TrackLane from "./TrackLane.vue";
@@ -216,6 +222,9 @@ const shownCaptions = computed(() => captions.value.filter(shown));
 /** The snap target a dragging clip's edge sits on (`snapGuide.ts`). */
 const snapGuideMs = ref<number | null>(null);
 provide(SNAP_GUIDE_KEY, snapGuideMs);
+/** The footer's line for the drag in hand (`dragHint.ts`). */
+const dragHint = ref<string | null>(null);
+provide(DRAG_HINT_KEY, dragHint);
 
 /** A gap narrower than this shows no hint (the concept's own). */
 const GAP_HINT_MIN_PX = 70;
@@ -481,6 +490,8 @@ async function onBelowLanesDrop(event: DragEvent) {
         />
       </div>
     </div>
+
+    <TimelineFooter :hint="dragHint" />
 
     <ContextMenu
       :open="menuOpen"

@@ -51,7 +51,7 @@ function product(id: string): ProductDto {
 }
 
 async function open(
-  opts: { dirty?: boolean; products?: ProductDto[]; saved?: number[]; saveFails?: boolean } = {},
+  opts: { dirty?: boolean; products?: ProductDto[]; saved?: number[]; saveFails?: boolean; saveHangs?: boolean } = {},
 ) {
   const store = useEditorProjectStore();
   store.setPort(
@@ -60,6 +60,7 @@ async function open(
       getProducts: () => Promise.resolve(opts.products ?? []),
       save: (sessionId, expectedRevision) => {
         opts.saved?.push(expectedRevision);
+        if (opts.saveHangs) return new Promise<SaveReceipt>(() => {});
         if (opts.saveFails) {
           return Promise.reject(
             new EditorPortError({
@@ -117,6 +118,28 @@ describe("EditorStatusBar", () => {
     await centre().trigger("click");
     await flushPromises();
     expect(saved).toEqual([2, 2]);
+  });
+
+  it("says what a click does, with its key, while a save is possible", async () => {
+    const w = await open({ dirty: true });
+    expect(w.get('[data-testid="editor-statusbar-recovery"]').attributes("title")).toBe("Save project (Ctrl+S)");
+  });
+
+  // D14 and the header's own rule: no second save while one is in flight.
+  // The slot is disabled for the round trip and says why.
+  it("sends no second save while one is in flight, and says why it waits", async () => {
+    const saved: number[] = [];
+    const w = await open({ dirty: true, saved, saveHangs: true });
+    const centre = () => w.get('[data-testid="editor-statusbar-recovery"]');
+
+    await centre().trigger("click");
+    await flushPromises();
+    expect(centre().attributes("disabled")).toBeDefined();
+    expect(centre().attributes("title")).toBe("Saving…");
+
+    (centre().element as HTMLButtonElement).click();
+    await flushPromises();
+    expect(saved).toEqual([2]);
   });
 
   it("counts the rendered products on the right", async () => {

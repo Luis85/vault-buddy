@@ -14,14 +14,10 @@
  *   rate of 0.25, and a `<select>` with no matching `<option>` shows
  *   nothing selected rather than the rate that is actually playing (D14:
  *   the control must never silently misrepresent live state). "Audio
- *   mixer" and "Sound" leave this row (D10): the mixer is
- *   reachable from View ⋯ → Audio mixer… (visual-parity Task 11) and, once
- *   Task 20 lands, the Audio tab and the timeline footer. `MixerPopover`
- *   keeps its place here for now, icon-only rather than a labelled button,
- *   because the guided walkthrough's "audio" lesson
- *   (`src/editor/guide/steps.json`, target `[data-action="mixer"]`) needs a
- *   real, visible control to point at until that later home exists — see
- *   `MixerPopover.vue`'s own doc.
+ *   mixer" and "Sound" leave this row (D10): the mixer opens from the
+ *   timeline footer's "Audio mixer" (visual-parity Task 20, ruling T12-1,
+ *   the guide's "audio" target with it), from View ⋯ → Audio mixer… and
+ *   from the Audio tab.
  * - **Centre**: Go to start / Go to end (both move `editorWorkspace`'s
  *   playhead directly, exactly how a timeline click seeks), the 34px round
  *   Play/Pause (also Space), and the mono timecode `MM:SS.d / MM:SS.d`
@@ -67,7 +63,6 @@ import type { Canvas } from "../../../editorTypes";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import type { EditorIconName } from "../icons/conceptIcons";
 import EditorIcon from "../icons/EditorIcon.vue";
-import MixerPopover from "../shell/MixerPopover.vue";
 
 const props = defineProps<{
   playing: boolean;
@@ -76,7 +71,7 @@ const props = defineProps<{
   /** The project's canvas, for the D10 badge; `null` before a project is
    * known (never rendered as a false "0 × 0"). */
   canvas: Canvas | null;
-  /** The preview's sample peak, for this row's meter and the mixer's. */
+  /** The preview's sample peak, for this row's meter. */
   readPeak?: () => number | null;
 }>();
 const emit = defineEmits<{
@@ -220,7 +215,6 @@ const rowHeightClass = computed(() => (workspace.shortWindow ? "h-10" : "h-[46px
           :style="{ width: `${peakFraction * 100}%` }"
         />
       </span>
-      <MixerPopover :read-peak="readPeak" />
       <select
         data-testid="transport-rate"
         class="h-[30px] shrink-0 border-0 bg-transparent px-0.5 text-[11px] text-fg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"

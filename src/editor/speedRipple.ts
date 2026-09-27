@@ -50,7 +50,7 @@ function followersOf(project: Project, clip: Clip, speed: number): { ids: string
 }
 
 /** `ids` grown to whole groups, as Rust's `move_clips` grows them. */
-function withGroups(project: Project, ids: string[]): Set<string> {
+export function withGroups(project: Project, ids: string[]): Set<string> {
   const groups = new Set(project.clips.filter((c) => ids.includes(c.id) && c.group_id).map((c) => c.group_id));
   return new Set(project.clips.filter((c) => ids.includes(c.id) || groups.has(c.group_id)).map((c) => c.id));
 }

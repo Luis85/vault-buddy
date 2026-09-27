@@ -3,7 +3,7 @@
  * The audio mixer (Task 27; F-05, F-25; onboarding step 14's
  * `[data-action="mixer"]` target) — per-track volume/mute/solo, the master
  * gain, a monitoring-only mute, and the preview's sample-peak meter, in a
- * popover opened from the transport row, beside the preview speaker.
+ * popover opened from the timeline footer's "Audio mixer".
  *
  * **Two kinds of control, deliberately worded apart** (USER-GUIDE.md: "The
  * speaker beside Play mutes your monitoring only; clip and track mute
@@ -26,13 +26,15 @@
  * Split into `MixerTrackRow`/`MixerSlider`/`MixerPeakMeter` so no one
  * template carries every branch (the fallow template-complexity ratchet).
  *
- * **The trigger is icon-only** (visual-parity Task 12; concept spec §4.3):
- * the concept's transport has no "Audio mixer" button at all — Task 20's
- * `TimelineFooter` gives it a real, labelled home ("Audio mixer" + the
- * audio-track-count pill). Until then this stays the guide's `[data-action=
- * "mixer"]` target (`steps.json`'s "audio" lesson) needs a real, visible
- * control to point at, so it keeps its place beside the transport's own
- * controls rather than vanishing outright.
+ * **The trigger is the timeline footer's "Audio mixer"** (visual-parity
+ * Task 20, concept spec §7, ruling T12-1): the sliders icon, the label and
+ * a pill counting the live project's audio tracks — the guide's "audio"
+ * lesson target (`[data-action="mixer"]`, `useGuideTarget("mixer")`). The
+ * transport row carried an icon-only trigger until then. The panel opens
+ * ABOVE the button and is `position: fixed`, placed from the button's box
+ * when it opens: the timeline section clips its overflow, so an absolutely
+ * placed panel would be cut off at the timeline's top edge. Its height is
+ * held to the room above the button, and it scrolls past that.
  */
 import type { ComponentPublicInstance } from "vue";
 import { computed, ref } from "vue";
@@ -60,6 +62,8 @@ const editorProject = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
 
 const open = ref(false);
+/** Where the fixed panel sits: above the trigger, right-aligned with it. */
+const panelStyle = ref<Record<string, string>>({});
 const root = ref<HTMLElement | null>(null);
 const triggerRef = ref<HTMLButtonElement | null>(null);
 /** The guide's `mixer` (Task 55) — the same button. */
@@ -69,10 +73,41 @@ function bindTrigger(el: Element | ComponentPublicInstance | null): void {
   mixerTarget(el);
 }
 const tracks = computed(() => editorProject.project?.tracks ?? []);
+/** The concept's pill (`#audioTrackCount`): the live project's audio tracks. */
+const audioTrackCount = computed(() => tracks.value.filter((t) => t.kind === "audio").length);
+const triggerLabel = computed(() => {
+  const n = audioTrackCount.value;
+  return `Audio mixer, ${n} audio ${n === 1 ? "track" : "tracks"}`;
+});
 const masterGain = computed(() => editorProject.project?.master_gain ?? 1);
 
 function commitMaster(gain: number): Promise<boolean> {
   return editorProject.execute({ kind: "setMasterGain", gain });
+}
+
+/** The gap between the trigger and the panel, and the least room kept
+ * between the panel and the window's top edge. */
+const PANEL_GAP_PX = 4;
+const VIEWPORT_MARGIN_PX = 8;
+
+function place(): void {
+  const rect = triggerRef.value?.getBoundingClientRect();
+  if (!rect) return;
+  panelStyle.value = {
+    right: `${Math.max(VIEWPORT_MARGIN_PX, window.innerWidth - rect.right)}px`,
+    bottom: `${window.innerHeight - rect.top + PANEL_GAP_PX}px`,
+    maxHeight: `${Math.max(0, rect.top - PANEL_GAP_PX - VIEWPORT_MARGIN_PX)}px`,
+  };
+}
+
+function show(): void {
+  place();
+  open.value = true;
+}
+
+function toggle(): void {
+  if (open.value) open.value = false;
+  else show();
 }
 
 function close(): void {
@@ -81,9 +116,7 @@ function close(): void {
 }
 
 /** Task 54: a muted-or-clipping finding's "Open the mixer". */
-onReveal("mixer", () => {
-  open.value = true;
-});
+onReveal("mixer", show);
 
 /** F-M8: closing while open is not scoped to focus being inside the
  * popover — a click anywhere else on the editor (`root` wraps the trigger
@@ -120,14 +153,19 @@ useWindowDismiss(onWindowPointerDown, onWindowKeydown);
       type="button"
       data-action="mixer"
       data-testid="mixer-toggle"
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-line text-fg-muted hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      class="inline-flex min-h-[25px] shrink-0 items-center gap-[7px] rounded-control border border-transparent px-[5px] py-[3px] text-[10px] text-fg-muted hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       :aria-expanded="open ? 'true' : 'false'"
       aria-controls="editor-mixer"
-      aria-label="Audio mixer"
-      title="Audio mixer"
-      @click="open = !open"
+      :aria-label="triggerLabel"
+      title="Audio mixer: track levels, mute and solo"
+      @click="toggle"
     >
       <EditorIcon name="sliders" />
+      Audio mixer
+      <span
+        data-testid="mixer-toggle-count"
+        class="rounded border border-line bg-raised px-1.5 py-0.5 text-[9px] leading-none tracking-[0.3px] text-fg-secondary"
+      >{{ audioTrackCount }}</span>
     </button>
     <div
       v-if="open"
@@ -135,7 +173,8 @@ useWindowDismiss(onWindowPointerDown, onWindowKeydown);
       role="dialog"
       aria-label="Audio mixer"
       data-testid="mixer-popover"
-      class="absolute bottom-full right-0 z-30 mb-1 flex w-72 flex-col gap-2 rounded-control border border-line bg-panel p-2 text-micro text-fg-muted shadow-lg"
+      class="fixed z-30 flex w-72 max-w-[calc(100vw-16px)] flex-col gap-2 overflow-y-auto rounded-control border border-line bg-panel p-2 text-micro text-fg-muted shadow-lg"
+      :style="panelStyle"
     >
       <p class="text-fg-subtle">
         Track and master levels change the rendered video.

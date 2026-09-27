@@ -3479,7 +3479,9 @@ Vue sees only its low-rate reports (`playing`, and a 10 Hz time that drives
 `editorWorkspace` fields, never editor commands. Task 27 routes every layer's
 gain through ONE `AnalyserNode` so the controller can answer `readPeak()` —
 the preview output's SAMPLE PEAK, which the mixer (`MixerPopover`, opened
-from the transport row, `data-action="mixer"`) polls only while open and
+from the timeline footer's "Audio mixer", `data-action="mixer"`, since
+visual-parity Task 20; it reads the peak through `src/editor/previewPeak.ts`,
+the reader `PreviewSurface` registers while mounted) polls only while open and
 labels a peak in dBFS, never loudness. The mixer's track/master levels,
 mute and solo are render-affecting commands (`setTrackFlags`/
 `setMasterGain`); its "Mute preview (does not affect the video)" is the

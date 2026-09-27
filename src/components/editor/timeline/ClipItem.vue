@@ -46,6 +46,7 @@ import { computed, nextTick, ref } from "vue";
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { usePointerPress } from "../../../composables/usePointerPress";
 import { useTimelineDrag } from "../../../composables/useTimelineDrag";
+import { clipDragHint, useDragHintReport } from "../../../editor/dragHint";
 import { hasPreviewSource } from "../../../editor/previewLayers";
 import { isContextMenuShortcut } from "../../../editor/shortcuts";
 import { useSnapGuideReport } from "../../../editor/snapGuide";
@@ -145,8 +146,21 @@ const drag = useTimelineDrag({
   execute: (command) => editorProject.execute(command),
 });
 
-/** The dashed guide `TimelineView` draws while this clip's drag snaps. */
+/** The dashed guide `TimelineView` draws while this clip's drag snaps, and
+ * the footer's line for the drag (`dragHint.ts`). */
 useSnapGuideReport(drag.snapGuideMs);
+useDragHintReport(
+  computed(() =>
+    clipDragHint({
+      project: editorProject.project,
+      clip: props.clip,
+      moveIds: moveTargetClipIds(),
+      move: drag.movePreview.value,
+      trim: drag.trimPreview.value,
+      fade: drag.fadePreview.value,
+    }),
+  ),
+);
 
 const root = ref<HTMLElement | null>(null);
 /** The guide's `clip.selected` (Task 55): this clip, while it is selected. */
