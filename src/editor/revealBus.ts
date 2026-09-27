@@ -19,6 +19,16 @@
  * not a Pinia store: nothing here is project or workspace state, the
  * `dialogs.ts` precedent. `checkReveal.ts` decides WHAT to reveal.
  *
+ * **Two surfaces are actions, not reveals**: `"playback"` (play the
+ * preview from `requestPlaybackFrom`'s instant) and `"playPause"` (the
+ * transport's toggle). A request made while no handler is mounted runs when
+ * one mounts — for a reveal that is the point, for an action it is harmless
+ * here, because the one handler (`PreviewSurface`) is mounted with the
+ * shell, and both askers (the Fades tab's "Preview entrance", the mixer's
+ * "Play / pause preview") live inside that same shell: a request is always
+ * handled at once, never left to replay. A surface that could ask while the
+ * preview is NOT mounted must not use these two.
+ *
  * `checksDialogOpen` is the Checks dialog's one open flag, so the header's
  * button, the Render dialog and the canvas-ratio toast (Task 32) open the
  * same dialog.
