@@ -661,7 +661,7 @@ describe("webcamRecorder — the microphone and a late answer", () => {
     devices.releaseList();
     await enabling;
     expect(r.view.state).toBe("idle");
-    expect(states.at(-1)).toBe("idle");
+    expect(states[states.length - 1]).toBe("idle");
     expect(states).not.toContain("ready");
     expect(devices.tracks().every((t) => t.stopped)).toBe(true);
   });
