@@ -1271,13 +1271,26 @@ async function frameBoxes(page: Page): Promise<number[]> {
   ].map(Math.round);
 }
 
-test.describe("parity 1600x1000: the workspace in the light and contrast themes (screens 13–14)", () => {
+/** Waits until every finite animation and transition on the page has
+ * finished (the inspector tabs' colour transition, a menu's fade) and two
+ * frames have painted since, so a screenshot shows the settled state. */
+async function settled(page: Page): Promise<void> {
+  await page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .every((a) => a.playState !== "running" || a.effect?.getComputedTiming().iterations === Infinity),
+  );
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+}
+
+test.describe("parity 1600x1000: the workspace in the light and contrast themes, and a refused open (screens 13–15)", () => {
   test("light: screen 02's frame on the light palette", async ({ page }) => {
     await openParity(page, { width: 1600, height: 1000 }, { theme: "light", invitation: false });
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     await page.getByTestId("clip-c5").click();
     await page.getByTestId("inspector-tab-layout").click();
-    await page.waitForTimeout(250);
+    await expect(page.getByTestId("inspector-tab-layout")).toHaveClass(/(^|\s)active(\s|$)/);
+    await settled(page);
     await page.screenshot({ path: "test-results/parity/built-13-light.png" });
     await composite(page, "13-light.png", "test-results/parity/built-13-light.png", "vs-13-light");
 
@@ -1288,14 +1301,15 @@ test.describe("parity 1600x1000: the workspace in the light and contrast themes 
     await expect(page.getByTestId("editor-header-render")).toHaveCSS("background-color", "rgb(120, 83, 184)");
   });
 
-  test("forced colours: the selection, a cue, the playhead and the handles keep a system colour", async ({ page }) => {
+  test("forced colours: a selected cue and clip, the playhead and the handles keep a system colour", async ({ page }) => {
     await openParity(
       page,
       { width: 1600, height: 1000 },
       { invitation: false, workspace: { selection_clip_ids: ["c2"], selected: { type: "effect", id: "fx4" } } },
     );
     await page.emulateMedia({ forcedColors: "active" });
-    await page.waitForTimeout(250);
+    await page.waitForFunction(() => matchMedia("(forced-colors: active)").matches);
+    await settled(page);
     await page.screenshot({ path: "test-results/parity/built-14-high-contrast.png" });
     await composite(page, "14-high-contrast.png", "test-results/parity/built-14-high-contrast.png", "vs-14-high-contrast");
 
@@ -1308,7 +1322,44 @@ test.describe("parity 1600x1000: the workspace in the light and contrast themes 
       const adjust = await page.getByTestId(testid).evaluate((el) => getComputedStyle(el).forcedColorAdjust);
       expect(adjust, `${testid} is repainted to the page colour in forced colours`).toBe("none");
     }
+    // A clip selected with the mouse (no focus ring: the outline is the
+    // selection's own) is marked; its unselected neighbour is not.
+    await page.getByTestId("clip-c5").click();
+    await expect(page.getByTestId("clip-c5")).toHaveAttribute("aria-selected", "true");
+    expect(await outline("clip-c5"), "the selected clip is unmarked in forced colours").not.toBe("none");
+    expect(await outline("clip-c3"), "an unselected clip stays unmarked").toBe("none");
     await expect(page.getByTestId("editor-header-save")).toBeInViewport();
     await expect(page.getByTestId("editor-header-render")).toBeInViewport();
+  });
+
+  // Concept screen 15 is the browser reference's "The editor could not
+  // start" page. The native counterpart is the editor window's own "could
+  // not be opened" line (`OpenFailureNotice`), which a refused open shows
+  // in place of the shell: role wording, no redaction handle, on the dark
+  // backdrop the window opens with.
+  test("a refused open: the window's could-not-be-opened line (screen 15)", async ({ page }) => {
+    await installTauriStub(page, {
+      rejects: {
+        editor_open_staged: {
+          code: "sourceMissing",
+          message: "The recording <name:#1a2b3c4d> is no longer on this PC.",
+          retryable: false,
+          operationId: "op-parity-15",
+        },
+      },
+    });
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.goto("/");
+    const line = page.getByTestId("editor-open-failed");
+    await expect(line).toBeVisible();
+    await settled(page);
+    await page.screenshot({ path: "test-results/parity/built-15-startup-recovery.png" });
+    await composite(page, "15-startup-recovery.png", "test-results/parity/built-15-startup-recovery.png", "vs-15-startup-recovery");
+
+    await expect(line).toContainText("This could not be opened.");
+    await expect(line).toContainText("is no longer on this PC.");
+    await expect(line).not.toContainText("<name:");
+    await expect(page.getByTestId("editor-shell")).toHaveCount(0);
+    await expect(page.locator(".vb-editor")).toHaveCSS("background-color", "rgb(24, 25, 30)");
   });
 });
