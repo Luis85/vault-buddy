@@ -11,9 +11,9 @@
  * text (mustache), never markup.
  */
 import type { ProjectSummaryDto } from "../../../editorTypes";
-import AppButton from "../../ui/AppButton.vue";
 import EditorIcon from "../icons/EditorIcon.vue";
 import DialogHost from "../shell/DialogHost.vue";
+import DialogButton from "./DialogButton.vue";
 
 defineProps<{ open: boolean; projects: ProjectSummaryDto[] }>();
 const emit = defineEmits<{ (e: "close"): void; (e: "open", projectFileId: string): void }>();
@@ -70,13 +70,12 @@ function savedAt(iso: string): string {
     </ul>
 
     <template #footer>
-      <AppButton
-        variant="ghost"
+      <DialogButton
         data-testid="open-project-cancel"
         @click="emit('close')"
       >
         Cancel
-      </AppButton>
+      </DialogButton>
     </template>
   </DialogHost>
 </template>

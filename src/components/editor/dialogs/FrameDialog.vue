@@ -29,8 +29,8 @@ import { FRAME_FORMATS } from "../../../editor/previewHeader";
 import { openChecks } from "../../../editor/revealBus";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useNotificationsStore } from "../../../stores/notifications";
-import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
+import DialogButton from "./DialogButton.vue";
 
 defineProps<{ open: boolean }>();
 const emit = defineEmits<(e: "close") => void>();
@@ -123,14 +123,13 @@ function keep(): void {
     </p>
 
     <template #footer>
-      <AppButton
-        variant="secondary"
+      <DialogButton
         data-testid="frame-dialog-keep"
-        :disabled="busy"
+        :reason="busy ? 'Changing the format…' : null"
         @click="keep"
       >
         Keep current format
-      </AppButton>
+      </DialogButton>
     </template>
   </DialogHost>
 </template>

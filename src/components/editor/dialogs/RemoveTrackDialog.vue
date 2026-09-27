@@ -13,8 +13,8 @@ import { computed, watch } from "vue";
 
 import { clipsOnTrack, removalMessage, trackRemovalRequest } from "../../../editor/trackRemoval";
 import { useEditorProjectStore } from "../../../stores/editorProject";
-import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
+import DialogButton from "./DialogButton.vue";
 
 const editorProject = useEditorProjectStore();
 
@@ -66,19 +66,19 @@ function confirm(): void {
     </p>
 
     <template #footer>
-      <AppButton
-        variant="ghost"
+      <DialogButton
         data-testid="remove-track-cancel"
         @click="cancel"
       >
         Cancel
-      </AppButton>
-      <AppButton
+      </DialogButton>
+      <DialogButton
+        variant="primary"
         data-testid="remove-track-confirm"
         @click="confirm"
       >
         Continue
-      </AppButton>
+      </DialogButton>
     </template>
   </DialogHost>
 </template>

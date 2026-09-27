@@ -63,8 +63,8 @@ import { useWindowDismiss } from "../../../composables/useWindowDismiss";
 import { onReveal, requestReveal } from "../../../editor/revealBus";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
-import IconButton from "../../ui/IconButton.vue";
 import DialogButton from "../dialogs/DialogButton.vue";
+import DialogCloseButton from "../dialogs/DialogCloseButton.vue";
 import EditorIcon from "../icons/EditorIcon.vue";
 import MixerPeakMeter from "./MixerPeakMeter.vue";
 import MixerSlider from "./MixerSlider.vue";
@@ -219,14 +219,11 @@ useWindowDismiss(onWindowPointerDown, onWindowKeydown);
             Track levels change both the preview and the rendered video.
           </p>
         </div>
-        <IconButton
+        <DialogCloseButton
           label="Close audio mixer"
           data-testid="mixer-close"
-          class="h-8 w-8 shrink-0"
           @click="close"
-        >
-          <EditorIcon name="x" />
-        </IconButton>
+        />
       </header>
       <div class="flex min-h-0 flex-col gap-3 overflow-y-auto px-4 pb-4">
         <div>

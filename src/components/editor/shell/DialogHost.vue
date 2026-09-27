@@ -48,8 +48,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import { isTopDialog, nextDialogId, popDialog, pushDialog } from "../../../editor/dialogs";
 import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
-import IconButton from "../../ui/IconButton.vue";
-import EditorIcon from "../icons/EditorIcon.vue";
+import DialogCloseButton from "../dialogs/DialogCloseButton.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -217,16 +216,12 @@ function onBackdrop(): void {
             <slot name="subtitle" />
           </p>
         </div>
-        <IconButton
+        <DialogCloseButton
           label="Close"
-          :title="closeReason ?? undefined"
+          :reason="closable ? null : (closeReason ?? 'Finish what is running first.')"
           :data-testid="closeTestid"
-          :disabled="!closable"
-          class="h-8 w-8 shrink-0"
           @click="requestClose"
-        >
-          <EditorIcon name="x" />
-        </IconButton>
+        />
       </header>
 
       <div

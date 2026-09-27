@@ -13,8 +13,8 @@ import { computed, ref, watch } from "vue";
 
 import { renameIfChanged } from "../../../editor/renameTutorial";
 import { useEditorProjectStore } from "../../../stores/editorProject";
-import AppButton from "../../ui/AppButton.vue";
 import DialogHost from "../shell/DialogHost.vue";
+import DialogButton from "./DialogButton.vue";
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<(e: "close") => void>();
@@ -75,22 +75,21 @@ function cancel(): void {
     </label>
 
     <template #footer>
-      <AppButton
-        variant="ghost"
+      <DialogButton
         data-testid="rename-dialog-cancel"
-        :disabled="busy"
+        :reason="busy ? 'Renaming…' : null"
         @click="cancel"
       >
         Cancel
-      </AppButton>
-      <AppButton
+      </DialogButton>
+      <DialogButton
+        variant="primary"
         data-testid="rename-dialog-apply"
-        :disabled="Boolean(reason) || busy"
-        :title="reason ?? undefined"
+        :reason="reason ?? (busy ? 'Renaming…' : null)"
         @click="apply"
       >
         Apply
-      </AppButton>
+      </DialogButton>
     </template>
   </DialogHost>
 </template>
