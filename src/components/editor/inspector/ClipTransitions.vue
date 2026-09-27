@@ -1,79 +1,89 @@
 <script setup lang="ts">
 /**
- * The Fades inspector's transitions block for one clip (Task 30; F-19;
- * SCREENS-AND-INTERACTIONS.md §04: "Fades are different from crossfades;
- * show numeric duration/curve and warn about track shortening where
- * applicable"). One `TransitionRow` per transition the clip carries — at
- * most one IN and one OUT, `transitionRules.transitionsOf` — each with its
- * own duration draft and Remove, and "Add transition": the SAME
- * `transition` action the clip context menu offers (`actions.ts`), resolved
- * against this clip as the pointer target, so its enabled state and reason
- * can never disagree with the menu's.
+ * The Fades tab's "Between two clips" (Task 30; F-19; visual-parity Task
+ * 15, concept spec §5 "Fades"). One `TransitionRow` per transition the clip
+ * carries — at most one IN and one OUT, `transitionRules.transitionsOf` —
+ * and, while the clip does not yet blend into the next one, Blend · 0.5s /
+ * Blend · 1s: the `transition` action the clip menu offers, resolved
+ * against this clip, so its reasons (a locked track, no adjacent next clip,
+ * a taken side) can never disagree with the menu's; a blend longer than the
+ * pair allows says so too.
  */
 import { computed } from "vue";
 
 import { baseActionContext } from "../../../editor/actionContext";
-import { commandFor, resolveActions } from "../../../editor/actions";
-import { transitionsOf } from "../../../editor/transitionRules";
+import { resolveActions } from "../../../editor/actions";
+import { addTransitionCommand, blendRefusal, transitionsOf } from "../../../editor/transitionRules";
 import type { Transition } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import BlendPresets from "./BlendPresets.vue";
+import InspectorSection from "./InspectorSection.vue";
 import TransitionRow from "./TransitionRow.vue";
 
-const props = defineProps<{ clipId: string }>();
+const props = defineProps<{ clipId: string; lockReason: string | null }>();
 
 const editorProject = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
 
-const actionContext = computed(() =>
-  baseActionContext(
-    editorProject.project,
-    editorProject.snapshot,
-    workspace.playheadMs,
-    workspace.selectionClipIds,
-    { kind: "clip", id: props.clipId, timeMs: null },
-  ),
+const verdict = computed(
+  () =>
+    resolveActions(
+      baseActionContext(editorProject.project, editorProject.snapshot, workspace.playheadMs, workspace.selectionClipIds, {
+        kind: "clip",
+        id: props.clipId,
+        timeMs: null,
+      }),
+    ).transition,
 );
-const addTransition = computed(() => resolveActions(actionContext.value).transition);
 
+const sides = computed(() =>
+  editorProject.project ? transitionsOf(editorProject.project, props.clipId) : { incoming: null, outgoing: null },
+);
 const rows = computed(() => {
-  const project = editorProject.project;
-  if (!project) return [];
-  const { incoming, outgoing } = transitionsOf(project, props.clipId);
   const out: { transition: Transition; side: "in" | "out" }[] = [];
-  if (incoming) out.push({ transition: incoming, side: "in" });
-  if (outgoing) out.push({ transition: outgoing, side: "out" });
+  if (sides.value.incoming) out.push({ transition: sides.value.incoming, side: "in" });
+  if (sides.value.outgoing) out.push({ transition: sides.value.outgoing, side: "out" });
   return out;
 });
 
-function onAddTransition(): void {
-  const command = commandFor("transition", actionContext.value);
-  if (command) void editorProject.execute(command);
+function reasonFor(ms: number): string | null {
+  const project = editorProject.project;
+  const clip = editorProject.clipById(props.clipId);
+  if (!verdict.value.enabled || !project || !clip) return verdict.value.reason ?? "Not available.";
+  return blendRefusal(project, clip, ms);
+}
+
+function onBlend(ms: number): void {
+  const project = editorProject.project;
+  const clip = editorProject.clipById(props.clipId);
+  if (project && clip) void editorProject.execute(addTransitionCommand(project, clip, ms));
 }
 </script>
 
 <template>
-  <div
-    data-testid="fades-section-transitions"
-    class="flex flex-col gap-1 border-t border-line pt-2"
-  >
-    <span class="text-fg-subtle">Transitions</span>
-    <TransitionRow
-      v-for="row in rows"
-      :key="row.transition.id"
-      :transition="row.transition"
-      :side="row.side"
-    />
-    <button
-      type="button"
-      data-testid="fades-section-add-transition"
-      class="cursor-pointer self-start rounded px-1.5 py-0.5 text-left transition-colors hover:bg-hover"
-      :class="addTransition.enabled ? 'text-fg-secondary' : 'cursor-default opacity-50'"
-      :aria-disabled="!addTransition.enabled"
-      :title="addTransition.reason ?? 'Blends this clip into the next one; the overlap shortens only this track'"
-      @click="onAddTransition"
+  <InspectorSection title="Between two clips">
+    <div
+      data-testid="fades-section-transitions"
+      class="flex flex-col gap-2.5"
     >
-      {{ addTransition.label }}
-    </button>
-  </div>
+      <TransitionRow
+        v-for="row in rows"
+        :key="row.transition.id"
+        :transition="row.transition"
+        :side="row.side"
+        :lock-reason="lockReason"
+      />
+      <template v-if="!sides.outgoing">
+        <p class="text-[10px] leading-[1.6] text-fg-muted">
+          Blend this clip into the next adjacent clip on the same track. The overlap shortens only this track.
+        </p>
+        <BlendPresets
+          testid="fades-section-blend"
+          :reason-for="reasonFor"
+          @blend="onBlend"
+        />
+      </template>
+    </div>
+  </InspectorSection>
 </template>

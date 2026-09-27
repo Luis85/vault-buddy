@@ -502,6 +502,76 @@ test.describe("parity 1600x1000: the inspector frame (screens 02, 04)", () => {
     await expect(page.getByTestId("layout-transform")).toHaveAttribute("open", "");
   });
 
+  // Visual-parity Task 15 (§5 Fades, Audio, Speed, Color): screen 04's
+  // Fades tab, and the three tabs no screenshot shows.
+  test("the Fades tab: the envelope, fields in seconds, the presets and Between two clips", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("clip-c5").click();
+    await page.getByTestId("inspector-tab-fades").click();
+    const body = page.getByTestId("inspector-body");
+    await expect(body.locator("h3")).toHaveText(["A softer entrance. A cleaner exit.", "Between two clips"]);
+    // §5: the 58px well draws the SVG inside its 1px border.
+    expect((await box(page, "fades-section-graph")).height).toBeCloseTo(56, 0);
+    await expect(page.getByTestId("fades-section-fade-in")).toHaveValue("0.6");
+    await expect(page.getByTestId("fades-section-fade-out")).toHaveValue("0.6");
+    const fadeIn = await box(page, "fades-section-fade-in");
+    const fadeOut = await box(page, "fades-section-fade-out");
+    expect(fadeOut.y).toBeCloseTo(fadeIn.y, 0);
+    await expect(page.getByTestId("fades-section-preset-500")).toHaveText("Quick · 0.5s");
+    expect((await box(page, "fades-section-preset-500")).height).toBeCloseTo(29, 0);
+    await expect(page.getByTestId("fades-section-preview")).toHaveText("Preview entrance");
+    await expect(body).not.toContainText(/\bms\b/);
+    await page.waitForTimeout(250);
+    await page.getByTestId("editor-shell-inspector").screenshot({ path: "test-results/parity/built-04-fades-tab.png" });
+  });
+
+  test("the Audio, Speed and Color tabs take the concept's sections", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("clip-c5").click();
+    const body = page.getByTestId("inspector-body");
+    await page.getByTestId("inspector-tab-audio").click();
+    await expect(body.locator("h3")).toHaveText(["Clip audio", "Mix"]);
+    await expect(page.getByTestId("audio-section-volume-value")).toHaveText("100%");
+    await page.getByTestId("editor-shell-inspector").screenshot({ path: "test-results/parity/built-audio-tab.png" });
+
+    await page.getByTestId("inspector-tab-speed").click();
+    await expect(body.locator("h3")).toHaveText(["Keep the useful pace"]);
+    await expect(page.getByTestId("speed-section-readout-speed")).toHaveText("1×");
+    expect(await page.getByTestId("speed-section-readout-speed").evaluate((el) => getComputedStyle(el).fontSize)).toBe(
+      "35px",
+    );
+    await page.getByTestId("editor-shell-inspector").screenshot({ path: "test-results/parity/built-speed-tab.png" });
+
+    await page.getByTestId("inspector-tab-color").click();
+    await expect(body.locator("h3")).toHaveText(["A consistent look", "Fine adjustments"]);
+    const columns = await page
+      .getByTestId("color-preset-original")
+      .evaluate((el) => getComputedStyle(el.parentElement as Element).gridTemplateColumns.split(" ").length);
+    expect(columns).toBe(3);
+    await expect(page.getByTestId("color-section-brightness-value")).toHaveText("100%");
+    await page.getByTestId("editor-shell-inspector").screenshot({ path: "test-results/parity/built-color-tab.png" });
+  });
+
+  test("the cue state: Teaching properties, its sections, 27px swatches, timing in seconds", async ({ page }) => {
+    await openParity(
+      page,
+      { width: 1600, height: 1000 },
+      { invitation: false, workspace: { selection_clip_ids: ["c1"], selected: { type: "effect", id: "fx1" } } },
+    );
+    await expect(page.getByTestId("inspector-title")).toHaveText("Teaching properties");
+    await expect(page.getByTestId("inspector-card-name")).toHaveText("Text");
+    await expect(page.getByTestId("inspector-card-detail")).toHaveText("Attached to Open your workspace");
+    await expect(page.getByTestId("effect-section").locator("h3")).toHaveText([
+      "Instruction", "Color", "Timing within this clip", "Position · % of this video",
+    ]);
+    const swatch = await box(page, "effect-swatch-ffffff");
+    expect(swatch.width).toBeCloseTo(27, 0);
+    expect(swatch.height).toBeCloseTo(27, 0);
+    await expect(page.getByTestId("effect-swatch-ffffff")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("effect-section")).not.toContainText(/\bms\b/);
+    await page.getByTestId("editor-shell-inspector").screenshot({ path: "test-results/parity/built-cue-state.png" });
+  });
+
   test("the ✕ hides the inspector and gives its column to the preview", async ({ page }) => {
     await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
     await page.getByTestId("inspector-hide").click();

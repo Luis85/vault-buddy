@@ -5,13 +5,17 @@
  * way each treatment renders (`adjustmentsFilter`, the preview's own
  * mapping), labelled Original, Clear, Warm, Soft, Mono (`COLOR_TREATMENTS`).
  * The tile the selection already wears carries `.active`. A refusal (a
- * locked track) disables every tile with its reason.
+ * locked track) disables every tile with its reason. The multi inspector's
+ * Shared color and the Color tab can be on screen together (Adjust all),
+ * so each names its tiles with its own `prefix`.
  */
 import { adjustmentsFilter, COLOR_TREATMENTS } from "../../../editor/colorPresets";
 
 type Treatment = (typeof COLOR_TREATMENTS)[number];
 
-defineProps<{ activeId: string | null; reason: string | null }>();
+withDefaults(defineProps<{ activeId: string | null; reason: string | null; prefix?: string }>(), {
+  prefix: "color-treatment",
+});
 const emit = defineEmits<(e: "pick", treatment: Treatment) => void>();
 </script>
 
@@ -25,7 +29,7 @@ const emit = defineEmits<(e: "pick", treatment: Treatment) => void>();
       v-for="t in COLOR_TREATMENTS"
       :key="t.id"
       type="button"
-      :data-testid="`color-treatment-${t.id}`"
+      :data-testid="`${prefix}-${t.id}`"
       :aria-pressed="t.id === activeId"
       :aria-disabled="reason ? 'true' : undefined"
       :title="reason ?? undefined"

@@ -6,7 +6,9 @@
  * dialog, (Task 57) the preview toolbar's Review, which Ctrl+E asks
  * for, (visual-parity Task 10) the library's Project section, which
  * `LibraryPanel` answers, and (Task 11) the learning center's Shortcuts
- * tab, which the View menu asks `GuideHelpButton` for. `requestReveal(surface)` bumps a per-surface serial and
+ * tab, which the View menu asks `GuideHelpButton` for, and (Task 15) the
+ * preview's playback, which the Fades tab's "Preview entrance" asks
+ * `PreviewSurface` for. `requestReveal(surface)` bumps a per-surface serial and
  * `onReveal(surface, fn)` — called from that surface's own setup — runs
  * `fn` once per request it has not handled yet, including one made just
  * before it mounted (the media library mounts only when its tab is chosen,
@@ -22,11 +24,11 @@ import { reactive, ref, watch } from "vue";
 
 export type RevealSurface =
   | "reconnect" | "webcam" | "mixer" | "ratio" | "timeline" | "library" | "inspector" | "render" | "review"
-  | "projectSection" | "shortcuts";
+  | "projectSection" | "shortcuts" | "playback";
 
 const SURFACES: readonly RevealSurface[] = [
   "reconnect", "webcam", "mixer", "ratio", "timeline", "library", "inspector", "render", "review",
-  "projectSection", "shortcuts",
+  "projectSection", "shortcuts", "playback",
 ];
 
 const requested = reactive(Object.fromEntries(SURFACES.map((s) => [s, 0])) as Record<RevealSurface, number>);
@@ -34,6 +36,8 @@ const handled = Object.fromEntries(SURFACES.map((s) => [s, 0])) as Record<Reveal
 
 /** Where the timeline should scroll to, output ms (`"timeline"`). */
 let timelineTarget = 0;
+/** Where the preview should play from, output ms (`"playback"`). */
+let playbackStart = 0;
 
 /** The Checks dialog's open flag (header button, canvas toast). */
 export const checksDialogOpen = ref(false);
@@ -75,6 +79,17 @@ export function requestTimelineReveal(ms: number): void {
 /** The output time the last timeline reveal asked for. */
 export function revealedTimelineMs(): number {
   return timelineTarget;
+}
+
+/** Asks the preview to play from output instant `ms`. */
+export function requestPlaybackFrom(ms: number): void {
+  playbackStart = ms;
+  requestReveal("playback");
+}
+
+/** The output time the last playback request asked to play from. */
+export function requestedPlaybackMs(): number {
+  return playbackStart;
 }
 
 /** The clip whose inspector name field should take focus — the clip

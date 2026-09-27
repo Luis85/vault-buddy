@@ -1,26 +1,31 @@
 <script setup lang="ts">
 /**
- * One transition the selected clip carries, in the Fades inspector (Task
- * 30; F-19; SCREENS-AND-INTERACTIONS.md §04: "Fades are different from
- * crossfades; show numeric duration/curve and warn about track shortening
- * where applicable"). Its own component so each row owns its own numeric
- * draft (`useInspectorDraft` runs once per row's setup, keyed on the
- * transition id by the caller) — a clip can gain or lose a transition while
- * the Fades tab stays mounted.
+ * One transition the selected clip carries, in the Fades tab's "Between two
+ * clips" (Task 30; F-19; visual-parity Task 15, concept spec §5 "Fades"):
+ * the `.callout` naming it — "Cross dissolve" or "Equal-power crossfade",
+ * its overlap, "selected track only" — then Blend · 0.5s / 1s and an
+ * Overlap (s) field (`setTransitionDuration`), and Remove crossfade
+ * (`removeTransition`). Its own component so each row owns its own draft
+ * (`useInspectorDraft` runs once per row's setup, keyed on the transition
+ * id by the caller) — a clip can gain or lose a transition while the tab
+ * stays mounted.
  *
- * The duration's upper bound mirrors Rust's `transitions::duration_bound`
- * through `transitionRules.transitionBoundMs`, read once at setup (the
- * `FadesSection` precedent): a preview of the refusal, never the authority —
- * `set_transition_duration` re-checks on every commit.
+ * The overlap's bound mirrors Rust's `transitions::duration_bound` through
+ * `transitionRules.transitionBoundMs`, read once at setup: a preview of the
+ * refusal, never the authority — `set_transition_duration` re-checks on
+ * every commit.
  */
 import { computed } from "vue";
 
-import { numberField, useInspectorDraft } from "../../../composables/useInspectorDraft";
-import { transitionBoundMs } from "../../../editor/transitionRules";
+import { secondsField, useInspectorDraft } from "../../../composables/useInspectorDraft";
+import { blendTooLong, transitionBoundMs } from "../../../editor/transitionRules";
 import type { Transition } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
+import BlendPresets from "./BlendPresets.vue";
+import InspectorButton from "./InspectorButton.vue";
+import InspectorNumberInput from "./InspectorNumberInput.vue";
 
-const props = defineProps<{ transition: Transition; side: "in" | "out" }>();
+const props = defineProps<{ transition: Transition; side: "in" | "out"; lockReason: string | null }>();
 
 const editorProject = useEditorProjectStore();
 
@@ -28,6 +33,8 @@ const from = editorProject.clipById(props.transition.from);
 const to = editorProject.clipById(props.transition.to);
 const boundMs = from && to ? transitionBoundMs(from, to) : 0;
 
+const live = computed(() => editorProject.project?.transitions.find((t) => t.id === props.transition.id));
+const durationMs = computed(() => live.value?.duration_ms ?? props.transition.duration_ms);
 const title = computed(() => (props.transition.kind === "dissolve" ? "Cross dissolve" : "Equal-power crossfade"));
 const partner = computed(() => {
   const clip = props.side === "in" ? from : to;
@@ -35,17 +42,13 @@ const partner = computed(() => {
   return props.side === "in" ? `From ${name}` : `Into ${name}`;
 });
 
+function setDuration(ms: number): Promise<boolean> {
+  return editorProject.execute({ kind: "setTransitionDuration", transitionId: props.transition.id, durationMs: ms });
+}
+
 const duration = useInspectorDraft(
-  numberField({
-    value: () => editorProject.project?.transitions.find((t) => t.id === props.transition.id)?.duration_ms ?? 0,
-    label: "Transition",
-    min: 1,
-    max: boundMs,
-    rangeLabel: `1 and ${boundMs} ms`,
-    integer: true,
-  }),
-  (durationMs) =>
-    editorProject.execute({ kind: "setTransitionDuration", transitionId: props.transition.id, durationMs }),
+  secondsField({ value: () => durationMs.value, label: "Overlap", minMs: 1, maxMs: boundMs }),
+  setDuration,
 );
 
 function onRemove(): void {
@@ -56,37 +59,36 @@ function onRemove(): void {
 <template>
   <div
     data-testid="transition-row"
-    class="flex flex-col gap-0.5 rounded border border-line px-1.5 py-1"
+    class="flex flex-col gap-2.5"
   >
-    <span class="text-fg-secondary">{{ title }} · {{ partner }}</span>
-    <label class="flex flex-col gap-0.5">
-      <span class="text-fg-subtle">Duration (ms)</span>
-      <input
-        data-testid="transition-row-duration"
-        type="text"
-        class="rounded border border-line bg-stage px-1 py-0.5 text-fg"
-        :value="duration.draft.value"
-        @input="duration.draft.value = ($event.target as HTMLInputElement).value"
-        @keydown.enter="duration.submit()"
-        @keydown.escape="duration.revert()"
-        @blur="duration.submit()"
-      >
-      <span
-        v-if="duration.error.value"
-        data-testid="transition-row-duration-error"
-        class="text-danger"
-      >{{ duration.error.value }}</span>
-    </label>
-    <p class="text-fg-subtle">
-      The overlap shortens only this track.
+    <p
+      class="rounded-[7px] border border-accent/22 bg-accent-bg p-[13px] text-[11px] leading-[1.7] text-fg-secondary"
+    >
+      <b class="text-accent-ink">{{ title }}</b><br>
+      {{ (durationMs / 1000).toFixed(2) }}s overlap · selected track only<br>
+      <small class="text-[10px]">{{ partner }}</small>
     </p>
-    <button
-      type="button"
+    <BlendPresets
+      testid="transition-row-blend"
+      :reason-for="(ms) => lockReason ?? blendTooLong(boundMs, ms)"
+      :current-ms="durationMs"
+      @blend="setDuration"
+    />
+    <InspectorNumberInput
+      :field="duration"
+      label="Overlap (s)"
+      testid="transition-row-duration"
+      :step="0.05"
+      :min="0"
+    />
+    <InspectorButton
+      class="self-start"
+      icon="x"
       data-testid="transition-row-remove"
-      class="cursor-pointer self-start rounded px-1.5 py-0.5 text-fg-secondary transition-colors hover:bg-hover"
+      :reason="lockReason"
       @click="onRemove"
     >
-      Remove transition
-    </button>
+      Remove crossfade
+    </InspectorButton>
   </div>
 </template>

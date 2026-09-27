@@ -1,33 +1,30 @@
 <script setup lang="ts">
 /**
- * The Inspector's Audio category (Task 27; F-05, F-24, F-25). Fills
- * `InspectorPanel`'s `#audio` slot (`EditorRoot.vue`) with a clip's own
- * render-affecting audio: its volume, its mute, and **Detach audio**.
+ * The Inspector's Audio category (Task 27; F-05, F-24, F-25; visual-parity
+ * Task 15, concept spec §5 "Audio"). **Clip audio**: the clip's own
+ * render-affecting Volume (a 0–200 % range over the LINEAR `Clip.volume`,
+ * `[0,2]`; a drag commits once, on release), Mute this clip (over the whole
+ * selection, `setClipMix` takes `clipIds`), Detach source audio
+ * (`AudioDetachControl`, the registry's own verdict) and the stems note
+ * (`AudioStemsNote`). **Mix**: Open audio mixer, the same reveal View →
+ * Audio mixer… makes.
  *
- * **Volume is stored LINEAR and read out in dB** (`AudioVolumeField`, one
- * shared `useInspectorDraft`: a slider drag only moves the draft, the
- * release sends exactly one `setClipMix`).
- *
- * **Mute** acts on the whole selection (`setClipMix` takes `clipIds`), so a
- * multi-selection can be muted at once; volume and Detach need exactly one
- * clip and say so rather than acting on `clipIds[0]` (R20).
- *
- * **Detach audio** (`AudioDetachControl`) reads the SAME `actions.ts`
- * verdict the context menu does, so the two can never disagree.
- *
- * **Stems** (`AudioStemsNote`, Task 53): a capture recorded without per-input
- * stems says so, and names the setting that records them.
- *
- * Nothing here is monitoring: the preview's mute and volume live in the
- * transport and the mixer, and never reach a command.
+ * Volume needs exactly one clip and says so rather than acting on
+ * `clipIds[0]` (R20). A locked track disables the tab; the inspector's
+ * frame says why and the fieldset carries the reason. Nothing here is
+ * monitoring: the preview's mute lives in the transport and the mixer, and
+ * never reaches a command.
  */
 import { computed } from "vue";
 
 import { useSelectedClips } from "../../../composables/useSelectedClips";
+import { requestReveal } from "../../../editor/revealBus";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import AudioDetachControl from "./AudioDetachControl.vue";
 import AudioStemsNote from "./AudioStemsNote.vue";
-import AudioVolumeField from "./AudioVolumeField.vue";
+import InspectorButton from "./InspectorButton.vue";
+import InspectorRange from "./InspectorRange.vue";
+import InspectorSection from "./InspectorSection.vue";
 
 const props = defineProps<{ clipIds: string[] }>();
 
@@ -40,54 +37,85 @@ const asset = computed(() => editorProject.project?.assets.find((a) => a.id === 
 const isStill = computed(() => clip.value !== undefined && asset.value?.media_type === "image");
 
 const allMuted = computed(() => clips.value.length > 0 && clips.value.every((c) => c.muted));
-const muteLabel = computed(() => (allMuted.value ? "Unmute clip audio" : "Mute clip audio"));
-function onToggleMute(): void {
-  if (lockReason.value || clips.value.length === 0) return;
-  void editorProject.execute({ kind: "setClipMix", clipIds: clips.value.map((c) => c.id), muted: !allMuted.value });
+
+function mix(change: { volume?: number; muted?: boolean }): Promise<boolean> {
+  if (lockReason.value || clips.value.length === 0) return Promise.resolve(false);
+  return editorProject.execute({ kind: "setClipMix", clipIds: clips.value.map((c) => c.id), ...change });
+}
+/** A refused mute puts the box back where the projection says it is. */
+async function onMute(event: Event): Promise<void> {
+  const box = event.target as HTMLInputElement;
+  if (!(await mix({ muted: box.checked }))) box.checked = allMuted.value;
 }
 </script>
 
 <template>
-  <div
-    data-testid="audio-section"
-    class="flex flex-col gap-2"
-  >
-    <p
-      v-if="isStill"
-      data-testid="audio-section-still"
+  <!-- The mixer is not an edit, so Mix stays outside the locked fieldset. -->
+  <div class="flex min-w-0 flex-col">
+    <fieldset
+      data-testid="audio-section"
+      :disabled="lockReason !== null"
+      :title="lockReason ?? undefined"
+      class="flex min-w-0 flex-col"
     >
-      A still image has no sound.
-    </p>
-    <template v-else>
-      <AudioVolumeField
-        v-if="clip"
-        :clip-id="clip.id"
-        :lock-reason="lockReason"
-      />
-      <p
-        v-else
-        data-testid="audio-section-multi"
+      <InspectorSection title="Clip audio">
+        <p
+          v-if="isStill"
+          data-testid="audio-section-still"
+        >
+          A still image has no sound.
+        </p>
+        <template v-else>
+          <InspectorRange
+            v-if="clip"
+            label="Volume"
+            testid="audio-section-volume"
+            :value="Math.round(clip.volume * 100)"
+            :min="0"
+            :max="200"
+            :step="1"
+            suffix="%"
+            :commit="(v) => mix({ volume: v / 100 })"
+          />
+          <p
+            v-else
+            data-testid="audio-section-multi"
+          >
+            Select a single clip to set its volume or detach its audio.
+          </p>
+          <label class="flex items-center gap-2 text-[11px] text-fg">
+            <input
+              data-testid="audio-section-mute"
+              type="checkbox"
+              class="shrink-0"
+              :checked="allMuted"
+              @change="onMute"
+            >
+            Mute this clip
+          </label>
+          <p class="text-[10px] leading-[1.6] text-fg-muted">
+            Track and master levels are applied after the clip level.
+          </p>
+          <AudioDetachControl
+            v-if="clip"
+            :asset="asset"
+          />
+          <AudioStemsNote :asset="asset" />
+        </template>
+      </InspectorSection>
+    </fieldset>
+    <InspectorSection title="Mix">
+      <InspectorButton
+        class="self-start"
+        icon="sliders"
+        data-testid="audio-section-mixer"
+        @click="requestReveal('mixer')"
       >
-        Select a single clip to set its volume or detach its audio.
+        Open audio mixer
+      </InspectorButton>
+      <p class="text-[10px] leading-[1.6] text-fg-muted">
+        Monitoring mute does not mute exports. Track mute and solo do affect exports.
       </p>
-
-      <button
-        type="button"
-        data-testid="audio-section-mute"
-        class="cursor-pointer rounded px-1.5 py-0.5 text-left transition-colors hover:bg-hover"
-        :aria-pressed="allMuted ? 'true' : 'false'"
-        :aria-disabled="lockReason !== null"
-        :title="lockReason ?? 'Mutes the clip in the rendered video'"
-        @click="onToggleMute"
-      >
-        {{ muteLabel }}
-      </button>
-
-      <AudioDetachControl
-        v-if="clip"
-        :asset="asset"
-      />
-      <AudioStemsNote :asset="asset" />
-    </template>
+    </InspectorSection>
   </div>
 </template>

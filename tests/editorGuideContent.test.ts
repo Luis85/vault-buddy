@@ -119,9 +119,6 @@ describe("native lesson copy", () => {
         tip: "Adding a track is optional: dropping media below the last track makes a new one.",
         task: "Open the top track's menu to see what it offers. You do not need to change anything.",
       },
-      fades: {
-        body: "Set Fade in and Fade out, or drag the gold handles on a timeline clip. Video fades reveal the layer beneath; audio fades change volume.",
-      },
       audio: {
         tip: "Listen to the actual rendered file before sharing.",
       },

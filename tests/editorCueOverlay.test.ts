@@ -503,6 +503,15 @@ describe("EffectSection", () => {
     await input.trigger("keydown", { key: "Enter" });
     await flushPromises();
   }
+  /** A slider released at `value`: its `input` steps, then one `change`. */
+  async function slide(w: ReturnType<typeof mountSection>, testid: string, value: string) {
+    const input = w.get(`[data-testid="${testid}"]`);
+    (input.element as HTMLInputElement).value = value;
+    await input.trigger("input");
+    await input.trigger("change");
+    await flushPromises();
+  }
+  const headings = (w: ReturnType<typeof mountSection>) => w.findAll("h3").map((h) => h.text());
 
   // Named test (brief): the privacy cover's limitation is permanent copy,
   // not a dismissible hint — F-33 "Warn about motion/layers and uncensored
@@ -526,33 +535,46 @@ describe("EffectSection", () => {
     expect(mountSection("arr").find('[data-testid="effect-mask-warning"]').exists()).toBe(false);
   });
 
-  it("shows start/end in OUTPUT time and commits SOURCE time", async () => {
+  // Visual-parity Task 15 (concept spec §5 "Teaching cue").
+  it("names the cue and the clip it is attached to, over its kind's sections", async () => {
     await openProject();
     const w = mountSection("arr");
-    // Source 1500..2500 on the 2× clip = output 1500..2000.
-    expect((w.get('[data-testid="effect-field-start"]').element as HTMLInputElement).value).toBe("1500");
-    expect((w.get('[data-testid="effect-field-end"]').element as HTMLInputElement).value).toBe("2000");
-    await type(w, "effect-field-start", "1600");
-    await type(w, "effect-field-end", "2100");
+    expect(w.get('[data-testid="inspector-card-name"]').text()).toBe("Arrow");
+    expect(w.get('[data-testid="inspector-card-detail"]').text()).toBe("Attached to Screen");
+    expect(headings(w)).toEqual(["Appearance", "Color", "Timing within this clip", "Position · % of this video"]);
+  });
+
+  it("timing within this clip, in seconds from its start, commits SOURCE time", async () => {
+    await openProject();
+    const w = mountSection("arr");
+    // Source 1500..2500 on the 2× clip starting at 1000 = output 1500..2000,
+    // 0.5 s to 1 s into the clip.
+    expect((w.get('[data-testid="effect-field-start"]').element as HTMLInputElement).value).toBe("0.5");
+    expect((w.get('[data-testid="effect-field-end"]').element as HTMLInputElement).value).toBe("1");
+    expect(w.get('[data-testid="effect-section-timing-help"]').text()).toBe(
+      "0.5s on screen. Follows this clip when moved.",
+    );
+    await type(w, "effect-field-start", "0.6");
+    await type(w, "effect-field-end", "1.1");
     expect(executed).toEqual([
       { kind: "updateEffect", effectId: "arr", startMs: 1_700 },
       { kind: "updateEffect", effectId: "arr", endMs: 2_700 },
     ]);
-    await type(w, "effect-field-start", "900");
-    expect(w.get('[data-testid="effect-field-start-error"]').text()).toBe("Start must be between 1000 and 11000 ms");
+    await type(w, "effect-field-start", "10.5");
+    expect(w.get('[data-testid="effect-field-start-error"]').text()).toBe("Starts at must be between 0 and 10 s");
   });
 
-  it("edits every prop of its kind: arrow endpoints, stroke and colour", async () => {
+  it("edits every prop of its kind: arrow tip, line weight and colour", async () => {
     await openProject();
     const w = mountSection("arr");
-    expect(w.findAll("[data-testid^=effect-field-]").map((f) => f.attributes("data-testid"))).toEqual([
-      "effect-field-start", "effect-field-end", "effect-field-x", "effect-field-y",
-      "effect-field-x2", "effect-field-y2", "effect-field-stroke", "effect-field-color",
+    expect(w.findAll("input[data-testid^=effect-field-]").map((f) => f.attributes("data-testid"))).toEqual([
+      "effect-field-stroke", "effect-field-color", "effect-field-start", "effect-field-end",
+      "effect-field-x", "effect-field-y", "effect-field-x2", "effect-field-y2",
     ]);
+    expect(w.get('[data-testid="effect-field-x2"]').element.closest("label")?.textContent).toContain("Arrow tip X");
     await type(w, "effect-field-x2", "75");
-    await type(w, "effect-field-stroke", "9");
-    await type(w, "effect-field-stroke", "30");
-    expect(w.get('[data-testid="effect-field-stroke-error"]').text()).toBe("Stroke must be between 1 and 20");
+    await slide(w, "effect-field-stroke", "9");
+    expect(w.get('[data-testid="effect-field-stroke-value"]').text()).toBe("9 px");
     const color = w.get('[data-testid="effect-field-color"]');
     // `setValue` on a colour input fires its `change` itself.
     await color.setValue("#00ff88");
@@ -567,7 +589,22 @@ describe("EffectSection", () => {
     ]);
   });
 
-  it("text: copy, size, background; step: number; spotlight: dim; zoom: factor and easing", async () => {
+  it("the colour row: the concept's five swatches, the current one pressed", async () => {
+    await openProject();
+    const w = mountSection("arr");
+    const swatches = w.findAll("[data-testid^=effect-swatch-]");
+    expect(swatches.map((s) => s.attributes("aria-label"))).toEqual([
+      "Set color #ffd279", "Set color #ffffff", "Set color #ac93f1", "Set color #7bd4bc", "Set color #f297a7",
+    ]);
+    expect(swatches.map((s) => s.attributes("aria-pressed"))).toEqual(["true", "false", "false", "false", "false"]);
+    expect(w.get('[data-testid="effect-field-color"]').attributes("aria-label")).toBe("Custom annotation color");
+    await swatches[2].trigger("click");
+    await swatches[0].trigger("click");
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "updateEffect", effectId: "arr", props: { color: "#ac93f1" } }]);
+  });
+
+  it("text: copy, size, background; step: number; spotlight: dim; zoom: magnification and easing", async () => {
     await openProject(
       project({
         effects: [
@@ -579,18 +616,22 @@ describe("EffectSection", () => {
       }),
     );
     const t = mountSection("t");
+    expect(headings(t)).toEqual(["Instruction", "Color", "Timing within this clip", "Position · % of this video"]);
     await type(t, "effect-field-text", "Open settings");
-    await type(t, "effect-field-fontSize", "48");
+    await slide(t, "effect-field-fontSize", "48");
     await t.get('[data-testid="effect-field-background"]').setValue(true);
     await flushPromises();
     const n = mountSection("n");
     await type(n, "effect-field-number", "4");
     const s = mountSection("s");
+    expect(headings(s)).toEqual(["Appearance", "Timing within this clip", "Position · % of this video"]);
     expect(s.find('[data-testid="effect-field-color"]').exists()).toBe(false);
-    await type(s, "effect-field-dim", "40");
+    expect(s.get('[data-testid="effect-field-dim-value"]').text()).toBe("65%");
+    await slide(s, "effect-field-dim", "40");
     const z = mountSection("z");
-    await type(z, "effect-field-factor", "2.5");
-    await type(z, "effect-field-easing", "600");
+    expect(headings(z)).toEqual(["Focus", "Timing within this clip", "Position · % of this video"]);
+    await slide(z, "effect-field-factor", "2.5");
+    await type(z, "effect-field-easing", "0.6");
     expect(executed).toEqual([
       { kind: "updateEffect", effectId: "t", props: { text: "Open settings" } },
       { kind: "updateEffect", effectId: "t", props: { fontSize: 48 } },
@@ -637,13 +678,15 @@ describe("teaching cues — edges", () => {
   it("EffectSection on a locked track: every control disabled, nothing sent", async () => {
     await openProject(project({ tracks: [track("v1", { locked: true, name: "Screen" })] }));
     const w = mount(EffectSection, { props: { effectId: "arr" } });
-    expect(w.get('[data-testid="effect-section-locked"]').text()).toContain("Track Screen is locked");
+    expect(w.get('[data-testid="effect-section-locked"]').text()).toBe("Track Screen is locked. Unlock it before editing.");
     expect(w.get('[data-testid="effect-field-x2"]').attributes("disabled")).toBeDefined();
-    expect(w.get('[data-testid="effect-remove"]').attributes("disabled")).toBeDefined();
+    expect(w.get('[data-testid="effect-remove"]').attributes("aria-disabled")).toBe("true");
+    expect(w.get('[data-testid="effect-swatch-ffffff"]').attributes("aria-disabled")).toBe("true");
     // Even a submit is refused before it reaches Rust.
     await w.get('[data-testid="effect-field-x2"]').setValue("80");
     await w.get('[data-testid="effect-field-x2"]').trigger("keydown", { key: "Enter" });
-    await w.get('[data-testid="effect-field-start"]').setValue("1600");
+    await w.get('[data-testid="effect-swatch-ffffff"]').trigger("click");
+    await w.get('[data-testid="effect-field-start"]').setValue("0.6");
     await w.get('[data-testid="effect-field-start"]').trigger("keydown", { key: "Enter" });
     await w.get('[data-testid="effect-remove"]').trigger("click");
     await flushPromises();

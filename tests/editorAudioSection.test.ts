@@ -1,6 +1,7 @@
 /**
- * `AudioSection.vue` (Task 27; F-05, F-24) — the Inspector's Audio category:
- * clip volume (linear stored, dB read out), mute, and Detach audio.
+ * `AudioSection.vue` (Task 27; F-05, F-24; visual-parity Task 15) — the
+ * Inspector's Audio category: clip volume (linear stored, percent read
+ * out), Mute this clip, Detach source audio and Open audio mixer.
  */
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -8,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import AudioSection from "../src/components/editor/inspector/AudioSection.vue";
 import { EditorPortError } from "../src/editor/port";
+import { revealSerial } from "../src/editor/revealBus";
 import type { Asset, Clip, EditorOpenResult, EditorSnapshot, Project, Track } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
@@ -123,88 +125,95 @@ afterEach(() => {
   refuse = false;
 });
 
-describe("AudioSection — volume", () => {
-  // The named case: a slider drag is MANY input events and ONE commit. The
-  // draft moves with every step (so does the dB readout); only the release
-  // (`change`) sends, and the blur that follows it is not a second send.
-  it("volume draft commits once", async () => {
+describe("AudioSection — Clip audio", () => {
+  // Visual-parity Task 15 (concept spec §5 "Audio"): a Volume range in
+  // percent, 0–200. A drag is MANY input events and ONE commit: only the
+  // release (`change`) sends.
+  it("the volume range reads out percent and commits once on release, stored LINEAR", async () => {
     const w = await mountSection(["c1"]);
-    const slider = w.get('[data-testid="audio-section-volume-slider"]');
-    // A real drag: `input` per step, `change` once on release. (VTU's
-    // `setValue` fires BOTH, which is a release per step — not a drag.)
-    for (const v of ["0.7", "0.5", "0.25"]) {
+    expect(w.findAll("h3").map((h) => h.text())).toEqual(["Clip audio", "Mix"]);
+    const slider = w.get('[data-testid="audio-section-volume"]');
+    expect([slider.attributes("min"), slider.attributes("max")]).toEqual(["0", "200"]);
+    expect(w.get('[data-testid="audio-section-volume-value"]').text()).toBe("80%");
+    // A real drag: `input` per step, `change` once on release.
+    for (const v of ["70", "50", "25"]) {
       (slider.element as HTMLInputElement).value = v;
       await slider.trigger("input");
     }
     expect(executed).toEqual([]);
-    expect(w.get('[data-testid="audio-section-db"]').text()).toBe("−12.0 dB");
-
+    expect(w.get('[data-testid="audio-section-volume-value"]').text()).toBe("25%");
     await slider.trigger("change");
-    await w.get('[data-testid="audio-section-volume"]').trigger("blur");
     await flushPromises();
     expect(executed).toEqual([{ kind: "setClipMix", clipIds: ["c1"], volume: 0.25 }]);
   });
 
-  it("typed volume commits on Enter once, and stores LINEAR while reading out dB", async () => {
-    const w = await mountSection(["c1"]);
-    expect(w.get('[data-testid="audio-section-db"]').text()).toBe("−1.9 dB");
-    const field = w.get('[data-testid="audio-section-volume"]');
-    await field.setValue("2");
-    expect(w.get('[data-testid="audio-section-db"]').text()).toBe("+6.0 dB");
-    await field.trigger("keydown", { key: "Enter" });
-    await field.trigger("blur");
-    await flushPromises();
-    expect(executed).toEqual([{ kind: "setClipMix", clipIds: ["c1"], volume: 2 }]);
-
-    await field.setValue("0");
-    expect(w.get('[data-testid="audio-section-db"]').text()).toBe("−∞ dB");
-  });
-
-  it("an out-of-range volume stays visible with a correction and sends nothing", async () => {
-    const w = await mountSection(["c1"]);
-    const field = w.get('[data-testid="audio-section-volume"]');
-    await field.setValue("2.5");
-    await field.trigger("keydown", { key: "Enter" });
-    await flushPromises();
-    expect(executed).toEqual([]);
-    expect(w.get('[data-testid="audio-section-volume-error"]').text()).toContain("between 0 and 2");
-    expect((field.element as HTMLInputElement).value).toBe("2.5");
-  });
-
-  it("a volume Rust refuses falls back to the committed value", async () => {
+  it("a volume Rust refuses puts the slider back", async () => {
     refuse = true;
     const w = await mountSection(["c1"]);
-    const field = w.get('[data-testid="audio-section-volume"]');
-    await field.setValue("1.5");
-    await field.trigger("keydown", { key: "Enter" });
+    const slider = w.get('[data-testid="audio-section-volume"]');
+    (slider.element as HTMLInputElement).value = "150";
+    await slider.trigger("input");
+    await slider.trigger("change");
     await flushPromises();
     expect(executed).toHaveLength(1);
-    expect((field.element as HTMLInputElement).value).toBe("0.8");
+    expect(w.get('[data-testid="audio-section-volume-value"]').text()).toBe("80%");
   });
-});
 
-describe("AudioSection — mute and detach", () => {
-  it("mute acts on the whole selection; volume and detach need one clip", async () => {
-    const w = await mountSection(["c1", "c2"]);
-    expect(w.find('[data-testid="audio-section-multi"]').exists()).toBe(true);
-    expect(w.find('[data-testid="audio-section-volume"]').exists()).toBe(false);
-    expect(w.find('[data-testid="audio-section-detach"]').exists()).toBe(false);
-    await w.get('[data-testid="audio-section-mute"]').trigger("click");
+  it("Mute this clip is a checkbox over the whole selection", async () => {
+    const one = await mountSection(["c1"]);
+    const mute = one.get('[data-testid="audio-section-mute"]');
+    expect(mute.element.closest("label")?.textContent).toContain("Mute this clip");
+    expect((mute.element as HTMLInputElement).checked).toBe(false);
+    await mute.setValue(true);
+    expect(executed).toEqual([{ kind: "setClipMix", clipIds: ["c1"], muted: true }]);
+
+    const both = await mountSection(["c1", "c2"]);
+    expect(both.find('[data-testid="audio-section-multi"]').exists()).toBe(true);
+    expect(both.find('[data-testid="audio-section-volume"]').exists()).toBe(false);
+    expect(both.find('[data-testid="audio-section-detach"]').exists()).toBe(false);
+    await both.get('[data-testid="audio-section-mute"]').setValue(true);
     expect(executed).toEqual([{ kind: "setClipMix", clipIds: ["c1", "c2"], muted: true }]);
   });
 
-  it("a clip on a locked track sends nothing and says why", async () => {
-    const w = await mountSection(["c1"], { tracks: [track("v1", { locked: true })] });
+  it("a mute Rust refuses puts the box back", async () => {
+    refuse = true;
+    const w = await mountSection(["c1"]);
     const mute = w.get('[data-testid="audio-section-mute"]');
-    expect(mute.attributes("title")).toBe("Track v1 is locked");
-    await mute.trigger("click");
-    expect(executed).toEqual([]);
+    await mute.setValue(true);
+    await flushPromises();
+    expect(executed).toHaveLength(1);
+    expect((mute.element as HTMLInputElement).checked).toBe(false);
   });
 
-  it("Detach audio lands on the free audio track through the shared action registry", async () => {
+  it("a clip on a locked track disables the tab and sends nothing", async () => {
+    const w = await mountSection(["c1"], { tracks: [track("v1", { locked: true }), track("au1", { kind: "audio" })] });
+    const fieldset = w.get('[data-testid="audio-section"]');
+    expect(fieldset.attributes("title")).toBe("Track v1 is locked");
+    expect(fieldset.attributes("disabled")).toBeDefined();
+    await w.get('[data-testid="audio-section-mute"]').setValue(true);
+    expect(executed).toEqual([]);
+  });
+});
+
+describe("AudioSection — detach and mix", () => {
+  it("Detach source audio lands on the free audio track through the shared action registry", async () => {
     const w = await mountSection(["c1"]);
-    await w.get('[data-testid="audio-section-detach"]').trigger("click");
+    const detach = w.get('[data-testid="audio-section-detach"]');
+    expect(detach.text()).toBe("Detach source audio");
+    await detach.trigger("click");
     expect(executed).toEqual([{ kind: "detachAudio", clipId: "c1", audioTrackId: "au1" }]);
+  });
+
+  it("a video whose sound is already detached says why Detach is unavailable", async () => {
+    const w = await mountSection(["c1"], {
+      assets: [asset("a1"), asset("a1-audio", { kind: "audio", name: "a1 · audio", linked_asset: "a1" })],
+      clips: [clip(), clip({ id: "d", asset_id: "a1-audio", track_id: "au1" })],
+    });
+    const detach = w.get('[data-testid="audio-section-detach"]');
+    expect(detach.attributes("aria-disabled")).toBe("true");
+    expect(detach.attributes("title")).toBe("This clip's audio is already detached");
+    await detach.trigger("click");
+    expect(executed).toEqual([]);
   });
 
   it("a still image has no audio controls at all", async () => {
@@ -213,16 +222,21 @@ describe("AudioSection — mute and detach", () => {
     expect(w.find('[data-testid="audio-section-detach"]').exists()).toBe(false);
   });
 
-  it("a detached audio clip names the video it came from, and cannot be detached again", async () => {
+  it("a detached audio clip names the video it came from and offers no Detach", async () => {
     const w = await mountSection(["d"], {
       assets: [asset("a1"), asset("a1-audio", { kind: "audio", name: "a1 · audio", linked_asset: "a1" })],
       clips: [clip({ muted: true }), clip({ id: "d", asset_id: "a1-audio", track_id: "au1" })],
     });
     expect(w.get('[data-testid="audio-section-linked"]').text()).toBe("Detached from a1.");
-    const detach = w.get('[data-testid="audio-section-detach"]');
-    expect(detach.attributes("aria-disabled")).toBe("true");
-    await detach.trigger("click");
-    expect(executed).toEqual([]);
+    expect(w.find('[data-testid="audio-section-detach"]').exists()).toBe(false);
+  });
+
+  it("Open audio mixer asks the mixer to show itself, as View → Audio mixer does", async () => {
+    const w = await mountSection(["c1"]);
+    const before = revealSerial("mixer");
+    await w.get('[data-testid="audio-section-mixer"]').trigger("click");
+    expect(revealSerial("mixer")).toBe(before + 1);
+    expect(w.text()).toContain("Monitoring mute does not mute exports. Track mute and solo do affect exports.");
   });
 });
 

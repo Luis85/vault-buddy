@@ -127,9 +127,15 @@ export function percentField(opts: {
  * Task 14, the Clip tab): shown and typed as seconds, committed as whole
  * milliseconds — every `EditorCommand` time is an integer Rust decodes as
  * u64, so a finer entry is rounded rather than refused. */
-export function secondsField(opts: { value: () => number; label: string; maxMs: number }): InspectorField<number> {
-  const max = opts.maxMs / 1000;
-  const seconds = numberField({ value: () => opts.value() / 1000, label: opts.label, min: 0, max, rangeLabel: `0 and ${max} s` });
+export function secondsField(opts: {
+  value: () => number;
+  label: string;
+  maxMs: number;
+  /** The least a value may be (a transition's overlap is at least 1 ms). */
+  minMs?: number;
+}): InspectorField<number> {
+  const [min, max] = [(opts.minMs ?? 0) / 1000, opts.maxMs / 1000];
+  const seconds = numberField({ value: () => opts.value() / 1000, label: opts.label, min, max, rangeLabel: `${min} and ${max} s` });
   return {
     value: opts.value,
     format: (ms: number) => String(ms / 1000),

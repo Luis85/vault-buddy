@@ -67,6 +67,7 @@ import { EditorPortError } from "../../../editor/port";
 import type { AudioContextLike } from "../../../editor/previewController";
 import { PreviewController } from "../../../editor/previewController";
 import { containRect } from "../../../editor/previewGeometry";
+import { onReveal, requestedPlaybackMs } from "../../../editor/revealBus";
 import { clipAtPoint } from "../../../editor/stageHit";
 import type { Effect, Project } from "../../../editorTypes";
 import { logWarning } from "../../../logging";
@@ -253,6 +254,16 @@ function togglePlay(): void {
   if (controller.playing) controller.pause();
   else controller.play();
 }
+
+// The Fades tab's "Preview entrance" (visual-parity Task 15): the playhead
+// moves to the clip's start and the preview plays from there.
+onReveal("playback", () => {
+  const ms = requestedPlaybackMs();
+  workspace.setPlayhead(ms);
+  if (!controller) return;
+  void controller.seek(ms);
+  controller.play();
+});
 
 /** D15: select the topmost visible clip under a primary press, or clear
  * the selection (and any selected cue) on empty stage. */

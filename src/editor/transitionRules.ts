@@ -72,15 +72,30 @@ export function transitionRefusal(project: Project, clip: Clip): string | null {
   return null;
 }
 
-/** The `addTransition` "Add transition" sends for `clip` — only called once
- * `transitionRefusal` has returned `null`, so the next clip exists. */
-export function addTransitionCommand(project: Project, clip: Clip): EditorCommand {
+/** Why a blend of `ms` cannot join a pair whose bound is `boundMs`. */
+export function blendTooLong(boundMs: number, ms: number): string | null {
+  return ms > boundMs ? `These clips allow a blend of at most ${boundMs / 1_000} s.` : null;
+}
+
+/** Why the Fades tab's "Blend · {ms}" cannot join `clip` to the next clip
+ * (visual-parity Task 15): a graph refusal, else a blend past the bound. */
+export function blendRefusal(project: Project, clip: Clip, ms: number): string | null {
+  const reason = transitionRefusal(project, clip);
+  if (reason) return reason;
+  return blendTooLong(transitionBoundMs(clip, nextAdjacentClip(project, clip) as Clip), ms);
+}
+
+/** The `addTransition` for `clip` into the next clip — only called once
+ * `transitionRefusal` has returned `null`, so the next clip exists — asking
+ * for `durationMs` (the context menu's "Add transition" asks for the
+ * reference's 1s), clamped to the pair's bound. */
+export function addTransitionCommand(project: Project, clip: Clip, durationMs = DEFAULT_TRANSITION_MS): EditorCommand {
   const next = nextAdjacentClip(project, clip) as Clip;
   return {
     kind: "addTransition",
     fromClipId: clip.id,
     toClipId: next.id,
-    durationMs: Math.min(DEFAULT_TRANSITION_MS, transitionBoundMs(clip, next)),
+    durationMs: Math.min(durationMs, transitionBoundMs(clip, next)),
     transitionKind: transitionKindFor(project, clip),
   };
 }

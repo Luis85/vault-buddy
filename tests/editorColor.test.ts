@@ -1,8 +1,8 @@
 /**
- * Canvas formats and colour treatment (Task 32; F-38, F-39): `colorPresets.ts`
- * (presets and the CSS `filter:` mapping), `ColorSection.vue` (the Color
- * inspector category — a whole-selection `setAdjustments`, the `setLayout`
- * precedent). The canvas-format control that used to be tested here is
+ * Canvas formats and colour treatment (Task 32; F-38, F-39; visual-parity
+ * Task 15): `colorPresets.ts` (the treatments and the CSS `filter:` mapping),
+ * `ColorSection.vue` (the Color inspector category — a whole-selection
+ * `setAdjustments`, the `setLayout` precedent). The canvas-format control that used to be tested here is
  * the preview header's Frame dialog now (`editorPreviewHeader.test.ts`,
  * visual-parity Task 11).
  */
@@ -11,8 +11,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import ColorSection from "../src/components/editor/inspector/ColorSection.vue";
-import type { ColorPresetId } from "../src/editor/colorPresets";
-import { adjustmentsFilter, COLOR_PRESETS, findColorPreset } from "../src/editor/colorPresets";
+import { adjustmentsFilter, COLOR_TREATMENTS } from "../src/editor/colorPresets";
 import type { EditorCommand } from "../src/editor/editorCommandTypes";
 import type { Asset, Clip, Project, Track } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
@@ -110,13 +109,6 @@ async function open(p: Project): Promise<void> {
   await store.openStaged(base);
 }
 
-async function type(w: ReturnType<typeof mount>, testid: string, value: string): Promise<void> {
-  const input = w.get(`[data-testid="${testid}"]`);
-  await input.setValue(value);
-  await input.trigger("keydown", { key: "Enter" });
-  await flushPromises();
-}
-
 beforeEach(() => {
   setActivePinia(createPinia());
 });
@@ -127,97 +119,85 @@ describe("colorPresets", () => {
     expect(adjustmentsFilter(undefined)).toBe("none");
   });
 
-  it("findColorPreset resolves every declared id and refuses an unknown one", () => {
-    for (const preset of COLOR_PRESETS) {
-      expect(findColorPreset(preset.id)).toBe(preset);
-    }
-    expect(() => findColorPreset("nope" as ColorPresetId)).toThrow("unknown color preset");
-  });
-
-  // Named test (brief): "preset maps to the documented CSS filter string".
-  it("each documented preset maps to the exact brightness/contrast/saturate/sepia/grayscale CSS filter string", () => {
-    const byId = Object.fromEntries(COLOR_PRESETS.map((p) => [p.id, p]));
-    expect(adjustmentsFilter(byId.none.adjustments)).toBe("none");
-    expect(adjustmentsFilter(byId.vivid.adjustments)).toBe(
-      "brightness(1) contrast(1.1) saturate(1.3) sepia(0) grayscale(0)",
+  // Ruling T5-3: the context menu, the multi inspector and the Color tab
+  // share ONE set, the concept's five treatments.
+  it("the treatments are the concept's five, each a documented CSS filter string", () => {
+    expect(COLOR_TREATMENTS.map((t) => t.label)).toEqual(["Original", "Clear", "Warm", "Soft", "Mono"]);
+    const byId = Object.fromEntries(COLOR_TREATMENTS.map((t) => [t.id, t]));
+    expect(adjustmentsFilter(byId.original.adjustments)).toBe("none");
+    expect(adjustmentsFilter(byId.mono.adjustments)).toBe(
+      "brightness(1) contrast(1.12) saturate(1) sepia(0) grayscale(1)",
     );
     expect(adjustmentsFilter(byId.warm.adjustments)).toBe(
-      "brightness(1) contrast(1) saturate(1.1) sepia(0.2) grayscale(0)",
-    );
-    expect(adjustmentsFilter(byId.cool.adjustments)).toBe(
-      "brightness(1) contrast(1) saturate(0.9) sepia(0) grayscale(0)",
-    );
-    expect(adjustmentsFilter(byId.mono.adjustments)).toBe(
-      "brightness(1) contrast(1) saturate(1) sepia(0) grayscale(1)",
-    );
-    expect(adjustmentsFilter(byId.sepia.adjustments)).toBe(
-      "brightness(1) contrast(1) saturate(1) sepia(0.8) grayscale(0)",
+      "brightness(1.02) contrast(1.04) saturate(1.08) sepia(0.18) grayscale(0)",
     );
   });
 });
 
+const WARM = { brightness: 1.02, contrast: 1.04, saturation: 1.08, sepia: 0.18, grayscale: 0 };
+
+async function slide(w: ReturnType<typeof mount>, testid: string, value: string): Promise<void> {
+  const input = w.get(`[data-testid="${testid}"]`);
+  (input.element as HTMLInputElement).value = value;
+  await input.trigger("input");
+  await input.trigger("change");
+  await flushPromises();
+}
+
 describe("ColorSection", () => {
-  it("shows the first clip's values and sends a typed brightness as one setAdjustments over the whole selection", async () => {
+  // Visual-parity Task 15 (concept spec §5 "Color").
+  it("A consistent look: the five treatment tiles, one setAdjustments over the whole selection", async () => {
     await open(project([clip("c1"), clip("c2", { start_ms: 3_000 })]));
     const w = mount(ColorSection, { props: { clipIds: ["c1", "c2"] } });
-    expect((w.get('[data-testid="color-section-saturation"]').element as HTMLInputElement).value).toBe("1");
-    await type(w, "color-section-brightness", "1.5");
-    expect(executed).toEqual([
-      {
-        kind: "setAdjustments",
-        clipIds: ["c1", "c2"],
-        adjustments: { brightness: 1.5, contrast: 1, saturation: 1, sepia: 0, grayscale: 0 },
-      },
+    expect(w.findAll("h3").map((h) => h.text())).toEqual(["A consistent look", "Fine adjustments"]);
+    // Each tile's picture carries a hidden "Aa"; its name is the label.
+    expect(w.findAll("[data-testid^=color-preset-]").map((t) => t.text().replace("Aa", ""))).toEqual([
+      "Original", "Clear", "Warm", "Soft", "Mono",
     ]);
+    expect(w.get('[data-testid="color-preset-original"]').attributes("aria-pressed")).toBe("true");
+    await w.get('[data-testid="color-preset-warm"]').trigger("click");
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "setAdjustments", clipIds: ["c1", "c2"], adjustments: WARM }]);
   });
 
-  it("refuses an out-of-range value inline and sends nothing", async () => {
-    await open(project([clip("c1")]));
+  it("Fine adjustments: Brightness, Contrast and Saturation in percent, the full object sent", async () => {
+    await open(project([clip("c1", { adjustments: WARM })]));
     const w = mount(ColorSection, { props: { clipIds: ["c1"] } });
-    await type(w, "color-section-contrast", "3");
-    expect(w.get('[data-testid="color-section-contrast-error"]').text()).toContain("0.25");
-    expect(executed).toEqual([]);
-    await type(w, "color-section-saturation", "2.5");
-    expect(w.get('[data-testid="color-section-saturation-error"]').text()).toContain("0 and 2");
-    expect(executed).toEqual([]);
-  });
-
-  it("a preset sends every field at once and None clears", async () => {
-    await open(project([clip("c1")]));
-    const w = mount(ColorSection, { props: { clipIds: ["c1"] } });
-    expect(w.get('[data-testid="color-preset-none"]').attributes("aria-pressed")).toBe("true");
-    await w.get('[data-testid="color-preset-vivid"]').trigger("click");
+    expect(w.get('[data-testid="color-section-brightness-value"]').text()).toBe("102%");
+    expect(w.get('[data-testid="color-section-contrast-value"]').text()).toBe("104%");
+    expect(w.get('[data-testid="color-section-saturation-value"]').text()).toBe("108%");
+    const brightness = w.get('[data-testid="color-section-brightness"]');
+    expect([brightness.attributes("min"), brightness.attributes("max")]).toEqual(["25", "200"]);
+    expect(w.get('[data-testid="color-section-saturation"]').attributes("min")).toBe("0");
+    await slide(w, "color-section-brightness", "150");
     expect(executed).toEqual([
-      { kind: "setAdjustments", clipIds: ["c1"], adjustments: { brightness: 1, contrast: 1.1, saturation: 1.3, sepia: 0, grayscale: 0 } },
+      { kind: "setAdjustments", clipIds: ["c1"], adjustments: { ...WARM, brightness: 1.5 } },
     ]);
-    await w.get('[data-testid="color-preset-none"]').trigger("click");
-    expect(executed[1]).toEqual({ kind: "setAdjustments", clipIds: ["c1"], adjustments: null });
+    expect(w.get('[data-testid="color-preset-warm"]').attributes("aria-pressed")).toBe("true");
   });
 
-  it("sends a typed grayscale as one setAdjustments", async () => {
-    await open(project([clip("c1")]));
+  it("custom values light no tile", async () => {
+    await open(project([clip("c1", { adjustments: { ...WARM, brightness: 1.5 } })]));
     const w = mount(ColorSection, { props: { clipIds: ["c1"] } });
-    await type(w, "color-section-grayscale", "1");
-    expect(executed).toEqual([
-      { kind: "setAdjustments", clipIds: ["c1"], adjustments: { brightness: 1, contrast: 1, saturation: 1, sepia: 0, grayscale: 1 } },
-    ]);
-  });
-
-  it("a clip's own adjustments light the matching preset, and custom values light none", async () => {
-    await open(
-      project([clip("c1", { adjustments: { brightness: 1, contrast: 1.1, saturation: 1.3, sepia: 0, grayscale: 0 } })]),
-    );
-    const matched = mount(ColorSection, { props: { clipIds: ["c1"] } });
-    expect(matched.get('[data-testid="color-preset-vivid"]').attributes("aria-pressed")).toBe("true");
-    expect(matched.get('[data-testid="color-preset-none"]').attributes("aria-pressed")).toBe("false");
-
-    await open(
-      project([clip("c2", { adjustments: { brightness: 1.5, contrast: 1, saturation: 1, sepia: 0, grayscale: 0 } })]),
-    );
-    const custom = mount(ColorSection, { props: { clipIds: ["c2"] } });
-    for (const preset of COLOR_PRESETS) {
-      expect(custom.get(`[data-testid="color-preset-${preset.id}"]`).attributes("aria-pressed")).toBe("false");
+    for (const t of COLOR_TREATMENTS) {
+      expect(w.get(`[data-testid="color-preset-${t.id}"]`).attributes("aria-pressed")).toBe("false");
     }
+  });
+
+  it("Reset color clears the adjustments, and says why when there is nothing to reset", async () => {
+    await open(project([clip("c1", { adjustments: WARM })]));
+    const w = mount(ColorSection, { props: { clipIds: ["c1"] } });
+    await w.get('[data-testid="color-section-reset"]').trigger("click");
+    await flushPromises();
+    expect(executed).toEqual([{ kind: "setAdjustments", clipIds: ["c1"], adjustments: null }]);
+
+    await open(project([clip("c2")]));
+    const original = mount(ColorSection, { props: { clipIds: ["c2"] } });
+    const reset = original.get('[data-testid="color-section-reset"]');
+    expect(reset.attributes("aria-disabled")).toBe("true");
+    expect(reset.attributes("title")).toBe("The colour is already the original.");
+    await reset.trigger("click");
+    expect(executed).toEqual([]);
   });
 
   it("a card clip in the selection gets the Rust refusal wording, not controls", async () => {
@@ -241,14 +221,17 @@ describe("ColorSection", () => {
   });
 
   it("a locked track disables the controls and says why", async () => {
-    await open(project([clip("c1")], [track("v1", { locked: true, name: "Webcam" })]));
+    await open(project([clip("c1", { adjustments: WARM })], [track("v1", { locked: true, name: "Webcam" })]));
     const w = mount(ColorSection, { props: { clipIds: ["c1"] } });
     // The inspector's frame says it once (visual-parity Task 13); the
     // fields carry the reason as their tooltip.
     expect(w.find('[data-testid="color-section-locked"]').exists()).toBe(false);
     expect(w.get("fieldset").attributes("title")).toContain("Track Webcam is locked");
     expect(w.get("fieldset").attributes("disabled")).toBeDefined();
+    expect(w.get('[data-testid="color-preset-mono"]').attributes("title")).toContain("Track Webcam is locked");
     await w.get('[data-testid="color-preset-mono"]').trigger("click");
+    await w.get('[data-testid="color-section-reset"]').trigger("click");
+    await slide(w, "color-section-contrast", "150");
     expect(executed).toEqual([]);
   });
 });

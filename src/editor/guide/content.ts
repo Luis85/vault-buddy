@@ -134,7 +134,6 @@ type CopyOverride = Partial<Record<"label" | "body" | "tip" | "task", string>>;
  * - `tracks`: there is no Add track menu — the lesson points at the top
  *   track's own menu, and a track is added by dropping media below the
  *   last one;
- * - `fades`: there are no fade presets;
  * - `chapters`: there is no companion-note preview;
  * - `save`: Save project stores the project here, there is no download,
  *   recovery is the native journal, and a copy as a project file is the
@@ -168,9 +167,6 @@ export const LESSON_COPY_OVERRIDES: Readonly<Partial<Record<GuideStepId, CopyOve
     label: "Track menu",
     tip: "Adding a track is optional: dropping media below the last track makes a new one.",
     task: "Open the top track's menu to see what it offers. You do not need to change anything.",
-  },
-  fades: {
-    body: "Set Fade in and Fade out, or drag the gold handles on a timeline clip. Video fades reveal the layer beneath; audio fades change volume.",
   },
   audio: {
     tip: "Listen to the actual rendered file before sharing.",

@@ -204,52 +204,71 @@ async function mountFades(clipId: string, overrides: Partial<Project> = {}) {
   return { w, executed };
 }
 
-describe("FadesSection transitions", () => {
-  it("Add transition sends the action's own command", async () => {
+describe("FadesSection: Between two clips", () => {
+  // Visual-parity Task 15 (concept spec §5 "Fades"): Blend · 0.5s / 1s add
+  // a transition into the next clip, each refused with its reason.
+  it("Blend · 0.5s joins the clip to the next one; Blend · 1s past the pair's bound says why", async () => {
     const { w, executed } = await mountFades("c1");
-    await w.get('[data-testid="fades-section-add-transition"]').trigger("click");
+    expect(w.get('[data-testid="fades-section-transitions"]').text()).toContain(
+      "Blend this clip into the next adjacent clip on the same track. The overlap shortens only this track.",
+    );
+    const long = w.get('[data-testid="fades-section-blend-1000"]');
+    expect(long.text()).toBe("Blend · 1s");
+    // c1 is 1300ms long: half of it, 650ms, is the most any blend may take.
+    expect(long.attributes("aria-disabled")).toBe("true");
+    expect(long.attributes("title")).toBe("These clips allow a blend of at most 0.65 s.");
+    await long.trigger("click");
+    await w.get('[data-testid="fades-section-blend-500"]').trigger("click");
     await flushPromises();
     expect(executed).toEqual([
-      { kind: "addTransition", fromClipId: "c1", toClipId: "c2", durationMs: 650, transitionKind: "dissolve" },
+      { kind: "addTransition", fromClipId: "c1", toClipId: "c2", durationMs: 500, transitionKind: "dissolve" },
     ]);
   });
 
-  it("a disabled Add transition names its reason and sends nothing", async () => {
+  it("a clip with no adjacent next clip names the reason and sends nothing", async () => {
     const { w, executed } = await mountFades("c2");
-    const button = w.get('[data-testid="fades-section-add-transition"]');
-    expect(button.attributes("aria-disabled")).toBe("true");
-    expect(button.attributes("title")).toBe(NOT_ADJACENT);
-    await button.trigger("click");
+    const blend = w.get('[data-testid="fades-section-blend-500"]');
+    expect(blend.attributes("aria-disabled")).toBe("true");
+    expect(blend.attributes("title")).toBe(NOT_ADJACENT);
+    await blend.trigger("click");
     await flushPromises();
     expect(executed).toEqual([]);
   });
 
-  it("a transitioned clip shows its row; the duration and Remove send their own commands", async () => {
+  it("a transitioned clip shows its crossfade; Blend, the overlap and Remove crossfade send their own commands", async () => {
     const { w, executed } = await mountFades("c2", { transitions: [transition()] });
     const rows = w.findAll('[data-testid="transition-row"]');
     expect(rows).toHaveLength(1);
-    expect(rows[0].text()).toContain("Cross dissolve · From Clip c1");
+    expect(rows[0].text()).toContain("Cross dissolve");
+    expect(rows[0].text()).toContain("0.40s overlap · selected track only");
 
     const field = w.get('[data-testid="transition-row-duration"]');
-    expect((field.element as HTMLInputElement).value).toBe("400");
-    await field.setValue("520");
+    expect((field.element as HTMLInputElement).value).toBe("0.4");
+    await field.setValue("0.52");
     await field.trigger("keydown", { key: "Enter" });
+    await w.get('[data-testid="transition-row-blend-500"]').trigger("click");
     await w.get('[data-testid="transition-row-remove"]').trigger("click");
     await flushPromises();
     expect(executed).toEqual([
       { kind: "setTransitionDuration", transitionId: "tr1", durationMs: 520 },
+      { kind: "setTransitionDuration", transitionId: "tr1", durationMs: 500 },
       { kind: "removeTransition", transitionId: "tr1" },
     ]);
+    expect(w.get('[data-testid="transition-row-remove"]').text()).toBe("Remove crossfade");
   });
 
-  it("a duration past half the shorter clip stays visible with a correction and sends nothing", async () => {
+  it("an overlap past half the shorter clip stays visible with a correction and sends nothing", async () => {
     const { w, executed } = await mountFades("c1", { transitions: [transition()] });
     const field = w.get('[data-testid="transition-row-duration"]');
-    await field.setValue("651"); // c1 is 1300ms: the bound is 650
+    await field.setValue("0.651"); // c1 is 1300ms: the bound is 650
     await field.trigger("keydown", { key: "Enter" });
     await flushPromises();
     expect(executed).toEqual([]);
-    expect(w.get('[data-testid="transition-row-duration-error"]').text()).toContain("between 1 and 650");
-    expect(w.get('[data-testid="transition-row"]').text()).toContain("Into Clip c2");
+    expect(w.get('[data-testid="transition-row-duration-error"]').text()).toContain("between 0.001 and 0.65 s");
+    // c1 already blends into c2, so it offers no second blend.
+    expect(w.find('[data-testid="fades-section-blend-500"]').exists()).toBe(false);
+    expect(w.get('[data-testid="transition-row-blend-1000"]').attributes("title")).toBe(
+      "These clips allow a blend of at most 0.65 s.",
+    );
   });
 });

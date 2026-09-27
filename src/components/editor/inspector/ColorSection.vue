@@ -1,166 +1,116 @@
 <script setup lang="ts">
 /**
- * The Inspector's Color category (Task 32; F-39; SCREENS-AND-INTERACTIONS.md
- * §04). Six presets and five numeric sliders (brightness/contrast/
- * saturation/sepia/grayscale), each one `setAdjustments` over the WHOLE
- * selection (`clipIds`) — the `setLayout` whole-selection/atomic precedent:
- * a multi-selection gets identical values in one command, and Rust applies
- * them atomically or not at all. The fields show the first selected clip's
- * values; `InspectorPanel` already states the scope.
+ * The Inspector's Color category (Task 32; F-39; visual-parity Task 15,
+ * concept spec §5 "Color"). "A consistent look": the five treatments as
+ * picture tiles (`ColorTreatmentGrid`, the one preset set the clip menus
+ * and the multi inspector share, ruling T5-3); "Fine adjustments":
+ * Brightness, Contrast and Saturation as percent sliders; then Reset color.
+ * Each is one `setAdjustments` over the WHOLE selection (`clipIds`) — the
+ * Adjust all state hands it several clips — and every slider sends the FULL
+ * five-field object (Rust rejects a partial one), moving only its own field.
+ * The sliders show the first selected clip's values.
  *
- * Colour applies to footage only — never a title card (its asset's
- * `builtin` kind is `card`, `previewLayers.ts`'s own `BUILTIN_HAS_FILE`
- * identification, task brief) and never an audio clip (nothing to colour).
- * Either one in the selection gets a note instead of controls, worded to
- * match Rust's own refusal so the two surfaces can never disagree
- * (`core::editor::commands::layout::check_color_targets`).
+ * Colour applies to footage only — never a title card and never an audio
+ * clip. Either one in the selection gets a note instead of controls,
+ * worded as Rust's own refusal (`visualTargets.ts`, the clip menus' check).
+ * A locked track disables everything; the inspector's frame says why and
+ * the fieldset carries the reason.
  */
 import { computed } from "vue";
 
-import { numberField, useInspectorDraft } from "../../../composables/useInspectorDraft";
 import { useSelectedClips } from "../../../composables/useSelectedClips";
-import type { ColorPresetId } from "../../../editor/colorPresets";
-import { COLOR_PRESETS, findColorPreset } from "../../../editor/colorPresets";
+import { COLOR_TREATMENTS, isTreatment, ORIGINAL_ADJUSTMENTS } from "../../../editor/colorPresets";
 import { colorRefusal } from "../../../editor/visualTargets";
 import type { Adjustments } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
-import InspectorNumberInput from "./InspectorNumberInput.vue";
+import ColorTreatmentGrid from "./ColorTreatmentGrid.vue";
+import InspectorButton from "./InspectorButton.vue";
+import InspectorRange from "./InspectorRange.vue";
+import InspectorSection from "./InspectorSection.vue";
 
 const props = defineProps<{ clipIds: string[] }>();
 
 const editorProject = useEditorProjectStore();
 const { clips, lockReason } = useSelectedClips(() => props.clipIds);
 
-/** Why this selection cannot be colour-adjusted, or `null` when it can —
- * `check_color_targets`'s own two refusals, in its order
- * (`visualTargets.ts`, which the clip menus' Color treatment shares). */
+/** Why this selection cannot be colour-adjusted, or `null` when it can. */
 const blockedReason = computed(() =>
   colorRefusal(
     editorProject.project,
     clips.value.map((c) => c.id),
   ),
 );
-const ready = computed(() => blockedReason.value === null);
 
-const DEFAULT_ADJUSTMENTS: Adjustments = { brightness: 1, contrast: 1, saturation: 1, sepia: 0, grayscale: 0 };
-const first = computed(() => clips.value[0]);
-const current = computed<Adjustments>(() => first.value?.adjustments ?? DEFAULT_ADJUSTMENTS);
+const current = computed<Adjustments>(() => clips.value[0]?.adjustments ?? ORIGINAL_ADJUSTMENTS);
+/** The tile every selected clip wears, or none (custom values, a mix). */
+const activeId = computed(
+  () => COLOR_TREATMENTS.find((t) => clips.value.every((c) => isTreatment(c.adjustments, t.adjustments)))?.id ?? null,
+);
+const resetReason = computed(() =>
+  clips.value.every((c) => !c.adjustments) ? "The colour is already the original." : null,
+);
+
+/** The concept's three sliders, in percent of the stored factor. */
+const SLIDERS: { key: keyof Adjustments; label: string; min: number }[] = [
+  { key: "brightness", label: "Brightness", min: 25 },
+  { key: "contrast", label: "Contrast", min: 25 },
+  { key: "saturation", label: "Saturation", min: 0 },
+];
 
 function send(adjustments: Adjustments | null): Promise<boolean> {
   if (lockReason.value || clips.value.length === 0) return Promise.resolve(false);
-  return editorProject.execute({
-    kind: "setAdjustments",
-    clipIds: clips.value.map((c) => c.id),
-    adjustments,
-  });
+  return editorProject.execute({ kind: "setAdjustments", clipIds: clips.value.map((c) => c.id), adjustments });
 }
 
-/** Every numeric field sends the FULL five-field object (Rust rejects a
- * partial one once it is present at all) — only the named field moves. */
-function patch(partial: Partial<Adjustments>): Promise<boolean> {
-  return send({ ...current.value, ...partial });
-}
-
-const fields = {
-  brightness: useInspectorDraft(
-    numberField({ value: () => current.value.brightness, label: "Brightness", min: 0.25, max: 2, rangeLabel: "0.25× and 2×" }),
-    (brightness) => patch({ brightness }),
-  ),
-  contrast: useInspectorDraft(
-    numberField({ value: () => current.value.contrast, label: "Contrast", min: 0.25, max: 2, rangeLabel: "0.25× and 2×" }),
-    (contrast) => patch({ contrast }),
-  ),
-  saturation: useInspectorDraft(
-    numberField({ value: () => current.value.saturation, label: "Saturation", min: 0, max: 2, rangeLabel: "0 and 2×" }),
-    (saturation) => patch({ saturation }),
-  ),
-  sepia: useInspectorDraft(
-    numberField({ value: () => current.value.sepia, label: "Sepia", min: 0, max: 1, rangeLabel: "0 and 1" }),
-    (sepia) => patch({ sepia }),
-  ),
-  grayscale: useInspectorDraft(
-    numberField({ value: () => current.value.grayscale, label: "Grayscale", min: 0, max: 1, rangeLabel: "0 and 1" }),
-    (grayscale) => patch({ grayscale }),
-  ),
-};
-
-/** Fields matching an exact preset's values light that preset's button;
- * `none` lights whenever nothing is set. Anything else (a manual drag, or
- * a mixed multi-selection) lights none of them — never a false positive. */
-function adjustmentsEqual(a: Adjustments, b: Adjustments): boolean {
-  return a.brightness === b.brightness && a.contrast === b.contrast && a.saturation === b.saturation
-    && a.sepia === b.sepia && a.grayscale === b.grayscale;
-}
-const activePreset = computed<ColorPresetId | null>(() => {
-  const live = first.value?.adjustments;
-  if (!live) return "none";
-  const match = COLOR_PRESETS.find((p) => p.adjustments && adjustmentsEqual(p.adjustments, live));
-  return match?.id ?? null;
-});
-
-function onPreset(id: ColorPresetId): void {
-  void send(findColorPreset(id).adjustments);
+function slide(key: keyof Adjustments, percent: number): Promise<boolean> {
+  return send({ ...current.value, [key]: percent / 100 });
 }
 </script>
 
 <template>
-  <div
-    v-if="ready"
+  <fieldset
+    v-if="blockedReason === null"
     data-testid="color-section"
-    class="flex flex-col gap-2"
+    :disabled="lockReason !== null"
+    :title="lockReason ?? undefined"
+    class="flex min-w-0 flex-col"
   >
-    <fieldset
-      data-testid="color-section-fields"
-      :disabled="lockReason !== null"
-      :title="lockReason ?? undefined"
-      class="flex flex-col gap-2 disabled:opacity-50"
-    >
-      <div
-        class="flex flex-wrap gap-1"
-        role="group"
-        aria-label="Colour presets"
+    <InspectorSection title="A consistent look">
+      <ColorTreatmentGrid
+        prefix="color-preset"
+        :active-id="activeId"
+        :reason="lockReason"
+        @pick="(t) => send(t.adjustments)"
+      />
+    </InspectorSection>
+    <InspectorSection title="Fine adjustments">
+      <InspectorRange
+        v-for="s in SLIDERS"
+        :key="s.key"
+        :label="s.label"
+        :testid="`color-section-${s.key}`"
+        :value="Math.round(current[s.key] * 100)"
+        :min="s.min"
+        :max="200"
+        :step="1"
+        suffix="%"
+        :commit="(v) => slide(s.key, v)"
+      />
+      <InspectorButton
+        class="self-start"
+        icon="undo"
+        data-testid="color-section-reset"
+        :reason="lockReason ?? resetReason"
+        @click="send(null)"
       >
-        <button
-          v-for="preset in COLOR_PRESETS"
-          :key="preset.id"
-          type="button"
-          :data-testid="`color-preset-${preset.id}`"
-          :aria-pressed="preset.id === activePreset"
-          :title="preset.label"
-          class="cursor-pointer rounded border border-line px-1.5 py-0.5 hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-          :class="preset.id === activePreset ? 'bg-accent/20 text-accent-fg' : 'text-fg'"
-          @click="onPreset(preset.id)"
-        >
-          {{ preset.label }}
-        </button>
-      </div>
-      <InspectorNumberInput
-        :field="fields.brightness"
-        label="Brightness (×)"
-        testid="color-section-brightness"
-      />
-      <InspectorNumberInput
-        :field="fields.contrast"
-        label="Contrast (×)"
-        testid="color-section-contrast"
-      />
-      <InspectorNumberInput
-        :field="fields.saturation"
-        label="Saturation (×)"
-        testid="color-section-saturation"
-      />
-      <InspectorNumberInput
-        :field="fields.sepia"
-        label="Sepia"
-        testid="color-section-sepia"
-      />
-      <InspectorNumberInput
-        :field="fields.grayscale"
-        label="Grayscale"
-        testid="color-section-grayscale"
-      />
-    </fieldset>
-  </div>
+        Reset color
+      </InspectorButton>
+      <p class="text-[10px] leading-[1.6] text-fg-muted">
+        Treats the footage, not the teaching cues or captions. It is included in the rendered video, but is not a
+        color-managed mastering process.
+      </p>
+    </InspectorSection>
+  </fieldset>
   <p
     v-else
     data-testid="color-section-note"

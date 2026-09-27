@@ -41,6 +41,9 @@ export interface OpenParityOptions {
    * `true`) leaves it showing, exactly as a fresh, never-dismissed vault
    * would (`PARITY_REPLIES`'s `invitationDismissed: false`). */
   invitation?: boolean;
+  /** Fields merged into the saved workspace — a selection to open on (a
+   * teaching cue, which the parity project cannot select by a click). */
+  workspace?: Record<string, unknown>;
 }
 
 /** Opens the tutorial editor against the populated `PARITY_OPEN_RESULT`
@@ -56,7 +59,8 @@ export async function openParity(
   // workspace replies; `emulateMedia` below only keeps native controls in
   // step with it.
   const theme = opts.theme === undefined ? "dark" : opts.theme;
-  const workspace = theme === null ? { ...PARITY_OPEN_RESULT.workspace } : { ...PARITY_OPEN_RESULT.workspace, theme };
+  const saved = { ...PARITY_OPEN_RESULT.workspace, ...opts.workspace };
+  const workspace = theme === null ? saved : { ...saved, theme };
   await installTauriStub(page, {
     openResult: { ...PARITY_OPEN_RESULT, workspace },
     replies: { ...PARITY_REPLIES, editor_get_workspace: workspace },
