@@ -27,7 +27,7 @@ import { computed, ref } from "vue";
 
 import { chapterRows } from "../../../editor/captionRules";
 import { rulerTicks } from "../../../editor/rulerTicks";
-import { msToX, pxPerMs, TRACK_LABEL_WIDTH_PX } from "../../../editor/timelineLayout";
+import { msToX, pxPerMs } from "../../../editor/timelineLayout";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import { formatMenuTime } from "../menus/menuModel";
@@ -36,6 +36,8 @@ import AddTrackButton from "./AddTrackButton.vue";
 const props = defineProps<{
   zoom: number;
   widthPx: number;
+  /** The label column at this window width (`editorWorkspace.trackLabelWidth`). */
+  labelWidth: number;
 }>();
 
 const workspace = useEditorWorkspaceStore();
@@ -110,7 +112,7 @@ function onKeydown(event: KeyboardEvent) {
     <div
       data-testid="timeline-ruler-label"
       class="sticky left-0 z-[3] flex shrink-0 items-center justify-between border-r border-line bg-panel px-3"
-      :style="{ width: `${TRACK_LABEL_WIDTH_PX}px` }"
+      :style="{ width: `${labelWidth}px` }"
     >
       <AddTrackButton v-model:open="addTrackOpen" />
       <span

@@ -681,10 +681,120 @@ test.describe("parity 960x640 (12-compact)", () => {
     expect((await box(page, "timeline-toolbar-zoom-range")).width).toBeCloseTo(48, 0);
   });
 
-  // The track label column is 174 at this width (§1.4); Task 17 builds it.
-  test.fixme("the timeline's label column is 174 (Task 17)", async ({ page }) => {
+  // The track label column is 174 at this width (§1.4; Task 17): the
+  // ruler's cell and every track header, which stay pinned when scrolled.
+  test("the timeline's label column is 174", async ({ page }) => {
     await openParity(page, { width: 960, height: 640 }, { invitation: false });
-    expect((await box(page, "timeline-label-column")).width).toBeCloseTo(174, 0);
+    expect((await box(page, "timeline-ruler-label")).width).toBeCloseTo(174, 0);
+    const header = await box(page, "track-lane-header-v1");
+    expect(header.width).toBeCloseTo(174, 0);
+    await page.getByTestId("timeline-scroll").evaluate((el) => (el.scrollLeft = 400));
+    await expect.poll(async () => (await box(page, "track-lane-header-v1")).x).toBeCloseTo(header.x, 0);
+  });
+});
+
+// Task 17 (screen 02, concept spec §6.4; design D12, ruling P4): the track
+// rows. The label column is pinned in the one scroll container, so a clip
+// scrolled into view by its own focus never takes the headers with it.
+const TRACK_IDS = ["v3", "v2", "v1", "a1"];
+
+test.describe("parity 1600x1000: the track rows (screen 02, §6.4)", () => {
+  test("the headers stay pinned when a nudged clip's focus scrolls the lanes", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    const left = (await box(page, "timeline-scroll")).x;
+    await page.getByTestId("clip-c3").click();
+    for (let i = 0; i < 3; i += 1) await page.keyboard.press("ArrowRight");
+    // The regression needs a scrolled timeline to mean anything.
+    await expect.poll(() => page.getByTestId("timeline-scroll").evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+    for (const id of TRACK_IDS) {
+      expect(Math.abs((await box(page, `track-lane-header-${id}`)).x - left), id).toBeLessThanOrEqual(1);
+    }
+    expect(Math.abs((await box(page, "timeline-ruler-label")).x - left)).toBeLessThanOrEqual(1);
+  });
+
+  test("header anatomy: 196 wide, rows ≈68, a 28px badge, 26px controls, an 11px title", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.screenshot({ path: "test-results/parity/built-02-track-rows.png" });
+    await composite(page, "02-workspace.png", "test-results/parity/built-02-track-rows.png", "vs-02-track-rows");
+
+    const badges: string[] = [];
+    for (const id of TRACK_IDS) {
+      expect((await box(page, `track-lane-header-${id}`)).width).toBeCloseTo(196, 0);
+      expect(Math.abs((await box(page, `track-lane-${id}`)).height - 68)).toBeLessThanOrEqual(3);
+      const badge = await box(page, `track-header-${id}-badge`);
+      expect([badge.width, badge.height]).toEqual([28, 28]);
+      badges.push((await page.getByTestId(`track-header-${id}-badge`).textContent())?.trim() ?? "");
+    }
+    expect(badges).toEqual(["V3", "V2", "V1", "A1"]);
+    for (const control of ["visible", "mute", "solo", "lock"]) {
+      const b = await box(page, `track-header-v1-${control}`);
+      expect([Math.round(b.width), Math.round(b.height)], control).toEqual([26, 26]);
+    }
+    const name = page.getByTestId("track-header-v1-name");
+    expect(await name.evaluate((el) => [getComputedStyle(el).fontSize, getComputedStyle(el).fontWeight])).toEqual(["11px", "550"]);
+    await expect(page.getByTestId("track-header-v1-menu")).toHaveCount(0);
+  });
+
+  test("right-click or Shift+F10 on a header opens its track menu; Escape gives focus back", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("track-lane-header-v2").click({ button: "right", position: { x: 150, y: 20 } });
+    await expect(page.getByTestId("editor-context-menu-heading")).toHaveText("Detail overlay");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("editor-context-menu")).toHaveCount(0);
+
+    await page.getByTestId("track-header-a1-badge").focus();
+    await page.keyboard.press("Shift+F10");
+    await expect(page.getByTestId("editor-context-menu-heading")).toHaveText("Guide cues");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("track-header-a1-badge")).toBeFocused();
+
+    await page.getByTestId("track-header-v2-badge").click();
+    await expect(page.getByTestId("inspector-title")).toHaveText("Track properties");
+  });
+});
+
+// Task 17, review focus 3 (extreme content): twenty tracks scroll under the
+// sticky ruler with the label column pinned, and a 120-character track name
+// ellipsizes inside its header.
+test.describe("the timeline with twenty tracks and a 120-character track name", () => {
+  test("the ruler stays on top, the headers stay left, and the long name never pushes a control out", async ({ page }) => {
+    const longName = "T".repeat(120);
+    const tracks = Array.from({ length: 20 }, (_, i) => ({
+      id: `t${i}`,
+      kind: i < 14 ? ("video" as const) : ("audio" as const),
+      name: i === 0 ? longName : `Track ${i}`,
+      visible: true,
+      locked: false,
+      muted: false,
+      solo: false,
+      volume: 1,
+    }));
+    const openResult = { ...PARITY_OPEN_RESULT, project: { ...PARITY_OPEN_RESULT.project, tracks, clips: [], effects: [], markers: [], transitions: [] } };
+    await installTauriStub(page, { openResult, replies: PARITY_REPLIES });
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.goto("/");
+    await page.getByTestId("editor-shell").waitFor();
+    await page.waitForTimeout(800);
+    await page.getByTestId("guide-invitation-dismiss").click();
+
+    const cell = await box(page, "track-lane-header-t0");
+    const name = await box(page, "track-header-t0-name");
+    expect(name.x + name.width).toBeLessThanOrEqual(cell.x + cell.width);
+    expect(await page.getByTestId("track-header-t0-name").evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+    const lock = await box(page, "track-header-t0-lock");
+    expect(lock.x + lock.width).toBeLessThanOrEqual(cell.x + cell.width);
+    await expect(page.getByTestId("track-lane-empty-t0")).toHaveText("Drop video here · or add from Media");
+
+    const scroller = await box(page, "timeline-scroll");
+    await page.getByTestId("timeline-scroll").evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+      el.scrollLeft = 300;
+    });
+    await expect.poll(async () => (await box(page, "timeline-ruler")).y).toBeCloseTo(scroller.y, 0);
+    const last = await box(page, "track-lane-header-t19");
+    expect(Math.abs(last.x - scroller.x)).toBeLessThanOrEqual(1);
+    expect(last.y + last.height).toBeLessThanOrEqual(scroller.y + scroller.height + 1);
+    expect(last.y).toBeGreaterThanOrEqual(scroller.y + 32 - 1);
   });
 });
 

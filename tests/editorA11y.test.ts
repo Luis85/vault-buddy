@@ -176,7 +176,7 @@ async function everySurface(w: VueWrapper, check: () => string[]): Promise<strin
   }
   workspace.setSelected({ type: "effect", id: "cue-1" });
   await run();
-  for (const toggle of ["editor-header-help", "editor-header-project-menu", "timeline-toolbar-more", "mixer-toggle", "track-header-v1-menu"]) {
+  for (const toggle of ["editor-header-help", "editor-header-project-menu", "timeline-toolbar-more", "mixer-toggle", "timeline-add-track"]) {
     const el = w.find(`[data-testid="${toggle}"]`);
     expect(el.exists(), `${toggle} is rendered`).toBe(true);
     await el.trigger("click");
@@ -234,7 +234,7 @@ describe("menus and dialogs return focus", () => {
     ["editor-header-project-menu", '[data-testid="editor-project-menu"]'],
     ["timeline-toolbar-more", '[data-testid="editor-context-menu"]'],
     ["mixer-toggle", '[data-testid="mixer-popover"]'],
-    ["track-header-v1-menu", '[data-testid="track-header-v1-menu-list"]'],
+    ["timeline-add-track", '[data-testid="timeline-add-track-panel-root"]'],
   ])("Escape in the menu %s opens gives focus back to it", async (toggle, menu) => {
     useEditorWorkspaceStore().select(["body"]);
     const w = await mountEditor();

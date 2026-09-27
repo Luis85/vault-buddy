@@ -486,6 +486,7 @@ describe("the timeline scrolls a revealed object into view", () => {
   it("Show it on a clip off to the right scrolls the timeline to it", async () => {
     await openSession();
     const workspace = useEditorWorkspaceStore();
+    workspace.setViewport(1600, 1000); // A 1600px window: the full 196px label column (§1.4; happy-dom is 1024 wide).
     mount(TimelineView, { props: { viewportWidth: 400 } });
     await flushPromises();
     revealFinding(finding({ code: "gap", severity: "info", target: { kind: "clip", id: "c2" }, action: "select" }));

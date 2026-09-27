@@ -684,6 +684,7 @@ describe("editorWorkspace — persist without a session", () => {
 describe("editorWorkspace — zoomToRange", () => {
   it("zooms the range to fill the visible lane width and scrolls it into view, without an edit", () => {
     const ws = useEditorWorkspaceStore();
+    ws.setViewport(1600, 1000); // A 1600px window: the full 196px label column (§1.4; happy-dom is 1024 wide).
     // 10 s at zoom 1 is 500 px; the lanes get the viewport minus the 196 px
     // label column and an 80 px margin, and the range starts 25 px in.
     const scrollLeft = ws.zoomToRange(10_000, 20_000, 776);

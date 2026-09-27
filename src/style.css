@@ -110,6 +110,9 @@
      `.canvas-wrap{background:#17151f}`): the same in both themes, like the
      card canvases above — it stands for the rendered video's own black. */
   --color-canvas: #17151f;
+  /* A locked lane's hatch (§6.4, `#8888880b`): neutral grey at 4 %, the
+     same in both themes. */
+  --color-lock-hatch: #8888880b;
   /* The colour treatments' sample picture (concept spec §5 `.filter-tile`):
      a gradient, a lilac shape and "Aa", filtered per treatment — a picture,
      so the same in both themes. */
@@ -305,6 +308,17 @@ body,
   }
 }
 
+/* A locked track's lane (concept spec §6.4, visual-parity Task 17): a
+   diagonal hatch over its clips, under the pinned label column (z-15). */
+.vb-lane-locked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  pointer-events: none;
+  background: repeating-linear-gradient(135deg, transparent 0 8px, var(--color-lock-hatch) 8px 10px);
+}
+
 /* Forced colours (Windows high-contrast themes; Task 58, F-49). The
    browser repaints every colour with the theme's system colours and drops
    box-shadows, which is how this app draws its focus rings (`ring-*`) and
@@ -328,6 +342,16 @@ body,
   .vb-handle {
     forced-color-adjust: none;
     background-color: ButtonText;
+  }
+  /* A track header's on-state (gold) and a locked lane's hatch keep a
+     system colour (§6.4: "the locked-track hatch and the selection outline
+     must remain distinguishable"); a selected clip is Highlight above. */
+  .vb-track-active {
+    border: 2px solid Highlight;
+  }
+  .vb-lane-locked::after {
+    forced-color-adjust: none;
+    background: repeating-linear-gradient(135deg, transparent 0 8px, GrayText 8px 10px);
   }
 }
 

@@ -1,47 +1,49 @@
 <script setup lang="ts">
 /**
- * One track's row: a fixed-width label column, then a content-space clip
- * area `widthPx` wide (Task 20; F-04). `clips` arrives ALREADY filtered to
- * this track and ALREADY virtualized (`TimelineView`'s own
- * `timelineLayout.visibleClips` call, once for the whole project rather than
- * once per lane) — this component never re-derives either.
+ * One track's row (Task 20; F-04; visual-parity Task 17, concept spec §6.4,
+ * design D12): the label cell, then a content-space clip area `widthPx`
+ * wide. `clips` arrives ALREADY filtered to this track and ALREADY
+ * virtualized (`TimelineView`'s one `visibleClips` call) — this component
+ * never re-derives either.
  *
- * The label column deliberately scrolls WITH the lane body rather than
- * staying pinned via `position: sticky` — a real product would pin it, but
- * `TimelineView`'s own report names this as a scoped simplification: sticky
- * layout is untestable in this Vitest environment anyway (AGENTS.md's
- * Testing conventions: happy-dom has no layout engine) and the CSS
- * interaction with a per-row flex width was real added risk for a property
- * nothing here can verify. A follow-up gap, not a hidden shortcut.
+ * **The label cell is pinned** (`position: sticky; left: 0`, D12) in the
+ * one scroll container, above the clips and the grid (`z-[15]`: a clip's
+ * own handles sit at `z-10`), below the sticky ruler row (`z-20`). A row
+ * is `LANE_HEIGHT_PX` tall — the header's content plus the bottom rule —
+ * so the drag's cross-track hit-test shares the number. The cell holds
+ * `TrackHeader`; a right-click on it, or Shift+F10 / the Menu key while
+ * focus is inside it, asks `TimelineView` for the track menu
+ * (`track-context-menu`, ruling P4).
  *
- * Task 23 (F-06): the label column's plain name span is now `TrackHeader`
- * (name/eye/lock/mute/solo/volume/menu). **A locked track's clip body is
- * `pointer-events-none`** — Rust's own `ensure_unlocked`-shaped refusal
- * (`core::editor::commands::tracks`) means a drag/trim/select gesture that
- * started here would only ever end in a rejected `moveClips`/`trimClip`
- * anyway, so this stops the gesture from starting at all rather than
- * letting the user watch a preview that can never commit. The reason is
- * carried as the body's own `title`, `actionMeta.ts`'s `lockedReason` — the
- * SAME text a locked track's clip actions already show elsewhere, so a
- * locked lane never explains itself two different ways.
+ * **The lane**: a 1px grid line at every ruler tick (`rulerTicks.tickStep`,
+ * the ruler's own step), "Drop video here · or add from Media" while it
+ * holds no clip, a diagonal hatch while the track is locked
+ * (`vb-lane-locked`, `style.css`, which keeps it in a Windows contrast
+ * theme), its clips at 40 % while a video track is hidden, and the accent
+ * wash while an accepted asset drag is over it.
+ *
+ * **A locked track's clip body is `pointer-events-none`** — Rust's own
+ * `ensure_unlocked`-shaped refusal (`core::editor::commands::tracks`) means
+ * a drag/trim/select that started here could only end in a rejected
+ * command, so the gesture never starts. The reason is the body's `title`,
+ * `actionMeta.ts`'s `lockedReason` — the same text a locked track's clip
+ * actions show elsewhere.
  *
  * **Native drag-and-drop target (Task 26)**: dropping a `LibraryAssetCard`
  * onto this lane inserts a clip at the drop's own time — `insertClip`
  * through `editorProject.execute`, owned by the parent (`TimelineView.vue`,
  * which alone knows the scroll/label offset needed to turn a `clientX` into
  * a timeline `ms`); this component only decides WHETHER the drop lands
- * (`trackCompat.trackAccepts`, the same rule `useTimelineDrag`'s cross-lane
- * clip move already applies) and shows why not. The listeners sit on the
+ * (`trackCompat.trackAccepts`) and shows why not. The listeners sit on the
  * ROOT element, not the (possibly `pointer-events-none`) body: a locked
- * lane's body is deliberately unreachable by a POINTER gesture (see above),
- * but a locked lane must still show ITS OWN refusal reason during a native
- * drag, and `pointer-events: none` excludes an element from drag
- * hit-testing exactly the way it excludes it from pointer hit-testing.
+ * lane must still show its own refusal reason during a native drag.
  */
 import { computed, ref } from "vue";
 
 import { lockedReason } from "../../../editor/actionMeta";
-import { LANE_HEIGHT_PX, msToX, TRACK_LABEL_WIDTH_PX } from "../../../editor/timelineLayout";
+import { tickStep } from "../../../editor/rulerTicks";
+import { isContextMenuShortcut } from "../../../editor/shortcuts";
+import { LANE_HEIGHT_PX, msToX, pxPerMs } from "../../../editor/timelineLayout";
 import { clipOutputEnd } from "../../../editor/timeMap";
 import { draggedAssetId, draggedAssetKind, dropRefusalReason, trackAccepts } from "../../../editor/trackCompat";
 import type { Asset, AssetKind, Clip, ClipSpan, Track } from "../../../editorTypes";
@@ -50,11 +52,15 @@ import TrackHeader from "./TrackHeader.vue";
 
 const props = defineProps<{
   track: Track;
+  /** `V3`, `A1`… (`timelineLayout.trackBadges`). */
+  badge: string;
   clips: Clip[];
   assets: Asset[];
   selectedClipIds: string[];
   zoom: number;
   widthPx: number;
+  /** The label column at this window width (`editorWorkspace.trackLabelWidth`). */
+  labelWidth: number;
   /** This lane's own index in the visual (top-to-bottom) track order, and
    * that same order's ids — Task 21's `useTimelineDrag` cross-track
    * drop-target hit-test, threaded straight through to each `ClipItem`
@@ -66,6 +72,8 @@ const emit = defineEmits<{
   (e: "context-menu", payload: { clip: Clip; clientX: number; clientY: number; atPlayhead?: boolean }): void;
   /** A right-click on the lane's empty body (visual-parity Task 5). */
   (e: "lane-context-menu", payload: { trackId: string; clientX: number; clientY: number }): void;
+  /** The header asks for the track menu (visual-parity Task 17). */
+  (e: "track-context-menu", payload: { trackId: string; clientX: number; clientY: number }): void;
   /** A `LibraryAssetCard` drop this lane accepted — `TimelineView.vue`
    * resolves `clientX` into a snapped `startMs` and sends the `insertClip`
    * (this component knows neither scroll position nor the label offset). */
@@ -110,6 +118,39 @@ function onDrop(event: DragEvent): void {
   emit("asset-drop", { assetId, trackId: props.track.id, clientX: event.clientX });
 }
 
+/** An accepted drag is over this lane: the accent wash (§6.4). */
+const dropTarget = computed(() => dragKind.value !== null && dropReason.value === null);
+
+/** Right-click on the header opens the track menu at the pointer. */
+function onHeaderContextMenu(event: MouseEvent): void {
+  emit("track-context-menu", { trackId: props.track.id, clientX: event.clientX, clientY: event.clientY });
+}
+/** Shift+F10 / the Menu key anywhere in the header: the menu opens under
+ * the cell, and Escape gives focus back to the control that had it. */
+function onHeaderKeydown(event: KeyboardEvent): void {
+  if (!isContextMenuShortcut(event)) return;
+  event.preventDefault();
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  emit("track-context-menu", { trackId: props.track.id, clientX: rect.left, clientY: rect.bottom });
+}
+
+/** One grid line per ruler tick, at the ruler's own step (§6.4). */
+const laneStyle = computed(() => {
+  const pps = pxPerMs(props.zoom) * 1000;
+  return {
+    width: `${props.widthPx}px`,
+    backgroundImage: "linear-gradient(to right, var(--color-line) 1px, transparent 1px)",
+    // Float noise (`0.05 × 3 × 1000`) never reaches the stylesheet.
+    backgroundSize: `${Number((tickStep(pps) * pps).toFixed(3))}px 100%`,
+  };
+});
+const laneClass = computed(() => [
+  props.track.locked ? "vb-lane-locked pointer-events-none" : "",
+  dropReason.value ? "cursor-not-allowed" : "",
+  dropTarget.value ? "bg-accent-bg" : "",
+  props.track.kind === "video" && !props.track.visible ? "*:opacity-40" : "",
+]);
+
 /** A clip answers its own right-click first (`@contextmenu.prevent`), so
  * an event that arrives here already handled was a clip's, not the lane's. */
 function onLaneContextMenu(event: MouseEvent): void {
@@ -143,7 +184,7 @@ function widthOf(clip: Clip): number {
 <template>
   <div
     :data-testid="`track-lane-${track.id}`"
-    class="flex border-b border-line"
+    class="flex min-h-[58px] w-max min-w-full border-b border-line"
     :style="{ height: `${LANE_HEIGHT_PX}px` }"
     @dragover="onDragOver"
     @dragleave="onDragLeave"
@@ -151,28 +192,30 @@ function widthOf(clip: Clip): number {
   >
     <div
       :data-testid="`track-lane-header-${track.id}`"
-      class="flex shrink-0 items-center gap-1 truncate border-r border-line bg-raised px-2 text-micro text-fg-secondary"
-      :style="{ width: `${TRACK_LABEL_WIDTH_PX}px` }"
+      class="sticky left-0 z-[15] flex shrink-0 items-center border-r border-line bg-panel px-2.5 py-2"
+      :style="{ width: `${labelWidth}px` }"
+      @contextmenu.prevent="onHeaderContextMenu"
+      @keydown="onHeaderKeydown"
     >
-      <span
-        class="h-2 w-2 shrink-0 rounded-full"
-        :class="track.kind === 'audio' ? 'bg-audio' : 'bg-video'"
-      />
       <TrackHeader
         :track="track"
-        :track-index="trackIndex"
-        :track-count="trackOrder.length"
+        :badge="badge"
       />
     </div>
 
     <div
       :data-testid="`track-lane-body-${track.id}`"
       :title="bodyTitle"
-      class="relative bg-stage"
-      :class="[track.locked ? 'pointer-events-none' : '', dropReason ? 'cursor-not-allowed' : '']"
-      :style="{ width: `${widthPx}px` }"
+      class="relative"
+      :class="laneClass"
+      :style="laneStyle"
       @contextmenu="onLaneContextMenu"
     >
+      <span
+        v-if="sortedClips.length === 0"
+        :data-testid="`track-lane-empty-${track.id}`"
+        class="pointer-events-none absolute top-[18px] left-4 text-[10px] text-fg-muted"
+      >Drop {{ track.kind }} here · or add from Media</span>
       <ClipItem
         v-for="clip in sortedClips"
         :key="clip.id"

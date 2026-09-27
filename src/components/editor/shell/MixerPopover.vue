@@ -89,7 +89,7 @@ onReveal("mixer", () => {
  * popover — a click anywhere else on the editor (`root` wraps the trigger
  * AND the popover, so re-clicking the trigger itself is never "outside")
  * or an Escape pressed with focus on the timeline must both close it, the
- * `TrackHeader.vue` track-menu precedent. `stopImmediatePropagation` (not
+ * precedent of the track header's former ⋮ menu. `stopImmediatePropagation` (not
  * only `preventDefault`) is what actually keeps a keystroke the mixer
  * already spent from ALSO reaching a `window`-level listener registered
  * after this one — the same reason `ContextMenu.vue`'s own Escape handler

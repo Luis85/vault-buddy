@@ -32,12 +32,15 @@ import type {
   Track,
 } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
+import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
 import { fakeEditorPort as fakePort } from "./helpers/fakeEditorPort";
 
 enableAutoUnmount(afterEach);
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  // A 1600px window: the full 196px label column (§1.4; happy-dom is 1024 wide).
+  useEditorWorkspaceStore().setViewport(1600, 1000);
 });
 
 // ---- fixtures ---------------------------------------------------------------
@@ -217,6 +220,8 @@ describe("TrackLane — native asset drop (Task 26)", () => {
     const w = mount(TrackLane, {
       props: {
         track: track("v1", { kind: "video" }),
+        badge: "V1",
+        labelWidth: 196,
         clips: [],
         assets: [],
         selectedClipIds: [],
@@ -248,6 +253,8 @@ describe("TrackLane — native asset drop (Task 26)", () => {
     const w = mount(TrackLane, {
       props: {
         track: track("v1", { kind: "video", locked: true, name: "Screen recording" }),
+        badge: "V1",
+        labelWidth: 196,
         clips: [],
         assets: [],
         selectedClipIds: [],
@@ -276,6 +283,8 @@ describe("TrackLane — native asset drop (Task 26)", () => {
     const w = mount(TrackLane, {
       props: {
         track: track("v1", { kind: "video" }),
+        badge: "V1",
+        labelWidth: 196,
         clips: [],
         assets: [],
         selectedClipIds: [],
@@ -302,6 +311,8 @@ describe("TrackLane — native asset drop (Task 26)", () => {
     const w = mount(TrackLane, {
       props: {
         track: track("v1", { kind: "video" }),
+        badge: "V1",
+        labelWidth: 196,
         clips: [],
         assets: [],
         selectedClipIds: [],
@@ -326,6 +337,8 @@ describe("TrackLane — native asset drop (Task 26)", () => {
     const w = mount(TrackLane, {
       props: {
         track: track("v1", { kind: "video" }),
+        badge: "V1",
+        labelWidth: 196,
         clips: [],
         assets: [],
         selectedClipIds: [],
@@ -354,6 +367,8 @@ describe("TrackLane — native asset drop (Task 26)", () => {
     const w = mount(TrackLane, {
       props: {
         track: track("v1", { kind: "video" }),
+        badge: "V1",
+        labelWidth: 196,
         clips: [],
         assets: [],
         selectedClipIds: [],
@@ -381,6 +396,8 @@ describe("TrackLane — native asset drop (Task 26)", () => {
     const w = mount(TrackLane, {
       props: {
         track: track("v1", { kind: "video" }),
+        badge: "V1",
+        labelWidth: 196,
         clips: [],
         assets: [],
         selectedClipIds: [],
@@ -568,10 +585,10 @@ describe("TimelineView — cross-lane move keeps cue ids (Task 21's moveClips, e
 
     const c2 = w.get('[data-testid="clip-c2"]');
     // c2 is on v1 (lane index 1 of 2); v2 sits directly above it. +10px at
-    // zoom 1 is +200ms; -56px (one LANE_HEIGHT_PX) is one lane up.
+    // zoom 1 is +200ms; -68px (one LANE_HEIGHT_PX) is one lane up.
     await c2.trigger("pointerdown", { clientX: 20, clientY: 100, pointerId: 1 });
-    await c2.trigger("pointermove", { clientX: 30, clientY: 44, pointerId: 1 });
-    await c2.trigger("pointerup", { clientX: 30, clientY: 44, pointerId: 1 });
+    await c2.trigger("pointermove", { clientX: 30, clientY: 32, pointerId: 1 });
+    await c2.trigger("pointerup", { clientX: 30, clientY: 32, pointerId: 1 });
     await flushPromises();
 
     expect(executed).toEqual([{ kind: "moveClips", clipIds: ["c2"], deltaMs: 200, trackId: "v2" }]);

@@ -26,6 +26,8 @@ let executed: unknown[] = [];
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  // A 1600px window: the full 196px label column (§1.4; happy-dom is 1024 wide).
+  useEditorWorkspaceStore().setViewport(1600, 1000);
   clearClipboardForTest();
   executed = [];
 });

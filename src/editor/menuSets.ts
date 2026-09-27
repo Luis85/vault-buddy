@@ -57,13 +57,20 @@ function assetTargetMenu(ctx: MenuContext, assetId: string): BuiltMenu {
   return { heading: name || "Media asset", items: assetMenu(ctx, assetId) };
 }
 
-/** A lane opens the gap menu ("Timeline gap"); no target at all — the
+function trackTargetMenu(ctx: MenuContext, trackId: string): BuiltMenu {
+  const name = ctx.action.project?.tracks.find((t) => t.id === trackId)?.name;
+  return { heading: name || "Track", items: trackMenu(ctx, trackId) };
+}
+
+/** A track header opens the track menu (visual-parity Task 17, ruling P4);
+ * a lane opens the gap menu ("Timeline gap"); no target at all — the
  * toolbar's Edit actions with nothing selected — the editor actions, at the
  * playhead. */
 export function contextMenuFor(ctx: MenuContext): BuiltMenu {
   const target = ctx.action.pointerTarget;
   if (target?.kind === "clip") return clipTargetMenu(ctx);
   if (target?.kind === "asset" && target.id) return assetTargetMenu(ctx, target.id);
+  if (target?.kind === "track" && target.id) return trackTargetMenu(ctx, target.id);
   if (target?.kind === "gap") {
     return {
       heading: "Timeline gap",

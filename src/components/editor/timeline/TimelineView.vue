@@ -47,7 +47,7 @@ import {
   pxPerMs,
   revealScrollLeft,
   snapTargets,
-  TRACK_LABEL_WIDTH_PX,
+  trackBadges,
   visibleClips,
   xToMs,
 } from "../../../editor/timelineLayout";
@@ -108,7 +108,7 @@ function onScroll(event: Event) {
 onReveal("timeline", () => {
   const el = scrollRef.value;
   const left = el
-    ? revealScrollLeft(revealedTimelineMs(), workspace.timelineZoom, el.scrollLeft, effectiveViewportWidth.value)
+    ? revealScrollLeft(revealedTimelineMs(), workspace.timelineZoom, el.scrollLeft, effectiveViewportWidth.value, labelPx.value)
     : null;
   if (!el || left === null) return;
   el.scrollLeft = left;
@@ -127,6 +127,11 @@ const contentDurationMs = computed(() => Math.max(editorProject.durationMs, 0) +
 const contentWidthPx = computed(() => pxPerMs(workspace.timelineZoom) * contentDurationMs.value);
 
 const tracks = computed(() => editorProject.project?.tracks ?? []);
+/** V3/V2/V1 top to bottom, A1… (§6.4). */
+const badges = computed(() => trackBadges(tracks.value));
+/** The label column at this window width (§1.4): every row lays it out, and
+ * every pointer/playhead conversion takes it back out. */
+const labelPx = computed(() => workspace.trackLabelWidth);
 /** Task 21: the lane order `ClipItem`'s cross-track drop hit-test needs —
  * see `TrackLane.vue`'s own `trackOrder` prop doc. */
 const orderedTrackIds = computed(() => tracks.value.map((t) => t.id));
@@ -134,10 +139,11 @@ const orderedTrackIds = computed(() => tracks.value.map((t) => t.id));
 /** `visibleClips` operates on the CLIP body's own coordinate space
  * (`TrackLane`'s convention: `msToX(start_ms, zoom)` with no label offset),
  * while `scrollLeftPx` is measured against the whole scrolled row INCLUDING
- * the label column (`TrackLane`/`TimelineRuler` both scroll the label along
- * with the content, their own doc explains why) -- so the label width has to
- * come back out before the viewport window is converted to ms. */
-const bodyScrollLeft = computed(() => Math.max(0, scrollLeftPx.value - TRACK_LABEL_WIDTH_PX));
+ * the label column. The column is pinned over the lanes' left edge (D12),
+ * so the lanes show body x `scrollLeft .. scrollLeft + viewport - label`;
+ * starting the window a label's width earlier renders the few clips hidden
+ * under the column too, never one that should show. */
+const bodyScrollLeft = computed(() => Math.max(0, scrollLeftPx.value - labelPx.value));
 
 const visible = computed(() =>
   visibleClips(
@@ -201,7 +207,7 @@ const menuContext = computed(() =>
 function msFromClientX(clientX: number): number {
   if (!scrollRef.value) return workspace.playheadMs;
   const rect = scrollRef.value.getBoundingClientRect();
-  const contentX = clientX - rect.left + scrollRef.value.scrollLeft - TRACK_LABEL_WIDTH_PX;
+  const contentX = clientX - rect.left + scrollRef.value.scrollLeft - labelPx.value;
   return Math.round(xToMs(Math.max(0, contentX), workspace.timelineZoom));
 }
 
@@ -217,6 +223,12 @@ function openMenu(target: PointerTarget | null, x: number, y: number, fromToolba
 function onClipContextMenu(payload: { clip: Clip; clientX: number; clientY: number; atPlayhead?: boolean }) {
   const timeMs = payload.atPlayhead ? workspace.playheadMs : msFromClientX(payload.clientX);
   openMenu({ kind: "clip", id: payload.clip.id, timeMs }, payload.clientX, payload.clientY);
+}
+
+/** A track header's right-click or Shift+F10 (visual-parity Task 17): the
+ * track menu. */
+function onTrackContextMenu(payload: { trackId: string; clientX: number; clientY: number }) {
+  openMenu({ kind: "track", id: payload.trackId, timeMs: null }, payload.clientX, payload.clientY);
 }
 
 /** A right-click on an empty stretch of a lane (visual-parity Task 5). */
@@ -320,25 +332,29 @@ async function onBelowLanesDrop(event: DragEvent) {
       <TimelineRuler
         :zoom="workspace.timelineZoom"
         :width-px="contentWidthPx"
+        :label-width="labelPx"
       />
       <div
         data-testid="timeline-playhead"
         class="vb-playhead pointer-events-none absolute top-0 bottom-0 z-30 w-px bg-accent"
-        :style="{ left: `${TRACK_LABEL_WIDTH_PX + pxPerMs(workspace.timelineZoom) * workspace.playheadMs}px` }"
+        :style="{ left: `${labelPx + pxPerMs(workspace.timelineZoom) * workspace.playheadMs}px` }"
       />
       <TrackLane
         v-for="(track, i) in tracks"
         :key="track.id"
         :track="track"
+        :badge="badges[track.id]"
         :clips="clipsByTrack.get(track.id) ?? []"
         :assets="editorProject.project?.assets ?? []"
         :selected-clip-ids="workspace.selectionClipIds"
         :zoom="workspace.timelineZoom"
         :width-px="contentWidthPx"
+        :label-width="labelPx"
         :track-index="i"
         :track-order="orderedTrackIds"
         @context-menu="onClipContextMenu"
         @lane-context-menu="onLaneContextMenu"
+        @track-context-menu="onTrackContextMenu"
         @asset-drop="onAssetDrop"
       />
       <!-- Multi-track placement (Task 26): dropping a library asset here
@@ -347,7 +363,7 @@ async function onBelowLanesDrop(event: DragEvent) {
       <div
         data-testid="timeline-below-lanes"
         class="relative"
-        :style="{ width: `${contentWidthPx + TRACK_LABEL_WIDTH_PX}px`, height: `${LANE_HEIGHT_PX}px` }"
+        :style="{ width: `${contentWidthPx + labelPx}px`, height: `${LANE_HEIGHT_PX}px` }"
         @dragover="onBelowLanesDragOver"
         @drop="onBelowLanesDrop"
       />

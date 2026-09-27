@@ -42,7 +42,7 @@ import { markRaw, ref, shallowRef, watch } from "vue";
 import { createPanelControls, TIMELINE_DEFAULT_HEIGHT } from "../editor/panelLayout";
 import type { EditorPort } from "../editor/port";
 import { createTauriEditorPort } from "../editor/port";
-import { fitZoom, msToX, TRACK_LABEL_WIDTH_PX } from "../editor/timelineLayout";
+import { fitZoom, msToX, trackLabelWidthAt } from "../editor/timelineLayout";
 import type { DeleteMode, Selected, Theme, Workspace } from "../editorTypes";
 import { logWarning } from "../logging";
 import { toEditorError, useEditorProjectStore } from "./editorProject";
@@ -390,10 +390,10 @@ const RANGE_LEAD_PX = 25;
  * range fills the visible lanes, and scroll it into view — a view change
  * only, never an edit. Returns the new scroll offset, which the timeline
  * applies to its scroller (the store cannot reach the element). */
-function createRangeZoom(f: WorkspaceFields, persist: () => void) {
+function createRangeZoom(f: WorkspaceFields, persist: () => void, windowWidth: Ref<number>) {
   return {
     zoomToRange(startMs: number, endMs: number, viewportPx: number): number {
-      const lanesPx = viewportPx - TRACK_LABEL_WIDTH_PX - RANGE_MARGIN_PX;
+      const lanesPx = viewportPx - trackLabelWidthAt(windowWidth.value) - RANGE_MARGIN_PX;
       const zoom = clamp(fitZoom(endMs - startMs, lanesPx), ZOOM_RANGE);
       const left = Math.max(0, Math.round(msToX(startMs, zoom) - RANGE_LEAD_PX));
       f.timelineZoom.value = zoom;
@@ -485,7 +485,7 @@ export const useEditorWorkspaceStore = defineStore("editorWorkspace", () => {
     persist,
     ...mutators,
     ...selection,
-    ...createRangeZoom(fields, persist),
+    ...createRangeZoom(fields, persist, viewportWidth),
     ...panels,
     ...createDisclosures(sessionId),
   };

@@ -2,8 +2,9 @@
  * Wires a window-level `pointerdown` and `keydown` listener for the
  * lifetime of the calling component, removing both on unmount — the
  * shared mount/unmount plumbing behind every "an outside click or Escape
- * closes it" popover in the tutorial editor (`TrackHeader.vue`'s track
- * menu, `MixerPopover.vue`'s audio mixer, both otherwise unrelated).
+ * closes it" popover in the tutorial editor — `MixerPopover.vue`'s audio
+ * mixer (`TrackHeader.vue`'s ⋮ track menu used it too, until visual-parity
+ * Task 17 moved the track menu onto the shared `MenuPanel`).
  * Extracted once `check:quality`'s clone-group gate caught the two as a
  * byte-identical 8-line block (the `useRovingTablist.ts` precedent for
  * the same gate catching a different pair of components).

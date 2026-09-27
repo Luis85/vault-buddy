@@ -115,9 +115,7 @@ describe("native lesson copy", () => {
         body: "Right-click a clip for the actions that apply to it. Edit actions in the timeline opens the same menu for the selected clips without a right click.",
       },
       tracks: {
-        label: "Track menu",
-        tip: "Adding a track is optional: dropping media below the last track makes a new one.",
-        task: "Open the top track's menu to see what it offers. You do not need to change anything.",
+        tip: "Adding a track is optional: dropping media below the last track makes a new one too.",
       },
       audio: {
         tip: "Listen to the actual rendered file before sharing.",

@@ -420,19 +420,18 @@ describe("the coach", () => {
     expect(useEditorOnboardingStore().progress).toMatchObject({ active: false, currentStepId: "context" });
   });
 
-  // The track menu closes on a WINDOW Escape listener and lets the event
-  // bubble through the shell, so here it is the guide that must notice an
-  // open menu and leave the key to it.
-  it("Escape with the track menu open closes the menu, not the guide", async () => {
+  // The tracks lesson's menu (Add track, visual-parity Task 17): Escape in
+  // it closes the menu, and the guide stays on its lesson.
+  it("Escape with the Add track menu open closes the menu, not the guide", async () => {
     const w = await mountEditor();
     await click(w, "guide-invitation-start");
     await goTo(w, "tracks");
-    await click(w, "track-header-v1-menu");
-    expect(w.find('[data-testid="track-header-v1-menu-list"]').exists()).toBe(true);
+    await click(w, "timeline-add-track");
+    expect(w.find('[data-testid="timeline-add-track-panel-root"]').exists()).toBe(true);
 
-    keydown(w.get('[data-testid="track-header-v1-menu"]').element, "Escape");
+    keydown(document.activeElement ?? w.get('[data-testid="timeline-add-track"]').element, "Escape");
     await flushPromises();
-    expect(w.find('[data-testid="track-header-v1-menu-list"]').exists()).toBe(false);
+    expect(w.find('[data-testid="timeline-add-track-panel-root"]').exists()).toBe(false);
     expect(coach(w).attributes("data-step-id")).toBe("tracks");
   });
 
@@ -480,9 +479,11 @@ describe("the coach", () => {
   it("the coach renders the native lesson copy, never the reference's", async () => {
     const w = await mountEditor();
     await click(w, "guide-invitation-start");
+    // "Open Add track" is true since visual-parity Task 16 built the ruler's
+    // Add track menu; the tracks lesson reads it verbatim again.
     for (const id of STEP_IDS) {
       const text = coach(w).text();
-      for (const untrue of [/download/i, /three-minute/i, /\bsample\b/i, /built-in project/i, /Open Add track/, /Open Project/, /Browser/]) {
+      for (const untrue of [/download/i, /three-minute/i, /\bsample\b/i, /built-in project/i, /Open Project/, /Browser/]) {
         expect(text, `${id}: ${String(untrue)}`).not.toMatch(untrue);
       }
       await click(w, "guide-next");

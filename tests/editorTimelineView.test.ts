@@ -27,6 +27,8 @@ enableAutoUnmount(afterEach);
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  // A 1600px window: the full 196px label column (§1.4; happy-dom is 1024 wide).
+  useEditorWorkspaceStore().setViewport(1600, 1000);
   clearClipboardForTest();
 });
 
@@ -735,8 +737,8 @@ describe("ClipItem — drag (Task 21)", () => {
 
     const c2 = w.get('[data-testid="clip-c2"]'); // 0..1000 on v1 (lane 2 of 3)
     await c2.trigger("pointerdown", { clientX: 20, clientY: 100, pointerId: 1 });
-    await c2.trigger("pointermove", { clientX: 30, clientY: 156, pointerId: 1 }); // +200ms, one lane down
-    await c2.trigger("pointerup", { clientX: 30, clientY: 156, pointerId: 1 });
+    await c2.trigger("pointermove", { clientX: 30, clientY: 168, pointerId: 1 }); // +200ms, one lane down
+    await c2.trigger("pointerup", { clientX: 30, clientY: 168, pointerId: 1 });
     await flushPromises();
 
     expect(executed).toEqual([{ kind: "moveClips", clipIds: ["c2"], deltaMs: 200, trackId: null }]);
@@ -883,7 +885,7 @@ describe("ClipItem — drag (Task 21)", () => {
 describe("TimelineRuler — degenerate zoom", () => {
   it("a non-positive zoom seeks to 0 rather than dividing by zero", async () => {
     const workspace = useEditorWorkspaceStore();
-    const w = mount(TimelineRuler, { props: { zoom: 0, widthPx: 500 } });
+    const w = mount(TimelineRuler, { props: { zoom: 0, widthPx: 500, labelWidth: 196 } });
 
     const ticks = w.get('[data-testid="timeline-ruler-ticks"]');
     (ticks.element as HTMLElement).getBoundingClientRect = () =>
@@ -899,7 +901,7 @@ describe("TimelineRuler — whole milliseconds (Task 5 fix round 1)", () => {
   it("a click at a fractional zoom puts the playhead on an integer ms", async () => {
     await openProject({}, { durationMs: 1_000_000 });
     const workspace = useEditorWorkspaceStore();
-    const w = mount(TimelineRuler, { props: { zoom: 3, widthPx: 2000 } });
+    const w = mount(TimelineRuler, { props: { zoom: 3, widthPx: 2000, labelWidth: 196 } });
     const ticks = w.get('[data-testid="timeline-ruler-ticks"]');
     (ticks.element as HTMLElement).getBoundingClientRect = () =>
       ({ left: 0, top: 0, width: 2000, height: 24, right: 2000, bottom: 24, x: 0, y: 0 }) as DOMRect;
@@ -917,7 +919,7 @@ describe("TimelineRuler — drag (fix round 1, finding 2)", () => {
     await openProject({}, { durationMs: 1_000_000 });
     const workspace = useEditorWorkspaceStore();
     workspace.select(["c1"]);
-    const w = mount(TimelineRuler, { props: { zoom: 1, widthPx: 2000 } });
+    const w = mount(TimelineRuler, { props: { zoom: 1, widthPx: 2000, labelWidth: 196 } });
 
     const ticks = w.get('[data-testid="timeline-ruler-ticks"]');
     (ticks.element as HTMLElement).getBoundingClientRect = () =>
@@ -952,7 +954,7 @@ describe("TimelineRuler — drag (fix round 1, finding 2)", () => {
     await openProject({}, { durationMs: 1_000_000 });
     const workspace = useEditorWorkspaceStore();
     workspace.setPlayhead(0);
-    const w = mount(TimelineRuler, { props: { zoom: 1, widthPx: 2000 } });
+    const w = mount(TimelineRuler, { props: { zoom: 1, widthPx: 2000, labelWidth: 196 } });
     const ticks = w.get('[data-testid="timeline-ruler-ticks"]');
     (ticks.element as HTMLElement).getBoundingClientRect = () =>
       ({ left: 0, top: 0, width: 2000, height: 24, right: 2000, bottom: 24, x: 0, y: 0 }) as DOMRect;

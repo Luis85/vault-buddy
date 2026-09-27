@@ -640,4 +640,14 @@ describe("contextMenuFor — which set a target opens", () => {
     expect(missing.heading).toBe("Missing.mp4");
     expect(labels(missing.items)).toContain("Reconnect original…");
   });
+
+  // visual-parity Task 17 (ruling P4): a track header's right-click or
+  // Shift+F10 opens the track menu, headed by the track's own name.
+  it("a track opens the track menu, headed by its name", () => {
+    const found = contextMenuFor(menuCtx({ pointerTarget: { kind: "track", id: "a1", timeMs: null } }));
+    expect(found.heading).toBe("A1");
+    expect(labels(found.items)).toEqual(labels(trackMenu(menuCtx(), "a1")));
+    const gone = contextMenuFor(menuCtx({ pointerTarget: { kind: "track", id: "nope", timeMs: null } }));
+    expect(gone).toEqual({ heading: "Track", items: [] });
+  });
 });

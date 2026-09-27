@@ -201,7 +201,7 @@ describe("useTimelineDrag — body drag", () => {
     // drag -- neither its preview nor a command.
     drag.updateBodyDrag(400 * PPM);
     expect(drag.movePreview.value).toBeNull();
-    await drag.endBodyDrag(56);
+    await drag.endBodyDrag(68);
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -221,8 +221,8 @@ describe("useTimelineDrag — body drag", () => {
     const drag = useTimelineDrag(deps(execute));
 
     drag.beginBodyDrag(0, 0);
-    // One lane down (56px) -- targetIndex 0 + 1 -> "v2".
-    await drag.endBodyDrag(56);
+    // One lane down (68px) -- targetIndex 0 + 1 -> "v2".
+    await drag.endBodyDrag(68);
 
     expect(execute).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "moveClips", trackId: "v2" }),
@@ -248,7 +248,7 @@ describe("useTimelineDrag — body drag", () => {
 
     drag.beginBodyDrag(0, 0);
     drag.updateBodyDrag(200 * PPM);
-    await drag.endBodyDrag(56); // one lane down: a1, which refuses the clip
+    await drag.endBodyDrag(68); // one lane down: a1, which refuses the clip
 
     expect(refused).toEqual(["a1"]);
     expect(execute).toHaveBeenCalledWith({ kind: "moveClips", clipIds: ["c1"], deltaMs: 200, trackId: null });
@@ -261,7 +261,7 @@ describe("useTimelineDrag — body drag", () => {
 
     drag.beginBodyDrag(0, 0);
     drag.updateBodyDrag(10 * PPM);
-    await drag.endBodyDrag(56); // would otherwise cross a lane
+    await drag.endBodyDrag(68); // would otherwise cross a lane
 
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({ trackId: null }));
   });
@@ -515,7 +515,7 @@ describe("useTimelineDrag — degenerate input", () => {
 
     drag.updateBodyDrag(400);
     drag.updateTrim(400);
-    await drag.endBodyDrag(56);
+    await drag.endBodyDrag(68);
     await drag.endTrim();
 
     expect(drag.movePreview.value).toBeNull();

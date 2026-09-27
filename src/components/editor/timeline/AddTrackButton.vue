@@ -7,10 +7,16 @@
  * the same resolver, builder and path the empty-lane menu uses — so a
  * disabled reason (no project, Rust's 32-track limit) shows the same way
  * in both, as the item's hint line.
+ *
+ * It is the guide's `track.menu` target (the concept's
+ * `[data-action="trackMenu"]`, "Add a video or audio track"): visual-parity
+ * Task 17 removed the track header's ⋮ menu the lesson used to point at.
  */
 import { computed, ref } from "vue";
 
 import { useBaseActionContext } from "../../../composables/useActionRegistry";
+import type { GuideRef } from "../../../composables/useGuideTarget";
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import type { ActionId } from "../../../editor/actions";
 import { resolveActions } from "../../../editor/actions";
 import { activateEditorAction } from "../../../editor/clipboard";
@@ -22,6 +28,12 @@ import MenuPanel from "../menus/MenuPanel.vue";
 
 const editorProject = useEditorProjectStore();
 const trigger = ref<HTMLButtonElement | null>(null);
+const guideTarget: GuideRef = useGuideTarget("track.menu");
+/** One element, two refs: the menu's anchor and the guide's target. */
+function bindTrigger(el: Element | null): void {
+  trigger.value = el instanceof HTMLButtonElement ? el : null;
+  guideTarget(el);
+}
 /** Whether the menu is showing — the ruler row lifts itself above the
  * playhead while it is, so the line never crosses the open menu. */
 const open = defineModel<boolean>("open", { default: false });
@@ -53,7 +65,7 @@ function onPointerDown(event: PointerEvent): void {
 
 <template>
   <button
-    ref="trigger"
+    :ref="(el) => bindTrigger(el as Element | null)"
     type="button"
     data-testid="timeline-add-track"
     aria-haspopup="menu"

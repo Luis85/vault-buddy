@@ -126,14 +126,14 @@ type CopyOverride = Partial<Record<"label" | "body" | "tip" | "task", string>>;
  * this app is replaced here, by lesson id, and nowhere else — the coach
  * renders `lessonCopy(id)`, never a raw step. Each entry replaces exactly
  * the sentence that was untrue:
- * - `media`/`tracks`/`audio`: there is no sample project;
+ * - `media`/`tracks`/`audio`: there is no sample project (for `tracks`
+ *   that is the whole correction: since visual-parity Task 16 the ruler's
+ *   Add track is the menu the lesson describes, and its `track.menu`
+ *   target — Task 17 removed the header's ⋮ it pointed at before);
  * - `select`: there is no Clear selection item and no V shortcut;
  * - `split`: the delete modes are "Leave gap" and "Close gap on this
  *   track", not "Ripple this track";
  * - `context`: only a clip has a right-click menu;
- * - `tracks`: there is no Add track menu — the lesson points at the top
- *   track's own menu, and a track is added by dropping media below the
- *   last one;
  * - `chapters`: there is no companion-note preview;
  * - `save`: Save project stores the project here, there is no download,
  *   recovery is the native journal, and a copy as a project file is the
@@ -164,9 +164,7 @@ export const LESSON_COPY_OVERRIDES: Readonly<Partial<Record<GuideStepId, CopyOve
     body: "Right-click a clip for the actions that apply to it. Edit actions in the timeline opens the same menu for the selected clips without a right click.",
   },
   tracks: {
-    label: "Track menu",
-    tip: "Adding a track is optional: dropping media below the last track makes a new one.",
-    task: "Open the top track's menu to see what it offers. You do not need to change anything.",
+    tip: "Adding a track is optional: dropping media below the last track makes a new one too.",
   },
   audio: {
     tip: "Listen to the actual rendered file before sharing.",

@@ -16,25 +16,45 @@
  * a viewport's visible px range into an ms range for virtualization, needs
  * the real `scrollLeft` to undo.
  */
-import type { Clip, ClipSpan, Marker, Project } from "../editorTypes";
+import type { Clip, ClipSpan, Marker, Project, Track } from "../editorTypes";
 import { clipOutputEnd, outputAt } from "./timeMap";
 
 function clipSpanOf(clip: Clip): ClipSpan {
   return { start_ms: clip.start_ms, in_ms: clip.in_ms, out_ms: clip.out_ms, speed: clip.speed ?? 1 };
 }
 
-/** The track-label column's width — mirrors `--editor-label` (`style.css`,
- * 196px, the CONTRACT's own value). `TrackLane.vue`/`TimelineRuler.vue` both
- * lay out a matching label-column-then-content-track row, so this lives here
- * (their one shared layout constant) rather than being read from CSS at
- * runtime or hand-copied twice. */
-export const TRACK_LABEL_WIDTH_PX = 196;
+/** The track-label column's width at full size (concept spec §1.3, 196px).
+ * The column narrows with the window (§1.4: `--label` is 184 at or below
+ * 1200px wide and 174 at or below 1000): `trackLabelWidthAt` is the one
+ * rule, read through `editorWorkspace.trackLabelWidth` by every row that
+ * lays out a label-column-then-content-track (`TrackLane`, `TimelineRuler`)
+ * and by every conversion that has to take the column back out. */
+const TRACK_LABEL_WIDTH_PX = 196;
 
-/** One track lane's rendered height (`TrackLane.vue`'s own `LANE_HEIGHT_PX`,
- * moved here in Task 21 so `useTimelineDrag.ts`'s cross-track drop hit-test
- * shares the exact same number `TrackLane` lays lanes out with, rather than
- * a second copy of the magic number). */
-export const LANE_HEIGHT_PX = 56;
+/** The label column's width in a window `viewportWidth` px wide (§1.4). */
+export function trackLabelWidthAt(viewportWidth: number): number {
+  if (viewportWidth <= 1000) return 174;
+  if (viewportWidth <= 1200) return 184;
+  return TRACK_LABEL_WIDTH_PX;
+}
+
+/** Each track's mono badge (§6.4): video tracks read `V<n>` top to bottom,
+ * numbered DOWN to V1 (the frontmost is the highest number), audio tracks
+ * `A1`, `A2`… in their own order. */
+export function trackBadges(tracks: readonly Pick<Track, "id" | "kind">[]): Record<string, string> {
+  let video = tracks.filter((t) => t.kind === "video").length;
+  let audio = 1;
+  const out: Record<string, string> = {};
+  for (const t of tracks) out[t.id] = t.kind === "video" ? `V${video--}` : `A${audio++}`;
+  return out;
+}
+
+/** One track row's rendered height, border included (concept spec §6.4:
+ * the header's content is 8+24+1+26+8 = 67px, plus the row's 1px bottom
+ * rule — "≈68"). `TrackLane.vue` lays rows out at exactly this height so
+ * `useTimelineDrag.ts`'s cross-track drop hit-test (moved here in Task 21)
+ * shares the same number rather than a second copy of it. */
+export const LANE_HEIGHT_PX = 68;
 
 /** Pixels per millisecond at zoom 1 — 50px per second. Chosen so a typical
  * few-minute tutorial spans a scrollable-but-not-absurd content width; there
@@ -164,12 +184,19 @@ export function visibleClips(
 /**
  * Task 54: the scroll position that brings output instant `ms` into view,
  * or `null` when it already is. Scroll coordinates include the label
- * column (the lanes scroll it along, see `TimelineView`), so the instant
- * sits at `TRACK_LABEL_WIDTH_PX + msToX(ms)`; out of view, it lands a
- * third of the way in rather than flush against an edge.
+ * column, which is pinned over the lanes' left edge (design D12), so the
+ * instant sits at `labelPx + msToX(ms)` and is visible only right of the
+ * pinned column; out of view, it lands a third of the way in rather than
+ * flush against an edge.
  */
-export function revealScrollLeft(ms: number, zoom: number, scrollLeft: number, viewportPx: number): number | null {
-  const x = TRACK_LABEL_WIDTH_PX + msToX(ms, zoom);
-  if (x >= scrollLeft + TRACK_LABEL_WIDTH_PX && x <= scrollLeft + viewportPx) return null;
-  return Math.max(0, Math.round(x - TRACK_LABEL_WIDTH_PX - (viewportPx - TRACK_LABEL_WIDTH_PX) / 3));
+export function revealScrollLeft(
+  ms: number,
+  zoom: number,
+  scrollLeft: number,
+  viewportPx: number,
+  labelPx: number = TRACK_LABEL_WIDTH_PX,
+): number | null {
+  const x = labelPx + msToX(ms, zoom);
+  if (x >= scrollLeft + labelPx && x <= scrollLeft + viewportPx) return null;
+  return Math.max(0, Math.round(x - labelPx - (viewportPx - labelPx) / 3));
 }

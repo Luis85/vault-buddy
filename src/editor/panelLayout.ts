@@ -23,6 +23,8 @@
 import type { Ref } from "vue";
 import { computed } from "vue";
 
+import { trackLabelWidthAt } from "./timelineLayout";
+
 /** At or below this width the inspector is an overlay drawer (§1.4). */
 const INSPECTOR_DRAWER_MAX_WIDTH = 1080;
 /** At or below this width the library is an overlay drawer too (§1.4). */
@@ -162,6 +164,8 @@ export function createPanelControls(r: PanelRefs, persist: () => void) {
     libraryVisible: computed(() => libraryShown(read(r), r.viewportWidth.value)),
     inspectorVisible: computed(() => inspectorShown(read(r), r.viewportWidth.value)),
     shortWindow: computed(() => r.viewportHeight.value <= SHORT_WINDOW_MAX_HEIGHT),
+    /** The timeline's track-label column at this window width (§1.4). */
+    trackLabelWidth: computed(() => trackLabelWidthAt(r.viewportWidth.value)),
     /** The timeline's height as shown: the stored one, clamped to the window. */
     timelineHeightPx: computed(() => clampTimelineHeight(r.timelineHeight.value, r.viewportHeight.value)),
     setViewport(width: number, height: number): void {

@@ -1,143 +1,97 @@
 <script setup lang="ts">
 /**
- * One track's own controls (Task 23; F-06): name (inline rename), the
- * visibility eye (video tracks only -- audio has nothing to hide, the
- * reference editor's own `t.kind==='video'` gate), lock, mute, solo, a
- * volume slider (audio tracks only -- video's own `Track.volume` exists in
- * the model but has no consumer here yet; a mixer landing later is where a
- * VIDEO track's volume would get a control), and a track menu (Move up/
- * Move down/Delete track). Replaces `TrackLane.vue`'s previous static
- * name-only label column.
+ * One track's header (Task 23; F-06; visual-parity Task 17, concept spec
+ * §6.4): a 28px mono badge (V3/V2/V1 top to bottom, A1…), the title, and a
+ * row of 26px controls — the eye (video tracks only: audio has nothing to
+ * hide), **M**, **S** and the padlock. An active control reads gold; the
+ * eye is "active" while the track is HIDDEN, as the concept draws it.
  *
- * Every mutation goes straight to `editorProject.execute` (the
- * `ClipItem.vue`/`TimelineToolbar.vue` precedent of a leaf component
- * calling the store directly rather than emitting purely upward) --
- * `setTrackFlags`/`renameTrack`/`moveTrack`/`deleteTrack`, never a local
- * write (R14).
+ * The badge and the title select the track (`editorWorkspace.selectTrack`)
+ * and show the inspector, which then reads Track properties — the
+ * concept's `data-select-track`. At a drawer width the inspector is closed,
+ * so the click also reveals it: selecting a track the user cannot see
+ * would be a click with no visible effect (D14).
  *
- * **Locked-track gating stays entirely on THIS side of the wire, mirroring
- * Rust's own rule (`core::editor::commands::tracks`) rather than
- * re-deriving it**: every control except Lock itself is disabled
- * (`aria-disabled`, never the native `disabled` attribute -- the
- * `TimelineToolbar.vue`/`ContextMenu.vue` precedent of keeping a disabled
- * control reachable so its `title` explains why) with the SAME reason text
- * `actionMeta.ts`'s `lockedReason` already gives a locked track's clip
- * actions, so a locked track never shows two different explanations for
- * the same fact. Lock/unlock is the one control that is NEVER disabled --
- * the brief's own carve-out, and `setTrackFlags`' own Rust-side rule.
+ * There is no ⋮ button (ruling P4): the track menu (`menuSets.trackMenu`)
+ * opens from a right-click on the header, or Shift+F10 / the Menu key while
+ * focus is in it — `TrackLane` owns that, since the label cell is its
+ * element. Its "Rename track…" comes back here through
+ * `revealBus.trackRenameRequest` and opens the inline rename; its "Remove
+ * track…" goes through `trackRemoval.ts`'s confirm, the one removal path.
+ * Track volume lives in the inspector's Track properties and the mixer.
  *
- * **Every `title`/`class` ternary lives in a named computed, not inline in
- * the template** (fallow's own template-complexity gate flagged the first
- * draft CRITICAL at 26 cyclomatic once seven controls each carried two or
- * three inline conditionals) -- moving the branching into `<script>`
- * leaves the template itself close to a flat list of bindings, and each
- * computed here is one or two conditions, individually far under any
- * complexity threshold.
+ * Every flag goes straight to `editorProject.execute` as `setTrackFlags`
+ * (the `ClipItem.vue` precedent of a leaf calling the store), never a local
+ * write (R14). **Locked-track gating mirrors Rust's rule
+ * (`core::editor::commands::tracks`)**: every flag but the padlock itself is
+ * refused while the track is locked — `aria-disabled`, never native
+ * `disabled`, so the control stays reachable and its `title` says why, with
+ * the same `lockedReason` text a locked track's clip actions give.
+ *
+ * Titles and classes live in computeds, keeping the template a flat list of
+ * bindings (fallow's template-complexity gate).
  */
 import { computed, nextTick, ref, watch } from "vue";
 
-import { useGuideTarget } from "../../../composables/useGuideTarget";
-import { useWindowDismiss } from "../../../composables/useWindowDismiss";
 import { lockedReason } from "../../../editor/actionMeta";
 import { trackRenameRequest } from "../../../editor/revealBus";
 import type { Track } from "../../../editorTypes";
 import { useEditorProjectStore } from "../../../stores/editorProject";
+import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import EditorIcon from "../icons/EditorIcon.vue";
 
 const props = defineProps<{
   track: Track;
-  /** This lane's own index and the total track count -- what the track
-   * menu's Move up/Move down need to disable at either boundary. */
-  trackIndex: number;
-  trackCount: number;
+  /** `V3`, `A1`… (`timelineLayout.trackBadges`). */
+  badge: string;
 }>();
 
 const editorProject = useEditorProjectStore();
-/** The guide's `track.menu` (Task 55): the TOP track's menu, one target
- * rather than whichever header happened to register first. */
-const menuTarget = useGuideTarget("track.menu", { active: () => props.trackIndex === 0 });
+const workspace = useEditorWorkspaceStore();
 
 const locked = computed(() => props.track.locked);
 const reason = computed(() => lockedReason(props.track.name));
-/** Only the ONE reusable pair a disabled-while-locked control needs. */
-const disabledClass = "cursor-default opacity-50";
-const enabledClass = "cursor-pointer";
 
-function setFlags(patch: {
-  visible?: boolean;
-  locked?: boolean;
-  muted?: boolean;
-  solo?: boolean;
-  volume?: number;
-}) {
-  void editorProject.execute({ kind: "setTrackFlags", trackId: props.track.id, ...patch });
+type Flag = "visible" | "muted" | "solo" | "locked";
+
+/** Flip one flag; everything but the padlock is refused while locked. */
+function toggle(flag: Flag) {
+  if (locked.value && flag !== "locked") return;
+  const change: Partial<Record<Flag, boolean>> = { [flag]: !props.track[flag] };
+  void editorProject.execute({ kind: "setTrackFlags", trackId: props.track.id, ...change });
 }
 
-function toggleVisible() {
-  if (locked.value) return;
-  setFlags({ visible: !props.track.visible });
-}
-function toggleLocked() {
-  setFlags({ locked: !props.track.locked });
-}
-function toggleMuted() {
-  if (locked.value) return;
-  setFlags({ muted: !props.track.muted });
-}
-function toggleSolo() {
-  if (locked.value) return;
-  setFlags({ solo: !props.track.solo });
-}
-function onVolumeChange(event: Event) {
-  if (locked.value) return;
-  const value = Number((event.target as HTMLInputElement).value);
-  setFlags({ volume: value });
+function showProperties() {
+  workspace.selectTrack(props.track.id);
+  workspace.revealInspector();
 }
 
-// ---- computed title/class (kept OUT of the template — see the module doc) --
+// ---- computed titles / classes (kept OUT of the template) -----------------
 
-const eyeTitle = computed(() => (locked.value ? reason.value : props.track.visible ? "Hide track" : "Show track"));
-const eyeClass = computed(() => [
-  locked.value ? disabledClass : enabledClass,
-  props.track.visible ? "text-fg-secondary" : "text-fg-subtle",
-]);
-const lockTitle = computed(() => (props.track.locked ? "Unlock track" : "Lock track"));
-const lockClass = computed(() => (props.track.locked ? "text-accent-fg" : "text-fg-secondary"));
-const muteTitle = computed(() => (locked.value ? reason.value : "Mute track"));
-const muteClass = computed(() => [
-  locked.value ? disabledClass : enabledClass,
-  props.track.muted ? "bg-accent/20 text-accent-fg" : "text-fg-secondary",
-]);
-const soloTitle = computed(() => (locked.value ? reason.value : "Solo track"));
-const soloClass = computed(() => [
-  locked.value ? disabledClass : enabledClass,
-  props.track.solo ? "bg-accent/20 text-accent-fg" : "text-fg-secondary",
-]);
-const volumeTitle = computed(() => (locked.value ? reason.value : "Track volume"));
-/** `aria-label`, not just `title` (fix round 1): the button controls carry
- * a visible glyph plus a title, but a bare `<input type="range">` has no
- * accessible name at all otherwise -- "volume" alone would be ambiguous
- * once more than one track exists on the timeline. */
-const volumeLabel = computed(() => `${props.track.name} volume`);
-/** `aria-disabled`, never the native `disabled` attribute (fix round 1) --
- * this control had drifted from every sibling's own rule (see the module
- * doc): a native `disabled` range input drops out of the tab order and, in
- * most browsers/AT, stops reliably surfacing its `title`, making a locked
- * track's volume control LESS explorable than mute/solo/eye next to it.
- * `onVolumeChange`'s own `if (locked.value) return;` guard already refuses
- * the change while locked, so removing `disabled` does not reopen
- * anything `setTrackFlags` wouldn't refuse anyway. */
-const volumeClass = computed(() => (locked.value ? disabledClass : enabledClass));
+const CONTROL = "inline-flex h-[26px] min-h-[26px] min-w-[26px] items-center justify-center rounded-[4px] p-1 text-[10px]";
+const ACTIVE = "vb-track-active bg-gold-bg text-gold";
+const IDLE = "text-fg-secondary hover:bg-hover";
 
-// ---- inline rename ----------------------------------------------------------
+function controlClass(active: boolean, gated: boolean): string[] {
+  return [CONTROL, active ? ACTIVE : IDLE, gated && locked.value ? "cursor-default opacity-50" : "cursor-pointer"];
+}
+
+const badgeClass = computed(() => (props.track.kind === "audio" ? "bg-audio-bg text-audio" : "bg-video-bg text-video"));
+const hidden = computed(() => !props.track.visible);
+const eyeTitle = computed(() => (locked.value ? reason.value : hidden.value ? "Show video track" : "Hide video track"));
+const muteTitle = computed(() => (locked.value ? reason.value : `Mute ${props.track.name}`));
+const soloTitle = computed(() => (locked.value ? reason.value : `Solo audio on ${props.track.name}`));
+const lockTitle = computed(() => `${locked.value ? "Unlock" : "Lock"} ${props.track.name}`);
+
+// ---- inline rename (opened by the track menu's "Rename track…") -----------
 
 const editing = ref(false);
 const draft = ref(props.track.name);
 const nameInput = ref<HTMLInputElement | null>(null);
 
 /** The draft follows the committed name whenever it changes from OUTSIDE
- * (an undo, a rename landing from elsewhere) -- unless the user is
- * mid-edit, the `useInspectorDraft.ts` precedent for a field that must not
- * clobber a live keystroke with a stale server echo. */
+ * (an undo, a rename landing from elsewhere) — unless the user is mid-edit
+ * (the `useInspectorDraft.ts` precedent). */
 watch(
   () => props.track.name,
   (name) => {
@@ -145,17 +99,12 @@ watch(
   },
 );
 
-const nameTitle = computed(() => (locked.value ? reason.value : "Rename track"));
-const nameClass = computed(() => (locked.value ? "cursor-default opacity-70" : "cursor-pointer"));
-
 function beginRename() {
   if (locked.value) return;
   editing.value = true;
   draft.value = props.track.name;
   void nextTick(() => nameInput.value?.select());
 }
-/** The track menu's "Rename track…" (visual-parity Task 5) asks the header
- * that owns the name field to start its inline rename. */
 watch(
   trackRenameRequest,
   (id) => {
@@ -178,219 +127,106 @@ function cancelRename() {
   editing.value = false;
   draft.value = props.track.name;
 }
-
-// ---- track menu ---------------------------------------------------------
-
-const menuOpen = ref(false);
-const menuRoot = ref<HTMLElement | null>(null);
-
-function onWindowPointerDown(event: PointerEvent) {
-  if (!menuOpen.value) return;
-  if (menuRoot.value && !menuRoot.value.contains(event.target as Node)) menuOpen.value = false;
-}
-/** Escape closes the menu; when focus was inside it, focus goes back to
- * the menu button rather than falling to the page (Task 58). */
-function onWindowKeydown(event: KeyboardEvent) {
-  if (!menuOpen.value || event.key !== "Escape") return;
-  menuOpen.value = false;
-  if (menuRoot.value?.contains(document.activeElement)) {
-    menuRoot.value.querySelector<HTMLElement>("[aria-haspopup]")?.focus();
-  }
-}
-useWindowDismiss(onWindowPointerDown, onWindowKeydown);
-
-const canMoveUp = computed(() => !locked.value && props.trackIndex > 0);
-const canMoveDown = computed(() => !locked.value && props.trackIndex < props.trackCount - 1);
-const canDelete = computed(() => !locked.value);
-
-const menuItemTitle = computed(() => (locked.value ? reason.value : undefined));
-/** Audit finding 6: an edge track's Move up/down says why it cannot move. */
-const moveUpTitle = computed(() => menuItemTitle.value ?? (canMoveUp.value ? undefined : "Already the top track"));
-const moveDownTitle = computed(() => menuItemTitle.value ?? (canMoveDown.value ? undefined : "Already the bottom track"));
-function menuItemClass(enabled: boolean): string {
-  return enabled ? "cursor-pointer text-fg-secondary" : "cursor-default text-fg-subtle opacity-50";
-}
-const moveUpClass = computed(() => menuItemClass(canMoveUp.value));
-const moveDownClass = computed(() => menuItemClass(canMoveDown.value));
-const deleteClass = computed(() => (canDelete.value ? "cursor-pointer text-danger-fg" : "cursor-default text-fg-subtle opacity-50"));
-
-function moveUp() {
-  menuOpen.value = false;
-  if (!canMoveUp.value) return;
-  void editorProject.execute({ kind: "moveTrack", trackId: props.track.id, toIndex: props.trackIndex - 1 });
-}
-function moveDown() {
-  menuOpen.value = false;
-  if (!canMoveDown.value) return;
-  void editorProject.execute({ kind: "moveTrack", trackId: props.track.id, toIndex: props.trackIndex + 1 });
-}
-function deleteTrack() {
-  menuOpen.value = false;
-  if (!canDelete.value) return;
-  void editorProject.execute({ kind: "deleteTrack", trackId: props.track.id });
-}
 </script>
 
 <template>
   <div
     :data-testid="`track-header-${track.id}`"
-    class="flex items-center gap-1 truncate px-1"
+    class="flex min-w-0 flex-1 items-center gap-2"
   >
-    <input
-      v-if="editing"
-      ref="nameInput"
-      :data-testid="`track-header-${track.id}-name-input`"
-      class="w-0 min-w-0 flex-1 rounded border border-line bg-stage px-1 text-micro text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
-      :value="draft"
-      @input="draft = ($event.target as HTMLInputElement).value"
-      @keydown.enter="commitRename"
-      @keydown.escape="cancelRename"
-      @blur="commitRename"
-    >
-    <button
-      v-else
-      type="button"
-      :data-testid="`track-header-${track.id}-name`"
-      :aria-pressed="editing"
-      :aria-disabled="locked"
-      :title="nameTitle"
-      class="min-w-0 flex-1 truncate rounded px-0.5 text-left text-micro text-fg-secondary hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
-      :class="nameClass"
-      @click="beginRename"
-    >
-      {{ track.name }}
-    </button>
-
-    <button
-      v-if="track.kind === 'video'"
-      type="button"
-      :data-testid="`track-header-${track.id}-visible`"
-      :aria-pressed="track.visible"
-      :aria-disabled="locked"
-      :aria-label="`Show ${track.name}`"
-      :title="eyeTitle"
-      class="shrink-0 rounded px-1 hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
-      :class="eyeClass"
-      @click="toggleVisible"
-    >
-      &#128065;
-    </button>
-
     <button
       type="button"
-      :data-testid="`track-header-${track.id}-lock`"
-      :aria-pressed="track.locked"
-      :aria-label="`Lock ${track.name}`"
-      :title="lockTitle"
-      class="shrink-0 cursor-pointer rounded px-1 hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
-      :class="lockClass"
-      @click="toggleLocked"
+      :data-testid="`track-header-${track.id}-badge`"
+      :aria-label="`${track.name} track properties`"
+      :title="`${track.name} · track properties`"
+      class="grid h-7 min-h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[6px] p-0 vb-mono text-[10px] focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      :class="badgeClass"
+      @click="showProperties"
     >
-      &#128274;
+      {{ badge }}
     </button>
-
-    <button
-      type="button"
-      :data-testid="`track-header-${track.id}-mute`"
-      :aria-pressed="track.muted"
-      :aria-disabled="locked"
-      :aria-label="`Mute ${track.name}`"
-      :title="muteTitle"
-      class="shrink-0 rounded px-1 text-micro hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
-      :class="muteClass"
-      @click="toggleMuted"
-    >
-      M
-    </button>
-    <button
-      type="button"
-      :data-testid="`track-header-${track.id}-solo`"
-      :aria-pressed="track.solo"
-      :aria-disabled="locked"
-      :aria-label="`Solo ${track.name}`"
-      :title="soloTitle"
-      class="shrink-0 rounded px-1 text-micro hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
-      :class="soloClass"
-      @click="toggleSolo"
-    >
-      S
-    </button>
-
-    <input
-      v-if="track.kind === 'audio'"
-      :data-testid="`track-header-${track.id}-volume`"
-      type="range"
-      min="0"
-      max="2"
-      step="0.01"
-      :value="track.volume"
-      :aria-disabled="locked"
-      :aria-label="volumeLabel"
-      :title="volumeTitle"
-      class="w-10 shrink-0 accent-violet-500"
-      :class="volumeClass"
-      @change="onVolumeChange"
-    >
-
-    <div
-      ref="menuRoot"
-      class="relative shrink-0"
-    >
-      <button
-        :ref="menuTarget"
-        type="button"
-        :data-testid="`track-header-${track.id}-menu`"
-        aria-haspopup="menu"
-        :aria-expanded="menuOpen"
-        :aria-pressed="menuOpen"
-        :aria-label="`${track.name} track menu`"
-        title="Track menu"
-        class="cursor-pointer rounded px-1 text-fg-secondary hover:bg-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
-        @click="menuOpen = !menuOpen"
-      >
-        &#8942;
-      </button>
+    <div class="min-w-0 flex-1">
+      <div class="truncate text-[11px] font-[550] text-fg">
+        <input
+          v-if="editing"
+          ref="nameInput"
+          :data-testid="`track-header-${track.id}-name-input`"
+          :aria-label="`Rename ${track.name}`"
+          class="h-6 w-full min-w-0 rounded border border-line bg-stage px-1 text-[11px] text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+          :value="draft"
+          @input="draft = ($event.target as HTMLInputElement).value"
+          @keydown.enter="commitRename"
+          @keydown.escape.stop="cancelRename"
+          @blur="commitRename"
+        >
+        <button
+          v-else
+          type="button"
+          :data-testid="`track-header-${track.id}-name`"
+          :title="track.name"
+          class="block min-h-6 max-w-full cursor-pointer truncate rounded p-0 text-left text-[11px] font-[550] text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+          @click="showProperties"
+        >
+          {{ track.name }}
+        </button>
+      </div>
       <div
-        v-if="menuOpen"
-        role="menu"
-        :data-testid="`track-header-${track.id}-menu-list`"
-        class="absolute right-0 top-full z-40 mt-1 flex min-w-32 flex-col gap-0.5 rounded-control border border-line bg-panel p-1 text-micro shadow-lg"
+        :data-testid="`track-header-${track.id}-controls`"
+        class="mt-px flex items-center gap-1"
       >
         <button
+          v-if="track.kind === 'video'"
           type="button"
-          role="menuitem"
-          :data-testid="`track-header-${track.id}-move-up`"
-          :aria-disabled="!canMoveUp"
-          :title="moveUpTitle"
-          class="rounded px-1.5 py-0.5 text-left hover:bg-hover"
-          :class="moveUpClass"
-          @click="moveUp"
+          :data-testid="`track-header-${track.id}-visible`"
+          :aria-pressed="hidden"
+          :aria-disabled="locked"
+          :aria-label="`Hide ${track.name}`"
+          :title="eyeTitle"
+          :class="controlClass(hidden, true)"
+          @click="toggle('visible')"
         >
-          Move up
+          <EditorIcon
+            :name="hidden ? 'eyeOff' : 'eye'"
+            :size="12"
+          />
         </button>
         <button
           type="button"
-          role="menuitem"
-          :data-testid="`track-header-${track.id}-move-down`"
-          :aria-disabled="!canMoveDown"
-          :title="moveDownTitle"
-          class="rounded px-1.5 py-0.5 text-left hover:bg-hover"
-          :class="moveDownClass"
-          @click="moveDown"
+          :data-testid="`track-header-${track.id}-mute`"
+          :aria-pressed="track.muted"
+          :aria-disabled="locked"
+          :aria-label="`Mute ${track.name}`"
+          :title="muteTitle"
+          :class="controlClass(track.muted, true)"
+          @click="toggle('muted')"
         >
-          Move down
+          M
         </button>
         <button
           type="button"
-          role="menuitem"
-          :data-testid="`track-header-${track.id}-delete`"
-          :aria-disabled="!canDelete"
-          :title="menuItemTitle"
-          class="rounded px-1.5 py-0.5 text-left hover:bg-hover"
-          :class="deleteClass"
-          @click="deleteTrack"
+          :data-testid="`track-header-${track.id}-solo`"
+          :aria-pressed="track.solo"
+          :aria-disabled="locked"
+          :aria-label="`Solo ${track.name}`"
+          :title="soloTitle"
+          :class="controlClass(track.solo, true)"
+          @click="toggle('solo')"
         >
-          Delete track
+          S
+        </button>
+        <button
+          type="button"
+          :data-testid="`track-header-${track.id}-lock`"
+          :aria-pressed="locked"
+          :aria-label="`Lock ${track.name}`"
+          :title="lockTitle"
+          :class="controlClass(locked, false)"
+          @click="toggle('locked')"
+        >
+          <EditorIcon
+            :name="locked ? 'lock' : 'unlock'"
+            :size="12"
+          />
         </button>
       </div>
     </div>
