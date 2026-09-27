@@ -14,6 +14,9 @@
  * **Every way out stops the camera**: Close, Escape, a successful Add to
  * timeline, `open` turning false, `pagehide` and unmount all `dispose()`
  * the recorder, and every error disposes it too (inside the recorder).
+ * Stop & review turns the camera and microphone off as well (Ruling F-1),
+ * which is what the privacy line promises; Retake turns the same ones back
+ * on.
  *
  * **A finished take is never deleted** (GAP-195): it became a library asset
  * the moment Rust finished it. So Retake says the earlier take stays in the
@@ -94,17 +97,21 @@ async function ffmpegPreflight(): Promise<WebcamProblem | null> {
   return ffmpeg.status?.installed === false ? { kind: "encoderUnavailable", message: ENCODER_UNAVAILABLE_TEXT } : null;
 }
 
+/** A recorder whose changes reach the view only while it is THIS
+ * opening's: one released on close (a take finishing, a device listing
+ * ending) must not write over the view of the one that replaced it. */
 function create(): WebcamRecorder {
-  return new WebcamRecorder({
+  const created: WebcamRecorder = new WebcamRecorder({
     port: project.port,
     sessionId: () => project.sessionId,
     mediaDevices: navigator.mediaDevices,
     Recorder: (globalThis as { MediaRecorder?: RecorderConstructor }).MediaRecorder,
     preflight: ffmpegPreflight,
     onChange: (next) => {
-      view.value = next;
+      if (recorder === created) view.value = next;
     },
   });
+  return created;
 }
 
 const state = computed(() => view.value.state);

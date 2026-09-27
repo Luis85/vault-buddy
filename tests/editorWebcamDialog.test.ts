@@ -15,6 +15,7 @@ import WebcamDialog from "../src/components/editor/dialogs/WebcamDialog.vue";
 import MediaLibrary from "../src/components/editor/library/MediaLibrary.vue";
 import { cornerPreset, PRESENTER_CORNER, presenterBox } from "../src/editor/layoutGeometry";
 import { type EditorPort, EditorPortError } from "../src/editor/port";
+import { webcamStatus } from "../src/editor/webcamPhase";
 import { PERMISSION_DENIED_TEXT } from "../src/editor/webcamRecorder";
 import type { Clip, EditorCommand, EditorOpenResult, Project, TakeDto } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
@@ -285,12 +286,12 @@ describe("WebcamDialog — the take", () => {
     const w = mountDialog();
     await recordTake(w);
     await click(w, "webcam-close");
-    // Asked, not closed — and the camera is still live behind the question.
+    // Asked, not closed — the camera itself went off at Stop & review.
     expect(w.emitted("close")).toBeUndefined();
     const confirm = w.get('[data-testid="webcam-confirm"]');
     expect(confirm.text()).toMatch(/not on the timeline/i);
     expect(confirm.text()).toMatch(/stays in the media library/i);
-    expect(devices.tracks().every((t) => !t.stopped)).toBe(true);
+    expect(devices.tracks().every((t) => t.stopped)).toBe(true);
     await click(w, "webcam-confirm-back");
     expect(w.find('[data-testid="webcam-confirm"]').exists()).toBe(false);
     await click(w, "webcam-close");
@@ -630,6 +631,89 @@ function poll(): Promise<void> {
     }, 150);
   });
 }
+
+// Final review, Important 3 (Ruling F-1): "Camera and microphone stop
+// after recording or closing" is the dialog's own promise, so Stop & review
+// turns them off — the review reads "Camera off" — and Retake turns the
+// same camera and microphone back on.
+describe("WebcamDialog — the camera goes off at Stop & review", () => {
+  it("every track stops, the status says the camera is off, and the privacy line stays", async () => {
+    await openStore();
+    const w = mountDialog();
+    await recordTake(w);
+    expect(devices.tracks().every((t) => t.stopped)).toBe(true);
+    expect(webcamStatus("review")).toMatchObject({ label: "Camera off", tone: "off" });
+    expect(webcamStatus("committing")).toMatchObject({ label: "Camera off", tone: "off" });
+    expect(w.get('[data-testid="webcam-dialog"]').text()).not.toContain("Camera on");
+    expect(w.get('[data-testid="webcam-privacy"]').text()).toContain(
+      "Camera and microphone stop after recording or closing.",
+    );
+  });
+
+  it("Retake turns the chosen camera and microphone back on", async () => {
+    await openStore();
+    const w = mountDialog();
+    await w.get('[data-testid="webcam-mic"]').setValue(true);
+    await recordTake(w);
+    await click(w, "webcam-retake");
+    expect(devices.requests).toHaveLength(2);
+    expect(devices.requests[1]).toEqual(devices.requests[0]);
+    expect(w.get('[data-testid="webcam-status"]').text()).toContain("Camera on");
+    expect(footer(w)).toEqual(["Start recording"]);
+  });
+
+  it("the mic level preview is torn down at Stop & review", async () => {
+    const audio = fakeAudioContext(0.5);
+    vi.stubGlobal("AudioContext", audio.FakeAudioContext);
+    await openStore();
+    const w = mountDialog();
+    await w.get('[data-testid="webcam-mic"]').setValue(true);
+    await recordTake(w);
+    expect(audio.contexts).toHaveLength(1);
+    expect(audio.contexts[0]).toEqual({ closed: true, disconnected: 2 });
+    expect(w.get('[data-testid="webcam-mic-meter"]').attributes("aria-valuenow")).toBe("0");
+  });
+});
+
+// Final review, minor 8: a recorder the dialog already released must not
+// write over the view of the one that replaced it.
+describe("WebcamDialog — a released recorder never speaks again", () => {
+  it("a close while the devices are listed, then a reopen: the new dialog is idle", async () => {
+    devices = fakeMediaDevices(null, { holdList: true });
+    Object.defineProperty(navigator, "mediaDevices", { value: devices.mediaDevices, configurable: true });
+    await openStore();
+    const w = mountDialog();
+    await click(w, "webcam-enable");
+    await w.setProps({ open: false });
+    await w.setProps({ open: true });
+    devices.releaseList();
+    await flushPromises();
+    expect(w.get('[data-testid="webcam-status"]').text()).toContain("Camera off");
+    expect(footer(w)).toEqual(["Enable camera"]);
+    expect(devices.tracks().every((t) => t.stopped)).toBe(true);
+  });
+
+  it("a take that finishes after the dialog was closed and reopened is not shown in the new one", async () => {
+    let finish!: (t: TakeDto) => void;
+    await openStore({ webcamFinish: () => new Promise<TakeDto>((resolve) => (finish = resolve)) });
+    const w = mountDialog();
+    await click(w, "webcam-enable");
+    await click(w, "webcam-record");
+    await vi.advanceTimersByTimeAsync(3_000);
+    await flushPromises();
+    FakeRecorder.instances[0].emit([1, 2, 3]);
+    await click(w, "webcam-stop");
+    await w.setProps({ open: false });
+    await w.setProps({ open: true });
+    finish(TAKE);
+    await flushPromises();
+    expect(footer(w)).toEqual(["Enable camera"]);
+    // The new dialog holds no take, so its ✕ closes without asking.
+    await click(w, "webcam-close");
+    expect(w.find('[data-testid="webcam-confirm"]').exists()).toBe(false);
+    expect(w.emitted("close")).toHaveLength(1);
+  });
+});
 
 describe("WebcamDialog — the mic level preview", () => {
   it("reads the live microphone's peak and is torn down when the dialog closes", async () => {

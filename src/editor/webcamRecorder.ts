@@ -20,11 +20,15 @@
  *
  * **A finished take is never deleted** (Task 49's ruling, GAP-195): it is a
  * registered asset the moment `editor_webcam_finish` answers. So `retake`
- * after a finished take only returns to `ready` — the earlier take stays in
- * the library — and only a take that is still OPEN (recording, never
- * finished) is ever discarded, which removes its `.part`.
+ * after a finished take only asks for the camera again — the earlier take
+ * stays in the library — and only a take that is still OPEN (recording,
+ * never finished) is ever discarded, which removes its `.part`.
  *
- * **Tracks are stopped on every way out**: `dispose` (the dialog's close,
+ * **Tracks are stopped on every way out**: Stop & review (final review,
+ * Ruling F-1: the dialog promises "Camera and microphone stop after
+ * recording", so they do — once the recorder has stopped, so its final
+ * chunk still lands; Retake asks again for the same devices through
+ * `enable`, epoch-guarded like any request), `dispose` (the dialog's close,
  * `pagehide`) and every error. A camera left running would keep its light
  * on for the rest of the process. A take still recording at `dispose` is
  * DROPPED in order (fix round 1): its final chunk is deliberately not sent,
@@ -192,6 +196,8 @@ export class WebcamRecorder {
   private session: Session | null = null;
   /** Bumped by every cancel/dispose, so a countdown that outlives it stops. */
   private epoch = 0;
+  /** The devices the last `enable` asked for — what Retake asks for again. */
+  private request: { deviceId?: string; withMic: boolean; micId?: string } | null = null;
 
   constructor(private readonly deps: WebcamDeps) {}
 
@@ -228,6 +234,7 @@ export class WebcamRecorder {
    * on: its stream is stopped the moment it arrives, and nothing changes. */
   async enable(deviceId?: string, withMic = false, micId?: string): Promise<void> {
     this.stopTracks();
+    this.request = { deviceId, withMic, micId };
     this.set({ state: "requesting", problem: null });
     const epoch = this.epoch;
     let stream: MediaStream;
@@ -245,6 +252,9 @@ export class WebcamRecorder {
     }
     this.live = stream;
     await this.listDevices();
+    // A close during the listing already stopped this stream (`dispose`);
+    // its end must not write "ready" over the closed view.
+    if (epoch !== this.epoch) return;
     this.set({ state: "ready" });
   }
 
@@ -358,12 +368,19 @@ export class WebcamRecorder {
     });
   }
 
-  /** Stop recording and finish the take; `review` shows it. */
+  /** Stop recording, turn the camera and microphone off, and finish the
+   * take; `review` shows it. The tracks stop once the recorder has — its
+   * final chunk is flushed from the live stream — and before the appends
+   * drain, which can take a while. */
   async stop(): Promise<void> {
     const session = this.session;
     if (!session || this.state !== "recording") return;
     this.set({ state: "review", take: null });
-    await this.drain(session);
+    if (session.recorder.state !== "inactive") session.recorder.stop();
+    await session.stopped;
+    this.stopTracks();
+    this.set({});
+    await session.chain;
     if (session.failure || session.nextSeq === 0) {
       this.session = null;
       this.discardOpen(session.sessionId, session.takeId);
@@ -399,11 +416,15 @@ export class WebcamRecorder {
     this.set({ state: this.live ? "ready" : "idle", count: null });
   }
 
-  /** Record again. A finished take is NOT deleted (GAP-195) — it stays in
-   * the library; only the dialog stops offering it. */
+  /** Record again: ask for the same camera and microphone the take used
+   * (their light went off at Stop & review). A finished take is NOT deleted
+   * (GAP-195) — it stays in the library; only the dialog stops offering it. */
   async retake(): Promise<void> {
     if (this.state !== "review" || this.session) return;
-    this.set({ state: this.live ? "ready" : "idle", take: null });
+    this.set({ take: null });
+    const request = this.request;
+    if (!request) return this.set({ state: "idle" });
+    await this.enable(request.deviceId, request.withMic, request.micId);
   }
 
   /** Run `place` (the dialog's timeline insertion) as `committing`; back

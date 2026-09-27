@@ -35,15 +35,22 @@ export interface FakeDevices {
   tracks: () => FakeTrack[];
   /** Answers the requests held back by `{ hold: true }`, in order. */
   release: () => void;
+  /** Answers the device listings held back by `{ holdList: true }`. */
+  releaseList: () => void;
 }
 
 /** `deny` names the `DOMException` every request fails with; `hold`
  * keeps every request pending until `release()` (a permission prompt the
- * user has not answered yet). */
-export function fakeMediaDevices(deny: string | null = null, opts: { hold?: boolean } = {}): FakeDevices {
+ * user has not answered yet); `holdList` keeps every device listing pending
+ * until `releaseList()` (a slow `enumerateDevices`). */
+export function fakeMediaDevices(
+  deny: string | null = null,
+  opts: { hold?: boolean; holdList?: boolean } = {},
+): FakeDevices {
   const requests: MediaStreamConstraints[] = [];
   const streams: FakeStream[] = [];
   const held: (() => void)[] = [];
+  const heldLists: (() => void)[] = [];
   const getUserMedia = vi.fn((constraints: MediaStreamConstraints) => {
     requests.push(constraints);
     if (deny) return Promise.reject(new DOMException("refused", deny));
@@ -52,18 +59,22 @@ export function fakeMediaDevices(deny: string | null = null, opts: { hold?: bool
     if (!opts.hold) return Promise.resolve(stream);
     return new Promise<FakeStream>((resolve) => held.push(() => resolve(stream)));
   });
+  const list = [
+    { kind: "videoinput", deviceId: "cam-front", label: "Front camera", groupId: "g1" },
+    { kind: "audioinput", deviceId: "mic-1", label: "Microphone", groupId: "g1" },
+    { kind: "videoinput", deviceId: "cam-usb", label: "", groupId: "g2" },
+  ];
   const enumerateDevices = () =>
-    Promise.resolve([
-      { kind: "videoinput", deviceId: "cam-front", label: "Front camera", groupId: "g1" },
-      { kind: "audioinput", deviceId: "mic-1", label: "Microphone", groupId: "g1" },
-      { kind: "videoinput", deviceId: "cam-usb", label: "", groupId: "g2" },
-    ]);
+    opts.holdList
+      ? new Promise<typeof list>((resolve) => heldLists.push(() => resolve(list)))
+      : Promise.resolve(list);
   return {
     mediaDevices: { getUserMedia, enumerateDevices } as unknown as MediaDevices,
     requests,
     streams,
     tracks: () => streams.flatMap((s) => s.tracks),
     release: () => held.splice(0).forEach((answer) => answer()),
+    releaseList: () => heldLists.splice(0).forEach((answer) => answer()),
   };
 }
 

@@ -183,7 +183,78 @@ describe("webcamRecorder — keeping and dropping takes", () => {
     expect(discards).toBe(0);
     expect(r.view.state).toBe("ready");
     expect(r.view.take).toBeNull();
-    expect(devices.tracks().every((t) => !t.stopped)).toBe(true);
+    // The camera went off at Stop & review; Retake turned a new one on.
+    expect(devices.streams).toHaveLength(2);
+    expect(devices.streams[1].tracks.every((t) => !t.stopped)).toBe(true);
+  });
+
+  // Final review, Important 3 (Ruling F-1): the dialog's privacy line says
+  // "Camera and microphone stop after recording or closing", but Stop &
+  // review kept every track for Retake, the light stayed on and the review
+  // status read "Camera on". The claim is now made true.
+  it("Stop & review stops every camera and microphone track before the take is reviewed", async () => {
+    const r = recorder({ webcamAppend: () => Promise.resolve(), webcamFinish: () => Promise.resolve(TAKE) });
+    await r.enable("cam-usb", true, "mic-1");
+    await r.start();
+    live().emit([1]);
+    await r.stop();
+    expect(devices.tracks()).toHaveLength(2);
+    expect(devices.tracks().every((t) => t.stopped)).toBe(true);
+    expect(r.stream).toBeNull();
+    expect(r.view.state).toBe("review");
+    expect(r.view.take).toEqual(TAKE);
+  });
+
+  it("the tracks stop only once the recorder has stopped, so its final chunk still lands", async () => {
+    const appended: number[] = [];
+    const r = recorder({
+      webcamAppend: (_s, _t, seq) => (appended.push(seq), Promise.resolve()),
+      webcamFinish: () => Promise.resolve(TAKE),
+    });
+    await r.enable();
+    await r.start();
+    const recorderStop = live().stop.bind(live());
+    let liveAtStop: boolean | null = null;
+    live().stop = () => {
+      liveAtStop = devices.tracks().every((t) => !t.stopped);
+      recorderStop();
+    };
+    live().emit([1]);
+    await r.stop();
+    expect(liveAtStop).toBe(true);
+    expect(appended).toEqual([0, 1]);
+  });
+
+  it("Retake asks again for the same camera and microphone, through enable", async () => {
+    const r = recorder({ webcamAppend: () => Promise.resolve(), webcamFinish: () => Promise.resolve(TAKE) });
+    await r.enable("cam-usb", true, "mic-1");
+    await r.start();
+    live().emit([1]);
+    await r.stop();
+    await r.retake();
+    expect(devices.requests).toHaveLength(2);
+    expect(devices.requests[1]).toEqual(devices.requests[0]);
+    expect(devices.requests[1]).toEqual({ video: { deviceId: { exact: "cam-usb" } }, audio: { deviceId: { exact: "mic-1" } } });
+    expect(r.view.state).toBe("ready");
+    expect(r.stream).toBe(devices.streams[1]);
+  });
+
+  it("a Retake the user leaves before the camera answers never turns it on", async () => {
+    const r = recorder({ webcamAppend: () => Promise.resolve(), webcamFinish: () => Promise.resolve(TAKE) });
+    await r.enable();
+    await r.start();
+    live().emit([1]);
+    await r.stop();
+    const held = fakeMediaDevices(null, { hold: true });
+    Object.assign(devices.mediaDevices, held.mediaDevices);
+    const retaking = r.retake();
+    await settle();
+    expect(r.view.state).toBe("requesting");
+    r.dispose();
+    held.release();
+    await retaking;
+    expect(held.tracks().every((t) => t.stopped)).toBe(true);
+    expect(r.view.state).toBe("idle");
   });
 
   it("dispose stops every track and discards a take still recording", async () => {
@@ -575,6 +646,24 @@ describe("webcamRecorder — the microphone and a late answer", () => {
     const r = recorder({});
     await r.enable("cam-usb", false, "mic-1");
     expect(devices.requests).toEqual([{ video: { deviceId: { exact: "cam-usb" } }, audio: false }]);
+  });
+
+  // Final review, minor 8: `enable` did not look at `epoch` again after
+  // the device listing, so a close while it was pending let the listing's
+  // end write "ready" over the closed view.
+  it("a close while the devices are being listed leaves the camera off and the view idle", async () => {
+    devices = fakeMediaDevices(null, { holdList: true });
+    const states: string[] = [];
+    const r = recorder({}, { onChange: (v) => states.push(v.state) });
+    const enabling = r.enable();
+    await settle();
+    r.dispose();
+    devices.releaseList();
+    await enabling;
+    expect(r.view.state).toBe("idle");
+    expect(states.at(-1)).toBe("idle");
+    expect(states).not.toContain("ready");
+    expect(devices.tracks().every((t) => t.stopped)).toBe(true);
   });
 
   it("a request answered after dispose stops its tracks at once and changes nothing", async () => {

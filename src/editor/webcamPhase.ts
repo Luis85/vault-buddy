@@ -104,8 +104,9 @@ const STATUSES: Record<WebcamState, WebcamStatus> = {
     tone: "recording",
     message: "Recording on this PC. Stop & review when you are done.",
   },
-  review: { label: "Camera on", tone: "live", message: "Review the take, then add it to the timeline or record it again." },
-  committing: { label: "Camera on", tone: "live", message: "Adding the take to the timeline…" },
+  // Stop & review turns the camera and microphone off (Ruling F-1).
+  review: { label: "Camera off", tone: "off", message: "Review the take, then add it to the timeline or record it again." },
+  committing: { label: "Camera off", tone: "off", message: "Adding the take to the timeline…" },
 };
 
 export function webcamStatus(state: WebcamState): WebcamStatus {
