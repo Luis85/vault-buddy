@@ -4,6 +4,8 @@
  * the render burns them in, where they sit, how big, and whether they get
  * a readable background. Presentational -- emits one partial
  * `setCaptionSettings` payload per change; `CaptionsLibrary` sends it.
+ * Visual-parity Task 10 (concept spec §3.4): a collapsed "Caption
+ * appearance" disclosure between two rules, as the concept keeps it.
  *
  * A project with no `captions` yet shows the reference editor's defaults
  * (on, burned in, 30 px, bottom, background) -- exactly what Rust creates
@@ -62,70 +64,69 @@ function onFontSize(event: Event): void {
 </script>
 
 <template>
-  <fieldset
+  <details
     data-testid="caption-settings"
-    :disabled="disabledReason !== null"
-    :title="disabledReason ?? undefined"
-    class="flex flex-col gap-1 rounded border border-line px-1.5 py-1"
+    class="my-4 border-y border-line py-3 text-[11px] text-fg"
   >
-    <legend class="px-0.5 text-fg-subtle">
+    <summary class="cursor-pointer">
       Caption appearance
-    </legend>
-    <label class="flex items-center gap-1">
-      <input
-        data-testid="caption-enabled"
-        type="checkbox"
-        :checked="shown.enabled"
-        class="accent-violet-500"
-        @change="emit('change', { enabled: checked($event) })"
-      >
-      Show captions (preview and checks)
-    </label>
-    <label class="flex items-center gap-1">
-      <input
-        data-testid="caption-burn-in"
-        type="checkbox"
-        :checked="shown.burnIn"
-        class="accent-violet-500"
-        @change="emit('change', { burnIn: checked($event) })"
-      >
-      Burn into the rendered video
-    </label>
-    <label class="flex items-center gap-1">
-      <input
-        data-testid="caption-background"
-        type="checkbox"
-        :checked="shown.background"
-        class="accent-violet-500"
-        @change="emit('change', { background: checked($event) })"
-      >
-      Readable background
-    </label>
-    <div class="flex gap-2">
-      <label class="flex items-center gap-1">
+    </summary>
+    <fieldset
+      :disabled="disabledReason !== null"
+      :title="disabledReason ?? undefined"
+      class="mt-3.5 flex flex-col gap-2"
+    >
+      <label class="flex items-center gap-2">
+        <input
+          data-testid="caption-enabled"
+          type="checkbox"
+          :checked="shown.enabled"
+          @change="emit('change', { enabled: checked($event) })"
+        >
+        Show captions
+      </label>
+      <label class="flex items-center gap-2">
+        <input
+          data-testid="caption-burn-in"
+          type="checkbox"
+          :checked="shown.burnIn"
+          @change="emit('change', { burnIn: checked($event) })"
+        >
+        Burn into rendered video
+      </label>
+      <label class="flex items-center gap-2">
+        <input
+          data-testid="caption-background"
+          type="checkbox"
+          :checked="shown.background"
+          @change="emit('change', { background: checked($event) })"
+        >
+        Readable background
+      </label>
+      <label class="flex flex-col gap-[5px] text-[10px] text-fg-secondary">
         Position
         <select
           data-testid="caption-position"
           :value="shown.position"
-          class="rounded border border-line bg-stage px-0.5 text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+          class="text-[11px] text-fg"
           @change="onPosition"
         >
           <option value="bottom">Bottom</option>
           <option value="top">Top</option>
         </select>
       </label>
-      <label class="flex items-center gap-1">
-        Size
+      <label class="flex flex-col gap-[5px] text-[10px] text-fg-secondary">
+        Font size
         <input
           data-testid="caption-font-size"
           type="number"
           :min="FONT_MIN"
           :max="FONT_MAX"
           :value="shown.fontSize"
-          class="w-12 rounded border border-line bg-stage px-0.5 text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+          class="text-[11px] text-fg"
           @change="onFontSize"
         >
       </label>
-    </div>
-  </fieldset>
+    </fieldset>
+  </details>
 </template>

@@ -149,6 +149,16 @@ describe("MediaLibrary — insert", () => {
     expect(executed).toEqual([{ kind: "addTrack", trackKind: "video", name: "Video 2", index: 0 }]);
   });
 
+  // visual-parity Task 10 (carried from Task 9's review): Space is the
+  // other key a focused row answers, exactly like Enter.
+  it("Space on the focused row runs its own primary action", async () => {
+    const w = await mountLibrary();
+    await w.get('[data-testid="library-asset-vid"]').trigger("keydown", { key: " " });
+    expect(executed).toEqual([
+      { kind: "insertClip", assetId: "vid", trackId: "v2", startMs: 4_200, inMs: 0, outMs: 12_000 },
+    ]);
+  });
+
   it("Enter on the focused row runs its own primary action", async () => {
     const w = await mountLibrary();
     await w.get('[data-testid="library-asset-vid"]').trigger("keydown", { key: "Enter" });
@@ -232,6 +242,14 @@ describe("MediaLibrary — rows: thumbnails, meta and trailing action", () => {
     expect(w.get('[data-testid="library-asset-vid"]').text()).toContain("0:12 · 1920 × 1080");
     expect(w.get('[data-testid="library-asset-aud"]').text()).toContain("0:07 · Local audio");
     expect(w.get('[data-testid="library-asset-gone"]').text()).toContain("Missing source");
+  });
+
+  // Task 9's review: an image without dimensions read "… · Video".
+  it("an image without dimensions reads Image, a video without them Video", async () => {
+    const plain: Asset = { id: "raw", kind: "video", name: "Raw.mov", duration_ms: 9_000 };
+    const w = await mountLibrary(undefined, {}, [], [...ASSETS, plain]);
+    expect(w.get('[data-testid="library-asset-pic"]').text()).toContain("0:05 · Image");
+    expect(w.get('[data-testid="library-asset-raw"]').text()).toContain("0:09 · Video");
   });
 
   it("has an Add button for an available asset and a Reconnect button that opens the dialog for a missing one", async () => {

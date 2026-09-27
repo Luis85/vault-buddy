@@ -137,8 +137,8 @@ describe("native lesson copy", () => {
       },
       products: {
         label: "Rendered products",
-        body: "Rendered videos are listed in the library's Products tab, which Project → Workspace & rendered products opens, separate from the editable project. Watch one, or restore the edit snapshot behind an earlier output.",
-        task: "Look through Products, then continue.",
+        body: "Rendered videos are listed under Project → Workspace & rendered products, beside the editable project. Watch one, or restore the edit snapshot behind an earlier output.",
+        task: "Look through the rendered products, then continue.",
       },
     });
   });
@@ -236,7 +236,7 @@ describe("every lesson's target in the mounted editor", () => {
     ["library.webcam", "library", "media", "library-webcam"],
     ["library.captions", "library", "captions", "captions-library"],
     ["library.chapters", "library", "chapters", "chapters-library"],
-    ["library.products", "library", "products", "product-library"],
+    ["library.products", "library", "project", "library-project-section"],
     ["inspector.layout", "property", "layout", "layout-section"],
     ["inspector.fades", "property", "fades", "fades-section"],
   ];
@@ -261,6 +261,10 @@ describe("every lesson's target in the mounted editor", () => {
     expect(resolve("library.captions")?.element.getAttribute("data-testid")).toBe("library-tab-captions");
     expect(resolve("inspector.layout")?.element.getAttribute("data-testid")).toBe("inspector-tab-layout");
     expect(resolve("library.import")?.element.getAttribute("data-testid")).toBe("library-import");
+    // visual-parity Task 10: the products live in the library's Project
+    // section, which is no tab — while it is closed the lesson points at
+    // the header's Project menu, the way in.
+    expect(resolve("library.products")?.element.getAttribute("data-testid")).toBe("editor-header-project-menu");
 
     workspace.setPropertyTab("layout");
     workspace.setLibraryTab("captions");

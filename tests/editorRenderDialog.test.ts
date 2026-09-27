@@ -20,6 +20,7 @@ import RenderDialog from "../src/components/editor/dialogs/RenderDialog.vue";
 import EditorHeader from "../src/components/editor/shell/EditorHeader.vue";
 import PreviewToolbar from "../src/components/editor/shell/PreviewToolbar.vue";
 import { EditorPortError } from "../src/editor/port";
+import { revealSerial } from "../src/editor/revealBus";
 import { useEditorJobsStore } from "../src/stores/editorJobs";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
@@ -179,6 +180,20 @@ describe("RenderDialog — completion", () => {
     expect(w.find('[data-testid="render-dialog-start"]').exists()).toBe(true);
     await start(w);
     expect(startRender).toHaveBeenCalledTimes(2);
+  });
+
+  // visual-parity Task 10 (design D9): the completion opens the library's
+  // Project section, through the one helper the Project menu and the
+  // status bar use, and steps aside so the section is not behind it.
+  it("Show in workspace opens the Project section and closes the dialog", async () => {
+    const { w, deliver } = await openDialog();
+    await start(w);
+    deliver(0, progress("job-0", { sequence: 2, phase: "complete", fraction: 1, terminal: { productId: "prod-b" } }));
+    await flushPromises();
+    const section = revealSerial("projectSection");
+    await w.get('[data-testid="render-dialog-products"]').trigger("click");
+    expect(revealSerial("projectSection")).toBe(section + 1);
+    expect(w.emitted("close")).toHaveLength(1);
   });
 
   // Task 46's carry: a refused render is the RENDER's error. It must not

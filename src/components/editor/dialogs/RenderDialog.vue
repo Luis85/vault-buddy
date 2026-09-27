@@ -40,6 +40,7 @@ import { useRenderJob } from "../../../composables/useRenderJob";
 import { completionText, isComplete } from "../../../editor/renderProgress";
 import { msFromSeconds, secondsText } from "../../../editor/renderRanges";
 import { openChecks } from "../../../editor/revealBus";
+import { revealWorkspaceProducts } from "../../../editor/revealProducts";
 import type { RenderQuality, RenderRange } from "../../../editorTypes";
 import { useEditorChecksStore } from "../../../stores/editorChecks";
 import { useEditorJobsStore } from "../../../stores/editorJobs";
@@ -186,6 +187,13 @@ function reviewChecks(): void {
   close();
   openChecks();
 }
+
+/** Visual-parity Task 10 (D9): the library's Project section, through the
+ * Project menu's and the status bar's own helper. */
+function showProducts(): void {
+  close();
+  revealWorkspaceProducts();
+}
 </script>
 
 <template>
@@ -231,6 +239,7 @@ function reviewChecks(): void {
         @cancel="cancel"
         @another="another"
         @publish="publishOpen = true"
+        @products="showProducts"
       />
       <PublishDialog
         :open="publishOpen"

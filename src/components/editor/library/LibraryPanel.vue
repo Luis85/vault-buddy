@@ -23,13 +23,15 @@
  * findings on Captions: `checkReveal.ts`). An unset or unknown stored
  * value falls back to Media.
  *
- * **Products (Task 47)** is the fifth tab: `ProductLibrary`, the project's
- * Rendered Products (the guide's `library.products` target) — mounted here
- * so a render's output is reachable from the running editor, not only from
- * the Render dialog that made it. **Ruling P6 (visual-parity design D9):**
- * Products stays a tab here for now — a later task moves it into the
- * library's Project section and drops the tab — so the row below renders
- * the concept's four tabs (§3.1) first, Products after.
+ * **The Project section (visual-parity Task 10; design D9; concept spec
+ * §3.6)** replaced Task 47's fifth "Products" tab: the tabs are the
+ * concept's four (§3.1), and the rendered products live in
+ * `ProjectSection` — not a tab but what `libraryTab === "project"` shows,
+ * with no tab selected (Media keeps the tab stop so the row stays
+ * reachable). It opens on the `projectSection` reveal
+ * (`revealWorkspaceProducts`: the Project menu, the status bar, the Render
+ * dialog's completion) and closes through its own "Back to media" or any
+ * tab.
  *
  * **Guide targets (Task 55):** only the open tab's panel is mounted, so each
  * tab is the FALLBACK route to the lessons its panel owns — the guide points
@@ -40,35 +42,42 @@ import { computed } from "vue";
 
 import { useGuideTabTargets } from "../../../composables/useGuideTarget";
 import { useRovingTablist } from "../../../composables/useRovingTablist";
+import { onReveal } from "../../../editor/revealBus";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
 import CaptionsLibrary from "./CaptionsLibrary.vue";
 import ChaptersLibrary from "./ChaptersLibrary.vue";
 import MediaLibrary from "./MediaLibrary.vue";
-import ProductLibrary from "./ProductLibrary.vue";
+import ProjectSection from "./ProjectSection.vue";
 import TitlesLibrary from "./TitlesLibrary.vue";
 
-type LibraryTab = "media" | "titles" | "captions" | "chapters" | "products";
+type LibraryTab = "media" | "titles" | "captions" | "chapters";
+/** What the library shows: a tab, or the Project section. */
+type LibraryView = LibraryTab | "project";
 
 const TABS: { id: LibraryTab; label: string }[] = [
   { id: "media", label: "Media" },
   { id: "titles", label: "Titles" },
   { id: "captions", label: "Captions" },
   { id: "chapters", label: "Chapters" },
-  { id: "products", label: "Products" },
 ];
 
 const workspace = useEditorWorkspaceStore();
-const activeTab = computed<LibraryTab>(() => {
+const view = computed<LibraryView>(() => {
   const saved = workspace.libraryTab;
+  if (saved === "project") return "project";
   return TABS.some((t) => t.id === saved) ? (saved as LibraryTab) : "media";
 });
+/** The tab that holds the tab stop: the open one, else Media. */
+const focusTab = computed<LibraryTab>(() => (view.value === "project" ? "media" : view.value));
 function choose(tab: LibraryTab): void {
   workspace.setLibraryTab(tab);
 }
 
+onReveal("projectSection", () => workspace.setLibraryTab("project"));
+
 const { setTabRef, onKeydown: onTablistKeydown } = useRovingTablist(
   () => TABS.length,
-  () => TABS.findIndex((t) => t.id === activeTab.value),
+  () => TABS.findIndex((t) => t.id === focusTab.value),
   (i) => choose(TABS[i].id),
 );
 
@@ -76,7 +85,6 @@ const bindTabTarget = useGuideTabTargets<LibraryTab>({
   media: ["library.import", "library.webcam"],
   captions: ["library.captions"],
   chapters: ["library.chapters"],
-  products: ["library.products"],
 });
 function setTab(i: number, el: Element | null): void {
   setTabRef(i, el);
@@ -104,29 +112,37 @@ function setTab(i: number, el: Element | null): void {
         type="button"
         role="tab"
         :data-testid="`library-tab-${tab.id}`"
-        :aria-selected="tab.id === activeTab"
-        :aria-controls="`library-tabpanel-${tab.id}`"
-        :tabindex="tab.id === activeTab ? 0 : -1"
+        :aria-selected="tab.id === view"
+        :aria-controls="tab.id === view ? `library-tabpanel-${tab.id}` : undefined"
+        :tabindex="tab.id === focusTab ? 0 : -1"
         class="min-h-8 flex-1 cursor-pointer rounded-md px-1 py-1.5 text-micro transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-        :class="tab.id === activeTab ? 'bg-accent-bg text-accent-ink' : 'text-fg-subtle'"
+        :class="tab.id === view ? 'bg-accent-bg text-accent-ink' : 'text-fg-subtle'"
         @click="choose(tab.id)"
       >
         {{ tab.label }}
       </button>
     </div>
 
-    <div
-      :id="`library-tabpanel-${activeTab}`"
-      role="tabpanel"
-      :aria-labelledby="`library-tab-${activeTab}`"
+    <section
+      v-if="view === 'project'"
+      aria-label="Workspace and rendered products"
       data-testid="library-body"
       class="min-h-0 flex-1"
     >
-      <MediaLibrary v-if="activeTab === 'media'" />
-      <TitlesLibrary v-else-if="activeTab === 'titles'" />
-      <CaptionsLibrary v-else-if="activeTab === 'captions'" />
-      <ChaptersLibrary v-else-if="activeTab === 'chapters'" />
-      <ProductLibrary v-else />
+      <ProjectSection />
+    </section>
+    <div
+      v-else
+      :id="`library-tabpanel-${view}`"
+      role="tabpanel"
+      :aria-labelledby="`library-tab-${view}`"
+      data-testid="library-body"
+      class="min-h-0 flex-1"
+    >
+      <MediaLibrary v-if="view === 'media'" />
+      <TitlesLibrary v-else-if="view === 'titles'" />
+      <CaptionsLibrary v-else-if="view === 'captions'" />
+      <ChaptersLibrary v-else />
     </div>
   </div>
 </template>

@@ -143,9 +143,8 @@ type CopyOverride = Partial<Record<"label" | "body" | "tip" | "task", string>>;
  * - `render`: an ffmpeg render has no three-minute limit, lands in the
  *   project's Products, and Publish DOES write a copy into a vault;
  * - `products`: the Project menu has no "workspace files" list — its
- *   "Workspace & rendered products" opens the library's Products tab
- *   (visual-parity Task 10 moves products into the library's Project
- *   section and retargets that item);
+ *   "Workspace & rendered products" opens the library's Project section
+ *   (visual-parity Task 10, design D9), where the rendered products live;
  * `help` carried an override until Task 57 shipped the learning center its
  * verbatim text describes (Help's menu, chapter jumps, quick answers,
  * shortcuts); it is the concept text again.
@@ -188,8 +187,8 @@ export const LESSON_COPY_OVERRIDES: Readonly<Partial<Record<GuideStepId, CopyOve
   },
   products: {
     label: "Rendered products",
-    body: "Rendered videos are listed in the library's Products tab, which Project → Workspace & rendered products opens, separate from the editable project. Watch one, or restore the edit snapshot behind an earlier output.",
-    task: "Look through Products, then continue.",
+    body: "Rendered videos are listed under Project → Workspace & rendered products, beside the editable project. Watch one, or restore the edit snapshot behind an earlier output.",
+    task: "Look through the rendered products, then continue.",
   },
 };
 

@@ -223,11 +223,12 @@ describe("what each item does", () => {
     expect(executed).toEqual([{ kind: "rename", title: "New name" }]);
   });
 
-  it("Workspace & rendered products shows the library's products", async () => {
+  it("Workspace & rendered products opens the library's Project section", async () => {
     const w = await mountRoot();
     const before = revealSerial("library");
+    const section = revealSerial("projectSection");
     await chooseProjectMenuItem(w, "products");
-    expect(useEditorWorkspaceStore().libraryTab).toBe("products");
+    expect(revealSerial("projectSection")).toBe(section + 1);
     expect(revealSerial("library")).toBe(before + 1);
   });
 

@@ -38,7 +38,8 @@ const NEW_CAPTION_TEXT = "New caption";
 
 const NO_CAPTION_CLIP = "No clip at the playhead to add a caption to";
 const NO_MARKER_CLIP = "No clip at the playhead to add a chapter to";
-const NO_CUE_AT_PLAYHEAD = "Move the playhead inside a caption to split it";
+const ONE_WORD = "Add at least two words before splitting a caption.";
+const TOO_SHORT_TO_SPLIT = "This caption is too short to split.";
 
 /** One listed caption: its cue, its clip, and where it plays. */
 export interface CaptionRow {
@@ -165,17 +166,22 @@ export function addCaptionAt(project: Project | null, selectedClipIds: string[],
   return { command: { kind: "addCaption", clipId: clip.id, startMs, endMs, text: NEW_CAPTION_TEXT } };
 }
 
-/** `splitCaption` at the playhead: the selected caption when the playhead
- * is on it, else the first caption playing there. Its source instant must
- * fall strictly inside the cue (Rust refuses a boundary split). */
-export function splitCaptionAt(rows: CaptionRow[], selectedId: string | null, t: number): Draft {
-  const playing = rows.filter((r) => r.startMs <= t && t < r.endMs);
-  const row = playing.find((r) => r.cue.id === selectedId) ?? playing[0];
-  if (!row) return { reason: NO_CUE_AT_PLAYHEAD };
-  const atMs = sourceAt(clipSpanOf(row.clip), t);
-  if (atMs === null || atMs <= row.cue.start_ms || atMs >= row.cue.end_ms) {
-    return { reason: NO_CUE_AT_PLAYHEAD };
-  }
+/** A card's own "Split cue" (visual-parity Task 10, concept spec §3.4):
+ * the words divide in two (the first half takes the extra one) and the
+ * cue's SOURCE span divides in the same proportion of characters — Rust's
+ * `splitCaption` then cuts the text at that instant. */
+export function splitCaptionCue(project: Project | null, row: CaptionRow): Draft {
+  if (!project) return { reason: NO_PROJECT };
+  const locked = lockReason(project, row.clip);
+  if (locked) return { reason: locked };
+  const words = row.cue.text.trim().split(/\s+/);
+  if (words.length < 2) return { reason: ONE_WORD };
+  const middle = Math.ceil(words.length / 2);
+  const left = words.slice(0, middle).join(" ").length;
+  const right = words.slice(middle).join(" ").length;
+  const { start_ms: start, end_ms: end } = row.cue;
+  const atMs = Math.round(start + ((end - start) * left) / (left + right));
+  if (atMs <= start || atMs >= end) return { reason: TOO_SHORT_TO_SPLIT };
   return { command: { kind: "splitCaption", captionId: row.cue.id, atMs } };
 }
 

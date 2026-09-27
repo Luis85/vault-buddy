@@ -15,7 +15,6 @@ import { EditorPortError } from "../src/editor/port";
 import { revealSerial } from "../src/editor/revealBus";
 import type { EditorOpenResult, EditorSnapshot, ProductDto, SaveReceipt } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
-import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
 import { fakeEditorPort as fakePort } from "./helpers/fakeEditorPort";
 
 enableAutoUnmount(afterEach);
@@ -133,13 +132,14 @@ describe("EditorStatusBar", () => {
     );
   });
 
-  it("the products slot opens the library on its products", async () => {
+  it("the products slot opens the library's Project section", async () => {
     const w = await open({ products: [product("p1"), product("p2")] });
     const before = revealSerial("library");
+    const section = revealSerial("projectSection");
 
     await w.get('[data-testid="editor-statusbar-products"]').trigger("click");
 
-    expect(useEditorWorkspaceStore().libraryTab).toBe("products");
+    expect(revealSerial("projectSection")).toBe(section + 1);
     expect(revealSerial("library")).toBe(before + 1);
   });
 });

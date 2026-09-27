@@ -5,7 +5,9 @@
  * while it runs, the one status line once it ends, and on completion
  * **Watch rendered file** (the real file, `ProductPlayer`), **Publish to
  * vault…** (Task 48: the dialog opens `PublishDialog` for the product) and
- * **Render another**. Presentational: the dialog owns the job.
+ * **Render another** — and (visual-parity Task 10, design D9) **Show in
+ * workspace**, the library's Project section where every product lives.
+ * Presentational: the dialog owns the job.
  */
 import { computed, ref } from "vue";
 
@@ -24,7 +26,12 @@ const props = defineProps<{
   productId: string | null;
   name: string;
 }>();
-const emit = defineEmits<{ (e: "cancel"): void; (e: "another"): void; (e: "publish"): void }>();
+const emit = defineEmits<{
+  (e: "cancel"): void;
+  (e: "another"): void;
+  (e: "publish"): void;
+  (e: "products"): void;
+}>();
 
 const watching = ref(false);
 const media = computed(() => (props.productId ? { productId: props.productId } : null));
@@ -83,6 +90,14 @@ function another(): void {
         @click="emit('publish')"
       >
         Publish to vault…
+      </AppButton>
+      <AppButton
+        variant="ghost"
+        size="sm"
+        data-testid="render-dialog-products"
+        @click="emit('products')"
+      >
+        Show in workspace
       </AppButton>
     </template>
     <AppButton

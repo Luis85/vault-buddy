@@ -481,6 +481,36 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
+// visual-parity Task 10: the library's Titles, Captions and Chapters tabs
+// and its Project section (with a product rendered from the revision on
+// screen, so its "Matches this edit" pill is measured) are surfaces too.
+const PRODUCT = {
+  id: "prod-keys",
+  projectId: "project-keys",
+  name: "Walkthrough",
+  filename: "prod-keys.mp4",
+  mime: "video/mp4",
+  revision: 1,
+  durationMs: 6000,
+  createdAt: "2026-09-25T10:00:00.000Z",
+  editFingerprint: "fingerprint",
+  renderRange: null,
+  available: true,
+};
+for (const theme of ["light", "dark"] as const) {
+  test(`${theme} theme text meets 4.5:1 in the library's other views`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    await openEditor(page, theme, undefined, { editor_get_products: [PRODUCT] });
+    for (const tab of ["titles", "captions", "chapters"]) {
+      await page.getByTestId(`library-tab-${tab}`).click();
+      expect(await lowContrast(page), tab).toEqual([]);
+    }
+    await page.getByTestId("editor-statusbar-products").click();
+    await expect(page.getByTestId("product-match-prod-keys")).toHaveText("Matches this edit");
+    expect(await lowContrast(page)).toEqual([]);
+  });
+}
+
 // Ruling T3-2: the Checks count is the concept's gold chip (§2
 // `#issueCount`), mono 9px gold on gold-bg — it replaced a shared badge
 // that read 2.2:1 — and it only renders with findings, so this run has one.

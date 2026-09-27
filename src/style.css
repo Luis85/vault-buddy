@@ -95,6 +95,17 @@
      replaced (1.16:1 on `panel`, pinned by `editorKeyboard.spec.ts`),
      light below is slate-900 at 5%. */
   --color-hover-subtle: rgb(255 255 255 / 0.05);
+  /* The Titles tab's template canvases (concept spec §3.3,
+     `.title-template.<preset> .template-canvas`): a picture of the card a
+     render draws, so the same in both themes — no light override. */
+  --color-card-intro: #393049;
+  --color-card-chapter: #272333;
+  --color-card-outro: #243b38;
+  --color-card-blank: #3a334d;
+  --color-card-ink: #f0edf7;
+  --color-card-eyebrow: #c5b2e9;
+  --color-card-outro-eyebrow: #b8dacf;
+  --color-card-blank-ink: #b9abc9;
 
   /* Editor shell region sizes (the CONTRACT's 244/276, the concept's
      runtime values). Not a Tailwind namespace, so no utility class is

@@ -1,10 +1,12 @@
 <script setup lang="ts">
 /**
- * The project's Rendered Products (Task 47; F-41, F-42; SCREENS 09), the
- * library's Products tab (`LibraryPanel`; the guide's `library.products`
- * target). One `ProductCard` per ledger entry: name, the revision it was
- * rendered from, its range, when it was made, and whether its file is
- * still on disk.
+ * The project's Rendered Products (Task 47; F-41, F-42; SCREENS 09), in
+ * the library's Project section (`ProjectSection`, visual-parity Task 10,
+ * design D9 — Products left the tabs). A "RENDERED PRODUCTS" heading with
+ * the count, then one `ProductCard` per ledger entry, newest first: name,
+ * the revision it was rendered from (and whether that is the revision on
+ * screen), its range, when it was made, and whether its file is still on
+ * disk — or the concept's dashed "No renders yet" (§3.6).
  *
  * **Watch** plays the ACTUAL encoded file (`ProductPlayer`, fed by
  * `editor_media_url({ productId })`) — never the editable preview, which is
@@ -19,18 +21,19 @@
  * can still be restored; only Watch is unavailable, and says why. A Review
  * render is never listed: it is not a product (F18).
  */
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 
-import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useEditorProductsStore } from "../../../stores/editorProducts";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import PublishDialog from "../dialogs/PublishDialog.vue";
+import EditorIcon from "../icons/EditorIcon.vue";
+import LibraryHeading from "./LibraryHeading.vue";
 import ProductCard from "./ProductCard.vue";
 
 const editorProject = useEditorProjectStore();
 const products = useEditorProductsStore();
-/** The guide's `library.products` (Task 55). */
-const guideTarget = useGuideTarget("library.products");
+const newestFirst = computed(() => products.current.slice().reverse());
+const onScreenRevision = computed(() => editorProject.snapshot?.revision ?? null);
 
 onMounted(() => void products.refresh());
 watch(
@@ -61,29 +64,40 @@ async function confirmRestore(id: string): Promise<void> {
 
 <template>
   <div
-    :ref="guideTarget"
     data-testid="product-library"
-    class="flex h-full flex-col gap-2 overflow-y-auto"
+    class="flex flex-col"
   >
+    <LibraryHeading
+      label="RENDERED PRODUCTS"
+      :pill="String(products.current.length)"
+      testid="products"
+    />
     <p
       v-if="products.error"
       role="alert"
       data-testid="product-library-error"
-      class="text-xs text-danger-fg"
+      class="text-[11px] text-danger-fg"
     >
       {{ products.error.message }}
     </p>
-    <p
+    <div
       v-if="products.current.length === 0"
       data-testid="product-library-empty"
-      class="text-xs text-fg-subtle"
+      class="my-3.5 flex flex-col items-center gap-2.5 rounded-[9px] border border-dashed border-line px-3 py-[22px] text-center"
     >
-      No rendered videos yet. Render video in the header makes one; it appears here.
-    </p>
+      <EditorIcon
+        name="video"
+        :size="26"
+        class="text-fg-muted"
+      />
+      <b class="text-[12px] font-semibold text-fg">No renders yet</b>
+      <span class="text-[11px] leading-[1.6] text-fg-muted">Save now. Render when ready. Your project stays editable either way.</span>
+    </div>
     <ProductCard
-      v-for="p in products.current"
+      v-for="p in newestFirst"
       :key="p.id"
       :product="p"
+      :current="p.revision === onScreenRevision"
       :watching="watchingId === p.id"
       :confirming="confirmingId === p.id"
       :busy="restoringId !== null"

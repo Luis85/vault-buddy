@@ -117,7 +117,7 @@ async function mountLibrary(markers: Marker[] = MARKERS, playheadMs = 3_500) {
   );
   await store.openStaged("b");
   useEditorWorkspaceStore().playheadMs = playheadMs;
-  const w = mount(ChaptersLibrary);
+  const w = mount(ChaptersLibrary, { attachTo: document.body });
   await flushPromises();
   return w;
 }
@@ -168,9 +168,14 @@ describe("ChaptersLibrary", () => {
 
   it("renames, deletes and jumps", async () => {
     const w = await mountLibrary();
+    await w.get('[data-testid="chapter-edit-m1"]').trigger("click");
     const title = w.get('[data-testid="chapter-title-m1"]');
     await title.setValue("Summary");
+    await flushPromises();
+    // A committed rename leaves the row's edit mode.
+    expect(w.find('[data-testid="chapter-title-m1"]').exists()).toBe(false);
     // An unchanged or blank title is never sent.
+    await w.get('[data-testid="chapter-edit-m2"]').trigger("click");
     const other = w.get('[data-testid="chapter-title-m2"]');
     await other.setValue("   ");
     await w.get('[data-testid="chapter-delete-m2"]').trigger("click");
@@ -187,10 +192,55 @@ describe("ChaptersLibrary", () => {
   it("a refused rename puts the stored title back", async () => {
     const w = await mountLibrary();
     refuse = true;
+    await w.get('[data-testid="chapter-edit-m1"]').trigger("click");
     const title = w.get('[data-testid="chapter-title-m1"]');
     await title.setValue("Too long for Rust, say");
     await flushPromises();
     expect(executed).toEqual([{ kind: "updateMarker", markerId: "m1", title: "Too long for Rust, say" }]);
     expect((title.element as HTMLInputElement).value).toBe("Wrap up");
+  });
+});
+
+// visual-parity Task 10 (concept spec §3.5): the concept's Chapters tab.
+describe("ChaptersLibrary — concept §3.5", () => {
+  it("reads TUTORIAL CHAPTERS with the chapter count and says chapters follow their clip", async () => {
+    const w = await mountLibrary();
+    expect(w.get('[data-testid="chapters-heading"]').text()).toBe("TUTORIAL CHAPTERS");
+    expect(w.get('[data-testid="chapters-pill"]').text()).toBe("2");
+    expect(w.text()).toContain("Chapters follow their source clip.");
+  });
+
+  it("numbers each row in output order, with its title and time", async () => {
+    const w = await mountLibrary();
+    const first = w.get('[data-testid="chapter-jump-m2"]');
+    expect(first.get('[data-testid="chapter-num-m2"]').text()).toBe("1");
+    expect(first.text()).toContain("0:01.5");
+    expect(w.get('[data-testid="chapter-num-m1"]').text()).toBe("2");
+    expect(w.get('[data-testid="chapter-edit-m1"]').attributes("aria-label")).toBe("Edit chapter Wrap up");
+  });
+
+  it("Escape leaves the rename without sending anything", async () => {
+    const w = await mountLibrary();
+    await w.get('[data-testid="chapter-edit-m1"]').trigger("click");
+    await w.get('[data-testid="chapter-title-m1"]').trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(w.find('[data-testid="chapter-title-m1"]').exists()).toBe(false);
+    expect(document.activeElement).toBe(w.get('[data-testid="chapter-edit-m1"]').element);
+    expect(executed).toEqual([]);
+  });
+
+  it("Add chapter at playhead is a full-width button after the list, with the tip below", async () => {
+    const w = await mountLibrary();
+    const add = w.get('[data-testid="chapter-add"]');
+    expect(add.text()).toBe("Add chapter at playhead");
+    expect(add.classes()).toContain("w-full");
+    expect(w.get('[data-testid="chapter-tip"]').text()).toContain("Keep the context.");
+  });
+
+  it("with no chapters it says what they are for", async () => {
+    const w = await mountLibrary([]);
+    expect(w.get('[data-testid="chapter-empty"]').text()).toBe(
+      "Add chapters to turn your recording into a reusable guide.",
+    );
   });
 });

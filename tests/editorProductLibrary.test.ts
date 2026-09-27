@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import LibraryPanel from "../src/components/editor/library/LibraryPanel.vue";
 import ProductLibrary from "../src/components/editor/library/ProductLibrary.vue";
+import { revealWorkspaceProducts } from "../src/editor/revealProducts";
 import type { EditorProjection } from "../src/editorTypes";
 import { useEditorJobsStore } from "../src/stores/editorJobs";
 import { useEditorProjectStore } from "../src/stores/editorProject";
@@ -152,12 +153,12 @@ describe("ProductLibrary", () => {
   });
 });
 
-describe("LibraryPanel — Products tab", () => {
+describe("LibraryPanel — the Project section", () => {
   it("mounts the product library from the editor's library panel", async () => {
     await openWithRenders({ getProducts: () => Promise.resolve([product()]) });
     const w = mount(LibraryPanel);
     expect(w.find('[data-testid="product-library"]').exists()).toBe(false);
-    await w.get('[data-testid="library-tab-products"]').trigger("click");
+    revealWorkspaceProducts();
     await flushPromises();
     expect(w.find('[data-testid="product-library"]').exists()).toBe(true);
     expect(w.find('[data-testid="product-card-prod-a"]').exists()).toBe(true);

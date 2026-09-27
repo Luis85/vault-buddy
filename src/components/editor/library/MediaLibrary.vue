@@ -55,6 +55,7 @@ import { computed, onMounted, ref } from "vue";
 
 import type { TimelineViewOps } from "../../../composables/useEditorMenuContext";
 import { useGuideTarget } from "../../../composables/useGuideTarget";
+import { useMediaImport } from "../../../composables/useMediaImport";
 import { baseActionContext } from "../../../editor/actionContext";
 import type { PointerTarget } from "../../../editor/actions";
 import { insertAssetOnFreeTrack, placementLabel, placeOnFreeTrack } from "../../../editor/placeOnFreeTrack";
@@ -70,6 +71,7 @@ import EditorIcon from "../icons/EditorIcon.vue";
 import ContextMenu from "../menus/ContextMenu.vue";
 import ImportStatus from "./ImportStatus.vue";
 import LibraryAssetCard from "./LibraryAssetCard.vue";
+import LibraryHeading from "./LibraryHeading.vue";
 
 const project = useEditorProjectStore();
 const workspace = useEditorWorkspaceStore();
@@ -104,7 +106,7 @@ function metaFor(asset: Asset, missing: boolean): string {
   const duration = formatDuration(asset.duration_ms);
   if (asset.kind === "audio") return `${duration} · Local audio`;
   if (asset.width && asset.height) return `${duration} · ${asset.width} × ${asset.height}`;
-  return `${duration} · Video`;
+  return `${duration} · ${asset.media_type === "image" ? "Image" : "Video"}`;
 }
 
 const missingIds = computed(() => new Set(project.missing.map((m) => m.assetId)));
@@ -141,16 +143,13 @@ const emptyText = computed(() =>
   query.value ? "No media matches the search." : "No media yet. Import video, audio or images.",
 );
 
+/** A missing row's button is Reconnect (`LibraryAssetCard`), so this
+ * only ever runs for an asset whose file is there. */
 function insert(row: AssetRow): void {
-  if (row.missing) return;
   void insertAssetOnFreeTrack((command) => project.execute(command), () => project.project, row.asset, workspace.playheadMs);
 }
 
-const importRefusal = computed<string | null>(() => {
-  if (!project.sessionId) return "Open a project first.";
-  if (jobs.activeImport) return "An import is already running.";
-  return null;
-});
+const { refusal: importRefusal, start: startImport } = useMediaImport();
 const importTitle = computed(() => importRefusal.value ?? "Import video, audio or images");
 
 const webcamRefusal = computed<string | null>(() => (project.sessionId ? null : "Open a project first."));
@@ -158,10 +157,6 @@ const webcamTitle = computed(() => webcamRefusal.value ?? "Record a webcam take"
 
 function openWebcam(): void {
   if (webcamRefusal.value === null) webcamOpen.value = true;
-}
-
-function startImport(): void {
-  if (importRefusal.value === null) void jobs.importMedia();
 }
 
 // ---- the one asset context menu (visual-parity Task 9, concept spec §8) ---
@@ -278,10 +273,11 @@ onReveal("webcam", openWebcam);
       >
     </div>
 
-    <div class="mb-[11px] flex items-center justify-between">
-      <span class="text-[10px] font-semibold tracking-[0.65px] text-fg-muted">SOURCE MEDIA</span>
-      <span class="rounded border border-line bg-raised px-1.5 py-0.5 text-[9px] tracking-[0.3px] text-fg-secondary">{{ assetCount }} assets</span>
-    </div>
+    <LibraryHeading
+      label="SOURCE MEDIA"
+      :pill="`${assetCount} assets`"
+      testid="media"
+    />
 
     <ul
       class="flex min-h-0 flex-1 flex-col overflow-y-auto"

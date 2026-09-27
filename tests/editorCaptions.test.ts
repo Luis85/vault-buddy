@@ -206,15 +206,15 @@ describe("CaptionsLibrary notices", () => {
 
   it("library never claims automatic transcription", async () => {
     const w = await mountLibrary();
-    expect(w.get('[data-testid="caption-transcription-note"]').text()).toContain(
-      "Automatic transcription is not available",
+    expect(w.get('[data-testid="caption-transcription-note"]').text()).toBe(
+      "Write or import captions. No speech service is connected.",
     );
     for (const control of w.findAll("button, a, [role='button'], label")) {
       expect(control.text()).not.toMatch(/transcri/i);
     }
     // And it says so even with nothing selected and no captions yet.
     const empty = await mountLibrary(project([]));
-    expect(empty.text()).toContain("Automatic transcription is not available");
+    expect(empty.text()).toContain("No speech service is connected.");
   });
 });
 
@@ -296,22 +296,26 @@ describe("CaptionsLibrary authoring", () => {
     expect(add.attributes("title")).toMatch(/clip/i);
   });
 
-  it("splits the caption under the playhead at its SOURCE instant", async () => {
-    const w = await mountLibrary(project(), null, 1_500);
-    await w.get('[data-testid="caption-split"]').trigger("click");
+  // visual-parity Task 10 (concept §3.4): each card's own "Split cue"
+  // divides its words in two and its SOURCE span in the same proportion —
+  // "Hello there" is 5 + 5 characters, so capA [2000, 4000) splits at 3000.
+  it("Split cue divides a card's text and its SOURCE span in proportion", async () => {
+    const w = await mountLibrary(project(), null, 9_000);
+    await w.get('[data-testid="caption-split-capA"]').trigger("click");
     await flushPromises();
     expect(executed).toEqual([{ kind: "splitCaption", captionId: "capA", atMs: 3_000 }]);
   });
 
-  it("refuses Split with a reason when no caption is under the playhead", async () => {
-    const w = await mountLibrary(project(), null, 5_000);
-    const split = w.get('[data-testid="caption-split"]');
+  it("Split cue is disabled, and says why, for a one-word caption", async () => {
+    const w = await mountLibrary();
+    const split = w.get('[data-testid="caption-split-capC"]');
     expect(split.attributes("disabled")).toBeDefined();
-    expect(split.attributes("title")).toMatch(/caption/i);
+    expect(split.attributes("title")).toBe("Add at least two words before splitting a caption.");
   });
 
   it("edits text, and timing typed in OUTPUT seconds becomes SOURCE time", async () => {
     const w = await mountLibrary();
+    await w.get('[data-testid="caption-edit-capA"]').trigger("click");
     const text = w.get('[data-testid="caption-text-capA"]');
     await text.setValue("Hello, world");
     const start = w.get('[data-testid="caption-start-capA"]');
@@ -330,6 +334,7 @@ describe("CaptionsLibrary authoring", () => {
   // the field would show a caption that is not the one stored.
   it("a refused edit puts the committed text and time back in the field", async () => {
     const w = await mountLibrary();
+    await w.get('[data-testid="caption-edit-capA"]').trigger("click");
     refuse = true;
     const text = w.get('[data-testid="caption-text-capA"]');
     await text.setValue("Rejected words");
@@ -445,5 +450,85 @@ describe("CaptionOverlay (preview placement)", () => {
     const off = { ...p, captions: { ...p.captions!, enabled: false } };
     expect(mount(CaptionOverlay, { props: { project: off, timeMs: 1_500, frame } }).find('[data-testid="caption-overlay"]').exists()).toBe(false);
     expect(mount(CaptionOverlay, { props: { project: p, timeMs: 5_000, frame } }).find('[data-testid="caption-overlay"]').exists()).toBe(false);
+  });
+});
+
+// ---- visual-parity Task 10: the concept's Captions tab (§3.4, screen 06) ----
+
+describe("CaptionsLibrary — concept §3.4", () => {
+  it("reads EVERY WORD, ACCESSIBLE with the caption count", async () => {
+    const w = await mountLibrary();
+    expect(w.get('[data-testid="captions-heading"]').text()).toBe("EVERY WORD, ACCESSIBLE");
+    expect(w.get('[data-testid="captions-pill"]').text()).toBe("3");
+  });
+
+  it("the attached-source box names the clip captions go on, or asks for one", async () => {
+    const attached = await mountLibrary();
+    expect(attached.get('[data-testid="caption-source"]').text()).toBe("Attached to Screen");
+    const none = await mountLibrary(project([]), null, 9_000);
+    expect(none.get('[data-testid="caption-source"]').text()).toBe("Select footage or audio to add captions.");
+  });
+
+  it("Add caption and Import SRT / VTT; Import is disabled with a reason when no clip is chosen", async () => {
+    const w = await mountLibrary();
+    expect(w.get('[data-testid="caption-add"]').text()).toBe("Add caption");
+    expect(w.get('[data-testid="caption-import"]').text()).toBe("Import SRT / VTT");
+    const none = await mountLibrary(project([]), null, 9_000);
+    const importButton = none.get('[data-testid="caption-import"]');
+    expect(importButton.attributes("disabled")).toBeDefined();
+    expect(importButton.attributes("title")).toMatch(/select a clip/i);
+  });
+
+  it("keeps the appearance settings in a collapsed Caption appearance disclosure", async () => {
+    const w = await mountLibrary();
+    const details = w.get('[data-testid="caption-settings"]');
+    expect(details.element.tagName).toBe("DETAILS");
+    expect(details.attributes("open")).toBeUndefined();
+    expect(details.get("summary").text()).toBe("Caption appearance");
+    expect(details.text()).toContain("Show captions");
+    expect(details.text()).toContain("Burn into rendered video");
+    expect(details.text()).toContain("Readable background");
+    expect(details.text()).toContain("Font size");
+  });
+
+  it("each card shows its OUTPUT span in gold mono, its text, and edit, Split cue and delete", async () => {
+    const w = await mountLibrary();
+    const time = w.get('[data-testid="caption-time-capA"]');
+    expect(time.text()).toBe("0:01.0 — 0:02.0");
+    expect(time.classes()).toEqual(expect.arrayContaining(["font-mono", "text-gold"]));
+    expect(w.get('[data-testid="caption-body-capA"]').text()).toBe("Hello there");
+    expect(w.get('[data-testid="caption-edit-capA"]').attributes("aria-label")).toBe("Edit caption 1");
+    expect(w.get('[data-testid="caption-split-capA"]').text()).toBe("Split cue");
+    expect(w.get('[data-testid="caption-delete-capA"]').attributes("aria-label")).toBe("Delete caption 1");
+    // The fields exist only while the card is being edited.
+    expect(w.find('[data-testid="caption-text-capA"]').exists()).toBe(false);
+    await w.get('[data-testid="caption-edit-capA"]').trigger("click");
+    expect(w.find('[data-testid="caption-text-capA"]').exists()).toBe(true);
+    expect(w.find('[data-testid="caption-start-capA"]').exists()).toBe(true);
+    await w.get('[data-testid="caption-edit-capA"]').trigger("click");
+    expect(w.find('[data-testid="caption-text-capA"]').exists()).toBe(false);
+  });
+
+  it("the time selects the caption and moves the playhead onto it", async () => {
+    const w = await mountLibrary();
+    await w.get('[data-testid="caption-time-capB"]').trigger("click");
+    const workspace = useEditorWorkspaceStore();
+    expect(workspace.selected).toEqual({ type: "caption", id: "capB" });
+    expect(workspace.playheadMs).toBe(2_000);
+  });
+
+  it("with no captions it says how to make the tutorial understandable without sound", async () => {
+    const w = await mountLibrary(project([]));
+    expect(w.get('[data-testid="caption-empty"]').text()).toBe(
+      "Make your tutorial understandable without sound. Select a clip, then add or import captions.",
+    );
+  });
+
+  it("exports with the native wording, never Download", async () => {
+    const w = await mountLibrary();
+    expect(w.get('[data-testid="caption-export-srt"]').text()).toBe("Export timeline SRT");
+    expect(w.get('[data-testid="caption-export-vtt"]').text()).toBe("Export timeline VTT");
+    expect(w.text()).not.toMatch(/download/i);
+    expect(w.text()).toContain("Imported timing begins at 00:00 of the visible clip.");
   });
 });

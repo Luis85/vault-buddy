@@ -17,10 +17,15 @@
  * - Rename tutorial…, Save a copy as project file… — the header's own
  *   dialogs (`rename`, `save-copy`);
  * - Workspace & rendered products — `revealWorkspaceProducts`, the status
- *   bar's own path.
+ *   bar's own path, which opens the library's Project section.
+ *
+ * The trigger is also the guide's `library.products` FALLBACK (visual-parity
+ * Task 10): while the Project section is closed there is no tab to point
+ * at, and this menu is the way in the lesson itself names.
  */
 import { computed, ref } from "vue";
 
+import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { PROJECT_MENU_HEADING, PROJECT_MENU_SUBTITLE,projectMenuItems } from "../../../editor/projectMenu";
 import { revealWorkspaceProducts } from "../../../editor/revealProducts";
 import type { ProjectSummaryDto } from "../../../editorTypes";
@@ -40,6 +45,11 @@ const emit = defineEmits<{
 
 const editorProject = useEditorProjectStore();
 const trigger = ref<HTMLButtonElement | null>(null);
+const productsFallback = useGuideTarget("library.products", { fallback: true });
+function setTrigger(el: unknown): void {
+  trigger.value = (el as HTMLButtonElement | null) ?? null;
+  productsFallback(trigger.value);
+}
 const open = ref(false);
 const listing = ref(false);
 const others = ref<ProjectSummaryDto[]>([]);
@@ -96,7 +106,7 @@ function onPick(projectFileId: string): void {
 
 <template>
   <button
-    ref="trigger"
+    :ref="setTrigger"
     type="button"
     data-testid="editor-header-project-menu"
     aria-haspopup="menu"

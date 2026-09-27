@@ -24,6 +24,7 @@ import { computed, ref, watch } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { selectionRange } from "../../../editor/renderRanges";
+import { renderRefusal } from "../../../editor/renderRefusal";
 import { onReveal } from "../../../editor/revealBus";
 import type { RenderRange } from "../../../editorTypes";
 import { useEditorJobsStore } from "../../../stores/editorJobs";
@@ -37,11 +38,7 @@ const workspace = useEditorWorkspaceStore();
 /** The guide's `header.render` (Task 55). */
 const renderTarget = useGuideTarget("header.render");
 
-const reason = computed<string | null>(() => {
-  if (!editorProject.sessionId) return "No project is open.";
-  if (editorProject.durationMs === 0) return "Place a clip on the timeline to render a video.";
-  return null;
-});
+const reason = computed(() => renderRefusal(editorProject.sessionId, editorProject.durationMs));
 const title = computed(() => reason.value ?? undefined);
 
 const open = ref(false);

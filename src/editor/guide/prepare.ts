@@ -26,7 +26,8 @@ const LIBRARY_TAB: Partial<Record<GuideTargetKey, string>> = {
   "library.webcam": "media",
   "library.captions": "captions",
   "library.chapters": "chapters",
-  "library.products": "products",
+  // Not a tab: the library's Project section (visual-parity Task 10, D9).
+  "library.products": "project",
 };
 
 /** The inspector category each inspector lesson points into. `inspector`

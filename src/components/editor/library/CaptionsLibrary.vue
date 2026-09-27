@@ -1,10 +1,14 @@
 <script setup lang="ts">
 /**
  * The caption workspace (Task 36; F-34, F-35; SCREENS-AND-INTERACTIONS.md §
- * 06): every caption in OUTPUT order, editable in place; Import (Rust's own
- * native dialog -- SRT, WebVTT or `.txt`), Add at playhead and Split at
- * playhead; the caption settings; and the reading-density and overlap
- * notices, each with a "Select cue" that reveals the caption it names.
+ * 06; visual-parity Task 10, concept spec §3.4): "EVERY WORD, ACCESSIBLE"
+ * with the caption count; the attached-source box naming the clip Add and
+ * Import use; Add caption and Import SRT / VTT (Rust's own native dialog --
+ * SRT, WebVTT or `.txt`); the collapsed "Caption appearance" settings; the
+ * reading-density and overlap notices, each with a "Select cue" that
+ * reveals the caption it names; every caption as a card in OUTPUT order
+ * (`CaptionCueRow`: its time, edit, Split cue, delete); and the native
+ * "Export timeline SRT / VTT".
  *
  * **Output time on screen, source time on the wire.** The list, the time
  * fields and the notices are all output time (`captionRules.captionRows`);
@@ -19,7 +23,7 @@
  * The list is windowed (`useVirtualRows`): a project may hold 2000
  * captions, each row an editable text box and two time fields.
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 
 import { useGuideTarget } from "../../../composables/useGuideTarget";
 import { useVirtualRows } from "../../../composables/useVirtualRows";
@@ -30,11 +34,13 @@ import {
   captionNotices,
   captionRows,
   captionTargetClip,
-  splitCaptionAt,
+  DENSITY_LIMIT_CPS,
+  splitCaptionCue,
 } from "../../../editor/captionRules";
 import { sourceAtClamped } from "../../../editor/timeMap";
 import { useEditorProjectStore } from "../../../stores/editorProject";
 import { useEditorWorkspaceStore } from "../../../stores/editorWorkspace";
+import EditorIcon from "../icons/EditorIcon.vue";
 import type { Revert } from "./CaptionCueRow.vue";
 import CaptionCueRow from "./CaptionCueRow.vue";
 import CaptionNotices from "./CaptionNotices.vue";
@@ -42,8 +48,11 @@ import type { CaptionSettingsPatch } from "./CaptionSettingsPanel.vue";
 import CaptionSettingsPanel from "./CaptionSettingsPanel.vue";
 import CaptionsExport from "./CaptionsExport.vue";
 import CaptionsToolbar from "./CaptionsToolbar.vue";
+import LibraryHeading from "./LibraryHeading.vue";
 
-const ROW_HEIGHT = 76;
+/** One card (§3.4 `.caption-card`) plus the 8px gap under it — fixed, so
+ * the windowed list knows every row's place. */
+const ROW_HEIGHT = 124;
 
 type UpdateCaption = { captionId: string; startMs?: number; endMs?: number; text?: string };
 
@@ -57,12 +66,17 @@ const notices = computed(() => captionNotices(rows.value));
 const selectedId = computed(() => (workspace.selected?.type === "caption" ? workspace.selected.id : null));
 
 const addDraft = computed(() => addCaptionAt(project.project, workspace.selectionClipIds, workspace.playheadMs));
-const splitDraft = computed(() => splitCaptionAt(rows.value, selectedId.value, workspace.playheadMs));
 const reasonOf = (d: Draft): string | null => ("reason" in d ? d.reason : null);
+/** The card whose time and text are fields right now. */
+const editingId = ref<string | null>(null);
+watch(rows, (list) => {
+  if (editingId.value && !list.some((row) => row.cue.id === editingId.value)) editingId.value = null;
+});
 
 const importTarget = computed(() =>
   captionTargetClip(project.project, workspace.selectionClipIds, workspace.playheadMs),
 );
+const densityHelp = `Imported timing begins at 00:00 of the visible clip. Reading-speed notices use a ${DENSITY_LIMIT_CPS} characters/second editorial heuristic, not an accessibility certification.`;
 const importReason = computed(() => {
   if (!project.project) return "No project is open.";
   const clip = importTarget.value;
@@ -87,6 +101,10 @@ function setViewport(el: unknown): void {
 
 function send(draft: Draft): void {
   if ("command" in draft) void project.execute(draft.command);
+}
+
+function toggleEdit(row: CaptionRow): void {
+  editingId.value = editingId.value === row.cue.id ? null : row.cue.id;
 }
 
 function plural(n: number, one: string, many: string): string {
@@ -159,54 +177,73 @@ function selectCue(row: CaptionRow): void {
   <div
     :ref="guideTarget"
     data-testid="captions-library"
-    class="flex h-full flex-col gap-2 text-micro text-fg-secondary"
+    class="flex h-full flex-col overflow-y-auto text-fg"
   >
+    <LibraryHeading
+      label="EVERY WORD, ACCESSIBLE"
+      :pill="String(rows.length)"
+      testid="captions"
+    />
     <p
       data-testid="caption-transcription-note"
-      class="text-fg-subtle"
+      class="text-[11px] text-fg-muted"
     >
-      Automatic transcription is not available. Write captions here, or
-      import an SRT or WebVTT file whose times start at 00:00 of the clip.
+      Write or import captions. No speech service is connected.
     </p>
+    <div
+      data-testid="caption-source"
+      class="my-[13px] flex gap-2 rounded-[7px] border border-line bg-app p-2.5 text-[10px] leading-relaxed"
+    >
+      <EditorIcon
+        name="link"
+        :size="14"
+        class="mt-0.5 shrink-0 text-accent"
+      />
+      <span
+        v-if="importTarget"
+        class="min-w-0 truncate"
+      >Attached to <b class="font-semibold">{{ importTarget.name }}</b></span>
+      <span v-else>Select footage or audio to add captions.</span>
+    </div>
     <CaptionsToolbar
       v-model:replace="replace"
       :import-reason="importReason"
       :importing="importing"
       :add-reason="reasonOf(addDraft)"
-      :split-reason="reasonOf(splitDraft)"
       @import="importFile"
       @add="send(addDraft)"
-      @split="send(splitDraft)"
     />
-    <CaptionsExport :reason="exportReason" />
     <p
       v-if="importStatus"
       data-testid="caption-import-status"
       role="status"
+      class="mt-2 text-[11px] text-fg-secondary"
     >
       {{ importStatus }}
     </p>
-    <CaptionNotices
-      v-if="notices.length > 0"
-      :notices="notices"
-      @select="selectCue"
-    />
     <CaptionSettingsPanel
       :settings="settings"
       :disabled-reason="settingsReason"
       @change="changeSettings"
     />
+    <CaptionNotices
+      v-if="notices.length > 0"
+      :notices="notices"
+      class="mb-2"
+      @select="selectCue"
+    />
     <p
       v-if="rows.length === 0"
-      class="text-fg-subtle"
+      data-testid="caption-empty"
+      class="py-5 text-center text-[12px] leading-[1.7] text-fg-muted"
     >
-      No captions yet. Select a clip, then add or import captions.
+      Make your tutorial understandable without sound. Select a clip, then add or import captions.
     </p>
     <div
       v-else
       :ref="setViewport"
       data-testid="caption-list"
-      class="min-h-0 flex-1 overflow-y-auto"
+      class="min-h-48 flex-1 overflow-y-auto"
       @scroll="onScroll"
     >
       <ul
@@ -219,12 +256,21 @@ function selectCue(row: CaptionRow): void {
           :row="row"
           :height="ROW_HEIGHT"
           :selected="row.cue.id === selectedId"
+          :editing="row.cue.id === editingId"
+          :split-reason="reasonOf(splitCaptionCue(project.project, row))"
           @text="(value, revert) => updateText(row, value, revert)"
           @start="(ms, revert) => updateStart(row, ms, revert)"
           @end="(ms, revert) => updateEnd(row, ms, revert)"
           @remove="remove(row)"
+          @edit="toggleEdit(row)"
+          @select="selectCue(row)"
+          @split="send(splitCaptionCue(project.project, row))"
         />
       </ul>
     </div>
+    <CaptionsExport :reason="exportReason" />
+    <p class="mt-2 text-[11px] leading-relaxed text-fg-muted">
+      {{ densityHelp }}
+    </p>
   </div>
 </template>

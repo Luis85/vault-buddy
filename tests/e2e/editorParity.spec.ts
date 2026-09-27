@@ -149,6 +149,58 @@ test.describe("the media library with a 120-character asset name", () => {
   });
 });
 
+// Task 10 (screen 06, concept spec §3.4): the Captions tab with the
+// presenter clip selected — the heading and count, the attached-source box,
+// the two actions, the appearance disclosure and the caption cards.
+test.describe("parity 1600x1000: the captions library (screen 06)", () => {
+  test("EVERY WORD, ACCESSIBLE, attached to the presenter clip, with its caption cards", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("library-tab-captions").click();
+    await page.getByTestId("clip-c5").click();
+    await expect(page.getByTestId("caption-source")).toHaveText("Attached to Presenter · demo");
+    await page.screenshot({ path: "test-results/parity/built-06-captions.png" });
+    await composite(page, "06-captions.png", "test-results/parity/built-06-captions.png", "vs-06-captions");
+
+    await expect(page.getByTestId("captions-heading")).toHaveText("EVERY WORD, ACCESSIBLE");
+    await expect(page.getByTestId("captions-pill")).toHaveText("2");
+    // §3.4: the actions are full-width 32px buttons, left-aligned.
+    const library = await box(page, "editor-shell-library");
+    for (const id of ["caption-add", "caption-import"]) {
+      const b = await box(page, id);
+      expect(b.height, id).toBeCloseTo(32, 0);
+      expect(b.width, id).toBeGreaterThan(library.width - 40);
+    }
+    await expect(page.getByTestId("caption-settings").locator("summary")).toHaveText("Caption appearance");
+    await expect(page.getByTestId("caption-time-cap1")).toHaveCSS("color", "rgb(235, 197, 130)");
+    await expect(page.getByTestId("caption-export-srt")).toHaveText("Export timeline SRT");
+  });
+
+  // A scrolling flex column shrank the intro button (min-height 32 from the
+  // base styles) and drew its second line outside it — measured, since
+  // happy-dom has no layout.
+  test("Titles: the intro button and the template cards hold their whole content", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("library-tab-titles").click();
+    const intro = await box(page, "titles-insert-intro");
+    const line = await page.getByTestId("titles-insert-intro").locator("small").boundingBox();
+    expect(line).not.toBeNull();
+    expect(line!.y + line!.height).toBeLessThanOrEqual(intro.y + intro.height);
+    const canvas = await box(page, "titles-canvas-intro");
+    expect(Math.abs(canvas.width / canvas.height - 16 / 9)).toBeLessThan(0.02);
+  });
+
+  test("the Project section opens from the status bar and goes back to Media", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("editor-statusbar-products").click();
+    await expect(page.getByTestId("library-project-section")).toBeVisible();
+    await expect(page.getByTestId("project-section-heading")).toHaveText("YOUR WORKSPACE");
+    await expect(page.getByTestId("project-section-pill")).toHaveText("r3");
+    await expect(page.getByTestId("product-card-prod1")).toBeVisible();
+    await page.getByTestId("library-project-back").click();
+    await expect(page.getByTestId("media-library")).toBeVisible();
+  });
+});
+
 // Task 5 (screen 03, concept spec §8): the clip context menu through the
 // one MenuPanel.
 test.describe("parity 1600x1000: the clip context menu (screen 03)", () => {

@@ -57,29 +57,30 @@ describe("LibraryPanel", () => {
     expect(w.get('[data-testid="library-tab-media"]').attributes("aria-selected")).toBe("true");
 
     // Wraps: ArrowLeft from the first tab goes to the last (Task 36 added
-    // Captions and Chapters after Titles, and Task 47 Products last).
+    // Captions and Chapters after Titles; visual-parity Task 10 moved Task
+    // 47's Products out of the tabs, into the Project section).
     await tablist.trigger("keydown", { key: "ArrowLeft" });
-    expect(w.get('[data-testid="library-tab-products"]').attributes("aria-selected")).toBe("true");
+    expect(w.get('[data-testid="library-tab-chapters"]').attributes("aria-selected")).toBe("true");
 
     await tablist.trigger("keydown", { key: "Home" });
     expect(w.get('[data-testid="library-tab-media"]').attributes("aria-selected")).toBe("true");
 
     await tablist.trigger("keydown", { key: "End" });
-    expect(w.get('[data-testid="library-tab-products"]').attributes("aria-selected")).toBe("true");
+    expect(w.get('[data-testid="library-tab-chapters"]').attributes("aria-selected")).toBe("true");
 
     w.unmount();
   });
 
-  // visual-parity Task 9, concept spec §3.1: the four concept tabs first
-  // (ruling P6 keeps Products, a fifth, until Task 10 moves it into the
-  // library's Project section), the active one a filled pill, the whole
-  // row a fixed 48px strip.
-  it("the tabs are exactly Media / Titles / Captions / Chapters (then Products, D9), the active one a filled pill", () => {
+  // visual-parity Task 9, concept spec §3.1: the concept's four tabs (Task
+  // 10 moved Products into the library's Project section, D9), the active
+  // one a filled pill, the whole row a fixed 48px strip.
+  it("the tabs are exactly Media / Titles / Captions / Chapters, the active one a filled pill", () => {
     const w = mount(LibraryPanel);
-    const labels = ["media", "titles", "captions", "chapters", "products"].map((id) =>
+    const labels = ["media", "titles", "captions", "chapters"].map((id) =>
       w.get(`[data-testid="library-tab-${id}"]`).text(),
     );
-    expect(labels).toEqual(["Media", "Titles", "Captions", "Chapters", "Products"]);
+    expect(labels).toEqual(["Media", "Titles", "Captions", "Chapters"]);
+    expect(w.find('[data-testid="library-tab-products"]').exists()).toBe(false);
     expect(w.get('[data-testid="library-tab-media"]').classes()).toContain("bg-accent-bg");
     expect(w.get('[data-testid="library-tab-media"]').classes()).toContain("text-accent-ink");
     expect(w.get('[data-testid="library-tab-titles"]').classes()).not.toContain("bg-accent-bg");

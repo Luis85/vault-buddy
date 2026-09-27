@@ -16,6 +16,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import TitlesLibrary from "../src/components/editor/library/TitlesLibrary.vue";
+import type { EditorPort } from "../src/editor/port";
 import type { EditorCommand, EditorOpenResult, Project, Track } from "../src/editorTypes";
 import { useEditorProjectStore } from "../src/stores/editorProject";
 import { useEditorWorkspaceStore } from "../src/stores/editorWorkspace";
@@ -51,7 +52,7 @@ function project(tracks: Track[]): Project {
 
 let executed: EditorCommand[] = [];
 
-async function mountLibrary(tracks: Track[] = [track("v1", "video")]) {
+async function mountLibrary(tracks: Track[] = [track("v1", "video")], extra: Partial<EditorPort> = {}) {
   executed = [];
   const p = project(tracks);
   const open: EditorOpenResult = {
@@ -79,6 +80,7 @@ async function mountLibrary(tracks: Track[] = [track("v1", "video")]) {
       executed.push(req.command);
       return Promise.resolve({ snapshot: { ...open.snapshot, revision: 2 }, project: p });
     },
+    ...extra,
   });
   const store = useEditorProjectStore();
   store.setPort(port);
@@ -138,5 +140,78 @@ describe("TitlesLibrary", () => {
     await flushPromises();
     await w.get('[data-testid="titles-add-blank"]').trigger("click");
     expect(executed).toEqual([]);
+  });
+});
+
+// visual-parity Task 10 (concept spec §3.3): the concept's Titles tab — the
+// heading, the intro insert, four 16:9 template cards and the still-image
+// import (a real backend: `editor_import_media` accepts PNG/JPEG/WebP).
+describe("TitlesLibrary — concept §3.3", () => {
+  it("reads GIVE IT STRUCTURE with a Local pill and the concept's intro line", async () => {
+    const w = await mountLibrary();
+    expect(w.get('[data-testid="titles-heading"]').text()).toBe("GIVE IT STRUCTURE");
+    expect(w.get('[data-testid="titles-pill"]').text()).toBe("Local");
+    expect(w.text()).toContain("A clear beginning, useful chapters, and a next step.");
+  });
+
+  it("Insert intro sends ONE insertIntro, with the card text when one is typed", async () => {
+    const w = await mountLibrary();
+    const intro = w.get('[data-testid="titles-insert-intro"]');
+    expect(intro.text()).toContain("Insert intro at the beginning");
+    expect(intro.text()).toContain("Move every existing track together");
+    await intro.trigger("click");
+    await w.get('[data-testid="titles-title"]').setValue("Welcome");
+    await w.get('[data-testid="titles-subtitle"]').setValue("Part 1");
+    await intro.trigger("click");
+    expect(executed).toEqual([
+      { kind: "insertIntro", durationMs: 3_000, title: "Intro", subtitle: "" },
+      { kind: "insertIntro", durationMs: 3_000, title: "Welcome", subtitle: "Part 1" },
+    ]);
+  });
+
+  it("offers four 16:9 template cards with the concept's texts and canvas colours", async () => {
+    const w = await mountLibrary();
+    const expected = [
+      ["intro", "A clear beginning", "Intro card", "bg-card-intro"],
+      ["chapter", "One step at a time", "Chapter card", "bg-card-chapter"],
+      ["outro", "What happens next?", "Closing card", "bg-card-outro"],
+      ["blank", "Room for your idea", "Plain background", "bg-card-blank"],
+    ];
+    for (const [id, title, label, colour] of expected) {
+      const card = w.get(`[data-testid="titles-add-${id}"]`);
+      const canvas = card.get(`[data-testid="titles-canvas-${id}"]`);
+      expect(canvas.classes()).toContain("aspect-video");
+      expect(canvas.classes()).toContain(colour);
+      expect(canvas.text()).toContain(title);
+      expect(canvas.text()).toContain("VAULT BUDDY · YOUR TUTORIAL");
+      expect(card.get(`[data-testid="titles-label-${id}"]`).text()).toBe(label);
+    }
+  });
+
+  it("Import a still image starts the media import and shows it on the Media tab", async () => {
+    let imports = 0;
+    const w = await mountLibrary([track("v1", "video")], {
+      importMedia: () => {
+        imports += 1;
+        return Promise.resolve({ jobId: "job-1" });
+      },
+      getJobs: () => Promise.resolve([]),
+    });
+    useEditorWorkspaceStore().setLibraryTab("titles");
+    await w.get('[data-testid="titles-import-image"]').trigger("click");
+    await flushPromises();
+    expect(imports).toBe(1);
+    expect(useEditorWorkspaceStore().libraryTab).toBe("media");
+  });
+
+  it("with no project open every insert is disabled and says why", async () => {
+    executed = [];
+    const w = mount(TitlesLibrary);
+    await flushPromises();
+    for (const id of ["titles-insert-intro", "titles-add-intro", "titles-add-blank", "titles-import-image"]) {
+      const button = w.get(`[data-testid="${id}"]`);
+      expect(button.attributes("disabled")).toBeDefined();
+      expect(button.attributes("title")).toBe("Open a project first.");
+    }
   });
 });
