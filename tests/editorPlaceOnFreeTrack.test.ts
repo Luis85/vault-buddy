@@ -201,7 +201,7 @@ describe("Media + lands on a free track", () => {
     const w = mount(MediaLibrary);
     // The detail asset is 18 s: v3 (from 1.5 s), v2 (from 11 s) and v1
     // (from 0) are all busy, so a new track goes on top.
-    await w.get('[data-testid="library-asset-detail-insert"]').trigger("click");
+    await w.get('[data-testid="library-asset-detail-add"]').trigger("click");
     await flushPromises();
     expect(sent).toEqual([
       { kind: "addTrack", trackKind: "video", name: "Video 4", index: 0 },

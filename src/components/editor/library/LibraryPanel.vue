@@ -26,7 +26,10 @@
  * **Products (Task 47)** is the fifth tab: `ProductLibrary`, the project's
  * Rendered Products (the guide's `library.products` target) — mounted here
  * so a render's output is reachable from the running editor, not only from
- * the Render dialog that made it.
+ * the Render dialog that made it. **Ruling P6 (visual-parity design D9):**
+ * Products stays a tab here for now — a later task moves it into the
+ * library's Project section and drops the tab — so the row below renders
+ * the concept's four tabs (§3.1) first, Products after.
  *
  * **Guide targets (Task 55):** only the open tab's panel is mounted, so each
  * tab is the FALLBACK route to the lessons its panel owns — the guide points
@@ -90,7 +93,7 @@ function setTab(i: number, el: Element | null): void {
       role="tablist"
       aria-label="Library"
       data-testid="library-tablist"
-      class="flex shrink-0 gap-1"
+      class="flex h-12 shrink-0 flex-nowrap gap-0 border-b border-line px-1.5 py-[5px]"
       @keydown="onTablistKeydown"
     >
       <button
@@ -104,8 +107,8 @@ function setTab(i: number, el: Element | null): void {
         :aria-selected="tab.id === activeTab"
         :aria-controls="`library-tabpanel-${tab.id}`"
         :tabindex="tab.id === activeTab ? 0 : -1"
-        class="cursor-pointer rounded px-1.5 py-0.5 text-micro transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-        :class="tab.id === activeTab ? 'bg-accent/20 text-accent-fg' : 'text-fg-subtle'"
+        class="min-h-8 flex-1 cursor-pointer rounded-md px-1 py-1.5 text-micro transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        :class="tab.id === activeTab ? 'bg-accent-bg text-accent-ink' : 'text-fg-subtle'"
         @click="choose(tab.id)"
       >
         {{ tab.label }}

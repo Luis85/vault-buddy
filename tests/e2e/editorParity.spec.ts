@@ -1,6 +1,8 @@
 import { expect, type Page, test } from "@playwright/test";
 
+import { PARITY_OPEN_RESULT, PARITY_REPLIES } from "./fixtures/parityProject";
 import { box, composite, openParity, previewTool } from "./parity";
+import { installTauriStub } from "./tauriStub";
 
 /**
  * Concept-parity checks for the tutorial editor's UI port
@@ -85,6 +87,65 @@ test.describe("parity 1600x1000: the header (screen 01)", () => {
     expect(panel.width).toBeCloseTo(282, 0);
     expect(Math.abs(panel.x - trigger.x)).toBeLessThanOrEqual(1);
     expect(panel.y).toBeGreaterThanOrEqual(trigger.y + trigger.height);
+  });
+});
+
+// Task 9 (screen 02, concept spec §3.1–3.2): the library tabs and the
+// Media tab's actions row, search, heading and asset rows.
+test.describe("parity 1600x1000: the media library (screen 02)", () => {
+  test("tabs are 48px, actions are 40px, thumbnails are 58x40, and the heading reads SOURCE MEDIA · 5 assets", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+
+    expect((await box(page, "library-tablist")).height).toBeCloseTo(48, 0);
+    expect((await box(page, "library-import")).height).toBeCloseTo(40, 0);
+    expect((await box(page, "library-webcam")).height).toBeCloseTo(40, 0);
+
+    const thumb = await box(page, "library-asset-capture-thumb");
+    expect(thumb.width).toBeCloseTo(58, 0);
+    expect(thumb.height).toBeCloseTo(40, 0);
+
+    await expect(page.getByTestId("library-body")).toContainText("SOURCE MEDIA");
+    await expect(page.getByTestId("library-body")).toContainText("5 assets");
+  });
+
+  test("right-clicking a row opens the asset menu, headed by its own name", async ({ page }) => {
+    await openParity(page, { width: 1600, height: 1000 }, { invitation: false });
+    await page.getByTestId("library-asset-presenter").click({ button: "right" });
+    await expect(page.getByTestId("editor-context-menu")).toBeVisible();
+    await expect(page.getByTestId("editor-context-menu-heading")).toHaveText("Presenter · demo");
+  });
+});
+
+// Task 9, review focus 3 (extreme content): a 120-character asset name must
+// never widen the library column — measured here, since happy-dom's own
+// unit suite structurally cannot (AGENTS.md's Testing conventions).
+test.describe("the media library with a 120-character asset name", () => {
+  test("the row stays inside the library column; the thumbnail and the trailing button keep their fixed size", async ({ page }) => {
+    const longName = `${"A".repeat(120)}.mp4`;
+    const openResult = {
+      ...PARITY_OPEN_RESULT,
+      project: {
+        ...PARITY_OPEN_RESULT.project,
+        assets: [
+          ...PARITY_OPEN_RESULT.project.assets,
+          { id: "long", kind: "video" as const, name: longName, duration_ms: 4_000 },
+        ],
+      },
+    };
+    await installTauriStub(page, { openResult, replies: PARITY_REPLIES });
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.goto("/");
+    await page.getByTestId("editor-shell").waitFor();
+    await page.waitForTimeout(800);
+    await page.getByTestId("guide-invitation-dismiss").click();
+
+    const library = await box(page, "editor-shell-library");
+    const row = await box(page, "library-asset-long");
+    expect(row.width).toBeLessThanOrEqual(library.width + 1);
+    const thumb = await box(page, "library-asset-long-thumb");
+    expect(thumb.width).toBeCloseTo(58, 0);
+    const addBtn = await box(page, "library-asset-long-add");
+    expect(addBtn.width).toBeCloseTo(28, 0);
   });
 });
 

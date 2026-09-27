@@ -69,4 +69,24 @@ describe("LibraryPanel", () => {
 
     w.unmount();
   });
+
+  // visual-parity Task 9, concept spec §3.1: the four concept tabs first
+  // (ruling P6 keeps Products, a fifth, until Task 10 moves it into the
+  // library's Project section), the active one a filled pill, the whole
+  // row a fixed 48px strip.
+  it("the tabs are exactly Media / Titles / Captions / Chapters (then Products, D9), the active one a filled pill", () => {
+    const w = mount(LibraryPanel);
+    const labels = ["media", "titles", "captions", "chapters", "products"].map((id) =>
+      w.get(`[data-testid="library-tab-${id}"]`).text(),
+    );
+    expect(labels).toEqual(["Media", "Titles", "Captions", "Chapters", "Products"]);
+    expect(w.get('[data-testid="library-tab-media"]').classes()).toContain("bg-accent-bg");
+    expect(w.get('[data-testid="library-tab-media"]').classes()).toContain("text-accent-ink");
+    expect(w.get('[data-testid="library-tab-titles"]').classes()).not.toContain("bg-accent-bg");
+  });
+
+  it("the tab row is a fixed 48px-tall strip (concept §3.1)", () => {
+    const w = mount(LibraryPanel);
+    expect(w.get('[data-testid="library-tablist"]').classes()).toContain("h-12");
+  });
 });

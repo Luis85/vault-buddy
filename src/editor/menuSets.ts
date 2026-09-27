@@ -49,12 +49,21 @@ function clipTargetMenu(ctx: MenuContext): BuiltMenu {
   return { heading: primaryTargetClip(ctx.action)?.name || "Clip", items: clipMenu(ctx) };
 }
 
+/** An asset row opens the media-asset menu, headed by its own name (the
+ * media library's right-click/Shift+F10, visual-parity Task 9) — the
+ * `clipTargetMenu` precedent, one target kind earlier. */
+function assetTargetMenu(ctx: MenuContext, assetId: string): BuiltMenu {
+  const name = ctx.action.project?.assets.find((a) => a.id === assetId)?.name;
+  return { heading: name || "Media asset", items: assetMenu(ctx, assetId) };
+}
+
 /** A lane opens the gap menu ("Timeline gap"); no target at all — the
  * toolbar's Edit actions with nothing selected — the editor actions, at the
  * playhead. */
 export function contextMenuFor(ctx: MenuContext): BuiltMenu {
   const target = ctx.action.pointerTarget;
   if (target?.kind === "clip") return clipTargetMenu(ctx);
+  if (target?.kind === "asset" && target.id) return assetTargetMenu(ctx, target.id);
   if (target?.kind === "gap") {
     return {
       heading: "Timeline gap",

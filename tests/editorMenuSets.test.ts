@@ -626,4 +626,16 @@ describe("contextMenuFor — which set a target opens", () => {
     expect(none.heading).toBe("Editor actions");
     expect(labels(none.items)[0]).toBe("Move playhead to 00:07.0");
   });
+
+  // visual-parity Task 9: the media library's own right-click/Shift+F10
+  // target, headed by the asset's own name like a clip is by its own.
+  it("an asset opens the media-asset menu, headed by its own name", () => {
+    const found = contextMenuFor(menuCtx({ pointerTarget: { kind: "asset", id: "vid", timeMs: null } }));
+    expect(found.heading).toBe("Screen.mp4");
+    expect(labels(found.items)).toEqual(["Add at playhead", "Add on a new track"]);
+
+    const missing = contextMenuFor(menuCtx({ pointerTarget: { kind: "asset", id: "gone", timeMs: null } }));
+    expect(missing.heading).toBe("Missing.mp4");
+    expect(labels(missing.items)).toContain("Reconnect original…");
+  });
 });

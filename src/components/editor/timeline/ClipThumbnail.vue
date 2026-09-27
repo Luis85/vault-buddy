@@ -10,40 +10,19 @@
  * thumbnail that cannot be made (no ffmpeg, no picture, a moved file)
  * simply is not drawn — the refusal is logged, except the expected
  * no-ffmpeg case, which the waveform lane already explains.
+ *
+ * The fetch/error/reconnect-refresh discipline itself lives in
+ * `useAssetThumbnail` (visual-parity Task 9), shared with the media
+ * library's own asset-row thumbnails.
  */
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { onMounted, ref, watch } from "vue";
-
-import { loadThumbnail, mediaVersion } from "../../../editor/mediaDerived";
-import { EditorPortError } from "../../../editor/port";
-import { logWarning } from "../../../logging";
-import { useEditorProjectStore } from "../../../stores/editorProject";
+import { useAssetThumbnail } from "../../../composables/useAssetThumbnail";
 
 const props = defineProps<{ assetId: string; atMs: number }>();
 
-const editorProject = useEditorProjectStore();
-const src = ref<string | null>(null);
-
-async function load(): Promise<void> {
-  const sessionId = editorProject.sessionId;
-  const key = `${props.assetId}|${props.atMs}`;
-  if (!sessionId) return;
-  try {
-    const path = await loadThumbnail(editorProject.port, sessionId, props.assetId, props.atMs);
-    if (key !== `${props.assetId}|${props.atMs}`) return;
-    src.value = convertFileSrc(path, "asset");
-  } catch (e) {
-    if (key !== `${props.assetId}|${props.atMs}`) return; // a newer frame owns the poster now
-    src.value = null;
-    if (e instanceof EditorPortError && e.error.code === "encoderUnavailable") return;
-    const reason = e instanceof EditorPortError ? e.error.code : String(e);
-    logWarning(`timeline: no thumbnail for asset ${props.assetId} (${reason})`);
-  }
-}
-
-onMounted(load);
-// `mediaVersion`: a reconnect replaced the asset's file (Task 40).
-watch(() => [props.assetId, props.atMs, editorProject.sessionId, mediaVersion(props.assetId)], load);
+const { src } = useAssetThumbnail(
+  () => props.assetId,
+  () => props.atMs,
+);
 </script>
 
 <template>

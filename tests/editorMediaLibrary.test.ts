@@ -1,12 +1,14 @@
 /**
- * `MediaLibrary.vue` (Task 25; F-02): search, asset cards (kind, duration,
- * availability), Import (Rust opens its own dialog), the running job's
- * progress + Cancel, the last import's per-file errors, and "+" — insert
- * at the playhead onto the first compatible, unlocked track FREE for the
- * clip's span, else onto a new one (`placeOnFreeTrack`, visual-parity Task
- * 7; its own suite, `editorPlaceOnFreeTrack.test.ts`, pins the rule and the
- * addTrack-then-insert sequence).
+ * `MediaLibrary.vue` (Task 25; F-02; visual-parity Task 9, concept spec
+ * §3.2): the actions row (Import media / Webcam), the search box, the
+ * "SOURCE MEDIA" heading with its asset-count pill, the asset rows
+ * (thumbnail, meta text, add/reconnect) and their asset context menu, and
+ * "+"/Enter — insert at the playhead onto the first compatible, unlocked
+ * track FREE for the clip's span, else onto a new one (`placeOnFreeTrack`,
+ * visual-parity Task 7; its own suite, `editorPlaceOnFreeTrack.test.ts`,
+ * pins the rule and the addTrack-then-insert sequence).
  */
+import { clearMocks, mockConvertFileSrc } from "@tauri-apps/api/mocks";
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -33,6 +35,10 @@ beforeEach(() => {
   setActivePinia(createPinia());
 });
 
+afterEach(() => {
+  clearMocks();
+});
+
 // Asymmetric: the FIRST video track is locked and an audio track sits
 // between, so "the first video track" and "the first unlocked compatible
 // track" are different answers.
@@ -40,21 +46,25 @@ function track(id: string, kind: "video" | "audio", locked = false): Track {
   return { id, kind, name: id, visible: true, locked, muted: false, solo: false, volume: 1 };
 }
 
+// `vid` carries dimensions (the meta line's "W × H" case); `pic` does not
+// (the fallback case — an image or a video whose probe hasn't reported
+// dimensions yet); `aud` is audio ("Local audio"); `gone` is missing
+// ("Missing source", overriding everything else).
 const ASSETS: Asset[] = [
-  { id: "vid", kind: "video", name: "Screen take.mp4", duration_ms: 12_000 },
+  { id: "vid", kind: "video", name: "Screen take.mp4", duration_ms: 12_000, width: 1920, height: 1080 },
   { id: "aud", kind: "audio", name: "Voice over.mp3", duration_ms: 7_500 },
   { id: "pic", kind: "video", name: "Diagram.png", duration_ms: 5_000, media_type: "image" },
   { id: "gone", kind: "video", name: "Old clip.mov", duration_ms: 3_000 },
 ];
 
-function project(tracks: Track[]): Project {
+function project(tracks: Track[], assets: Asset[] = ASSETS): Project {
   return {
     schema: "vault-buddy-video-project/3",
     id: "project-a",
     title: "Tutorial",
     canvas: { width: 1280, height: 720, fps: 30 },
     master_gain: 1,
-    assets: ASSETS,
+    assets,
     tracks,
     clips: [],
     effects: [],
@@ -71,9 +81,10 @@ async function mountLibrary(
   tracks: Track[] = [track("v-locked", "video", true), track("a1", "audio"), track("v2", "video")],
   extra: Partial<EditorPort> = {},
   missing: MissingMedia[] = [{ assetId: "gone", name: "Old clip.mov", expectedSize: 10, expectedDurationMs: 3_000 }],
+  assets: Asset[] = ASSETS,
 ) {
   executed = [];
-  const p = project(tracks);
+  const p = project(tracks, assets);
   const open: EditorOpenResult = {
     snapshot: {
       sessionId: "ses-a",
@@ -100,13 +111,14 @@ async function mountLibrary(
       return Promise.resolve({ snapshot: { ...open.snapshot, revision: 6 }, project: p });
     },
     getJobs: () => Promise.resolve([]),
+    mediaThumbnail: () => Promise.reject(new Error("no thumbnail stubbed")),
     ...extra,
   });
   const store = useEditorProjectStore();
   store.setPort(port);
   await store.openStaged("base");
   useEditorWorkspaceStore().playheadMs = 4_200;
-  const w = mount(MediaLibrary);
+  const w = mount(MediaLibrary, { attachTo: document.body });
   await flushPromises();
   return w;
 }
@@ -114,9 +126,9 @@ async function mountLibrary(
 describe("MediaLibrary — insert", () => {
   it("library + inserts at the playhead on the first unlocked compatible track", async () => {
     const w = await mountLibrary();
-    await w.get('[data-testid="library-asset-vid-insert"]').trigger("click");
-    await w.get('[data-testid="library-asset-aud-insert"]').trigger("click");
-    await w.get('[data-testid="library-asset-pic-insert"]').trigger("click");
+    await w.get('[data-testid="library-asset-vid-add"]').trigger("click");
+    await w.get('[data-testid="library-asset-aud-add"]').trigger("click");
+    await w.get('[data-testid="library-asset-pic-add"]').trigger("click");
     expect(executed).toEqual([
       { kind: "insertClip", assetId: "vid", trackId: "v2", startMs: 4_200, inMs: 0, outMs: 12_000 },
       { kind: "insertClip", assetId: "aud", trackId: "a1", startMs: 4_200, inMs: 0, outMs: 7_500 },
@@ -130,34 +142,153 @@ describe("MediaLibrary — insert", () => {
   // track that did not land.
   it("+ adds a track above the top video track when no unlocked one is free", async () => {
     const w = await mountLibrary([track("v-locked", "video", true), track("a1", "audio")]);
-    const button = w.get('[data-testid="library-asset-vid-insert"]');
-    expect(button.attributes("aria-disabled")).toBe("false");
-    expect(button.attributes("title")).toBe("Insert at the playhead on a new video track");
+    const button = w.get('[data-testid="library-asset-vid-add"]');
+    expect(button.attributes("title")).toBe("Add at the playhead on a new video track");
     await button.trigger("click");
     await flushPromises();
     expect(executed).toEqual([{ kind: "addTrack", trackKind: "video", name: "Video 2", index: 0 }]);
   });
 
-  it("a missing asset says so and cannot be inserted", async () => {
+  it("Enter on the focused row runs its own primary action", async () => {
     const w = await mountLibrary();
-    const card = w.get('[data-testid="library-asset-gone"]');
-    expect(card.text()).toContain("Missing");
-    await w.get('[data-testid="library-asset-gone-insert"]').trigger("click");
-    expect(executed).toEqual([]);
+    await w.get('[data-testid="library-asset-vid"]').trigger("keydown", { key: "Enter" });
+    expect(executed).toEqual([
+      { kind: "insertClip", assetId: "vid", trackId: "v2", startMs: 4_200, inMs: 0, outMs: 12_000 },
+    ]);
   });
 });
 
-describe("MediaLibrary — cards and search", () => {
-  it("shows each asset's kind and duration, and filters by name", async () => {
+describe("MediaLibrary — actions row (concept §3.2)", () => {
+  it("Import media and Webcam are 40px tall with icons", async () => {
     const w = await mountLibrary();
-    expect(w.get('[data-testid="library-asset-vid"]').text()).toContain("Video");
-    expect(w.get('[data-testid="library-asset-vid"]').text()).toContain("0:12");
-    expect(w.get('[data-testid="library-asset-aud"]').text()).toContain("Audio");
-    expect(w.get('[data-testid="library-asset-pic"]').text()).toContain("Image");
+    const importBtn = w.get('[data-testid="library-import"]');
+    const webcamBtn = w.get('[data-testid="library-webcam"]');
+    expect(importBtn.classes()).toContain("h-10");
+    expect(webcamBtn.classes()).toContain("h-10");
+    expect(importBtn.text()).toContain("Import media");
+    expect(webcamBtn.text()).toContain("Webcam");
+    expect(importBtn.find("svg").exists()).toBe(true);
+    expect(webcamBtn.find("svg").exists()).toBe(true);
+  });
 
-    await w.get('[data-testid="library-search"]').setValue("voice");
+  it("the search input has a search icon and the concept's placeholder, and filters by name", async () => {
+    const w = await mountLibrary();
+    const search = w.get('[data-testid="library-search"]');
+    expect(search.attributes("placeholder")).toBe("Find media…");
+    expect(search.attributes("aria-label")).toBe("Find media");
+    expect(search.element.parentElement?.querySelector("svg")).not.toBeNull();
+
+    await search.setValue("voice");
     expect(w.find('[data-testid="library-asset-aud"]').exists()).toBe(true);
     expect(w.find('[data-testid="library-asset-vid"]').exists()).toBe(false);
+  });
+});
+
+describe("MediaLibrary — heading (concept §3.2)", () => {
+  it('shows "SOURCE MEDIA" with the asset-count pill, unaffected by the search filter', async () => {
+    const w = await mountLibrary();
+    expect(w.text()).toContain("SOURCE MEDIA");
+    expect(w.text()).toContain("4 assets");
+    await w.get('[data-testid="library-search"]').setValue("voice");
+    expect(w.text()).toContain("4 assets");
+  });
+});
+
+describe("MediaLibrary — rows: thumbnails, meta and trailing action", () => {
+  it("renders a 58×40 thumbnail for a video asset, at 1 000 ms", async () => {
+    mockConvertFileSrc("windows");
+    const mediaThumbnail = vi.fn(() => Promise.resolve("C:\\cache\\vid-1000.jpg"));
+    const w = await mountLibrary(undefined, { mediaThumbnail });
+    await flushPromises();
+    expect(mediaThumbnail).toHaveBeenCalledWith("ses-a", "vid", 1_000);
+    const thumb = w.get('[data-testid="library-asset-vid-thumb"]');
+    expect(thumb.classes()).toContain("w-[58px]");
+    expect(thumb.classes()).toContain("h-10");
+    expect(thumb.find("img").attributes("src")).toContain("vid-1000.jpg");
+  });
+
+  // A 1 200 ms asset is shorter than the 2 000 ms the 1 000 ms instant needs
+  // headroom for, so the rule falls back to the asset's own midpoint: 600.
+  it("thumbnails at the asset's own midpoint when it is shorter than 2 s", async () => {
+    const shortAssets = [{ ...ASSETS[0], duration_ms: 1_200 }, ...ASSETS.slice(1)];
+    const mediaThumbnail = vi.fn(() => Promise.reject(new Error("unused")));
+    await mountLibrary(undefined, { mediaThumbnail }, [], shortAssets);
+    await flushPromises();
+    expect(mediaThumbnail).toHaveBeenCalledWith("ses-a", "vid", 600);
+  });
+
+  it("shows a teal audio tile for an audio asset and never asks for a thumbnail", async () => {
+    const mediaThumbnail = vi.fn(() => Promise.reject(new Error("unused")));
+    const w = await mountLibrary(undefined, { mediaThumbnail });
+    await flushPromises();
+    expect(mediaThumbnail).not.toHaveBeenCalledWith("ses-a", "aud", expect.anything());
+    const card = w.get('[data-testid="library-asset-aud"]');
+    expect(card.find("img").exists()).toBe(false);
+    expect(card.find(".bg-audio-bg").exists()).toBe(true);
+  });
+
+  it("shows W × H for video, Local audio for audio, and Missing source for a missing asset", async () => {
+    const w = await mountLibrary();
+    expect(w.get('[data-testid="library-asset-vid"]').text()).toContain("0:12 · 1920 × 1080");
+    expect(w.get('[data-testid="library-asset-aud"]').text()).toContain("0:07 · Local audio");
+    expect(w.get('[data-testid="library-asset-gone"]').text()).toContain("Missing source");
+  });
+
+  it("has an Add button for an available asset and a Reconnect button that opens the dialog for a missing one", async () => {
+    const w = await mountLibrary();
+    const add = w.get('[data-testid="library-asset-vid-add"]');
+    expect(add.attributes("aria-label")).toBe("Add Screen take.mp4 to timeline");
+
+    const reconnect = w.get('[data-testid="library-asset-gone-add"]');
+    expect(reconnect.attributes("aria-label")).toBe("Reconnect Old clip.mov");
+    expect(w.find('[data-testid="reconnect-row-gone"]').exists()).toBe(false);
+    await reconnect.trigger("click");
+    await flushPromises();
+    expect(document.body.querySelector('[data-testid="reconnect-row-gone"]')).not.toBeNull();
+  });
+
+  it("a 120-character asset name ellipsizes (never widens the row): the name carries the truncate class", async () => {
+    const longName = `${"A".repeat(120)}.mp4`;
+    const longAssets = [...ASSETS, { id: "long", kind: "video" as const, name: longName, duration_ms: 4_000 }];
+    const w = await mountLibrary(undefined, {}, [], longAssets);
+    const nameEl = w.get('[data-testid="library-asset-long"] b');
+    expect(nameEl.classes()).toContain("truncate");
+    expect(nameEl.text()).toBe(longName);
+    // The name column shrinks, never the fixed-size thumbnail or button.
+    expect(w.get('[data-testid="library-asset-long-thumb"]').classes()).toContain("w-[58px]");
+    expect(w.get('[data-testid="library-asset-long-add"]').classes()).toContain("w-7");
+  });
+});
+
+describe("MediaLibrary — empty state", () => {
+  it("an empty library shows guidance instead of a blank list", async () => {
+    const w = await mountLibrary(undefined, {}, [], []);
+    expect(w.text()).toContain("No media yet. Import video, audio or images.");
+    expect(w.text()).toContain("0 assets");
+  });
+
+  it("a search with no match says so", async () => {
+    const w = await mountLibrary();
+    await w.get('[data-testid="library-search"]').setValue("nothing matches this");
+    expect(w.text()).toContain("No media matches the search.");
+  });
+});
+
+describe("MediaLibrary — asset context menu (visual-parity Task 9, concept spec §8)", () => {
+  it("right-click opens the asset menu, headed by the asset's own name", async () => {
+    const w = await mountLibrary();
+    await w.get('[data-testid="library-asset-vid"]').trigger("contextmenu");
+    await flushPromises();
+    expect(w.find('[data-testid="editor-context-menu"]').exists()).toBe(true);
+    expect(w.get('[data-testid="editor-context-menu-heading"]').text()).toBe("Screen take.mp4");
+  });
+
+  it("Shift+F10 opens the same menu from the keyboard, and offers Reconnect for a missing asset", async () => {
+    const w = await mountLibrary();
+    await w.get('[data-testid="library-asset-gone"]').trigger("keydown", { key: "F10", shiftKey: true });
+    await flushPromises();
+    expect(w.get('[data-testid="editor-context-menu-heading"]').text()).toBe("Old clip.mov");
+    expect(w.text()).toContain("Reconnect original…");
   });
 });
 
