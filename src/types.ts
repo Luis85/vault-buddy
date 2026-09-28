@@ -303,6 +303,21 @@ export interface PandocStatus {
   configuredPath: string | null;
 }
 
+/** ffmpeg detection status, mirroring `src-tauri/src/ffmpeg.rs`'s
+ * `FfmpegStatus`. The `version` is the banner's whole first line — ffmpeg has
+ * no short version string, and inventing one on the frontend would be a second
+ * parser for what Rust already resolved. */
+export interface FfmpegStatus {
+  installed: boolean;
+  version: string | null;
+  path: string | null;
+  ffprobePath: string | null;
+  /** null means "this build cannot encode H.264": an untouched capture still
+   * remuxes, saving an EDITED one does not. Reported, never guessed. */
+  h264Encoder: string | null;
+  configuredPath: string | null;
+}
+
 export interface SearchHit {
   vaultId: string;
   vaultName: string;
@@ -344,3 +359,7 @@ export interface Recording {
   /** Sidecar state — drives the row indicator + re-transcribe confirm. */
   transcriptStatus: "none" | "pending" | "failed" | "complete" | "cancelled";
 }
+
+// The screen-capture domain's types live in their own module (see its
+// header); re-exported here so every `from "../types"` import is unchanged.
+export * from "./screenTypes";

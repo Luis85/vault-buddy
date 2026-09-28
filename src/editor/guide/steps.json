@@ -1,0 +1,309 @@
+[
+  {
+    "id": "welcome",
+    "chapter": "orient",
+    "title": "A recording is just the beginning.",
+    "target": ".projectbar",
+    "focus": "#libraryToggle",
+    "label": "Your tutorial workspace",
+    "body": "Turn a screen recording into a short tutorial. Media lives on the left, your preview is in the middle, and the timeline below controls what plays when.",
+    "tip": "The guide only changes the view and selection. It never applies edits for you. Actions you choose in the editor do affect this project.",
+    "visual": "workflow"
+  },
+  {
+    "id": "media",
+    "chapter": "orient",
+    "title": "Start with your source material.",
+    "target": "#library [data-action=\"import\"]",
+    "focus": "#library [data-action=\"import\"]",
+    "label": "Import video, audio or an image",
+    "prepare": "media",
+    "body": "Bring in a screen recording, narration, music or an image. Originals stay unchanged. Drag media to a compatible track, or use its + button.",
+    "tip": "The built-in project is ready to explore. Importing your own file is optional.",
+    "task": "Open the import picker, or use the sample and continue.",
+    "action": "[data-action=\"import\"]"
+  },
+  {
+    "id": "preview",
+    "chapter": "orient",
+    "title": "See your edit in motion.",
+    "target": ".transport",
+    "focus": "#playButton",
+    "label": "Playback controls",
+    "body": "Press Play to watch the assembled timeline. The time readout is the position in your edit, not in the original recording. Click the timeline ruler to jump to another moment.",
+    "tip": "The speed next to the speaker changes preview playback only. It does not change the exported video.",
+    "task": "Play a few seconds, then pause.",
+    "action": "#playButton",
+    "keys": [
+      "Space",
+      "← / →"
+    ]
+  },
+  {
+    "id": "timeline",
+    "chapter": "orient",
+    "title": "Time runs from left to right.",
+    "target": ".timeline-toolbar",
+    "focus": "#zoomRange",
+    "label": "Timeline controls",
+    "body": "Each rectangle is a clip. The vertical playhead shows the current moment. Zoom into short details, fit the whole edit, or drag the divider to make more room for tracks.",
+    "tip": "Video layers stack from top to bottom; audio layers mix together. Higher video tracks appear in front.",
+    "task": "Try timeline zoom or Fit.",
+    "action": "[data-action=\"fit\"], [data-action=\"zoomIn\"], [data-action=\"zoomOut\"], #zoomRange",
+    "keys": [
+      "F"
+    ]
+  },
+  {
+    "id": "select",
+    "chapter": "edit",
+    "title": "Choose the clip you want to change.",
+    "target": "@clip",
+    "focus": "@clip",
+    "label": "Selected timeline clip",
+    "prepare": "video",
+    "body": "Click a clip to select it. Its settings appear in Properties on the right. Shift-click adds another clip to the selection. A locked track protects its clips from editing.",
+    "tip": "Selection is not an edit. Use Edit actions → Clear selection or V to deselect without changing the video.",
+    "task": "Select a different clip, or keep this one.",
+    "action": "[data-clip]"
+  },
+  {
+    "id": "split",
+    "chapter": "edit",
+    "title": "Cut a clip, not the original.",
+    "target": "#splitButton",
+    "focus": "#splitButton",
+    "label": "Split at the playhead",
+    "prepare": "cut",
+    "body": "Put the playhead inside a selected clip, then choose Split. You get two independently editable pieces; no source frames are deleted. Remove an unwanted piece only after checking the delete mode.",
+    "tip": "Leave gap keeps other clips in place. Ripple this track closes the gap on this track only, which can change its alignment with other tracks.",
+    "task": "Optional edit: split here, then try Undo in the next step.",
+    "action": "#splitButton",
+    "keys": [
+      "S"
+    ],
+    "warning": true
+  },
+  {
+    "id": "undo",
+    "chapter": "edit",
+    "title": "You can take an edit back.",
+    "target": "#undoButton",
+    "focus": "#undoButton",
+    "label": "Undo and redo",
+    "body": "Undo reverses your most recent edit. Redo brings it back. This applies to cuts, moved clips, added teaching layers and property changes.",
+    "tip": "Undo reverses the most recent actual edit, not a tutorial step. If Undo is unavailable, there is nothing to undo yet.",
+    "task": "Use Undo only if you want to reverse the last edit.",
+    "action": "#undoButton",
+    "keys": [
+      "Ctrl / ⌘ Z"
+    ],
+    "warning": true
+  },
+  {
+    "id": "arrange",
+    "chapter": "edit",
+    "title": "Put each moment in the right place.",
+    "target": ".inspector",
+    "focus": "[data-prop=\"clipStart\"]",
+    "label": "Clip timing in Properties",
+    "prepare": "properties",
+    "body": "Drag a clip horizontally to change when it starts, or use its numeric timing fields. Drag an edge to trim. Compatible tracks accept a vertical move; original media stays untouched.",
+    "tip": "Group related clips before moving them to preserve their relative timing. Keep snapping on when you want edges to line up.",
+    "task": "Explore the timing fields. Changing a value edits this project.",
+    "action": "[data-prop=\"clipStart\"], [data-prop=\"sourceIn\"], [data-prop=\"sourceOut\"]",
+    "warning": true
+  },
+  {
+    "id": "context",
+    "chapter": "edit",
+    "title": "The action you need is right here.",
+    "target": ".timeline-toolbar [data-editor=\"more\"]",
+    "focus": ".timeline-toolbar [data-editor=\"more\"]",
+    "label": "More actions / right-click menu",
+    "prepare": "video",
+    "body": "Right-click a clip, annotation, track or media item for actions specific to that object. Edit actions in the timeline opens the same kind of menu without a right click.",
+    "tip": "When you right-click a clip, time-specific commands use the position you clicked. Disabled items explain what needs to change first.",
+    "task": "Open Edit actions, explore the menu, then close it with Escape.",
+    "action": "[data-editor=\"more\"]",
+    "context": true,
+    "keys": [
+      "Shift F10",
+      "Esc"
+    ]
+  },
+  {
+    "id": "tracks",
+    "chapter": "layers",
+    "title": "Give each layer its own track.",
+    "target": "[data-action=\"trackMenu\"]",
+    "focus": "[data-action=\"trackMenu\"]",
+    "label": "Add a video or audio track",
+    "body": "Use a video track for a screen recording, an image or a presenter. Use audio tracks for independent narration and music. Track controls handle visibility, mute, solo and locking.",
+    "tip": "Adding a track is optional. The sample already has multiple video and audio tracks.",
+    "task": "Open Add track to see the choices. You do not need to add one.",
+    "action": "[data-action=\"trackMenu\"]"
+  },
+  {
+    "id": "webcam",
+    "chapter": "layers",
+    "title": "Add a face to the explanation.",
+    "target": ".webcam-entry",
+    "focus": ".webcam-entry",
+    "prepare": "media",
+    "label": "Record a webcam overlay",
+    "body": "Record a presenter take and place it above your screen recording. Review or retake it before adding it. It remains an independent clip that you can trim and position.",
+    "tip": "Opening the dialog does not activate your camera. This guide never requests camera or microphone permission. Close the dialog to return here.",
+    "task": "Optional: inspect the recording options. A camera is not needed for this guide.",
+    "action": "[data-action=\"webcam\"]"
+  },
+  {
+    "id": "layout",
+    "chapter": "layers",
+    "title": "Keep the presenter out of the way.",
+    "target": ".inspector",
+    "focus": "[data-property-tab=\"layout\"]",
+    "label": "Overlay layout controls",
+    "prepare": "layout",
+    "body": "Select the presenter or another video layer. Drag it in the preview; drag a corner to resize it. Layout offers numeric sizing, placement presets, framing and crop controls.",
+    "tip": "Choose a corner that does not cover the button, text or detail you are teaching. Review the crop before exporting.",
+    "task": "Inspect Layout, or reposition a layer if you are ready to edit.",
+    "action": "[data-prop], [data-preset]",
+    "warning": true
+  },
+  {
+    "id": "fades",
+    "chapter": "polish",
+    "title": "Give clips a softer start and end.",
+    "target": ".inspector",
+    "focus": "[data-prop=\"fadeIn\"]",
+    "label": "Fade controls",
+    "prepare": "fades",
+    "body": "Set Fade in and Fade out, or drag the gold handles on a timeline clip. Video fades reveal the layer beneath; audio fades change volume. A preset is a quick starting point.",
+    "tip": "An edge fade is not a crossfade. A crossfade overlaps adjacent clips and shortens only their track. Check synchronization afterward.",
+    "task": "Optional edit: try a 0.5-second fade. Undo remains available.",
+    "action": "[data-fade-preset], [data-prop=\"fadeIn\"], [data-prop=\"fadeOut\"]",
+    "warning": true
+  },
+  {
+    "id": "audio",
+    "chapter": "polish",
+    "title": "Make the voice easy to hear.",
+    "target": "[data-action=\"mixer\"]",
+    "focus": "[data-action=\"mixer\"]",
+    "label": "Audio mixer",
+    "body": "Balance narration, source audio and music in the mixer. Track mute and solo affect your rendered video. The speaker beside Play only changes what you hear while monitoring.",
+    "tip": "Listen to the actual rendered file before sharing. The sample sounds are synthesized cues and ambience, not a recorded voice.",
+    "task": "Open the mixer. Close it when you are ready to continue.",
+    "action": "[data-action=\"mixer\"]"
+  },
+  {
+    "id": "callouts",
+    "chapter": "teach",
+    "title": "Point to the next action.",
+    "target": ".toolstrip",
+    "focus": ".toolstrip [data-effect=\"arrow\"]",
+    "label": "Teaching tools",
+    "prepare": "video",
+    "body": "Use the single preview header for text, arrows, highlights and zoom. More tools contains spotlights, numbered steps and privacy covers. Add them at the playhead. Annotations follow their source clip when you rearrange it.",
+    "tip": "Select an annotation to change its text, style, position and timing. One clear cue is often enough for a single action.",
+    "task": "Optional edit: add an arrow or another teaching cue.",
+    "action": "[data-effect]",
+    "warning": true
+  },
+  {
+    "id": "captions",
+    "chapter": "teach",
+    "title": "Let viewers follow without sound.",
+    "target": ".sidebar",
+    "focus": "[data-tab=\"captions\"]",
+    "label": "Captions library",
+    "prepare": "captions",
+    "body": "Write captions or import an SRT or plain WebVTT file, then check text and timing against the selected clip. Caption cues remain linked to their source footage.",
+    "tip": "Captions are manual or imported; automatic transcription is not connected. Readability checks flag dense or overlapping captions, but still review them yourself.",
+    "task": "Explore caption options. Adding captions is optional.",
+    "action": "[data-editor=\"caption-add\"], [data-editor=\"caption-import\"]"
+  },
+  {
+    "id": "chapters",
+    "chapter": "teach",
+    "title": "Make the tutorial easy to revisit.",
+    "target": ".sidebar",
+    "focus": "[data-action=\"marker\"]",
+    "label": "Tutorial chapters and companion note",
+    "prepare": "guide",
+    "body": "Add chapter markers for important steps. The companion Markdown note can embed the video and list timestamps, making the tutorial easier to find and use in Obsidian.",
+    "tip": "Chapters describes your video. Help opens this application walkthrough. They are separate.",
+    "task": "Preview the companion note without changing your project.",
+    "action": "[data-action=\"note\"]"
+  },
+  {
+    "id": "checks",
+    "chapter": "finish",
+    "title": "Catch problems before you share.",
+    "target": "#issuesButton",
+    "focus": "#issuesButton",
+    "label": "Before-you-share checks",
+    "body": "Checks points you to missing media, uncovered gaps, audio concerns and caption issues. Each item explains the problem and offers a relevant next action.",
+    "tip": "Checks is a review aid, not a guarantee. Watch and listen to the encoded video, especially when it contains private information.",
+    "task": "Open Checks, inspect its findings, then close it.",
+    "action": "#issuesButton"
+  },
+  {
+    "id": "save",
+    "chapter": "finish",
+    "title": "Save the project. Keep the options.",
+    "target": ".header-actions [data-action=\"downloadProject\"]",
+    "focus": ".header-actions [data-action=\"downloadProject\"]",
+    "label": "Save editable project",
+    "body": "Save project keeps the editable workspace without rendering. A portable project includes available originals, timeline, teaching layers and render history so you can continue later.",
+    "tip": "Saving here downloads a project file. Keep that file somewhere safe. Browser recovery is not a backup, and a portable project may include uncensored originals.",
+    "task": "Open Save project to inspect the formats. No download is required to finish the guide.",
+    "action": ".header-actions [data-action=\"downloadProject\"]",
+    "keys": [
+      "Ctrl / ⌘ S"
+    ],
+    "visual": "project"
+  },
+  {
+    "id": "render",
+    "chapter": "finish",
+    "title": "A video is a product of the project.",
+    "target": ".header-actions [data-action=\"save\"]",
+    "focus": ".header-actions [data-action=\"save\"]",
+    "label": "Render a separate video",
+    "body": "Render video creates a watchable output, not a replacement for the project. You can review a short range, play the actual output, then refine your edit and render another version.",
+    "tip": "Browser rendering here is a real-time review path with a three-minute limit. It does not write directly into a vault. Keep the editable project for later changes.",
+    "task": "Open Render video to inspect settings. You do not need to render anything.",
+    "action": ".header-actions [data-action=\"save\"]"
+  },
+  {
+    "id": "products",
+    "chapter": "return",
+    "title": "Keep working after the first export.",
+    "target": ".sidebar",
+    "focus": "#library [data-action=\"openProject\"],#projectMenuButton",
+    "label": "Project and rendered products",
+    "prepare": "project",
+    "body": "Open Project in the app header to find workspace files and rendered products. This keeps the editable workspace separate from rendered products. Open a saved project to continue, or inspect the edit snapshot behind an earlier output.",
+    "tip": "Missing originals can be reconnected without rebuilding your edit. An exported video by itself does not preserve separate tracks or annotations.",
+    "task": "Look through Project, then continue.",
+    "action": "[data-tab=\"project\"]"
+  },
+  {
+    "id": "help",
+    "chapter": "return",
+    "title": "Pick up here whenever you need.",
+    "target": "#editorHelp",
+    "focus": "#editorHelp",
+    "label": "Help & learning center",
+    "body": "Help is always here. Resume a paused walkthrough at the same step, jump to a chapter, search a quick answer, or revisit shortcuts. You can repeat any lesson.",
+    "tip": "Escape or Pause guide dismisses the overlays immediately. Your guide progress is separate from project saves.",
+    "task": "Finish the walkthrough, or pause and return later.",
+    "keys": [
+      "F1",
+      "Esc"
+    ],
+    "visual": "finish"
+  }
+]

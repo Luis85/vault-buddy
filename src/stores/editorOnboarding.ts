@@ -1,0 +1,268 @@
+/**
+ * The guided onboarding's state (Task 55; F-46, F-47; ONBOARDING.md § State
+ * and persistence; ADR R16): which lesson is current, which were read
+ * (`reviewed`) and which controls were tried (`explored` — separate, and
+ * trying a control NEVER advances the lesson), the invitation, active/
+ * collapsed, completion and the presentation preferences.
+ *
+ * **Apart from the project.** Progress is an app-wide preference persisted
+ * through `editor_get_guide_progress`/`editor_save_guide_progress`
+ * (`editor-prefs\guide-progress.json`), never the project document, a
+ * render snapshot or Undo — no action here calls `editor_execute`.
+ * `suspended` (a modal dialog has the screen) is transient and is not part
+ * of `progress`, so it can never be persisted.
+ *
+ * **Storage is best effort.** A read or save that fails sets `sessionOnly`
+ * (the header says so) and logs; it never throws into the editor, and the
+ * guide keeps working for this session. A later save that lands clears it
+ * — unless the READ failed (Task 56): then a file exists that this session
+ * could not read, and writing fresh progress over it would lose the user's
+ * real place, so nothing is written for the rest of the session and
+ * `sessionOnly` stays. Saves are debounced: a quick Next/Next/Next is one
+ * write of the latest state, and `flush()` writes a pending one at once
+ * (the editor shell calls it when the window hides or the shell unmounts,
+ * the close guard before it hides the window).
+ *
+ * **Callers (Task 56).** `GuideInvitation` (start, dismissInvitation),
+ * `GuideCoach` (next, back, pause, collapse, restart, markExplored — a
+ * click on the highlighted control), `GuideHelpButton` and F1/? (start),
+ * the learning center (jumpTo, setPreferences, restoreFrom, restart —
+ * Task 57), and every `DialogHost` (suspend on open, resume on close: a depth, so
+ * a confirm stacked on a dialog keeps the coach suspended until the last
+ * one closes).
+ */
+import { defineStore } from "pinia";
+
+import type { GuideStepId } from "../editor/guide/content";
+import { CONTENT_REVISION, GUIDE_STEPS, isGuideStepId, resolveStepId } from "../editor/guide/content";
+import type { EditorPort } from "../editor/port";
+import type { GuidePreferences, GuideProgress } from "../editorTypes";
+import { logWarning } from "../logging";
+import { toEditorError, useEditorProjectStore } from "./editorProject";
+
+const PERSIST_DEBOUNCE_MS = 400;
+
+function fresh(preferences: GuidePreferences = { dimming: true, motion: "system" }): GuideProgress {
+  return {
+    contentRevision: CONTENT_REVISION,
+    currentStepId: null,
+    reviewed: [],
+    explored: [],
+    invitationDismissed: false,
+    active: false,
+    collapsed: false,
+    completed: false,
+    preferences: { ...preferences },
+  };
+}
+
+/** Lessons only, first occurrence kept. */
+function lessons(ids: string[]): string[] {
+  return [...new Set(ids.filter(isGuideStepId))];
+}
+
+/** A stored document, resolved against THIS build's lessons. */
+function hydrate(stored: GuideProgress): GuideProgress {
+  return {
+    ...stored,
+    contentRevision: CONTENT_REVISION,
+    currentStepId: stored.currentStepId === null ? null : resolveStepId(stored.currentStepId),
+    reviewed: lessons(stored.reviewed),
+    explored: lessons(stored.explored),
+    preferences: { ...stored.preferences },
+  };
+}
+
+/** `snapshot()`, as a plain function for `writeProgress`. */
+function snapshotOf(p: GuideProgress): GuideProgress {
+  return {
+    ...p,
+    contentRevision: CONTENT_REVISION,
+    reviewed: [...p.reviewed],
+    explored: [...p.explored],
+    preferences: { ...p.preferences },
+  };
+}
+
+/** The write behind `save()`, a plain function so the debounced timer never
+ * calls an ACTION: Pinia's action wrapper calls `setActivePinia` with the
+ * store's own pinia, so a timer that outlives its pinia (a test's
+ * `setActivePinia(createPinia())` reset) would re-activate the old one and
+ * the next test's `useXStore()` calls would read stale stores. `project` is
+ * resolved by the caller, inside the store's own pinia. Never throws. */
+async function writeProgress(
+  guide: { readFailed: boolean; sessionOnly: boolean; progress: GuideProgress },
+  project: { port: EditorPort },
+): Promise<void> {
+  if (guide.readFailed) return;
+  try {
+    await project.port.saveGuideProgress(snapshotOf(guide.progress));
+    guide.sessionOnly = false;
+  } catch (e) {
+    guide.sessionOnly = true;
+    // S-15 (hardening Task 12): by code and operationId, never by
+    // message — which can carry a capture's own name in plain text.
+    const failure = toEditorError(e);
+    logWarning(`editor guide: could not save progress, this session only: ${failure.code} (${failure.operationId})`);
+  }
+}
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+export const useEditorOnboardingStore = defineStore("editorOnboarding", {
+  state: () => ({
+    progress: fresh(),
+    /** The saved progress has been read (or found unreadable). */
+    loaded: false,
+    /** Storage failed: progress lasts for this session only. */
+    sessionOnly: false,
+    /** Storage exists and could not be read: never write over it. */
+    readFailed: false,
+    /** Open modal dialogs; transient, never persisted. */
+    suspendDepth: 0,
+  }),
+  getters: {
+    /** A modal dialog has the screen. */
+    suspended(state): boolean {
+      return state.suspendDepth > 0;
+    },
+    /** The current lesson's position in `GUIDE_STEPS`, or -1. */
+    stepIndex(state): number {
+      return GUIDE_STEPS.findIndex((s) => s.id === state.progress.currentStepId);
+    },
+    /** Lessons read (Task 57's progress line). */
+    reviewedCount(state): number {
+      return state.progress.reviewed.filter(isGuideStepId).length;
+    },
+    /** Every lesson has been read. Judged from `reviewed`, never from
+     * `completed`, which a revisit clears (docs/Gaps.md GAP-205 (6)). */
+    hasFinished(state): boolean {
+      return GUIDE_STEPS.every((s) => state.progress.reviewed.includes(s.id));
+    },
+  },
+  actions: {
+    /** Reads the saved progress once per window. Never throws. */
+    async load(): Promise<void> {
+      if (this.loaded) return;
+      try {
+        this.progress = hydrate(await useEditorProjectStore().port.getGuideProgress());
+      } catch (e) {
+        this.sessionOnly = true;
+        this.readFailed = true;
+        const failure = toEditorError(e);
+        logWarning(`editor guide: could not read saved progress, this session only: ${failure.code} (${failure.operationId})`);
+      } finally {
+        this.loaded = true;
+      }
+    },
+    /** Starts, or resumes at the exact saved lesson. A finished guide is
+     * revisited from its first lesson (what was read stays read). */
+    start(): void {
+      const p = this.progress;
+      const resume = !p.completed && p.currentStepId !== null;
+      this.jumpTo(resume ? (p.currentStepId as GuideStepId) : GUIDE_STEPS[0].id);
+    },
+    next(): void {
+      const i = this.stepIndex;
+      if (i === GUIDE_STEPS.length - 1) {
+        this.progress.completed = true;
+        this.progress.active = false;
+        this.progress.collapsed = false;
+        this.persist();
+        return;
+      }
+      this.show(GUIDE_STEPS[Math.max(0, i + 1)].id);
+    },
+    back(): void {
+      const i = this.stepIndex;
+      if (i > 0) this.show(GUIDE_STEPS[i - 1].id);
+    },
+    /** Closes the coach, keeping the lesson for Resume. */
+    pause(): void {
+      this.progress.active = false;
+      this.progress.collapsed = false;
+      this.persist();
+    },
+    /** Keeps a small resume control while the user works. */
+    collapse(): void {
+      this.progress.collapsed = true;
+      this.persist();
+    },
+    dismissInvitation(): void {
+      this.progress.invitationDismissed = true;
+      this.persist();
+    },
+    /** A control was tried. Recorded only — the lesson stays put. */
+    markExplored(id: string): void {
+      if (!isGuideStepId(id) || this.progress.explored.includes(id)) return;
+      this.progress.explored.push(id);
+      this.persist();
+    },
+    /** The learning center's lesson and chapter jumps (Task 57): open the
+     * coach at `id`, exactly as a Resume would open it at a saved one. */
+    jumpTo(id: GuideStepId): void {
+      const p = this.progress;
+      p.completed = false;
+      p.active = true;
+      p.collapsed = false;
+      p.invitationDismissed = true;
+      this.show(id);
+    },
+    /** Presentation only — never guide state. */
+    setPreferences(preferences: Partial<GuidePreferences>): void {
+      this.progress.preferences = { ...this.progress.preferences, ...preferences };
+      this.persist();
+    },
+    /** Load progress file… (Task 57's "Restore progress file…", renamed
+     * to the concept's wording by visual-parity Task 23): install what Rust
+     * validated, PAUSED — restoring never starts the guide, and the
+     * invitation it answers stays answered. Saved like any other change (so not at all
+     * after a failed read: see the module doc). */
+    restoreFrom(restored: GuideProgress): void {
+      this.progress = { ...hydrate(restored), active: false, collapsed: false, invitationDismissed: true };
+      this.persist();
+    },
+    /** Start over: guide state only. Preferences — and the fact the
+     * invitation was already answered — are the person's, and stay. */
+    restart(): void {
+      this.progress = { ...fresh(this.progress.preferences), invitationDismissed: true };
+      this.start();
+    },
+    suspend(): void {
+      this.suspendDepth += 1;
+    },
+    resume(): void {
+      this.suspendDepth = Math.max(0, this.suspendDepth - 1);
+    },
+    /** Internal: makes `id` current and records it as read. */
+    show(id: GuideStepId): void {
+      this.progress.currentStepId = id;
+      if (!this.progress.reviewed.includes(id)) this.progress.reviewed.push(id);
+      this.persist();
+    },
+    /** Debounced save of the latest progress. Never throws. */
+    persist(): void {
+      if (persistTimer !== null) clearTimeout(persistTimer);
+      const project = useEditorProjectStore();
+      persistTimer = setTimeout(() => {
+        persistTimer = null;
+        void writeProgress(this, project);
+      }, PERSIST_DEBOUNCE_MS);
+    },
+    /** Writes a pending (debounced) save now. Never throws. */
+    async flush(): Promise<void> {
+      if (persistTimer === null) return;
+      clearTimeout(persistTimer);
+      persistTimer = null;
+      await this.save();
+    },
+    /** A plain copy of the progress, stamped with this build's content
+     * revision — what a save and a progress file carry. */
+    snapshot(): GuideProgress {
+      return snapshotOf(this.progress);
+    },
+    async save(): Promise<void> {
+      await writeProgress(this, useEditorProjectStore());
+    },
+  },
+});

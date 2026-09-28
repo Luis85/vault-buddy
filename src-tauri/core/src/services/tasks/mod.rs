@@ -6,6 +6,8 @@ use crate::{capture_config, capture_note, capture_paths, tasks};
 mod id_config;
 mod lists;
 mod parent;
+#[cfg(test)]
+pub(crate) mod test_announce;
 mod update;
 pub use id_config::{count_parent_links, set_task_id_config};
 pub use lists::{

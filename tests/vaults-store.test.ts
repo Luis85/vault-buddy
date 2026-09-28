@@ -227,6 +227,31 @@ describe("vaults store", () => {
     expect(store.recordModeVaultId).toBe("a1b2c3");
   });
 
+  it("opens the screen source picker for a vault and back() returns to the record chooser", () => {
+    // screenCapture's parent is recordMode, the same one-parent-per-view rule
+    // `recordings` follows. Without its own back() branch it falls through to
+    // the final else and lands on the vault LIST, skipping a level: the user
+    // who opened Capture knowledge → Record Screen and pressed Back would be
+    // thrown out of the vault entirely.
+    const store = useVaultsStore();
+    store.openScreenCapture("a1b2c3");
+    expect(store.view).toBe("screenCapture");
+    expect(store.screenCaptureVaultId).toBe("a1b2c3");
+    store.back();
+    expect(store.view).toBe("recordMode");
+    expect(store.recordModeVaultId).toBe("a1b2c3");
+  });
+
+  it("showList() clears the screen-capture vault id", () => {
+    // Every other view id is cleared here; a surviving one would re-render
+    // the picker for a stale vault on the next open.
+    const store = useVaultsStore();
+    store.openScreenCapture("a1b2c3");
+    store.showList();
+    expect(store.view).toBe("list");
+    expect(store.screenCaptureVaultId).toBeNull();
+  });
+
   it("back() returns each view to its parent", () => {
     const store = useVaultsStore();
     // recordings' parent is the record view (same vault)

@@ -32,6 +32,284 @@
   --text-micro: 0.625rem;
 }
 
+/* Tutorial editor tokens (Task 16, F-48; visual-parity Task 3). The
+   concept's palette, verbatim from
+   docs/superpowers/specs/2026-09-26-tutorial-editor-visual-parity-concept-spec.md
+   §1.1 (`reference/editor.css`' `:root` and `[data-theme=light]`), in the
+   concept's own dark-by-default shape.
+
+   **Two scopes, because some names are shared.** The names below are the
+   editor's alone (no other window uses them), so their DARK values are the
+   defaults here and `[data-theme="light"]` overrides them. `static` emits
+   every one as a root variable whether or not a utility reads it yet, so
+   the new roles (primary, ring, guide edge…) exist for the tasks that
+   restyle onto them. The names the panel window shares with the editor
+   (the `fg` ladder, `accent`, `focus`, `danger`) keep the panel's values in
+   the `@theme` block above; the editor's own values for them live in the
+   `[data-theme]` blocks below, which only the editor window ever sets
+   (`EditorShell`, from `editorWorkspace.theme`).
+
+   Concept name → token: --bg → app, --panel → panel, --raised → raised,
+   --stage → stage, --line → line, --hover → hover, --ink → fg,
+   --sub → fg-secondary, --muted → fg-muted, --accent → accent,
+   --accent-ink → accent-ink (and accent-fg, its older name),
+   --accent-bg → accent-bg, --primary → primary, --ring → ring (and focus),
+   --danger → danger-fg (the destructive-TEXT token; `danger` itself stays
+   the fill white button labels sit on), video/audio/gold(-bg) as named. */
+@theme static {
+  --color-app: #18191e;
+  --color-stage: #131419;
+  --color-panel: #202127;
+  --color-raised: #292a33;
+  --color-line: #353640;
+  --color-hover: #30303c;
+  --color-video: #aa92ed;
+  --color-video-bg: #40364f;
+  --color-audio: #8cccc0;
+  --color-audio-bg: #263e3d;
+  --color-gold: #ebc582;
+  --color-gold-bg: #493d2c;
+  --color-accent-bg: #393049;
+  --color-accent-ink: #dacdff;
+  /* Concept --primary #8b6ad4 carries white 11px/600 labels at 4.11:1;
+     every channel x0.945 reaches 4.54:1 (visual-parity Task 8, ruling
+     T3-1). The concept's hover (#9475d8, both themes) reads 3.62:1, so the
+     hover darkens instead: 5.13:1 here, 6.80:1 in light. */
+  --color-primary: #8364c8;
+  --color-primary-hover: #7a5cbd;
+  --color-ring: #d4c1ff;
+  --color-guide-edge: #ac8feb;
+  --color-guide-dim: rgba(10, 11, 18, 0.52);
+  /* A non-token literal in the concept (dialog backdrop), both themes. */
+  --color-backdrop: #080711aa;
+  /* Task 14 fix round 1 (review Important): the progress tracks' boundary
+     tint (and the trim handles', until visual-parity Task 18 drew those as
+     the concept's ink bars) — a static UI-component edge (WCAG 1.4.11 wants
+     ~3:1), not a hover. No concept counterpart; the dark value is the
+     `bg-white/10` it replaced, and `[data-theme="light"]` overrides it with
+     slate-900 at 55% (3.65:1 on `video-bg`, the tightest backdrop it ever
+     sat on). */
+  --color-track: rgb(255 255 255 / 0.1);
+  /* GAP-206's recorded residual: the lighter hover for rows that carried
+     `bg-white/5` (the Save project dialog's format rows, the learning
+     center's rows). No concept counterpart; dark is the `bg-white/5` it
+     replaced (1.16:1 on `panel`, pinned by `editorKeyboard.spec.ts`),
+     light below is slate-900 at 5%. */
+  --color-hover-subtle: rgb(255 255 255 / 0.05);
+  /* The Titles tab's template canvases (concept spec §3.3,
+     `.title-template.<preset> .template-canvas`): a picture of the card a
+     render draws, so the same in both themes — no light override. */
+  --color-card-intro: #393049;
+  --color-card-chapter: #272333;
+  --color-card-outro: #243b38;
+  --color-card-blank: #3a334d;
+  --color-card-ink: #f0edf7;
+  --color-card-eyebrow: #c5b2e9;
+  --color-card-outro-eyebrow: #b8dacf;
+  --color-card-blank-ink: #b9abc9;
+  /* The preview canvas under the picture (concept spec §4.2,
+     `.canvas-wrap{background:#17151f}`): the same in both themes, like the
+     card canvases above — it stands for the rendered video's own black. */
+  --color-canvas: #17151f;
+  /* The webcam dialog's camera view (§9.7, `.webcam-view`, `.webcam-empty`,
+     `.webcam-countdown`, `.webcam-timer`, the recording dot): a picture of
+     a camera, the same in both themes like the canvas above. */
+  --color-webcam-view: #18161d;
+  --color-webcam-glow: #292137;
+  --color-webcam-icon: #b7a0df;
+  --color-webcam-ink: #eee7f7;
+  --color-webcam-sub: #a89cb7;
+  --color-webcam-scrim: #0005;
+  --color-webcam-chip: #17121fce;
+  --color-webcam-recording: #f48796;
+  /* A locked lane's hatch (§6.4, `#8888880b`): neutral grey at 4 %, the
+     same in both themes. */
+  --color-lock-hatch: #8888880b;
+  /* A clip's edge (§6.5 `.clip`, `.audio .clip`): its kind's colour mixed
+     into its own fill, so it follows the theme with the pair. */
+  --color-clip-video-edge: color-mix(in srgb, var(--color-video) 48%, var(--color-video-bg));
+  --color-clip-audio-edge: color-mix(in srgb, var(--color-audio) 46%, var(--color-audio-bg));
+  /* The Teaching layers row (§6.4 `.track-row.fx`, `.fx-clip`) and the
+     Captions row's cues (`.caption-cue`): mixes of the theme's own pair,
+     so they follow it. */
+  --color-teaching-row: color-mix(in srgb, var(--color-accent-bg) 14%, var(--color-panel));
+  --color-cue-edge: color-mix(in srgb, var(--color-accent) 40%, var(--color-line));
+  --color-caption-edge: color-mix(in srgb, var(--color-gold) 50%, var(--color-line));
+  /* A clip's chips (§6.5): the length pill (`.clip-duration`, #16141a80,
+     white) and the badges (`.clip-badges`, #24202dc9, #f1eaff) — concept
+     literals over the picture, the same in both themes but the pill,
+     which light darkens to keep its white text at 4.5:1 over `video-bg`. */
+  --color-clip-pill: #16141a80;
+  --color-clip-pill-ink: #ffffff;
+  --color-clip-badge: #24202dc9;
+  --color-clip-badge-ink: #f1eaff;
+  /* The colour treatments' sample picture (concept spec §5 `.filter-tile`):
+     a gradient, a lilac shape and "Aa", filtered per treatment — a picture,
+     so the same in both themes. */
+  --color-swatch-from: #244f4a;
+  --color-swatch-to: #efae77;
+  --color-swatch-shape: #cfade9;
+  --color-swatch-ink: #ffffff;
+
+  /* Editor shell region sizes (the CONTRACT's 244/276, the concept's
+     runtime values). Not a Tailwind namespace, so no utility class is
+     generated — the shell's own scoped CSS reads them with `var(...)`. */
+  --editor-sidebar: 244px;
+  --editor-inspector: 276px;
+  --editor-timeline: 400px;
+  --editor-label: 196px;
+  /* The frame at narrower windows (concept spec §1.4, visual-parity Task
+     4): the library column at or below 1080px wide, and the library's
+     overlay drawer at or below 860. */
+  --editor-sidebar-compact: 232px;
+  --editor-library-drawer: 250px;
+  /* The drawers' lift (the concept's `--shadow`). */
+  --editor-shadow: 0 18px 60px #0005;
+  /* The guide's surfaces' lift (concept `--guide-shadow`, §9.1–9.3). */
+  --editor-guide-shadow: 0 20px 70px #0006;
+  /* Every menu's edge and lift (concept §8 `.context-panel`, Task 5). */
+  --color-menu-edge: color-mix(in srgb, var(--color-line) 65%, var(--color-fg-muted));
+  --editor-menu-shadow: 0 16px 55px #0006, 0 2px 6px #0003;
+  /* The preview canvas's lift and hairline edge (§4.2, `.canvas-wrap`'s
+     `box-shadow:0 8px 28px #0003` and `outline:1px solid #0002`). */
+  --editor-canvas-shadow: 0 8px 28px #0003, 0 0 0 1px #0002;
+}
+
+/* Tutorial editor light theme. The concept's `[data-theme=light]` values,
+   with three deltas measured by `tests/e2e/editorKeyboard.spec.ts` (4.5:1
+   for every text on every light surface — Task 58, GAP-206):
+   - `fg-muted` #5f5969 (concept --muted #696274 read under 4.5:1 on
+     `stage`); `fg-subtle`, a step the concept lacks, keeps #696274;
+   - `danger-fg` #a4304b (concept --danger #b63854, kept as `danger`);
+   - `hover-subtle`/`track`: no concept counterpart (above). */
+[data-theme="light"] {
+  color-scheme: light;
+  --editor-shadow: 0 18px 60px #2b194025;
+  --editor-guide-shadow: 0 20px 70px #25163a33;
+  --color-fg: #292632;
+  --color-fg-secondary: #504b5d;
+  --color-fg-muted: #5f5969;
+  --color-fg-subtle: #696274;
+  --color-accent: #7250ad;
+  --color-accent-fg: #603696;
+  --color-accent-ink: #603696;
+  --color-accent-bg: #ece5f8;
+  --color-primary: #7853b8;
+  --color-primary-hover: #6a48a6;
+  --color-danger: #b63854;
+  --color-danger-fg: #a4304b;
+  --color-focus: #7853b8;
+  --color-ring: #7853b8;
+  --color-guide-edge: #7952ba;
+  --color-guide-dim: rgba(20, 16, 35, 0.28);
+  --color-app: #f3f3f7;
+  --color-stage: #e8e7ef;
+  --color-panel: #fff;
+  --color-raised: #f1f0f5;
+  --color-line: #dcdce5;
+  --color-hover: #eeebf5;
+  --color-video: #724f9e;
+  --color-video-bg: #e5ddee;
+  --color-audio: #246e62;
+  --color-audio-bg: #d9eeea;
+  --color-gold: #8b5c16;
+  --color-gold-bg: #f7ecd8;
+  --color-track: rgb(15 23 42 / 0.55);
+  --color-hover-subtle: rgb(15 23 42 / 0.05);
+  --color-clip-pill: #16141a99;
+}
+
+/* Tutorial editor dark theme: the concept's text/accent/ring values for the
+   names the panel window shares (see the scoping note above), plus two
+   deltas measured by `tests/e2e/editorKeyboard.spec.ts` (Task 58 fix round
+   1, GAP-209): `fg-subtle` #8e98aa (a step the concept lacks; slate-500
+   read 2.99:1 on `raised`) and `video` #b39ef0 (concept #aa92ed: clip names
+   read 4.33:1 on `video-bg`, now 4.88:1). `danger` keeps red-400 — it is
+   the fill behind white button labels, and the concept's pink would read
+   1.9:1 there. */
+[data-theme="dark"] {
+  --color-fg: #f0eef6;
+  --color-fg-secondary: #c5c2d0;
+  --color-fg-muted: #a39fac;
+  --color-fg-subtle: #8e98aa;
+  --color-accent: #b6a2f5;
+  --color-accent-fg: #dacdff;
+  --color-danger-fg: #ffa3b4;
+  --color-focus: #d4c1ff;
+  --color-video: #b39ef0;
+}
+
+/* The editor's type and base controls (visual-parity Task 3; concept spec
+   §1.2, §1.5, §1.6), scoped to `.vb-editor` — EditorRoot's root — so the
+   panel window's own look is untouched. In the `base` layer, below every
+   utility, and each control selector sits inside `:where()`: `.vb-editor`
+   alone (0,1,0) is enough to win over preflight's bare `button`/`input`,
+   and any Tailwind class a component already carries still wins over
+   these, property by property. */
+@layer base {
+  .vb-editor {
+    font: 12px/1.5 "Segoe UI", system-ui, sans-serif;
+    background-color: var(--color-app);
+    color: var(--color-fg);
+  }
+  .vb-editor :where(button) {
+    min-height: 32px;
+    border-radius: 7px;
+    cursor: pointer;
+  }
+  .vb-editor :where(button:hover:not(:disabled)) {
+    background-color: var(--color-hover);
+  }
+  .vb-editor :where(button:disabled) {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  /* A pressed toggle (`button.active` in the concept). */
+  .vb-editor :where(button.active) {
+    color: var(--color-accent-ink);
+    background-color: var(--color-accent-bg);
+    border-color: color-mix(in srgb, var(--color-accent) 28%, transparent);
+  }
+  .vb-editor
+    :where(
+      input:not([type="range"], [type="checkbox"], [type="radio"], [type="color"], [type="file"]),
+      select,
+      textarea
+    ) {
+    min-height: 34px;
+    padding: 7px 9px;
+    border: 1px solid var(--color-line);
+    border-radius: 6px;
+    background-color: var(--color-app);
+    color: inherit;
+  }
+  .vb-editor :where(input[type="range"]) {
+    height: 24px;
+    accent-color: var(--color-accent);
+  }
+  .vb-editor :where(input[type="checkbox"], input[type="radio"]) {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--color-accent);
+  }
+  .vb-editor :where(button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
+  /* Only the timeline's scroller is styled thin in the concept; the rest
+     stay native (dark through `color-scheme`). */
+  .vb-editor :where(.vb-thin-scroll) {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
+  }
+}
+
+/* Timecodes, the ratio button, ruler ticks, track badges (concept §1.2). */
+@utility vb-mono {
+  font-family: ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
 html,
 body,
 #app {
@@ -40,8 +318,15 @@ body,
   background: transparent;
   overflow: hidden;
   user-select: none;
-  /* Render native controls (select popups, checkboxes, scrollbars) dark, so
-     option lists aren't low-contrast on the dark glass panel. */
+}
+
+/* Render native controls (select popups, checkboxes, scrollbars, the colour
+   input) dark, so option lists aren't low-contrast on the dark glass panel.
+   Set on `html` ALONE and inherited: `[data-theme="light"]` (the editor's
+   light theme, set on `html`) then wins for the whole page. Pinned on `body`
+   and `#app` as well, it kept a light editor's native controls dark (final
+   review; `tests/e2e/editorNativeControls.spec.ts`). */
+html {
   color-scheme: dark;
 }
 
@@ -61,6 +346,75 @@ body,
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* A locked track's lane (concept spec §6.4, visual-parity Task 17): a
+   diagonal hatch over its clips, under the pinned label column (z-15). */
+.vb-lane-locked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  pointer-events: none;
+  background: repeating-linear-gradient(135deg, transparent 0 8px, var(--color-lock-hatch) 8px 10px);
+}
+
+/* Forced colours (Windows high-contrast themes; Task 58, F-49). The
+   browser repaints every colour with the theme's system colours and drops
+   box-shadows, which is how this app draws its focus rings (`ring-*`) and
+   a selected clip — so both would vanish. Outlines survive, so they carry
+   both here; the playhead and the timeline/layout handles keep a system
+   colour of their own instead of being painted over with the page colour.
+   Unlayered, so it wins over Tailwind's `focus:outline-none` utility. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+  [role="option"][aria-selected="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: 1px;
+  }
+  .vb-playhead {
+    forced-color-adjust: none;
+    background-color: Highlight;
+  }
+  .vb-handle {
+    forced-color-adjust: none;
+    background-color: ButtonText;
+  }
+  /* A track header's on-state (gold) and a locked lane's hatch keep a
+     system colour (§6.4: "the locked-track hatch and the selection outline
+     must remain distinguishable"); a selected clip is Highlight above. */
+  .vb-track-active {
+    border: 2px solid Highlight;
+  }
+  .vb-lane-locked::after {
+    forced-color-adjust: none;
+    background: repeating-linear-gradient(135deg, transparent 0 8px, GrayText 8px 10px);
+  }
+  /* The guide's ring and its progress line (concept §9.2's own
+     forced-colors rule: `#guideRing{border:3px solid Highlight}`). */
+  .vb-guide-ring {
+    forced-color-adjust: none;
+    border: 3px solid Highlight;
+  }
+  .vb-guide-progress {
+    forced-color-adjust: none;
+    background-color: Highlight;
+  }
+  /* A teaching cue's colour swatches (`CueColorRow`): the fill IS the
+     choice, so it keeps its colour, with a system-colour edge so it reads
+     on any theme background; the chosen one is marked by an outline, since
+     the forced border colour is the same on all five (final review). */
+  .vb-swatch-fill {
+    forced-color-adjust: none;
+    border: 1px solid CanvasText;
+  }
+  .vb-swatch[aria-pressed="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: 1px;
   }
 }
 

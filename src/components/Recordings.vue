@@ -82,6 +82,12 @@ function statusLabel(r: Recording): string {
   return { none: "", pending: "Transcribing…", failed: "Transcript failed", complete: "Transcribed ✓", cancelled: "Cancelled" }[effectiveStatus(r)];
 }
 
+// "none" never renders (its empty label hides the indicator), but keeps the
+// "…" the old ternary gave it so the lookup stays total.
+function statusGlyph(r: Recording): string {
+  return { none: "…", pending: "…", failed: "⚠", complete: "✓", cancelled: "⦸" }[effectiveStatus(r)];
+}
+
 /**
  * Hover text for the status indicator: a live job's failure reason
  * (`job.error`, set only on a same-session "failed" transition) when there
@@ -252,7 +258,7 @@ async function open(mp3: string) {
               aria-label="Transcribing…"
               class="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-fg-subtle/40 border-t-fg-secondary align-middle"
             />
-            <span v-else>{{ effectiveStatus(r) === "failed" ? "⚠" : effectiveStatus(r) === "complete" ? "✓" : effectiveStatus(r) === "cancelled" ? "⦸" : "…" }}</span>
+            <span v-else>{{ statusGlyph(r) }}</span>
           </span>
           <button
             v-if="isActive(r.mp3)"

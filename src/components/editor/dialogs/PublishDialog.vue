@@ -1,0 +1,270 @@
+<script setup lang="ts">
+/**
+ * Publish a rendered video into a vault (Task 48; F-43; ADR R13 — the
+ * TENTH sanctioned vault write): pick the vault, a folder in it, whether to
+ * date the folder and whether to write a companion note, then Publish —
+ * Rust copies the immutable product in (never overwriting anything) and
+ * writes the note naming the file that actually landed
+ * (`editor_publish_product`).
+ *
+ * **The vault defaults to the CAPTURE's** (`project.destination.vault`,
+ * F-01) — never whatever the panel last had selected, which is another
+ * window's state about another task. A capture whose vault Obsidian no
+ * longer lists gets no default at all: the user picks one, and the
+ * disabled Publish says so (R20).
+ *
+ * **The vault's Screen settings are the defaults** (Task 59 fix round 1,
+ * GAP-211): *Date folders* → the dated toggle, *Write a companion note* →
+ * the note toggle, read from `get_screen_capture_config` for the vault
+ * picked — and re-read whenever the pick changes. The user can still
+ * override either for this publish. Settings that cannot be read fall back
+ * to the project's own date choice and a note, never to a refusal.
+ *
+ * **Never closes onto a publish in flight.** From the click until the
+ * receipt (or the refusal) lands, Close is disabled and Escape/backdrop
+ * are refused (`DialogHost`'s `closable`) — the copy is registered in
+ * Rust's job registry, but this dialog is the only place its outcome is
+ * shown. The receipt names the landed file(s) and offers Open (the note
+ * when there is one, else the video — `open_screen_capture`); a note that
+ * could not be written is a warning beside a video that WAS published.
+ *
+ * Visual-parity Task 21: the shared dialog chrome of the Render and Checks
+ * dialogs — the form in the body, its actions (Cancel · Publish, then
+ * Done · Open in Obsidian) in the footer — and every vault by its NAME
+ * (design D6), in the picker and in the receipt.
+ */
+import { computed, ref, watch } from "vue";
+
+import type { PublishReceipt, VaultChoice } from "../../../editorTypes";
+import { logWarning } from "../../../logging";
+import { toEditorError, useEditorProjectStore } from "../../../stores/editorProject";
+import DialogHost from "../shell/DialogHost.vue";
+import DialogButton from "./DialogButton.vue";
+import PublishForm from "./PublishForm.vue";
+import PublishResult from "./PublishResult.vue";
+
+const props = defineProps<{ open: boolean; productId: string | null; productName: string }>();
+const emit = defineEmits<{ (e: "close"): void }>();
+
+const editorProject = useEditorProjectStore();
+
+const vaults = ref<VaultChoice[]>([]);
+const vaultId = ref("");
+const folder = ref("");
+const dated = ref(false);
+const createNote = ref(true);
+const publishing = ref(false);
+const error = ref<string | null>(null);
+const receipt = ref<PublishReceipt | null>(null);
+
+/** Which toggle the USER has changed since the current vault was picked
+ * (fix round 2). A settings read that lands late must never undo a click
+ * made while it was in flight, so a read sets only an untouched field.
+ * `applying` marks the dialog's own writes (its reset, a read landing),
+ * which the SYNC watchers below must not mistake for the user's. */
+const touched = { dated: false, createNote: false };
+let applying = false;
+function applyDefaults(values: { dated?: boolean; createNote?: boolean }): void {
+  applying = true;
+  if (values.dated !== undefined) dated.value = values.dated;
+  if (values.createNote !== undefined) createNote.value = values.createNote;
+  applying = false;
+}
+watch(dated, () => {
+  if (!applying) touched.dated = true;
+}, { flush: "sync" });
+watch(createNote, () => {
+  if (!applying) touched.createNote = true;
+}, { flush: "sync" });
+
+/** The vault's Screen settings as this publish's defaults. A ticket keeps
+ * a slow reply for a vault no longer picked from overwriting a newer one,
+ * and `touched` keeps it from undoing the user's own choice. */
+let defaultsTicket = 0;
+async function loadDefaults(id: string): Promise<void> {
+  const ticket = ++defaultsTicket;
+  touched.dated = false;
+  touched.createNote = false;
+  if (!id) return;
+  try {
+    const defaults = await editorProject.port.publishDefaults(id);
+    if (ticket !== defaultsTicket) return;
+    applyDefaults({
+      dated: touched.dated ? undefined : defaults.dated,
+      createNote: touched.createNote ? undefined : defaults.createNote,
+    });
+  } catch (e) {
+    // S-15 (hardening Task 12): by code and operationId, never by
+    // message — which can carry a capture's own name in plain text.
+    const failure = toEditorError(e);
+    logWarning(`editor publish: the vault's Screen settings could not be read: ${failure.code} (${failure.operationId})`);
+  }
+}
+
+watch(vaultId, (id) => void loadDefaults(id));
+
+async function loadVaults(capture: string): Promise<void> {
+  try {
+    vaults.value = await editorProject.port.listVaults();
+  } catch (e) {
+    vaults.value = [];
+    error.value = `The vault list could not be read. ${toEditorError(e).message}`.trim();
+  }
+  vaultId.value = vaults.value.some((v) => v.id === capture) ? capture : "";
+}
+
+function reset(): void {
+  const destination = editorProject.project?.destination;
+  folder.value = destination?.folder ?? "";
+  applyDefaults({ dated: destination?.dated ?? false, createNote: true });
+  error.value = null;
+  receipt.value = null;
+  vaultId.value = "";
+  void loadVaults(destination?.vault ?? "");
+}
+
+watch(
+  () => props.open,
+  (open) => {
+    if (open) reset();
+  },
+  { immediate: true },
+);
+
+const reason = computed<string | null>(() => {
+  if (!editorProject.sessionId) return "No project is open.";
+  if (!props.productId) return "Render a video first.";
+  if (publishing.value) return "Publishing…";
+  if (!vaultId.value) return "Choose a vault to publish into.";
+  return null;
+});
+
+/** Close and Cancel wait for a publish in flight. */
+const cancelReason = computed(() => (publishing.value ? "Publishing…" : null));
+
+async function publish(): Promise<void> {
+  const sessionId = editorProject.sessionId;
+  const productId = props.productId;
+  if (reason.value !== null || !sessionId || !productId) return;
+  publishing.value = true;
+  error.value = null;
+  try {
+    receipt.value = await editorProject.port.publishProduct(sessionId, productId, {
+      vaultId: vaultId.value,
+      folder: folder.value.trim(),
+      dated: dated.value,
+      createNote: createNote.value,
+    });
+  } catch (e) {
+    error.value = toEditorError(e).message;
+  } finally {
+    publishing.value = false;
+  }
+}
+
+async function openInObsidian(): Promise<void> {
+  const landed = receipt.value;
+  if (!landed) return;
+  try {
+    await editorProject.port.openScreenCapture(landed.vaultId, landed.notePath ?? landed.videoPath);
+  } catch (e) {
+    // S-15 (hardening Task 12): the LOG line by code and operationId,
+    // never by message — the on-screen role wording still shows in full.
+    const failure = toEditorError(e);
+    logWarning(`editor publish: could not open the published file: ${failure.code} (${failure.operationId})`);
+    error.value = `Obsidian could not open it. ${failure.message}`;
+  }
+}
+
+function close(): void {
+  if (!publishing.value) emit("close");
+}
+</script>
+
+<template>
+  <DialogHost
+    :open="open"
+    label="Publish to vault"
+    :closable="!publishing"
+    close-testid="publish-close"
+    :close-reason="cancelReason"
+    @close="close"
+  >
+    <template #title>
+      Publish to vault
+    </template>
+    <template #subtitle>
+      A copy of “{{ productName }}” goes into your vault. The rendered video
+      and your project stay as they are.
+    </template>
+
+    <div
+      data-testid="publish-dialog"
+      class="flex flex-col gap-3"
+    >
+      <PublishResult
+        v-if="receipt"
+        :receipt="receipt"
+      />
+      <PublishForm
+        v-else
+        v-model:vault-id="vaultId"
+        v-model:folder="folder"
+        v-model:dated="dated"
+        v-model:create-note="createNote"
+        :vaults="vaults"
+        :disabled="publishing"
+      />
+      <p
+        v-if="error"
+        role="alert"
+        data-testid="publish-error"
+        class="text-xs text-danger-fg"
+      >
+        {{ error }}
+      </p>
+    </div>
+
+    <template #footer>
+      <template v-if="receipt">
+        <DialogButton
+          data-testid="publish-done"
+          @click="close"
+        >
+          Done
+        </DialogButton>
+        <DialogButton
+          variant="primary"
+          icon="vault"
+          data-testid="publish-open"
+          @click="openInObsidian"
+        >
+          Open in Obsidian
+        </DialogButton>
+      </template>
+      <template v-else>
+        <span
+          v-if="reason"
+          data-testid="publish-start-reason"
+          class="mr-auto text-[10px] text-fg-muted"
+        >{{ reason }}</span>
+        <DialogButton
+          data-testid="publish-cancel"
+          :reason="cancelReason"
+          @click="close"
+        >
+          Cancel
+        </DialogButton>
+        <DialogButton
+          variant="primary"
+          icon="upload"
+          data-testid="publish-start"
+          :reason="reason"
+          @click="publish"
+        >
+          Publish
+        </DialogButton>
+      </template>
+    </template>
+  </DialogHost>
+</template>

@@ -244,6 +244,133 @@ pub fn open_sources(
     })
 }
 
+/// An explicit, user-made multi-select of audio endpoints (spec 7.2).
+#[derive(Debug, Clone, Default)]
+pub struct DeviceSelection {
+    /// Input device names, exactly as `list_devices` reported them.
+    pub inputs: Vec<String>,
+    /// Output device names to capture as WASAPI loopback (Windows only).
+    pub outputs: Vec<String>,
+}
+
+/// Open every explicitly-selected endpoint.
+///
+/// Deliberately NOT `open_sources` with a list parameter. `open_sources`
+/// substitutes the DEFAULT device when a configured name is missing, which
+/// is right for a stale config and wrong here: these names were ticked by
+/// the user seconds ago in front of the live device list, so recording a
+/// different microphone than the one they picked is worse than recording
+/// nothing. A missing pick is SKIPPED with a warning that names it.
+///
+/// An empty selection — asked for, or left over after every pick went
+/// missing — is a legal outcome, not an error: spec 6.5 keeps a silent
+/// capture available because a silent UI demo is a real use case.
+pub fn open_selected_sources(sel: &DeviceSelection) -> Result<OpenSources, String> {
+    let host = cpal::default_host();
+    let mut inputs = Vec::new();
+    let mut streams = Vec::new();
+    let mut warnings = Vec::new();
+
+    for name in &sel.inputs {
+        let Some(device) = host
+            .input_devices()
+            .ok()
+            .and_then(|it| find_by_name(it, name))
+        else {
+            let w = format!(
+                "Selected microphone \"{name}\" is no longer available — it will not be recorded"
+            );
+            log::warn!("screen capture: {w}");
+            warnings.push(w);
+            continue;
+        };
+        let config = match device.default_input_config() {
+            Ok(c) => c,
+            Err(e) => {
+                let w = format!("Selected microphone \"{name}\" could not be opened ({e}) — it will not be recorded");
+                log::warn!("screen capture: {w}");
+                warnings.push(w);
+                continue;
+            }
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        match build_stream(&device, &config, tx) {
+            Ok(stream) => {
+                streams.push(stream);
+                inputs.push(SourceInput {
+                    name: name.clone(),
+                    rate: config.sample_rate(),
+                    channels: config.channels(),
+                    rx,
+                });
+            }
+            Err(e) => {
+                let w = format!("Selected microphone \"{name}\" could not be started ({e}) — it will not be recorded");
+                log::warn!("screen capture: {w}");
+                warnings.push(w);
+            }
+        }
+    }
+
+    for name in &sel.outputs {
+        #[cfg(windows)]
+        {
+            // WASAPI loopback: cpal exposes it by building an *input* stream
+            // on an *output* device — you get exactly what the speakers play.
+            let Some(device) = host
+                .output_devices()
+                .ok()
+                .and_then(|it| find_by_name(it, name))
+            else {
+                let w = format!("Selected desktop audio \"{name}\" is no longer available — it will not be recorded");
+                log::warn!("screen capture: {w}");
+                warnings.push(w);
+                continue;
+            };
+            let config = match device.default_output_config() {
+                Ok(c) => c,
+                Err(e) => {
+                    let w = format!("Selected desktop audio \"{name}\" could not be opened ({e}) — it will not be recorded");
+                    log::warn!("screen capture: {w}");
+                    warnings.push(w);
+                    continue;
+                }
+            };
+            let (tx, rx) = std::sync::mpsc::channel();
+            match build_stream(&device, &config, tx) {
+                Ok(stream) => {
+                    streams.push(stream);
+                    inputs.push(SourceInput {
+                        name: format!("{name} (loopback)"),
+                        rate: config.sample_rate(),
+                        channels: config.channels(),
+                        rx,
+                    });
+                }
+                Err(e) => {
+                    let w = format!("Selected desktop audio \"{name}\" could not be started ({e}) — it will not be recorded");
+                    log::warn!("screen capture: {w}");
+                    warnings.push(w);
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let w = format!(
+                "Desktop audio (loopback) is Windows-only — \"{name}\" will not be recorded"
+            );
+            log::warn!("screen capture: {w}");
+            warnings.push(w);
+        }
+    }
+
+    Ok(OpenSources {
+        inputs,
+        streams,
+        warnings,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +417,99 @@ mod tests {
         assert!(list.outputs.iter().all(|d| !d.name.is_empty()));
         assert!(list.inputs.iter().filter(|d| d.is_default).count() <= 1);
         assert!(list.outputs.iter().filter(|d| d.is_default).count() <= 1);
+    }
+
+    #[test]
+    fn an_empty_selection_opens_nothing_and_is_not_an_error() {
+        // Spec 6.5: zero audio sources is a legal, documented outcome — a
+        // silent UI demo is a real use case, and refusing Start on it would
+        // be wrong. This must hold on a CI runner with no devices at all.
+        let open = open_selected_sources(&DeviceSelection::default())
+            .expect("an empty selection is not a failure");
+        assert!(open.inputs.is_empty());
+        assert!(open.streams.is_empty());
+        assert!(
+            open.warnings.is_empty(),
+            "nothing was asked for, so nothing is missing"
+        );
+    }
+
+    #[test]
+    fn a_missing_pick_is_skipped_with_a_warning_and_never_substituted() {
+        // THE behavioural difference from open_sources. That function falls
+        // back to the default device, which is right for a stale config and
+        // wrong for a pick the user just made in front of the device list:
+        // recording a different microphone than the one they ticked is worse
+        // than recording nothing. The capture proceeds silently and says so.
+        let sel = DeviceSelection {
+            inputs: vec!["No Such Device 9000".to_string()],
+            outputs: vec![],
+        };
+        let open = open_selected_sources(&sel).expect("a missing pick does not fail the start");
+        assert!(
+            open.inputs.is_empty(),
+            "a missing pick must NOT be substituted with the default device"
+        );
+        assert!(
+            open.warnings
+                .iter()
+                .any(|w| w.contains("No Such Device 9000")),
+            "the warning names the missing device: {:?}",
+            open.warnings
+        );
+    }
+
+    #[test]
+    fn a_missing_output_pick_is_reported_on_every_platform() {
+        // On Windows it is a missing loopback endpoint; elsewhere loopback
+        // is unavailable entirely. Either way the user ticked something that
+        // will not be recorded, so either way they are told.
+        let sel = DeviceSelection {
+            inputs: vec![],
+            outputs: vec!["No Such Output 9000".to_string()],
+        };
+        let open = open_selected_sources(&sel).expect("a missing output does not fail the start");
+        assert!(open.inputs.is_empty());
+        assert!(
+            !open.warnings.is_empty(),
+            "an unrecorded pick is always reported"
+        );
+    }
+
+    #[test]
+    fn open_selected_sources_never_panics_on_a_real_selection() {
+        // Mirrors open_sources_never_panics: on a device-less CI runner this
+        // exercises the skip-and-warn path; on a dev machine it opens real
+        // streams.
+        let list = list_devices();
+        let sel = DeviceSelection {
+            inputs: list.inputs.iter().map(|d| d.name.clone()).collect(),
+            outputs: vec![],
+        };
+        match open_selected_sources(&sel) {
+            Ok(open) => assert!(open.inputs.iter().all(|i| !i.name.is_empty())),
+            Err(message) => assert!(!message.is_empty()),
+        }
+    }
+
+    #[test]
+    fn open_sources_keeps_its_fallback_posture_unchanged() {
+        // Regression guard for the split: the audio domain's stale-config
+        // fallback must not be "unified" into the new skip-and-warn posture
+        // by a later tidy-up. A meeting recording whose configured mic was
+        // unplugged still records on the default device.
+        match open_sources(false, Some("No Such Device 9000"), None) {
+            Ok(open) => {
+                assert!(
+                    !open.inputs.is_empty(),
+                    "open_sources substitutes the default; it does not skip"
+                );
+                assert!(open
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("No Such Device 9000")));
+            }
+            Err(message) => assert!(!message.is_empty()), // device-less CI
+        }
     }
 }

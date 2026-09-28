@@ -6,13 +6,23 @@ import { ref } from "vue";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
+import ActionPanel from "../src/components/ActionPanel.vue";
+import TaskDetail from "../src/components/TaskDetail.vue";
 import TaskListPicker from "../src/components/TaskListPicker.vue";
 import { useTaskDetail } from "../src/composables/useTaskDetail";
 import { logWarning } from "../src/logging";
+import { useNotificationsStore } from "../src/stores/notifications";
+import { useVaultsStore } from "../src/stores/vaults";
 import type { AggTask, TaskWriteResult } from "../src/types";
 
 // update_task's mocked "the write succeeded, no relationship change" reply
 // (Task 7 widened the command's return from a bare id to this object).
+// The two tests that mount a component tree for the first time in this
+// file get an explicit per-test budget instead of Vitest's 5 s default (the
+// editorShortcutsWired/editorPort precedent); the global timeout is not
+// raised.
+const MOUNT_BUDGET_MS = 15_000;
+
 const updateTaskOk: TaskWriteResult = { id: null, parentId: null, parentLink: null, idsEnabled: false };
 
 const task = (o: Partial<AggTask> = {}): AggTask => ({
@@ -39,7 +49,6 @@ describe("useTaskDetail", () => {
     mockIPC(() => undefined);
     const t = ref(task());
     const { remove } = useTaskDetail(t);
-    const { useVaultsStore } = await import("../src/stores/vaults");
     const store = useVaultsStore();
     store.view = "taskDetail"; // remove() only navigates while still on the detail view
     const back = vi.spyOn(store, "back");
@@ -61,7 +70,6 @@ describe("useTaskDetail", () => {
     );
     const t = ref(task());
     const { remove } = useTaskDetail(t);
-    const { useVaultsStore } = await import("../src/stores/vaults");
     const store = useVaultsStore();
     store.view = "taskDetail";
     const back = vi.spyOn(store, "back");
@@ -98,7 +106,6 @@ describe("useTaskDetail", () => {
 
   it("save surfaces an error and releases the guard", async () => {
     mockIPC((cmd) => { if (cmd === "update_task") throw new Error("boom"); return undefined; });
-    const { useNotificationsStore } = await import("../src/stores/notifications");
     const err = vi.spyOn(useNotificationsStore(), "error");
     const { save, busy } = useTaskDetail(ref(task()));
     expect(await save({ description: "x" })).toBe(false);
@@ -116,7 +123,6 @@ describe("useTaskDetail", () => {
       if (cmd === "move_task_to_list") throw new Error("move boom"); // the move fails
       return undefined;
     });
-    const { useNotificationsStore } = await import("../src/stores/notifications");
     const err = vi.spyOn(useNotificationsStore(), "error");
     const { save } = useTaskDetail(ref(task({ list: "" })));
     expect(await save({ title: "New title", list: "Home" })).toBe(false);
@@ -127,7 +133,6 @@ describe("useTaskDetail", () => {
 
   it("remove surfaces an error and releases the guard", async () => {
     mockIPC((cmd) => { if (cmd === "delete_task") throw new Error("nope"); return undefined; });
-    const { useNotificationsStore } = await import("../src/stores/notifications");
     const err = vi.spyOn(useNotificationsStore(), "error");
     const { remove, busy } = useTaskDetail(ref(task()));
     await remove();
@@ -142,7 +147,6 @@ describe("useTaskDetail", () => {
       if (cmd === "duplicate_task") return "/v/Tasks/t (copy).md";
       return undefined;
     });
-    const { useNotificationsStore } = await import("../src/stores/notifications");
     const notify = vi.spyOn(useNotificationsStore(), "notify");
     await useTaskDetail(ref(task())).duplicate();
     expect(calls[0][0]).toBe("duplicate_task");
@@ -154,7 +158,6 @@ describe("useTaskDetail", () => {
 
   it("duplicate surfaces an error and releases the guard", async () => {
     mockIPC((cmd) => { if (cmd === "duplicate_task") throw new Error("dupe fail"); return undefined; });
-    const { useNotificationsStore } = await import("../src/stores/notifications");
     const err = vi.spyOn(useNotificationsStore(), "error");
     const { duplicate, busy } = useTaskDetail(ref(task()));
     await duplicate();
@@ -172,7 +175,6 @@ describe("useTaskDetail", () => {
 
   it("openInObsidian surfaces a launch error without throwing", async () => {
     mockIPC((cmd) => { if (cmd === "open_task") throw new Error("launch fail"); return undefined; });
-    const { useNotificationsStore } = await import("../src/stores/notifications");
     const err = vi.spyOn(useNotificationsStore(), "error");
     await expect(useTaskDetail(ref(task())).openInObsidian()).resolves.toBeUndefined();
     // Non-throwing is necessary but not sufficient — the failure must reach the user.
@@ -192,7 +194,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task({ description: "hello" }) } });
     await new Promise((r) => setTimeout(r));
     expect((wrapper.find('[data-testid="task-detail-description"]').element as HTMLTextAreaElement).value).toBe("hello");
@@ -202,7 +203,14 @@ describe("TaskDetail.vue", () => {
     await wrapper.find('[data-testid="task-detail-delete-confirm"]').trigger("click");
     await new Promise((r) => setTimeout(r));
     expect(calls.some((c) => c[0] === "delete_task")).toBe(true);
-  });
+    // Explicit budget (MOUNT_BUDGET_MS): the first mount of TaskDetail's
+    // subtree under istanbul instrumentation, on a host a full coverage run
+    // (and a parallel cargo build) saturates, once timed out at 5034 ms
+    // against Vitest's 5000 ms default. The module TRANSFORM, the larger
+    // cost, is no longer in the timed window at all: every component and
+    // store this file mounts is imported statically (hardening Task 21), so
+    // Vitest pays it while collecting the file, which has no timeout.
+  }, MOUNT_BUDGET_MS);
 
   it("save sends a description change in the patch", async () => {
     const calls: any[] = [];
@@ -213,7 +221,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task({ description: null }) } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-description"]').setValue("new notes");
@@ -232,7 +239,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task({ description: "hello" }) } });
     await new Promise((r) => setTimeout(r));
     // Whitespace-only counts as emptied (trimmed before the emptiness check).
@@ -256,7 +262,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task({ description: "hello" }) } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-description"]').setValue("   ");
@@ -272,7 +277,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     expect((wrapper.find('[data-testid="task-detail-save"]').element as HTMLButtonElement).disabled).toBe(true);
@@ -284,7 +288,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-due"]').setValue("2026-08-01");
@@ -302,7 +305,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-scheduled"]').setValue("2026-08-02");
@@ -321,7 +323,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     expect(wrapper.findComponent(TaskListPicker).props("lists")).toEqual(["Home"]);
@@ -333,7 +334,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-delete"]').trigger("click");
@@ -347,7 +347,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task({ priority: "high" }) } });
     await new Promise((r) => setTimeout(r));
     const highBtn = wrapper.get('[data-testid="task-detail-priority-high"]');
@@ -368,7 +367,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "duplicate_task") return "/v/Tasks/t (copy).md";
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-duplicate"]').trigger("click");
@@ -384,7 +382,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-open"]').trigger("click");
@@ -399,7 +396,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: ["Old"] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task({ list: "Old" }) } });
     await new Promise((r) => setTimeout(r));
     expect(wrapper.findComponent(TaskListPicker).props("lists")).toEqual(["Home", "Old"]);
@@ -414,7 +410,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: ["Old"] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task({ list: "Old" }) } });
     await new Promise((r) => setTimeout(r));
     expect(wrapper.findComponent(TaskListPicker).props("lists")).toEqual(["Home", "Old"]);
@@ -429,7 +424,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: ["Old"] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task({ list: "" }) } });
     await new Promise((r) => setTimeout(r));
     expect(wrapper.findComponent(TaskListPicker).props("lists")).toEqual(["Home"]);
@@ -442,7 +436,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     expect(wrapper.findComponent(TaskListPicker).props("lists")).toEqual([]);
@@ -459,7 +452,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-delete"]').trigger("click");
@@ -483,9 +475,7 @@ describe("TaskDetail.vue", () => {
         });
       return undefined;
     });
-    const { useVaultsStore } = await import("../src/stores/vaults");
     useVaultsStore().view = "taskDetail";
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-delete"]').trigger("click"); // open confirm
@@ -510,9 +500,7 @@ describe("TaskDetail.vue", () => {
         });
       return undefined;
     });
-    const { useVaultsStore } = await import("../src/stores/vaults");
     useVaultsStore().view = "taskDetail";
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-delete"]').trigger("click");
@@ -537,7 +525,6 @@ describe("TaskDetail.vue", () => {
         });
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     const open = () => wrapper.find('[data-testid="task-detail-open"]').element as HTMLButtonElement;
@@ -559,7 +546,6 @@ describe("TaskDetail.vue", () => {
           })
         : undefined,
     );
-    const { useVaultsStore } = await import("../src/stores/vaults");
     const store = useVaultsStore();
     const { duplicate } = useTaskDetail(ref(task()));
     expect(store.taskDetailBusy).toBe(false);
@@ -579,7 +565,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-delete"]').trigger("click");
@@ -598,7 +583,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "move_task_to_list") return { path: "/v/Tasks/Home/t.md", id: null };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task({ list: "" }) } });
     try {
       await new Promise((r) => setTimeout(r));
@@ -630,7 +614,6 @@ describe("TaskDetail.vue", () => {
         });
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     const del = () => wrapper.find('[data-testid="task-detail-delete"]').element as HTMLButtonElement;
@@ -652,7 +635,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() }, attachTo: document.body });
     try {
       await new Promise((r) => setTimeout(r));
@@ -676,7 +658,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() }, attachTo: document.body });
     const seen: string[] = [];
     const onDocKeydown = (e: Event) => seen.push((e as KeyboardEvent).key);
@@ -707,7 +688,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: ["Zebra", "Middle"], archivedLists: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task({ list: "" }) } });
     await new Promise((r) => setTimeout(r));
     // listOrder first (Zebra, Middle), then the unordered rest alphabetically.
@@ -723,7 +703,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() }, attachTo: document.body });
     try {
       await new Promise((r) => setTimeout(r));
@@ -743,7 +722,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     expect(wrapper.find('[data-testid="task-detail-save"]').exists()).toBe(true);
@@ -764,7 +742,6 @@ describe("TaskDetail.vue", () => {
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() }, attachTo: document.body });
     try {
       await new Promise((r) => setTimeout(r));
@@ -792,9 +769,7 @@ describe("TaskDetail.vue", () => {
         });
       return undefined;
     });
-    const { useVaultsStore } = await import("../src/stores/vaults");
     useVaultsStore().view = "taskDetail";
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: task() } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-delete"]').trigger("click");
@@ -821,17 +796,13 @@ describe("TaskDetail.vue", () => {
       if (cmd === "list_tasks") return [parent, child];
       return undefined;
     });
-    // Both dynamic imports resolved BEFORE any store mutation: a first-time
-    // import of ActionPanel's whole component graph is slow enough under
-    // istanbul instrumentation to open a real async gap, and something in that
-    // window (module transform work, observed empirically) can leave
-    // getActivePinia() pointing at a stale instance by the time mount() runs —
-    // manifesting as ActionPanel rendering with a fresh default-state store
-    // instead of the one just configured below. Pre-warming both imports
-    // first keeps the store-setup -> mount critical section free of slow
-    // awaits, which is the actual fix; it is not merely a speed optimization.
-    const { useVaultsStore } = await import("../src/stores/vaults");
-    const ActionPanel = (await import("../src/components/ActionPanel.vue")).default;
+    // ActionPanel and the vaults store are imported statically at the top
+    // of this file, so nothing slow sits between the store setup below and
+    // mount(): a first-time dynamic import of ActionPanel's whole graph here
+    // once opened an async gap long enough for getActivePinia() to go stale
+    // (ActionPanel then rendered a fresh default-state store), and its
+    // transform cost timed the test out at 15 s under a parallel cargo build
+    // (hardening Task 21).
     const store = useVaultsStore();
     store.openTaskDetail(parent);
     const wrapper = mount(ActionPanel);
@@ -841,11 +812,10 @@ describe("TaskDetail.vue", () => {
     await new Promise((r) => setTimeout(r));
     expect((wrapper.get('[data-testid="task-detail-title"]').element as HTMLInputElement).value).toBe("Child");
     expect((wrapper.get('[data-testid="task-detail-description"]').element as HTMLTextAreaElement).value).toBe("cd");
-    // Explicit timeout: mounting the full ActionPanel tree (the point of the
+    // Explicit budget: mounting the full ActionPanel tree (the point of the
     // test — a props-only re-mount wouldn't exercise the :key remount at all)
-    // reliably exceeds Vitest's 5s default under istanbul coverage
-    // instrumentation even with the import pre-warming above.
-  }, 15000);
+    // can exceed Vitest's 5 s default under istanbul coverage instrumentation.
+  }, MOUNT_BUDGET_MS);
 });
 
 describe("TaskDetail.vue Parent row", () => {
@@ -860,7 +830,6 @@ describe("TaskDetail.vue Parent row", () => {
       if (cmd === "list_tasks") throw new Error("boom");
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     expect(wrapper.find('[data-testid="task-detail-parent-chip"]').exists()).toBe(false);
@@ -878,7 +847,6 @@ describe("TaskDetail.vue Parent row", () => {
       if (cmd === "list_tasks") return [self];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     expect(wrapper.find('[data-testid="task-detail-parent-chip"]').exists()).toBe(false);
@@ -895,7 +863,6 @@ describe("TaskDetail.vue Parent row", () => {
       if (cmd === "list_tasks") return [parent, self];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     expect(wrapper.get('[data-testid="task-detail-parent-chip"]').text()).toBe("Parent Task");
@@ -922,7 +889,6 @@ describe("TaskDetail.vue Parent row", () => {
       if (cmd === "list_tasks") return [archivedParent, self];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     expect(wrapper.get('[data-testid="task-detail-parent-chip"]').text()).toBe("Old Parent");
@@ -944,7 +910,6 @@ describe("TaskDetail.vue Parent row", () => {
       if (cmd === "list_tasks") return [archivedParent, self];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     expect(wrapper.get('[data-testid="task-detail-parent-status"]').text()).toBe("(archived)");
@@ -959,7 +924,6 @@ describe("TaskDetail.vue Parent row", () => {
       if (cmd === "list_tasks") return [parent, self];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     // An active parent's chip already says everything — no status span at all.
@@ -982,7 +946,6 @@ describe("TaskDetail.vue Parent row", () => {
       if (cmd === "list_tasks") return [self, active, archived];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
@@ -999,10 +962,8 @@ describe("TaskDetail.vue Parent row", () => {
       if (cmd === "list_tasks") return [parent, self];
       return undefined;
     });
-    const { useVaultsStore } = await import("../src/stores/vaults");
     const store = useVaultsStore();
     const spy = vi.spyOn(store, "openTaskDetail");
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-parent-chip"]').trigger("click");
@@ -1021,7 +982,6 @@ describe("TaskDetail.vue Parent row", () => {
       if (cmd === "update_task") return { id: null, parentId: null, parentLink: null, idsEnabled: false };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-parent-clear"]').trigger("click");
@@ -1044,7 +1004,6 @@ describe("TaskDetail.vue Parent row", () => {
       if (cmd === "update_task") return { id: null, parentId: "o", parentLink: "[[Tasks/other]]", idsEnabled: false };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
@@ -1067,7 +1026,6 @@ describe("TaskDetail.vue Parent row", () => {
       if (cmd === "list_tasks") return [self, other, groceries];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
@@ -1086,7 +1044,6 @@ describe("TaskDetail.vue Parent row", () => {
       if (cmd === "list_tasks") return [self, kid, other];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
@@ -1109,7 +1066,6 @@ describe("TaskDetail.vue Parent row", () => {
       if (cmd === "list_tasks") return [self];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self }, attachTo: document.body });
     try {
       await new Promise((r) => setTimeout(r));
@@ -1132,7 +1088,6 @@ describe("TaskDetail.vue Parent row", () => {
       if (cmd === "list_tasks") return [self];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self }, attachTo: document.body });
     const seen: string[] = [];
     const onDocKeydown = (e: Event) => seen.push((e as KeyboardEvent).key);
@@ -1187,7 +1142,6 @@ describe("TaskDetail.vue Parent row", () => {
       }
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
@@ -1213,7 +1167,6 @@ describe("TaskDetail.vue Parent row", () => {
         });
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     const change = () => wrapper.get('[data-testid="task-detail-parent-change"]').element as HTMLButtonElement;
@@ -1251,7 +1204,6 @@ describe("TaskDetail.vue Subtasks section", () => {
       if (cmd === "list_tasks") return [parent, ...kids];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: parent } });
     await new Promise((r) => setTimeout(r));
     expect(wrapper.get('[data-testid="task-detail-subtask-progress"]').text()).toContain("1 / 2");
@@ -1269,7 +1221,6 @@ describe("TaskDetail.vue Subtasks section", () => {
       if (cmd === "add_task") return { ...task({ vaultId: "v1", id: "n", parentId: "p", path: "/v1/n.md" }), idsEnabled: false };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: parent } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("New child");
@@ -1289,9 +1240,7 @@ describe("TaskDetail.vue Subtasks section", () => {
       if (cmd === "list_tasks") return [parent, child];
       return undefined;
     });
-    const { useVaultsStore } = await import("../src/stores/vaults");
     const store = useVaultsStore();
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: parent } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-subtask-open"]').trigger("click");
@@ -1321,7 +1270,6 @@ describe("TaskDetail.vue Subtasks section", () => {
       if (cmd === "add_task") return { ...task({ vaultId: "v1", id: "cid", parentId: "pid", path: "/v1/c.md", title: "Kid" }), idsEnabled: true };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: parent } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Kid");
@@ -1357,7 +1305,6 @@ describe("TaskDetail.vue Subtasks section", () => {
       }
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: parent } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Kid");
@@ -1379,9 +1326,7 @@ describe("TaskDetail.vue Subtasks section", () => {
       if (cmd === "add_task") return { ...task({ vaultId: "v1", id: "cid", parentId: "pid", path: "/v1/c.md", title: "Kid" }), idsEnabled: true };
       return undefined;
     });
-    const { useNotificationsStore } = await import("../src/stores/notifications");
     const notify = vi.spyOn(useNotificationsStore(), "notify");
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: parent } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Kid");
@@ -1399,9 +1344,7 @@ describe("TaskDetail.vue Subtasks section", () => {
       if (cmd === "add_task") return { ...task({ vaultId: "v1", id: "n", parentId: "p", path: "/v1/n.md" }), idsEnabled: false };
       return undefined;
     });
-    const { useNotificationsStore } = await import("../src/stores/notifications");
     const notify = vi.spyOn(useNotificationsStore(), "notify");
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: parent } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Kid");
@@ -1421,7 +1364,6 @@ describe("TaskDetail.vue Subtasks section", () => {
       if (cmd === "list_tasks") return [parent, child];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: parent } });
     await new Promise((r) => setTimeout(r));
     expect(wrapper.get('[data-testid="task-detail-subtask-progress"]').text()).toContain("0 / 1");
@@ -1442,9 +1384,7 @@ describe("TaskDetail.vue Subtasks section", () => {
       if (cmd === "set_task_status") throw new Error("locked");
       return undefined;
     });
-    const { useNotificationsStore } = await import("../src/stores/notifications");
     const err = vi.spyOn(useNotificationsStore(), "error");
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: parent } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-subtask-checkbox"]').trigger("change");
@@ -1463,7 +1403,6 @@ describe("TaskDetail.vue Subtasks section", () => {
       if (cmd === "list_tasks") return [parent];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: parent }, attachTo: document.body });
     const seen: string[] = [];
     const onDocKeydown = (e: Event) => seen.push((e as KeyboardEvent).key);
@@ -1491,9 +1430,7 @@ describe("TaskDetail.vue Subtasks section", () => {
       if (cmd === "add_task") throw new Error("disk full");
       return undefined;
     });
-    const { useNotificationsStore } = await import("../src/stores/notifications");
     const err = vi.spyOn(useNotificationsStore(), "error");
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: parent } });
     await new Promise((r) => setTimeout(r));
     await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Kid");
@@ -1518,7 +1455,6 @@ describe("TaskDetail.vue Subtasks section", () => {
         });
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: parent } });
     await new Promise((r) => setTimeout(r));
     const addInput = () => wrapper.get('[data-testid="task-detail-add-subtask"]').element as HTMLInputElement;
@@ -1551,7 +1487,6 @@ describe("TaskDetail.vue Subtasks — archiving", () => {
         return { ...task({ vaultId: "v1", id: "n", parentId: "p", path: "/v1/n.md" }), idsEnabled: false };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: open } });
     await new Promise((r) => setTimeout(r));
     return wrapper;
@@ -1580,7 +1515,6 @@ describe("TaskDetail.vue Subtasks — archiving", () => {
     // GAP-92: the child correctly INHERITS the parent's list, but an archived
     // list is hidden from the Lists view and from count_open_tasks the instant
     // the task is created — silently, before this.
-    const { useNotificationsStore } = await import("../src/stores/notifications");
     const spy = vi.spyOn(useNotificationsStore(), "notify");
     const w = await mountWith(
       task({ vaultId: "v1", id: "p", path: "/v1/p.md", list: "Old" }),
@@ -1595,7 +1529,6 @@ describe("TaskDetail.vue Subtasks — archiving", () => {
   });
 
   it("raises no archived disclosure for a live list", async () => {
-    const { useNotificationsStore } = await import("../src/stores/notifications");
     const spy = vi.spyOn(useNotificationsStore(), "notify");
     const w = await mountWith(
       task({ vaultId: "v1", id: "p", path: "/v1/p.md", list: "Live" }),
@@ -1639,7 +1572,6 @@ describe("TaskDetail.vue Subtasks — archived-list config readiness", () => {
         return { ...task({ vaultId: "v1", id: "n", parentId: "p", path: "/v1/n.md" }), idsEnabled: false };
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: open } });
     await new Promise((r) => setTimeout(r));
     return { wrapper, calls, release: () => release?.() };
@@ -1718,7 +1650,6 @@ describe("TaskDetail.vue parent picker — archived-list config readiness", () =
         return [open, task({ vaultId: "v1", id: "z", path: "/v1/z.md", list: "Old" })];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: open } });
     await new Promise((r) => setTimeout(r));
     return { wrapper, release: () => releaseConfig?.() };
@@ -1765,7 +1696,6 @@ describe("TaskDetail.vue parent picker — archived-list config readiness", () =
       if (cmd === "list_tasks") return [task({ vaultId: "v1", id: "p", path: "/v1/p.md" })];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, {
       props: { task: task({ vaultId: "v1", id: "p", path: "/v1/p.md" }) },
     });
@@ -1785,7 +1715,6 @@ describe("TaskDetail.vue parent picker — archived-list config readiness", () =
       if (cmd === "list_tasks") return [task({ vaultId: "v1", id: "p", path: "/v1/p.md" })];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, {
       props: { task: task({ vaultId: "v1", id: "p", path: "/v1/p.md" }) },
     });
@@ -1812,7 +1741,6 @@ describe("TaskDetail.vue parent picker — archived-list config readiness", () =
       if (cmd === "list_tasks") return [task({ vaultId: "v1", id: "p", path: "/v1/p.md" })];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, {
       props: { task: task({ vaultId: "v1", id: "p", path: "/v1/p.md" }) },
     });
@@ -1847,7 +1775,6 @@ describe("TaskDetail.vue parent picker — archived-list config readiness", () =
       if (cmd === "list_tasks") return [task({ vaultId: "v1", id: "p", path: "/v1/p.md" })];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, {
       props: { task: task({ vaultId: "v1", id: "p", path: "/v1/p.md" }) },
     });
@@ -1876,7 +1803,6 @@ describe("TaskDetail.vue parent picker — archived-list config readiness", () =
       if (cmd === "list_tasks") return [parent, self];
       return undefined;
     });
-    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
     const wrapper = mount(TaskDetail, { props: { task: self } });
     await new Promise((r) => setTimeout(r));
     expect(

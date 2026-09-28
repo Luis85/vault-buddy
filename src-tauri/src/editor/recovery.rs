@@ -1,0 +1,785 @@
+//! Project/session recovery (Task 37 Part A; F-44; ADR §4 "Recovery
+//! journal", R6; PERSISTENCE-AND-SECURITY.md "Recovery and garbage
+//! collection"): the `recovery.json` journal a dirty session leaves behind,
+//! the startup re-pin sweep that reconciles the project store against
+//! staging, and the sweep of abandoned package imports (Task 39). The
+//! store's other crash leftovers are `store_sweep`'s (hardening Task 7),
+//! run from the same thread.
+//!
+//! **The journal.** After every acknowledged edit (`editor_execute`, a
+//! finished import's `AddAssets`, a caption import) the session is
+//! SCHEDULED for a journal write; the named `editor-journal` thread writes
+//! `recovery.json` = `{schema, sessionRevision, savedRevision, project}` at
+//! most once per `JOURNAL_DEBOUNCE` per session, through
+//! `write_atomic_replacing` (temp + fsync + replacing rename). A save whose
+//! revision is still the session's current one deletes it
+//! (`save_commands::save_project_with`); `editor_close_session(keep)`
+//! flushes a pending write synchronously before the session goes.
+//!
+//! **Every journal write, flush and delete runs under the session's SAVE
+//! lock** (`save_commands::session_save_lock`), the same lock a save and a
+//! discard hold. That is what makes "save at the current revision deletes
+//! the journal" true: without it a journal write that read the session just
+//! before the save could land just after the delete and resurrect a journal
+//! for edits that are already on disk. The pending entry is also only ever
+//! TAKEN under that lock, by exactly one of the worker and a closing
+//! `keep`, so a close can never race the worker into writing nothing.
+//!
+//! A journal is never written for a CLEAN session (revision == persisted):
+//! there is nothing to recover, and a fresh session opened over a project
+//! must never overwrite a journal an earlier process left behind before the
+//! user has chosen Resume or Discard for it.
+//!
+//! **An unreadable journal is quarantined, never at open time (GAP-180 /
+//! R7, hardening Task 10 fix round 1).** Opening a project — whether or not
+//! `useRecovery` is set — never touches an existing `recovery.json`: doing
+//! so at open time ran on the ORDINARY panel open too (`editor_open_project`
+//! reopening a saved project from the panel's Tutorial-projects list passes
+//! `useRecovery: false`, `EditorRoot.vue`'s `kind === "project"` branch —
+//! opening a STAGED capture's Edit is a different path, `editor_open_staged`,
+//! which never reads or writes this file at all), silently erasing the very
+//! report (`hasRecovery`) the recovery dialog exists to show, before the
+//! user ever saw it. Instead, a journal that fails to load with a CONTENT
+//! verdict
+//! (`is_content_verdict` — a bad parse, an unknown schema, the wrong
+//! project id, a `validate_project` failure, or the size bound; never a
+//! transient I/O error, which says nothing about the file) is set aside —
+//! `rename_noreplace` to `recovery.unreadable-<unix seconds>.json`, never
+//! deleted — at exactly two points (`journal_quarantine.rs`, split out at
+//! this file's cap): (a) `quarantine_before_overwrite`, run by the journal
+//! WRITER immediately before its first write would replace it, so the
+//! session's own first acknowledged edit can never silently destroy it; and
+//! (b) `discard_or_quarantine_journal`, run by an explicit `discardRecovery`
+//! close, which keeps the bytes instead of deleting them when — and only
+//! when — they were never readable to begin with. A set-aside that fails,
+//! or a journal that cannot be read at all, is never replaced or deleted
+//! (hardening Task 18): the writer defers, Discard fails. `journal_present`
+//! (below) reports the name present, readable or not, which holds Task 9's
+//! take recovery back (`webcam_recover::recover_after_open`); only (b)
+//! releases it — after (a) the writer at once puts the session's OWN
+//! journal at that name, which a save of the current revision or a Discard
+//! later removes.//!
+//! **A readable journal no session resumed is set aside too (R12, amending
+//! R7; final review I-2).** A session minted by an open that did NOT resume
+//! the journal at the name (`editor_open_project` without `useRecovery`, or
+//! a staged capture's Edit) is marked by `note_unresumed_predecessor`; until
+//! it has written its own journal, its first write, a save of the current
+//! revision and a Discard of its own (dirty) changes move that predecessor
+//! to `recovery.unresumed-<unix seconds>.json` even when it reads cleanly,
+//! with the same collision retries and the same defer-on-failure. The only
+//! way to such a session past a READABLE journal is a Resume that failed
+//! for a transient reason and "Open saved project", and the Resume dialog
+//! tells the user that file is kept. A readable journal is replaced or
+//! deleted only by the session that resumed it or wrote it, and by the
+//! recovery offer's own Discard (a clean session: the user discarded
+//! exactly that journal, A27).
+
+use std::collections::HashMap;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager};
+use vault_buddy_core::capture_note::write_atomic_replacing;
+use vault_buddy_core::editor::{
+    is_valid_id, limits, validate_project, EditorError, EditorErrorCode, EditorSession, Project,
+};
+use vault_buddy_core::sync_util::lock_ignoring_poison;
+use vault_buddy_screen::staging;
+
+use super::journal_quarantine::{predecessor_cleared, PredecessorMemo};
+use super::package_import::importing_project_id;
+use super::project_store::{pin_staged, pinned_project, project_dir, store_dir, SourceLocator};
+use super::publish::{PublishJournal, PublishStep, PUBLISH_JOURNAL};
+use super::redact::{redact_name, redact_path};
+use super::render_jobs::JOBS_DIR;
+use super::save_commands::session_save_lock;
+use super::store_io::{load_sources, read_bounded, remove_dir_no_follow, RECOVERY_FILE};
+use super::store_sweep::{sweep_at_startup, SweepReport};
+use super::EditorState;
+use crate::editor_commands::is_safe_base;
+
+/// `recovery.json`'s schema identifier.
+pub const RECOVERY_SCHEMA: &str = "vault-buddy-recovery/1";
+
+/// An import build directory this old is an abandoned one (Task 39).
+const STALE_IMPORT_AFTER: Duration = Duration::from_secs(60 * 60);
+
+/// At most one journal write per session per this window (ADR §4).
+pub(crate) const JOURNAL_DEBOUNCE: Duration = Duration::from_millis(500);
+
+/// `recovery.json` on disk. `savedRevision` is the revision the project
+/// store had committed when the journal was written (`null` for a session
+/// that never had one, which no production open produces today).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecoveryJournal {
+    pub schema: String,
+    pub session_revision: u64,
+    pub saved_revision: Option<u64>,
+    pub project: Project,
+}
+
+struct Pending {
+    due: Instant,
+    root: PathBuf,
+}
+
+/// The per-session debounce state the `editor-journal` thread drains. A
+/// LEAF lock: never held across I/O or while taking another lock.
+#[derive(Default)]
+pub struct JournalQueue {
+    pending: Mutex<HashMap<String, Pending>>,
+    wake: Condvar,
+    /// Whether each session's `recovery.json` predecessor is settled
+    /// (`journal_quarantine::predecessor_cleared`).
+    pub(super) predecessors: PredecessorMemo,
+}
+
+impl JournalQueue {
+    /// Schedule `session_id`'s journal. An entry already waiting keeps its
+    /// EARLIER deadline — a steady stream of edits must still be journaled
+    /// every `JOURNAL_DEBOUNCE`, never postponed forever.
+    pub(crate) fn schedule(&self, session_id: &str, root: &Path, now: Instant) {
+        lock_ignoring_poison(&self.pending)
+            .entry(session_id.to_string())
+            .or_insert_with(|| Pending {
+                due: now + JOURNAL_DEBOUNCE,
+                root: root.to_path_buf(),
+            });
+        self.wake.notify_all();
+    }
+
+    /// Remove and return `session_id`'s pending root, due or not.
+    fn take(&self, session_id: &str) -> Option<PathBuf> {
+        lock_ignoring_poison(&self.pending)
+            .remove(session_id)
+            .map(|p| p.root)
+    }
+
+    /// Drop `session_id`'s pending write without performing it, and what
+    /// its predecessor check settled (its session is ending).
+    pub(crate) fn forget(&self, session_id: &str) {
+        lock_ignoring_poison(&self.pending).remove(session_id);
+        self.predecessors.forget(session_id);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_pending(&self, session_id: &str) -> bool {
+        lock_ignoring_poison(&self.pending).contains_key(session_id)
+    }
+
+    fn due_sessions(&self, now: Instant) -> Vec<String> {
+        lock_ignoring_poison(&self.pending)
+            .iter()
+            .filter(|(_, p)| p.due <= now)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// Block until the earliest deadline passes, something is scheduled, or
+    /// `idle` elapses — whichever is first.
+    fn wait(&self, idle: Duration) {
+        let pending = lock_ignoring_poison(&self.pending);
+        let now = Instant::now();
+        let timeout = pending
+            .values()
+            .map(|p| p.due.saturating_duration_since(now))
+            .min()
+            .unwrap_or(idle)
+            .min(idle);
+        if timeout.is_zero() {
+            return;
+        }
+        let _ = self
+            .wake
+            .wait_timeout(pending, timeout)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    }
+}
+
+pub(super) fn journal_path(root: &Path, project_id: &str) -> Option<PathBuf> {
+    project_dir(root, project_id).map(|d| d.join(RECOVERY_FILE))
+}
+
+/// Is there a journal — ANY entry wearing `recovery.json`'s name, checked
+/// no-follow — for `project_id`? A metadata failure other than "not found"
+/// answers yes: the caller (`webcam_recover`) holds back rather than risk
+/// overwriting unsaved changes it could not see (review C1).
+pub(crate) fn journal_present(root: &Path, project_id: &str) -> bool {
+    let Some(path) = journal_path(root, project_id) else {
+        return false;
+    };
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => true,
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
+/// Note an acknowledged edit of `session_id`: its journal is written within
+/// `JOURNAL_DEBOUNCE`.
+pub(crate) fn note_acknowledged(state: &EditorState, root: &Path, session_id: &str) {
+    state.journal.schedule(session_id, root, Instant::now());
+}
+
+/// What a journal write did.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum JournalWrite {
+    /// Written -- or nothing to write (a gone or clean session).
+    Done,
+    /// Refused for now: an unreadable earlier journal is in the way and
+    /// could not be set aside (`journal_quarantine`). It is kept, never
+    /// replaced; the caller decides whether to try again.
+    Deferred,
+}
+
+/// `session`'s journal, or `None` for a CLEAN session (nothing to recover).
+fn journal_of(session: &EditorSession) -> Option<RecoveryJournal> {
+    let snap = session.snapshot();
+    if snap.persisted_revision == Some(snap.revision) {
+        return None;
+    }
+    Some(RecoveryJournal {
+        schema: RECOVERY_SCHEMA.to_string(),
+        session_revision: snap.revision,
+        saved_revision: snap.persisted_revision,
+        project: session.project().clone(),
+    })
+}
+
+/// Write the journal for `session_id` from its CURRENT state. The caller
+/// holds the session's save lock. A gone or clean session writes nothing.
+fn write_locked(state: &EditorState, root: &Path, session_id: &str) -> io::Result<JournalWrite> {
+    let journal = {
+        let sessions = lock_ignoring_poison(&state.sessions);
+        match sessions.get(session_id).and_then(journal_of) {
+            Some(journal) => journal,
+            None => return Ok(JournalWrite::Done),
+        }
+    };
+    write_journal(state, root, session_id, &journal)
+}
+
+fn write_journal(
+    state: &EditorState,
+    root: &Path,
+    session_id: &str,
+    journal: &RecoveryJournal,
+) -> io::Result<JournalWrite> {
+    let path = journal_path(root, &journal.project.id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid project id"))?;
+    // R7(a): this write is about to REPLACE whatever already sits at
+    // `path`. An earlier process's journal this session never resumed, one
+    // that fails to load with a CONTENT verdict, is set aside first -- and
+    // if it cannot be, or cannot even be read, this write does not happen
+    // (hardening Task 18): replacing it would destroy exactly the bytes R7
+    // keeps. Checked once per session (`journal_quarantine`).
+    if !predecessor_cleared(state, session_id, root, &journal.project.id, &path) {
+        return Ok(JournalWrite::Deferred);
+    }
+    let json = serde_json::to_string_pretty(journal)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    // Final review M5: `load_journal` refuses anything over this bound, so
+    // a larger journal could never be resumed — and would replace the last
+    // one that could. Refused here, the older journal stays.
+    if json.len() as u64 > limits::MAX_PROJECT_JSON_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "the unsaved changes are {} bytes, over the {} byte bound; not journaled",
+                json.len(),
+                limits::MAX_PROJECT_JSON_BYTES
+            ),
+        ));
+    }
+    write_atomic_replacing(&path, &json).map(|()| JournalWrite::Done)
+}
+
+/// Perform `session_id`'s pending journal write now, if one is waiting.
+/// The caller holds the session's save lock. A write deferred by an
+/// unreadable earlier journal is scheduled again, never dropped.
+fn flush_locked(state: &EditorState, session_id: &str) {
+    if let Some(root) = state.journal.take(session_id) {
+        match write_locked(state, &root, session_id) {
+            Ok(JournalWrite::Done) => {}
+            Ok(JournalWrite::Deferred) => state.journal.schedule(session_id, &root, Instant::now()),
+            Err(e) => {
+                log::warn!("editor recovery: could not write the journal for {session_id}: {e}")
+            }
+        }
+    }
+}
+
+/// `editor_close_session(keep)`'s journal (hardening Task 18, C-2): the
+/// session has just been MOVED OUT of `sessions` (`session_close`), so no
+/// edit can land after this snapshot -- an execute now finds it gone -- and
+/// none acknowledged before it can be missing, whether or not its journal
+/// write had been scheduled yet. Written whenever the session is dirty. The
+/// caller holds the session's save lock.
+pub(crate) fn write_closing_locked(
+    state: &EditorState,
+    root: &Path,
+    session_id: &str,
+    session: &EditorSession,
+) {
+    state.journal.take(session_id);
+    let Some(journal) = journal_of(session) else {
+        return;
+    };
+    match write_journal(state, root, session_id, &journal) {
+        Ok(JournalWrite::Done) => {}
+        Ok(JournalWrite::Deferred) => log::warn!(
+            "editor recovery: session {session_id} closed with unsaved changes that were not \
+             journaled; an unreadable earlier journal was kept in their place"
+        ),
+        Err(e) => log::warn!("editor recovery: could not write the journal for {session_id}: {e}"),
+    }
+}
+
+/// Write every journal whose deadline has passed. Each is taken and written
+/// under its session's save lock; a session that has ended in the meantime
+/// is simply forgotten. Returns how many were written or skipped.
+pub(crate) fn flush_due(state: &EditorState, now: Instant) -> usize {
+    let due = state.journal.due_sessions(now);
+    for session_id in &due {
+        let Ok(lock) = session_save_lock(state, session_id) else {
+            state.journal.forget(session_id);
+            continue;
+        };
+        let _guard = lock_ignoring_poison(&lock);
+        flush_locked(state, session_id);
+    }
+    due.len()
+}
+
+/// Delete `project_id`'s journal — owned-file-only and no-follow: a symlink
+/// or a directory wearing the name is refused, never followed or recursed;
+/// an absent journal is already gone (`Ok`).
+pub(crate) fn remove_journal(root: &Path, project_id: &str) -> std::io::Result<()> {
+    let path = journal_path(root, project_id).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid project id")
+    })?;
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    if !meta.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "{} is not a plain file; refusing to remove it",
+                redact_path(&path)
+            ),
+        ));
+    }
+    std::fs::remove_file(&path)
+}
+
+/// Read and validate `project_id`'s journal like a project: bounded, parsed
+/// strictly, schema-checked, its own project id matching, and
+/// `validate_project`. Anything else is `invalidProject` and the file is
+/// left exactly as it was — this function writes nothing.
+pub(crate) fn load_journal(root: &Path, project_id: &str) -> Result<RecoveryJournal, EditorError> {
+    let invalid = |message: String| EditorError::new(EditorErrorCode::InvalidProject, message);
+    let path = journal_path(root, project_id).ok_or_else(|| {
+        EditorError::new(
+            EditorErrorCode::InvalidRequest,
+            format!("{project_id:?} is not a valid project id"),
+        )
+    })?;
+    if !path.is_file() {
+        return Err(EditorError::new(
+            EditorErrorCode::InvalidRequest,
+            "There are no unsaved changes to resume for this project.",
+        ));
+    }
+    let bytes = read_bounded(&path, limits::MAX_PROJECT_JSON_BYTES)?;
+    // Final review M-3: the Resume dialog renders this message, and serde's
+    // own text quotes the file (an unknown key a hand edit added), as a
+    // schema string would -- so the words are fixed and the detail is
+    // logged by its kind and position only (Task 6's `refuse_unparsable`
+    // posture).
+    let journal: RecoveryJournal = serde_json::from_slice(&bytes).map_err(|e| {
+        log::warn!(
+            "editor recovery: the journal of {project_id} did not parse ({:?} at line {}, \
+             column {})",
+            e.classify(),
+            e.line(),
+            e.column()
+        );
+        invalid("The unsaved changes could not be read.".to_string())
+    })?;
+    if journal.schema != RECOVERY_SCHEMA {
+        log::warn!("editor recovery: the journal of {project_id} names an unknown schema");
+        return Err(invalid(
+            "The unsaved changes use an unknown format.".to_string(),
+        ));
+    }
+    if journal.project.id != project_id {
+        return Err(invalid(
+            "The unsaved changes belong to a different project.".to_string(),
+        ));
+    }
+    validate_project(&journal.project)?;
+    Ok(journal)
+}
+
+/// The `editor-journal` thread's body: wait for the next deadline, flush
+/// what is due, until `stop` is set (production never sets it).
+pub(crate) fn journal_worker_loop(state: &EditorState, stop: &AtomicBool) {
+    while !stop.load(Ordering::SeqCst) {
+        state.journal.wait(Duration::from_secs(1));
+        flush_due(state, Instant::now());
+    }
+}
+
+/// Start the `editor-journal` thread (wired into `lib.rs`'s `setup`).
+pub fn spawn_journal_worker(app: &AppHandle) {
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("editor-journal".into())
+        .spawn(move || {
+            static NEVER: AtomicBool = AtomicBool::new(false);
+            let state = app.state::<EditorState>();
+            journal_worker_loop(&state, &NEVER);
+        });
+    if let Err(e) = spawned {
+        log::error!(
+            "editor recovery: could not start the journal thread; edits are journaled \
+             only when a session closes: {e}"
+        );
+    }
+}
+
+/// What the startup re-pin sweep did (F34).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RepinReport {
+    /// `(projectId, base)` pairs whose pin was written back.
+    pub repinned: Vec<(String, String)>,
+    /// Projects left unpinned: their staged base is gone, or another
+    /// project legitimately holds its pin. Reported, never deleted.
+    pub orphaned: Vec<String>,
+}
+
+/// F34 (ADR R6): re-pin every project whose staged source's sidecar has
+/// lost its pin — the crash between `create_project` and `pin_staged` that
+/// Task 10's open-time adoption only repairs if the user reopens that exact
+/// capture, or a sidecar rewritten by the (since retired, Task 59) legacy
+/// export path.
+///
+/// A project is re-pinned (through `pin_staged` → `staging::write_sidecar`,
+/// the owned atomic sidecar rail) only when its staged capture still EXISTS
+/// — sidecar readable, its own `base` matching, and the `.mp4` on disk —
+/// and the sidecar's pin is absent or names a project that does not claim
+/// this capture (gone, or whose `sources.json` names another). A capture
+/// already pinned to ANOTHER project that does claim it is never stolen.
+/// Everything else is REPORTED in `orphaned`: nothing is deleted and no pin
+/// is ever invented for a capture that is not there.
+///
+/// Projects are visited in id order, so which of two unpinned claimants of
+/// one capture wins is deterministic. A VIEW-style walk: an entry it cannot
+/// read is logged and skipped, never allowed to abort the sweep.
+pub fn run_startup_repin(root: &Path, staging_dir: &Path) -> RepinReport {
+    let mut report = RepinReport::default();
+    for id in valid_dir_names(&store_dir(root)) {
+        let sources = match load_sources(root, &id) {
+            Ok(sources) => sources,
+            Err(e) => {
+                log::warn!("editor-recovery-sweep: skipping {id}: {}", e.message);
+                continue;
+            }
+        };
+        let mut orphaned = false;
+        for record in sources.values() {
+            let SourceLocator::Staging { base } = &record.locator else {
+                continue;
+            };
+            match repin_one(root, staging_dir, &id, base) {
+                Repin::AlreadyPinned => {}
+                Repin::Repinned => report.repinned.push((id.clone(), base.clone())),
+                Repin::Orphaned => orphaned = true,
+            }
+        }
+        if orphaned {
+            report.orphaned.push(id);
+        }
+    }
+    report
+}
+
+enum Repin {
+    AlreadyPinned,
+    Repinned,
+    Orphaned,
+}
+
+/// MAY `project_id` claim staged capture `base`? A project directory that
+/// is gone cannot; one whose `sources.json` reads and names another base
+/// does not. One that exists but whose `sources.json` cannot be read right
+/// now (fix round 1) is treated as claiming it: an unreadable file is never
+/// proof its pin is free to take, so the sweep reports rather than steals.
+fn claims(root: &Path, project_id: &str, base: &str) -> bool {
+    if !project_dir(root, project_id).is_some_and(|d| d.is_dir()) {
+        return false;
+    }
+    match load_sources(root, project_id) {
+        Ok(sources) => sources
+            .values()
+            .any(|r| matches!(&r.locator, SourceLocator::Staging { base: b } if b == base)),
+        Err(e) => {
+            log::warn!(
+                "editor-recovery-sweep: {project_id} holds a pin but its sources cannot be read, \
+                 leaving the pin alone: {}",
+                e.message
+            );
+            true
+        }
+    }
+}
+
+fn repin_one(root: &Path, staging_dir: &Path, project_id: &str, base: &str) -> Repin {
+    if !is_safe_base(base) {
+        log::warn!("editor-recovery-sweep: {project_id} names an unsafe staged base");
+        return Repin::Orphaned;
+    }
+    let sidecar = staging::read_sidecar(&staging_dir.join(staging::sidecar_file_name(base)));
+    let video = staging_dir.join(staging::mp4_file_name(base)).is_file();
+    let Some(sidecar) = sidecar.filter(|s| s.base == base && video) else {
+        return Repin::Orphaned;
+    };
+    match pinned_project(&sidecar) {
+        Some(pin) if pin == project_id => return Repin::AlreadyPinned,
+        Some(pin) if claims(root, &pin, base) => return Repin::Orphaned,
+        _ => {}
+    }
+    match pin_staged(staging_dir, base, project_id) {
+        Ok(()) => Repin::Repinned,
+        Err(e) => {
+            log::warn!("editor-recovery-sweep: could not re-pin {project_id}: {e}");
+            Repin::Orphaned
+        }
+    }
+}
+
+/// The sorted names of `dir`'s subdirectories that are valid ids -- a
+/// project id in the store, a job id under `jobs\`. A VIEW: an unreadable
+/// directory is an empty list.
+fn valid_dir_names(dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|id| is_valid_id(id))
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// The largest `publish.json` read: three short fields.
+const PUBLISH_JOURNAL_MAX_BYTES: u64 = 64 * 1024;
+
+/// What one interrupted publish's journal says, in words (F36) -- logged on
+/// every start, so its vault-relative names (a folder, the product's
+/// title) are handles (M-V3, hardening Task 11). Named as a redactor
+/// because it is one: `redact_guard` accepts a call to it in a log line
+/// the way it accepts `redact_name(`, and `a_publish_report_names_no_vault_file`
+/// is what holds it to that (hardening Task 21).
+pub(crate) fn redact_publish_journal(journal: &PublishJournal) -> String {
+    let video = redact_name(&journal.video);
+    match (journal.step, journal.note.as_deref().map(redact_name)) {
+        (PublishStep::Reserved, _) => format!(
+            "A publish was interrupted before its video was saved as {video}. A hidden partial copy \
+             may be left in that folder; publish it again."
+        ),
+        (PublishStep::Video, Some(_)) => format!(
+            "A publish was interrupted: the video was saved as {video} but its note was not."
+        ),
+        (_, Some(note)) => format!(
+            "A publish was interrupted after it saved the video as {video} and its note as \
+             {note}."
+        ),
+        (_, None) => format!("A publish was interrupted after it saved the video as {video}."),
+    }
+}
+
+/// One publish a crash interrupted: its journal, or -- when that cannot be
+/// read -- only its job id (an app-minted `job-…`, never content).
+#[derive(Debug)]
+pub(crate) enum Interrupted {
+    Publish(PublishJournal),
+    Unreadable(String),
+}
+
+/// The report for a journal that could not be read.
+pub(crate) fn unreadable_publish(job: &str) -> String {
+    format!("A publish was interrupted, and its record ({job}) could not be read.")
+}
+
+/// Task 48 (F36; ADR R13): every publish a crash interrupted, in words, by
+/// project then job. A journal not at `complete` is REPORTED and left
+/// exactly where it is -- never deleted, never retried (docs/Gaps.md: no
+/// resume from the journal), so it is reported again on the next start. A
+/// `complete` one (a crash after the last step, before the publish removed
+/// its own job directory) is removed quietly: nothing was lost. A journal
+/// that cannot be read is reported as such, and kept.
+pub(crate) fn interrupted_publishes(root: &Path) -> Vec<Interrupted> {
+    let mut reports = Vec::new();
+    for project in valid_dir_names(&store_dir(root)) {
+        let Some(jobs) = project_dir(root, &project).map(|d| d.join(JOBS_DIR)) else {
+            continue;
+        };
+        for job in valid_dir_names(&jobs) {
+            let dir = jobs.join(&job);
+            let path = dir.join(PUBLISH_JOURNAL);
+            if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
+                continue;
+            }
+            let journal = read_bounded(&path, PUBLISH_JOURNAL_MAX_BYTES)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<PublishJournal>(&bytes).ok());
+            match journal {
+                Some(j) if j.step == PublishStep::Complete => {
+                    if let Err(e) = remove_dir_no_follow(&dir) {
+                        log::warn!("editor-recovery-sweep: could not remove {job}: {e}");
+                    }
+                }
+                Some(j) => reports.push(Interrupted::Publish(j)),
+                None => reports.push(Interrupted::Unreadable(job)),
+            }
+        }
+    }
+    reports
+}
+
+/// Task 39: remove every import build directory (`.<projectId>.importing`,
+/// `package_import`'s own name) whose last change is at least an hour
+/// before `now`. Nothing else in the store is touched.
+///
+/// Ownership is the NAME (`package_import::importing_project_id`: a leading
+/// dot, a valid project id, the `.importing` suffix) AND the kind: only a
+/// real directory, never a file or a link wearing the name. Removal is the
+/// store's own owned, no-follow walk (`store_io::remove_dir_no_follow`),
+/// never `remove_dir_all`. The hour is what keeps an import running in
+/// this very process safe — the sweep runs at startup, and an import is
+/// seconds to minutes long. A VIEW-style walk: a failure is logged and the
+/// sweep moves on.
+pub(crate) fn sweep_stale_imports(root: &Path, now: std::time::SystemTime) -> Vec<String> {
+    let mut removed = Vec::new();
+    let Ok(entries) = std::fs::read_dir(store_dir(root)) else {
+        return removed;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // A validated project id (`.<id>.importing`): content-free, so the
+        // log names it rather than a hash that would throw it away.
+        let Some(project_id) = importing_project_id(&name).map(str::to_string) else {
+            continue;
+        };
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let stale = meta
+            .modified()
+            .is_ok_and(|at| at + STALE_IMPORT_AFTER <= now);
+        if !meta.file_type().is_dir() || !stale {
+            continue;
+        }
+        match remove_dir_no_follow(&path) {
+            Ok(()) => removed.push(name),
+            Err(e) => log::warn!(
+                "editor-recovery-sweep: could not remove the unfinished import of {project_id}: {e}"
+            ),
+        }
+    }
+    removed
+}
+
+/// Run `sweep_stale_imports` (Task 39), the store's crash-leftover sweep
+/// (`store_sweep`, hardening Task 7), then `run_startup_repin`, on the named `editor-recovery-sweep` thread
+/// (wired into `lib.rs`'s `setup`, right after `run_screen_recovery`). That
+/// is SPAWN order only: the screen sweep runs on its own thread with its own
+/// retry loop and is not awaited. It does not need to be: a capture it
+/// promotes is `recovered`, which `editor_open_staged` refuses (F7), so no
+/// project can reference it — but its files are NOT disjoint from this
+/// sweep's (final review M6): listing a recovered stem rewrites a PUBLISHED
+/// capture's sidecar, the file a pin lives in. Both sweeps therefore hold
+/// the editor's `open` lock for their whole pass, as an editor open does
+/// while it pins, so no two of them ever write one sidecar at once.
+pub fn spawn_startup_repin(app: &AppHandle) {
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("editor-recovery-sweep".into())
+        .spawn(move || {
+            let Ok(root) = app.path().app_local_data_dir() else {
+                log::warn!("editor-recovery-sweep: could not resolve the local data directory");
+                return;
+            };
+            let state = app.state::<EditorState>();
+            let _open = lock_ignoring_poison(&state.open);
+            // Logged where the names are redacted, so `redact_guard` sees
+            // the redactor's call rather than trusting a variable's name.
+            for found in interrupted_publishes(&root) {
+                match found {
+                    Interrupted::Publish(journal) => log::warn!(
+                        "editor-recovery-sweep: {}",
+                        redact_publish_journal(&journal)
+                    ),
+                    Interrupted::Unreadable(job) => {
+                        log::warn!("editor-recovery-sweep: {}", unreadable_publish(&job))
+                    }
+                }
+            }
+            let now = std::time::SystemTime::now();
+            let swept = sweep_stale_imports(&root, now);
+            if !swept.is_empty() {
+                log::info!(
+                    "editor-recovery-sweep: removed {} abandoned project import(s)",
+                    swept.len()
+                );
+            }
+            match sweep_at_startup(&state, &root, now) {
+                Some(SweepReport { removed, kept }) if removed + kept > 0 => log::info!(
+                    "editor-recovery-sweep: removed {removed} crash leftover(s), kept {kept}"
+                ),
+                Some(_) => {}
+                None => log::info!(
+                    "editor-recovery-sweep: a project is already open; leftovers wait for the \
+                     next start"
+                ),
+            }
+            let report = run_startup_repin(&root, &staging::staging_dir(&root));
+            if !report.repinned.is_empty() {
+                log::info!(
+                    "editor-recovery-sweep: re-pinned {} project(s)",
+                    report.repinned.len()
+                );
+            }
+            if !report.orphaned.is_empty() {
+                log::warn!(
+                    "editor-recovery-sweep: {} project(s) left unpinned (their staged capture \
+                     is gone or belongs to another project): {}",
+                    report.orphaned.len(),
+                    report.orphaned.join(", ")
+                );
+            }
+        });
+    if let Err(e) = spawned {
+        log::warn!("editor-recovery-sweep: could not spawn thread: {e}");
+    }
+}
+
+#[cfg(test)]
+#[path = "recovery_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "recovery_sweep_tests.rs"]
+mod sweep_tests;

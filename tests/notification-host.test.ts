@@ -101,6 +101,60 @@ describe("NotificationHost", () => {
     expect(w.find('[data-testid="notification-action"]').exists()).toBe(false);
   });
 
+  // Task 6 (visual-parity, concept-spec §9.12): the editor window's own
+  // toast — fixed, centred, bottom 43px, a single `raised` card — is a
+  // SEPARATE opt-in `variant` prop; the default (no prop, every existing
+  // test above) must render byte-for-byte as before.
+  describe("variant=\"editor\"", () => {
+    it("defaults to the panel look when no variant is given", () => {
+      const n = useNotificationsStore();
+      n.error("boom");
+      const w = mount(NotificationHost);
+      expect(w.get('[data-testid="notification-host"]').classes()).toContain("inset-x-3");
+      expect(w.get('[data-testid="notification"]').classes()).toContain("bg-red-900");
+    });
+
+    it("renders a single centred, bottom-anchored card per §9.12, with no kind-coloured background", () => {
+      const n = useNotificationsStore();
+      n.info("Guide paused. Help → Resume walkthrough brings you back here.");
+      const w = mount(NotificationHost, { props: { variant: "editor" } });
+      const host = w.get('[data-testid="notification-host"]');
+      expect(host.classes()).toContain("bottom-[43px]");
+      const item = w.get('[data-testid="notification"]');
+      expect(item.text()).toContain("Guide paused");
+      expect(item.classes()).toContain("bg-raised");
+      expect(item.classes()).toContain("rounded-lg");
+      expect(item.classes().some((c) => c.startsWith("bg-red") || c.startsWith("bg-amber") || c.startsWith("bg-emerald") || c.startsWith("bg-slate"))).toBe(false);
+    });
+
+    it("still keeps role/aria-live by kind, dismiss and the action button, in the editor variant", async () => {
+      const n = useNotificationsStore();
+      const run = vi.fn();
+      n.error("boom");
+      n.notify("success", "Imported X", { action: { label: "Open", run } });
+      const w = mount(NotificationHost, { props: { variant: "editor" } });
+      const items = w.findAll('[data-testid="notification"]');
+      expect(items[0]!.attributes("role")).toBe("alert");
+      expect(items[0]!.attributes("aria-live")).toBe("assertive");
+      expect(items[1]!.attributes("role")).toBe("status");
+
+      await w.get('[data-testid="notification-action"]').trigger("click");
+      expect(run).toHaveBeenCalledTimes(1);
+
+      await w.get('[data-testid="notification-dismiss"]').trigger("click");
+      expect(n.items).toHaveLength(0);
+    });
+
+    it("renders nothing for either variant when there is nothing to say", () => {
+      expect(mount(NotificationHost).find('[data-testid="notification-host"]').exists()).toBe(false);
+      expect(
+        mount(NotificationHost, { props: { variant: "editor" } })
+          .find('[data-testid="notification-host"]')
+          .exists(),
+      ).toBe(false);
+    });
+  });
+
   it("keeps the container pointer-events-none while each toast is pointer-events-auto", () => {
     // The host overlays every panel view (Task 3/5) — it must never itself
     // intercept clicks outside a toast; only an actual toast (and its

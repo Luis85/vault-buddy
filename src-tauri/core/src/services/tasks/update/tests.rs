@@ -420,9 +420,8 @@ fn a_parent_stamp_failure_after_a_committed_field_write_reports_fields_saved() {
     if bypassed {
         let _ = std::fs::remove_file(&probe);
         std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-        eprintln!(
-            "SKIPPED a_parent_stamp_failure_after_a_committed_field_write_reports_fields_saved: \
-                 running as root, chmod 555 does not deny directory writes here"
+        crate::services::tasks::test_announce::announce_skip(
+            "running as root, chmod 555 does not deny directory writes here",
         );
         return;
     }

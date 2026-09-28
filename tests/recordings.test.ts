@@ -311,4 +311,36 @@ describe("Recordings", () => {
     const historicalRow = wrapper.findAll('[data-testid="recording-row"]')[2].element.parentElement;
     expect(historicalRow?.querySelector('[title="Transcript failed"]')).toBeTruthy();
   });
+
+  it("renders one glyph per fetched transcript status, and no indicator for none", async () => {
+    // Pins every arm of the status glyph lookup (it replaced a three-deep
+    // template ternary): a swapped or dropped arm must fail here, not ship.
+    const at = (mp3: string, transcriptStatus: string) => ({
+      mp3,
+      title: mp3,
+      recordedAt: "2026-07-04 12:00",
+      duration: "0:10",
+      type: "Meeting",
+      transcriptStatus,
+    });
+    const { wrapper } = await mountView({
+      list: [
+        at("C:/v/g/failed.mp3", "failed"),
+        at("C:/v/g/complete.mp3", "complete"),
+        at("C:/v/g/cancelled.mp3", "cancelled"),
+        at("C:/v/g/pending.mp3", "pending"),
+        at("C:/v/g/none.mp3", "none"),
+      ],
+    });
+    const glyph = (title: string) => wrapper.get(`[title="${title}"]`).text().trim();
+    expect(glyph("Transcript failed")).toBe("⚠");
+    expect(glyph("Transcribed ✓")).toBe("✓");
+    expect(glyph("Cancelled")).toBe("⦸");
+    expect(glyph("Transcribing…")).toBe("…");
+    // "none" has an empty label, so its row carries no indicator at all.
+    const rows = wrapper.findAll('[data-testid="recording-row"]');
+    const noneRow = rows.find((r) => r.text().includes("C:/v/g/none.mp3"));
+    expect(noneRow).toBeDefined();
+    expect(noneRow?.element.parentElement?.textContent).not.toMatch(/[…⚠✓⦸]/);
+  });
 });

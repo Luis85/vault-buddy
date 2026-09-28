@@ -34,9 +34,24 @@ export function logWarning(message: string): void {
   emit(pluginWarn, message);
 }
 
-/** Error-level marker for faults the app caught but could not handle. */
-export function logError(message: string): void {
+/**
+ * Error-level marker for faults the app caught but could not handle. Module-
+ * private: its one caller is logVueError, the uncaught-Vue-error sink.
+ */
+function logError(message: string): void {
   emit(pluginError, message);
+}
+
+/**
+ * The Vue `app.config.errorHandler` sink. Setting a custom handler replaces
+ * Vue's own console logging, and `logError` is a no-op outside Tauri — so the
+ * console write is the ONLY trace a plain browser dev session gets. It stays,
+ * first, and this chokepoint is the one sanctioned console sink in `src/`.
+ */
+export function logVueError(err: unknown, info: string): void {
+  // eslint-disable-next-line no-console -- Vue's default console trace is disabled by a custom errorHandler; this restores it
+  console.error(err);
+  logError(`vue error (${info}): ${String(err)}`);
 }
 
 /**

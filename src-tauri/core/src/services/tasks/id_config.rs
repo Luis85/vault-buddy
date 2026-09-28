@@ -399,9 +399,8 @@ mod tests {
         let bypassed = std::fs::read_to_string(&locked).is_ok();
         if bypassed {
             std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
-            eprintln!(
-                "SKIPPED an_unreadable_task_file_refuses_rather_than_reporting_no_links: \
-                 running as root, chmod 000 does not deny access here"
+            crate::services::tasks::test_announce::announce_skip(
+                "running as root, chmod 000 does not deny access here",
             );
             return;
         }

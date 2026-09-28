@@ -1,0 +1,14 @@
+{
+  "_comment": "The presenter placement (ADR section 4; F-21; pre-flight F35), ONE table for both languages: src/editor/layoutGeometry.ts PRESENTER_CORNER + presenterBox (tests/editorWebcamDialog.test.ts) and core::editor::migrate PRESENTER_* + presenter_height (core/src/editor/migrate_webcam_tests.rs). The height keeps the circle square in pixels on each supported canvas.",
+  "x": 0.775,
+  "y": 0.06,
+  "w": 0.19,
+  "frameShape": "circle",
+  "fit": "cover",
+  "heights": [
+    { "canvas": [1280, 720], "h": 0.3378 },
+    { "canvas": [720, 1280], "h": 0.1069 },
+    { "canvas": [720, 720], "h": 0.19 },
+    { "canvas": [960, 720], "h": 0.2533 }
+  ]
+}

@@ -15,6 +15,31 @@ function clearFade() {
   }
 }
 
+interface StatusFields {
+  state: SaveState;
+  error: string | null;
+  savingOwners: Record<number, true>;
+  errorsByOwner: Record<number, string>;
+  savedFlash: boolean;
+}
+
+// Priority: any outstanding error > a save in flight > a recent success >
+// idle. An unresolved failure therefore outranks a later unrelated success.
+// A plain function, not an action: the fade timer calls it, and Pinia's action
+// wrapper would setActivePinia(this store's pinia) whenever that timer fires —
+// in a test, in the middle of a LATER test (AGENTS.md > Testing conventions).
+function recompute(s: StatusFields) {
+  const messages = Object.values(s.errorsByOwner);
+  if (messages.length > 0) {
+    s.state = "error";
+    s.error = messages[0];
+    return;
+  }
+  s.error = null;
+  if (Object.keys(s.savingOwners).length > 0) s.state = "saving";
+  else s.state = s.savedFlash ? "saved" : "idle";
+}
+
 // The panel header's transient save indicator, shared across every auto-saving
 // settings field so one indicator covers the whole view. Because the Vault
 // settings tabs stay mounted (v-show), several useAutosave instances report
@@ -22,7 +47,7 @@ function clearFade() {
 // success from one field can't clear another field's still-unresolved error,
 // and an unmounted field can be retired cleanly (Codex PR #55). `state` and
 // `error` are the public fields the header reads; the bookkeeping below derives
-// them via recompute().
+// them via recompute(), above.
 export const useSettingsStatusStore = defineStore("settingsStatus", {
   state: () => ({
     state: "idle" as SaveState,
@@ -37,39 +62,26 @@ export const useSettingsStatusStore = defineStore("settingsStatus", {
     savedFlash: false,
   }),
   actions: {
-    // Priority: any outstanding error > a save in flight > a recent success >
-    // idle. An unresolved failure therefore outranks a later unrelated success.
-    recompute() {
-      const messages = Object.values(this.errorsByOwner);
-      if (messages.length > 0) {
-        this.state = "error";
-        this.error = messages[0];
-        return;
-      }
-      this.error = null;
-      if (Object.keys(this.savingOwners).length > 0) this.state = "saving";
-      else this.state = this.savedFlash ? "saved" : "idle";
-    },
     saving(owner: number) {
       clearFade();
       this.savingOwners[owner] = true;
       // A retry drops this owner's prior failure before it re-attempts.
       delete this.errorsByOwner[owner];
       this.savedFlash = false;
-      this.recompute();
+      recompute(this);
     },
     saved(owner: number) {
       clearFade();
       delete this.savingOwners[owner];
       delete this.errorsByOwner[owner];
       this.savedFlash = true;
-      this.recompute();
+      recompute(this);
       // Fade only when "Saved" is actually showing (not masked by another
       // owner's error or an in-flight save).
       if (this.state === "saved") {
         fadeTimer = setTimeout(() => {
           this.savedFlash = false;
-          this.recompute();
+          recompute(this);
           fadeTimer = null;
         }, SAVED_LINGER_MS);
       }
@@ -82,7 +94,7 @@ export const useSettingsStatusStore = defineStore("settingsStatus", {
       delete this.savingOwners[owner];
       this.errorsByOwner[owner] = message;
       this.savedFlash = false;
-      this.recompute();
+      recompute(this);
     },
     // Retire an unmounted owner: drop its in-flight AND error markers so a
     // late-settling save can't strand status in the header (the component and
@@ -91,14 +103,14 @@ export const useSettingsStatusStore = defineStore("settingsStatus", {
     release(owner: number) {
       delete this.savingOwners[owner];
       delete this.errorsByOwner[owner];
-      this.recompute();
+      recompute(this);
     },
     reset() {
       clearFade();
       this.savingOwners = {};
       this.errorsByOwner = {};
       this.savedFlash = false;
-      this.recompute();
+      recompute(this);
     },
   },
 });

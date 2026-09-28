@@ -11,7 +11,12 @@ vi.mock("@tauri-apps/plugin-log", () => ({
   error: logMocks.error,
 }));
 
-import { initLogging, logBreadcrumb, logWarning } from "../src/logging";
+import {
+  initLogging,
+  logBreadcrumb,
+  logVueError,
+  logWarning,
+} from "../src/logging";
 
 describe("logging bridge", () => {
   beforeEach(() => {
@@ -50,5 +55,42 @@ describe("logging bridge", () => {
     expect(logMocks.error).toHaveBeenCalledWith(
       "window error: boom @ a.js:1:2",
     );
+  });
+
+  // Setting app.config.errorHandler replaces Vue's own console logging, and
+  // logError is a no-op outside Tauri — so the console.error is the ONLY
+  // trace a plain browser dev session gets. Both halves must survive.
+  it("logVueError writes the raw error to the console, then to the log", () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    const order: string[] = [];
+    const consoleSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => order.push("console"));
+    logMocks.error.mockImplementation(() => {
+      order.push("log");
+      return Promise.resolve();
+    });
+    const err = new Error("kaboom");
+    try {
+      logVueError(err, "render function");
+      expect(consoleSpy).toHaveBeenCalledWith(err);
+      expect(logMocks.error).toHaveBeenCalledWith(
+        "vue error (render function): Error: kaboom",
+      );
+      expect(order).toEqual(["console", "log"]);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it("logVueError still reaches the console outside Tauri", () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      logVueError("plain string", "setup function");
+      expect(consoleSpy).toHaveBeenCalledWith("plain string");
+      expect(logMocks.error).not.toHaveBeenCalled();
+    } finally {
+      consoleSpy.mockRestore();
+    }
   });
 });

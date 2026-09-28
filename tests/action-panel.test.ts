@@ -5,12 +5,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { dailyNoteOpenedMessage } from "../src/buddyMessages";
 import ActionPanel from "../src/components/ActionPanel.vue";
+import ScreenSourcePicker from "../src/components/ScreenSourcePicker.vue";
 import TaskDetail from "../src/components/TaskDetail.vue";
 import Tasks from "../src/components/Tasks.vue";
 import UpdateView from "../src/components/UpdateView.vue";
-import { useCaptureStore } from "../src/stores/capture";
+import { RENAME_PROMPT_MS, useCaptureStore } from "../src/stores/capture";
 import { useDocumentImportsStore } from "../src/stores/documentImports";
 import { useNotificationsStore } from "../src/stores/notifications";
+import { useScreenCaptureStore } from "../src/stores/screenCapture";
 import { useSettingsStatusStore } from "../src/stores/settingsStatus";
 import { useVaultsStore } from "../src/stores/vaults";
 
@@ -47,6 +49,37 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("Update"); // the view title
     expect(wrapper.findComponent(UpdateView).exists()).toBe(true);
     expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
+  });
+
+  it("renders the screen source picker on its own view, with a back button", () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.openScreenCapture("d4e5f6");
+    const wrapper = mount(ActionPanel, {
+      global: { stubs: { ScreenSourcePicker: true } },
+    });
+    expect(wrapper.findComponent(ScreenSourcePicker).exists()).toBe(true);
+    // A titled view, not the vault-list fallback — the fallback would also
+    // render the magnifier/cog instead of Back.
+    expect(wrapper.text()).toContain("Record screen");
+    expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="settings-toggle"]').exists()).toBe(false);
+  });
+
+  it("lights the vault row's recording dot for a SCREEN capture too", async () => {
+    // `screenCapture.vaultId` is documented as driving the vault-row
+    // indicator "exactly like the audio store's own vaultId" — but the list
+    // was passed the audio store's id alone, so the row stayed dark for the
+    // whole screen capture while the claim stood in the store's own comment.
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    useScreenCaptureStore().$patch({ status: "capturing", vaultId: "a1b2c3" });
+    const wrapper = mount(ActionPanel);
+    await flushPromises();
+    const dot = wrapper.find('[title="Recording…"]');
+    expect(dot.exists()).toBe(true);
   });
 
   it("disables the header Back button while a Task Detail write is in flight", async () => {
@@ -515,7 +548,7 @@ describe("ActionPanel", () => {
     const wrapper = mount(ActionPanel);
     const capture = useCaptureStore();
     capture.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
-    capture.lastSavedAtMs = Date.now() - 31_000; // past RENAME_PROMPT_MS
+    capture.lastSavedAtMs = Date.now() - (RENAME_PROMPT_MS + 1_000); // stale
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).toContain("name this recording");
 
@@ -533,7 +566,7 @@ describe("ActionPanel", () => {
     const wrapper = mount(ActionPanel);
     const capture = useCaptureStore();
     capture.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
-    capture.lastSavedAtMs = Date.now() - 5_000; // well within RENAME_PROMPT_MS
+    capture.lastSavedAtMs = Date.now() - RENAME_PROMPT_MS / 6; // well within it
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).toContain("name this recording");
 
@@ -738,5 +771,90 @@ describe("ActionPanel save indicator", () => {
     expect(wrapper.get('[data-testid="import-progress"]').text()).toContain(
       "Report.docx",
     );
+  });
+
+  it("shows the screen capture bar on the list view while a capture runs", async () => {
+    // docs/Gaps.md GAP-118: the screen store's live state had no renderer,
+    // and ScreenSourcePicker's onStart navigates HERE. Every bar test mounts
+    // ScreenCaptureBar directly, so none of them sees this wiring — deleting
+    // the panel's block reinstates the gap with the whole suite still green.
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.find('[data-testid="screen-elapsed"]').exists()).toBe(false);
+    useScreenCaptureStore().$patch({
+      status: "capturing",
+      sourceTitle: "Screen 1",
+      startedAtMs: Date.now(),
+    });
+    await flushPromises();
+    expect(wrapper.get('[data-testid="screen-elapsed"]').text()).toContain(
+      "Recording",
+    );
+    expect(wrapper.get('[data-testid="screen-source"]').text()).toBe("Screen 1");
+    // ...and only on the list view: a live capture must not drag the bar
+    // into every other view the panel can be sitting on.
+    store.openSearch();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="screen-elapsed"]').exists()).toBe(false);
+  });
+
+  it("offers the finished capture's Edit action on the list view", async () => {
+    // The reachability half of the entry point. `applyStopped` resets the
+    // store to `idle` and THEN parks the staged file, so a bar gated on
+    // `status !== "idle"` alone renders nothing at the one moment the Edit
+    // action exists — the editor would be unreachable from the running app
+    // with every ScreenCaptureBar test still green, because those mount the
+    // bar directly and never see this gate (the same blindness GAP-118's
+    // test above was written for).
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.find('[data-testid="screen-edit"]').exists()).toBe(false);
+    useScreenCaptureStore().applyStopped({
+      base: "cap one",
+      path: "C:/staging/cap one.mp4",
+      durationMs: 30_000,
+      sourceTitle: "Screen 1",
+      width: 1920,
+      height: 1080,
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="screen-edit"]').exists()).toBe(true);
+    // ...and only on the list view, like the live bar it replaces.
+    store.openSearch();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="screen-edit"]').exists()).toBe(false);
+  });
+
+  // T7-I1 (the task-7 review). The comment beside these two bars used to say "a sibling, never a
+  // stack", justified by the CaptureGuard. The guard excludes two LIVE
+  // captures and says nothing about a FINISHED one, and since phase 4 the
+  // screen bar outlives its capture to carry the Edit action — so recording
+  // audio after a screen capture renders both, stacked.
+  //
+  // That is the accepted behaviour, not a tolerated bug, and this test is
+  // what pins the decision: the staged row is the only handle anything has on
+  // that footage until phase 5's browser, so hiding it under a live recording
+  // would make the editor unreachable for as long as the recording runs.
+  it("stacks a finished screen capture's row above a live recording bar", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    useScreenCaptureStore().applyStopped({
+      base: "cap one",
+      path: "C:/staging/cap one.mp4",
+      durationMs: 30_000,
+      sourceTitle: "Screen 1",
+      width: 1920,
+      height: 1080,
+    });
+    useCaptureStore().$patch({ status: "recording", startedAtMs: Date.now() });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="screen-edit"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="level-meter"]').exists()).toBe(true);
   });
 });

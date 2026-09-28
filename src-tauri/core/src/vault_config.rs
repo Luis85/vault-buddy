@@ -113,6 +113,19 @@ pub struct VaultCaptureConfig {
     pub task_body_template: Option<String>,
     pub document_extra_frontmatter: Option<String>,
     pub document_body_template: Option<String>,
+    /// Screen Capture (spec §12). Additive: every field defaults so an
+    /// existing config.json parses and re-serializes unchanged.
+    pub screen_capture_folder: Option<String>,
+    pub screen_capture_date_folders: bool,
+    pub screen_quality: crate::screen_capture_config::ScreenQuality,
+    /// Only 30 or 60; anything else normalizes to 30 at parse time.
+    pub screen_fps: u32,
+    pub screen_create_note: bool,
+    pub screen_extra_frontmatter: Option<String>,
+    pub screen_body_template: Option<String>,
+    /// Keep each audio input as its own stem file beside the mixed track
+    /// (Task 53). Off by default; applies to NEW recordings only.
+    pub screen_audio_stems: bool,
 }
 
 impl Default for VaultCaptureConfig {
@@ -148,6 +161,14 @@ impl Default for VaultCaptureConfig {
             task_body_template: None,
             document_extra_frontmatter: None,
             document_body_template: None,
+            screen_capture_folder: None,
+            screen_capture_date_folders: false,
+            screen_quality: crate::screen_capture_config::ScreenQuality::Balanced,
+            screen_fps: 30,
+            screen_create_note: true,
+            screen_extra_frontmatter: None,
+            screen_body_template: None,
+            screen_audio_stems: false,
         }
     }
 }
@@ -213,6 +234,8 @@ impl VaultCaptureConfig {
     pub fn documents_root(&self) -> &str {
         self.documents_folder.as_deref().unwrap_or("Documents")
     }
+
+    // `screen_capture_root` lives in `vault_config_screen`.
 }
 
 /// Per-field parsing through serde_json::Value: the file is hand-edited,
@@ -242,7 +265,7 @@ fn parse_string_list(entry: &serde_json::Value, key: &str) -> Vec<String> {
 /// Read an optional free-text field: trimmed, blank → None (the
 /// `transcriptionVocabulary` treatment) — but preserve interior whitespace
 /// (templates are multi-line, so only the ends are trimmed).
-fn template_field(entry: &serde_json::Value, key: &str) -> Option<String> {
+pub(crate) fn template_field(entry: &serde_json::Value, key: &str) -> Option<String> {
     entry
         .get(key)
         .and_then(|v| v.as_str())
@@ -365,6 +388,8 @@ pub fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
         task_body_template: template_field(entry, "taskBodyTemplate"),
         document_extra_frontmatter: template_field(entry, "documentExtraFrontmatter"),
         document_body_template: template_field(entry, "documentBodyTemplate"),
+        // The screen fields are parsed in `vault_config_screen` (Task 53).
+        ..crate::vault_config_screen::parsed(entry)
     }
 }
 
@@ -455,6 +480,7 @@ pub fn serialize_vault_entry(v: &VaultCaptureConfig) -> serde_json::Map<String, 
     if let Some(t) = &v.document_body_template {
         entry.insert("documentBodyTemplate".to_string(), json!(t));
     }
+    crate::vault_config_screen::serialize(v, &mut entry);
     entry
 }
 
@@ -705,6 +731,14 @@ mod tests {
                 task_body_template: Some("- [ ] {{title}}".to_string()),
                 document_extra_frontmatter: Some("area: Legal".to_string()),
                 document_body_template: Some("{{content}}".to_string()),
+                screen_capture_folder: Some("Inbox/Screens".to_string()),
+                screen_capture_date_folders: true,
+                screen_quality: crate::screen_capture_config::ScreenQuality::High,
+                screen_fps: 60,
+                screen_create_note: false,
+                screen_extra_frontmatter: Some("project: Alpha".to_string()),
+                screen_body_template: Some("## Screen\n{{content}}".to_string()),
+                screen_audio_stems: true,
             },
         );
         cfg.vaults
@@ -1115,4 +1149,5 @@ mod tests {
         assert!(!json2.contains("transcriptionVocabulary"), "got: {json2}");
         assert!(!json2.contains("transcriptionVad"), "got: {json2}");
     }
+    // The screen fields' own tests moved with them to `vault_config_screen`.
 }

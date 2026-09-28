@@ -1,0 +1,575 @@
+//! The phase-4 editor's segment algebra: which spans of a staged Screen
+//! Capture play, and in what order. Pure arithmetic with no I/O (spec §4.2,
+//! §8.1).
+//!
+//! **Since Task 59 it is read, never written.** The phase-4 editor that
+//! wrote a `timeline` into the staging sidecar, and the phase-5 export that
+//! planned on it, are retired. Its PRODUCTION surface is four functions:
+//! `from_sidecar_value` (the tutorial editor's MIGRATION,
+//! `core::editor::migrate`, carries a capture's saved cut into its first
+//! project through it, and so does the staged list), `whole`,
+//! `output_duration_ms` and `is_untouched` (the staged list's "edited"
+//! label, and the `identity_detection_matches_is_untouched` cross-check in
+//! `core::editor::render_plan`'s tests).
+//!
+//! **`split_at`, `delete`, `reorder` and `to_source_ms` have NO production
+//! caller.** They are retained ONLY as the fixture record of the phase-4
+//! editor's algebra — the Rust half of `tests/fixtures/timeline-cases.json`
+//! (the `ops`/`toSourceMs` rows), which documents how every saved cut on
+//! disk was made. Nothing may start calling them; delete them together with
+//! those rows if that record is ever judged not worth keeping.
+//!
+//! Every operation returns a NEW `Timeline`, which is what made the phase-4
+//! editor's undo/redo a stack of snapshots rather than a set of inverse
+//! operations.
+
+/// A half-open span `[source_start_ms, source_end_ms)` of the staged capture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Segment {
+    pub source_start_ms: u64,
+    pub source_end_ms: u64,
+}
+
+impl Segment {
+    pub fn duration_ms(&self) -> u64 {
+        self.source_end_ms.saturating_sub(self.source_start_ms)
+    }
+}
+
+/// The ordered list of segments an editor session produces. Segments never
+/// overlap, are never empty, and may appear in any order.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Timeline {
+    pub segments: Vec<Segment>,
+}
+
+impl Timeline {
+    /// The untouched timeline: one segment spanning the whole source.
+    pub fn whole(duration_ms: u64) -> Timeline {
+        if duration_ms == 0 {
+            return Timeline {
+                segments: Vec::new(),
+            };
+        }
+        Timeline {
+            segments: vec![Segment {
+                source_start_ms: 0,
+                source_end_ms: duration_ms,
+            }],
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    pub fn output_duration_ms(&self) -> u64 {
+        self.segments.iter().map(Segment::duration_ms).sum()
+    }
+
+    /// Split the segment containing `output_ms` into two at that point.
+    ///
+    /// A split landing exactly on a segment boundary (including 0 and the
+    /// end) is a NO-OP. Allowing it would mint a zero-length segment, which
+    /// the exporter cannot encode.
+    pub fn split_at(&self, output_ms: u64) -> Timeline {
+        let mut elapsed = 0u64;
+        let mut out = Vec::with_capacity(self.segments.len() + 1);
+        // No "already split" veto is needed here: segments are disjoint and
+        // `elapsed` strictly increases across the loop, so `output_ms >
+        // elapsed && output_ms < seg_end` can hold for at most one segment.
+        // Once it does, `elapsed` becomes `seg_end`, which is already known
+        // to exceed `output_ms` — so `output_ms > elapsed` is false for
+        // every later segment regardless of a flag. (Same unreachable-guard
+        // class as `screen_geometry::clamp_to_frame`, b4162da.)
+        for seg in &self.segments {
+            let seg_end = elapsed + seg.duration_ms();
+            if output_ms > elapsed && output_ms < seg_end {
+                let cut = seg.source_start_ms + (output_ms - elapsed);
+                out.push(Segment {
+                    source_start_ms: seg.source_start_ms,
+                    source_end_ms: cut,
+                });
+                out.push(Segment {
+                    source_start_ms: cut,
+                    source_end_ms: seg.source_end_ms,
+                });
+            } else {
+                out.push(*seg);
+            }
+            elapsed = seg_end;
+        }
+        Timeline { segments: out }
+    }
+
+    /// Remove one segment. Out of range is a no-op.
+    pub fn delete(&self, index: usize) -> Timeline {
+        if index >= self.segments.len() {
+            return self.clone();
+        }
+        let mut segments = self.segments.clone();
+        segments.remove(index);
+        Timeline { segments }
+    }
+
+    /// Move the segment at `from` to position `to`. Either index out of range
+    /// is a no-op.
+    pub fn reorder(&self, from: usize, to: usize) -> Timeline {
+        if from >= self.segments.len() || to >= self.segments.len() {
+            return self.clone();
+        }
+        let mut segments = self.segments.clone();
+        let seg = segments.remove(from);
+        segments.insert(to, seg);
+        Timeline { segments }
+    }
+
+    /// Map a point on the OUTPUT timeline back to a point in the source.
+    /// `None` once `output_ms` reaches or passes the output duration — the
+    /// span is half-open, so the end itself is not a playable instant.
+    pub fn to_source_ms(&self, output_ms: u64) -> Option<u64> {
+        let mut elapsed = 0u64;
+        for seg in &self.segments {
+            let seg_end = elapsed + seg.duration_ms();
+            if output_ms < seg_end {
+                return Some(seg.source_start_ms + (output_ms - elapsed));
+            }
+            elapsed = seg_end;
+        }
+        None
+    }
+
+    /// True when this timeline is exactly the whole source, unedited — the
+    /// retired phase-5 export's fast path (spec §8.3) keyed on it; the
+    /// staged list's "edited" label and the migration's identity still do.
+    pub fn is_untouched(&self, source_duration_ms: u64) -> bool {
+        matches!(
+            self.segments.as_slice(),
+            [Segment { source_start_ms: 0, source_end_ms }] if *source_end_ms == source_duration_ms
+        )
+    }
+
+    /// Turn the staged sidecar's hand-editable `timeline` field into a real
+    /// `Timeline`.
+    ///
+    /// This is the ONE place that value is interpreted (moved here from the
+    /// retired export's shell module by the tutorial-editor migration task,
+    /// so `core::editor::migrate` — which cannot depend on the `vault-buddy`
+    /// shell crate — and the staged list read the exact same reader). Anything
+    /// malformed — absent, null, wrong-typed, a segment with a non-numeric,
+    /// negative or fractional bound — degrades to the WHOLE capture, the
+    /// same defensive-read posture as the rest of the vault domain.
+    ///
+    /// That default is safe only because `is_untouched` is the authority on
+    /// "untouched": a whole-capture timeline answers it exactly as an absent
+    /// field would. An EXPLICITLY empty segment list (`{"segments": []}`) is
+    /// NOT degraded — the user deleted everything, and the migration must
+    /// see that rather than have their recording silently restored
+    /// underneath them.
+    ///
+    /// The key names come from `Timeline`'s own `rename_all = "camelCase"`
+    /// derive, never from a hand mapping (GAP-135): a rename here has to
+    /// redden
+    /// `the_on_disk_timeline_parses_from_the_spelling_the_editor_writes`
+    /// below, rather than silently degrading every timeline on disk to the
+    /// whole capture with every other test green.
+    ///
+    /// `value` is a borrow rather than an owned `Value` (unlike the reader
+    /// this replaced) so a caller holding a `&serde_json::Value` — the
+    /// staged sidecar's own JSON, or `StagedInput::legacy_timeline` — never
+    /// has to clone it first.
+    pub fn from_sidecar_value(value: &serde_json::Value, source_duration_ms: u64) -> Timeline {
+        <Timeline as serde::Deserialize>::deserialize(value)
+            .unwrap_or_else(|_| Timeline::whole(source_duration_ms))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seg(start: u64, end: u64) -> Segment {
+        Segment {
+            source_start_ms: start,
+            source_end_ms: end,
+        }
+    }
+
+    #[test]
+    fn whole_is_one_segment_spanning_the_source() {
+        let t = Timeline::whole(5_000);
+        assert_eq!(t.segments, vec![seg(0, 5_000)]);
+        assert_eq!(t.output_duration_ms(), 5_000);
+    }
+
+    // Regression: a zero-duration source (an empty/failed capture) must not
+    // mint a zero-length segment. The same invariant as the boundary-split
+    // no-op above — a zero-length segment reaches the exporter as an
+    // unplayable frame plan (spec §8.1).
+    #[test]
+    fn whole_of_zero_duration_is_an_empty_timeline() {
+        let t = Timeline::whole(0);
+        assert!(t.is_empty());
+        assert_eq!(t.output_duration_ms(), 0);
+    }
+
+    #[test]
+    fn split_divides_the_containing_segment_at_the_playhead() {
+        let t = Timeline::whole(5_000).split_at(2_000);
+        assert_eq!(t.segments, vec![seg(0, 2_000), seg(2_000, 5_000)]);
+        assert_eq!(
+            t.output_duration_ms(),
+            5_000,
+            "a split never changes duration"
+        );
+    }
+
+    // Regression: a split exactly on a boundary must be a NO-OP, not a
+    // zero-length segment. A zero-length segment reaches the exporter and
+    // produces an unplayable file (spec §8.1).
+    #[test]
+    fn split_on_an_existing_boundary_is_a_noop() {
+        let t = Timeline::whole(5_000).split_at(2_000);
+        assert_eq!(
+            t.clone().split_at(2_000),
+            t,
+            "boundary split changes nothing"
+        );
+        assert_eq!(t.clone().split_at(0), t, "split at 0 changes nothing");
+        assert_eq!(
+            t.clone().split_at(5_000),
+            t,
+            "split at the end changes nothing"
+        );
+    }
+
+    #[test]
+    fn split_past_the_end_is_a_noop() {
+        let t = Timeline::whole(5_000);
+        assert_eq!(t.clone().split_at(9_999), t);
+    }
+
+    #[test]
+    fn delete_removes_one_segment_and_shortens_the_output() {
+        let t = Timeline::whole(5_000).split_at(2_000).delete(0);
+        assert_eq!(t.segments, vec![seg(2_000, 5_000)]);
+        assert_eq!(t.output_duration_ms(), 3_000);
+    }
+
+    #[test]
+    fn delete_out_of_range_is_a_noop() {
+        let t = Timeline::whole(5_000);
+        assert_eq!(t.clone().delete(7), t);
+    }
+
+    #[test]
+    fn deleting_the_last_segment_yields_an_empty_timeline() {
+        let t = Timeline::whole(5_000).delete(0);
+        assert!(t.is_empty());
+        assert_eq!(t.output_duration_ms(), 0);
+    }
+
+    #[test]
+    fn reorder_moves_a_segment_without_changing_duration() {
+        let t = Timeline::whole(6_000).split_at(2_000).split_at(4_000);
+        assert_eq!(
+            t.segments,
+            vec![seg(0, 2_000), seg(2_000, 4_000), seg(4_000, 6_000)]
+        );
+        let r = t.reorder(0, 2);
+        assert_eq!(
+            r.segments,
+            vec![seg(2_000, 4_000), seg(4_000, 6_000), seg(0, 2_000)]
+        );
+        assert_eq!(r.output_duration_ms(), 6_000);
+    }
+
+    #[test]
+    fn reorder_out_of_range_is_a_noop() {
+        let t = Timeline::whole(5_000).split_at(2_000);
+        assert_eq!(t.clone().reorder(0, 9), t);
+        assert_eq!(t.clone().reorder(9, 0), t);
+    }
+
+    #[test]
+    fn to_source_ms_maps_output_time_through_reordered_segments() {
+        let t = Timeline::whole(6_000)
+            .split_at(2_000)
+            .split_at(4_000)
+            .reorder(0, 2);
+        // Output now plays [2000..4000), [4000..6000), [0..2000).
+        assert_eq!(t.to_source_ms(0), Some(2_000));
+        assert_eq!(t.to_source_ms(1_500), Some(3_500));
+        assert_eq!(
+            t.to_source_ms(2_000),
+            Some(4_000),
+            "first frame of segment 2"
+        );
+        assert_eq!(
+            t.to_source_ms(4_500),
+            Some(500),
+            "inside the moved-to-last segment"
+        );
+    }
+
+    #[test]
+    fn to_source_ms_is_none_past_the_end() {
+        let t = Timeline::whole(5_000);
+        assert_eq!(t.to_source_ms(5_000), None, "end is exclusive");
+        assert_eq!(t.to_source_ms(9_999), None);
+    }
+
+    #[test]
+    fn is_untouched_only_for_a_single_full_span_segment() {
+        assert!(
+            Timeline::whole(5_000).is_untouched(5_000),
+            "the fast-path case"
+        );
+        assert!(!Timeline::whole(5_000).split_at(2_000).is_untouched(5_000));
+        assert!(!Timeline::whole(5_000).delete(0).is_untouched(5_000));
+        assert!(
+            !Timeline {
+                segments: vec![seg(0, 4_000)]
+            }
+            .is_untouched(5_000),
+            "a trimmed tail is not untouched"
+        );
+    }
+
+    // Invariant: no operation may ever produce an empty or inverted segment.
+    // Anything violating this reaches the exporter as a corrupt frame plan.
+    #[test]
+    fn every_operation_preserves_non_empty_segments() {
+        let cases = vec![
+            Timeline::whole(5_000),
+            Timeline::whole(5_000).split_at(2_500),
+            Timeline::whole(5_000).split_at(2_500).delete(0),
+            Timeline::whole(6_000)
+                .split_at(2_000)
+                .split_at(4_000)
+                .reorder(2, 0),
+        ];
+        for t in cases {
+            for s in &t.segments {
+                assert!(
+                    s.source_start_ms < s.source_end_ms,
+                    "segment {s:?} is empty or inverted"
+                );
+            }
+        }
+    }
+
+    // ---- the SHARED fixture table -------------------------------------
+    //
+    // This algebra existed twice, in two languages, until Task 59: here, and
+    // in the phase-4 editor's TypeScript (`timelineGeometry.ts` +
+    // `useEditorTimeline.ts`). Each had its own tests and no fixture in
+    // common, so a disagreement between them was invisible (docs/Gaps.md
+    // GAP-136). Running one table through both found two real
+    // disagreements, a backwards segment and `whole(0)`; both are rows
+    // below. The TypeScript half and its size guard are retired with that
+    // editor; this half stays, because every saved cut on disk was made
+    // with this algebra and the migration reads them. `include_str!` keeps
+    // it honest: move or delete the fixture and this crate stops compiling,
+    // rather than quietly testing nothing.
+    const SHARED_FIXTURES: &str = include_str!("../../../tests/fixtures/timeline-cases.json");
+
+    fn fixtures() -> serde_json::Value {
+        serde_json::from_str(SHARED_FIXTURES).expect("the shared timeline fixture table is JSON")
+    }
+
+    // Segment keys are read by the names the editor WRITES onto disk
+    // (camelCase), through `Segment`'s own `rename_all` derive -- NOT by a
+    // hand mapping. This used to be one of three independent spellings of
+    // that wire shape (GAP-135); it and `from_sidecar_value` both go
+    // through the derive, so the fixture table below cannot disagree with
+    // production about a key name. Renaming a field here fails
+    // `the_on_disk_timeline_parses_from_the_spelling_the_editor_writes`,
+    // which holds a literal of what the editor actually writes.
+    fn segments_of(v: &serde_json::Value) -> Vec<Segment> {
+        serde_json::from_value(v.clone()).expect("segments array")
+    }
+
+    #[test]
+    fn shared_fixture_table_maps_output_time_to_source_time() {
+        let table = fixtures();
+        let cases = table["cases"].as_array().expect("cases");
+        // A table nothing iterates proves nothing, and one that silently
+        // shrinks to a single row proves almost nothing.
+        assert_eq!(cases.len(), 8, "the shared table lost or gained a case");
+        for case in cases {
+            let name = case["name"].as_str().expect("name");
+            let t = Timeline {
+                segments: segments_of(&case["segments"]),
+            };
+            assert_eq!(
+                t.output_duration_ms(),
+                case["outputDurationMs"].as_u64().expect("outputDurationMs"),
+                "output duration disagrees for {name}"
+            );
+            for row in case["toSourceMs"].as_array().expect("toSourceMs") {
+                let output_ms = row[0].as_u64().expect("outputMs");
+                let expected = row[1].as_u64();
+                assert_eq!(
+                    t.to_source_ms(output_ms),
+                    expected,
+                    "to_source_ms({output_ms}) disagrees for {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shared_fixture_table_agrees_on_whole_and_on_the_operations() {
+        let table = fixtures();
+        let whole = table["whole"].as_array().expect("whole");
+        assert_eq!(whole.len(), 2, "the shared table lost a `whole` row");
+        for row in whole {
+            let duration = row["durationMs"].as_u64().expect("durationMs");
+            assert_eq!(
+                Timeline::whole(duration).segments,
+                segments_of(&row["segments"]),
+                "whole({duration}) disagrees"
+            );
+        }
+        // Every operation row that the table carries, which is how a new row
+        // becomes live on both sides at once rather than in one language.
+        let mut applied = 0;
+        for case in table["cases"].as_array().expect("cases") {
+            let name = case["name"].as_str().expect("name");
+            let t = Timeline {
+                segments: segments_of(&case["segments"]),
+            };
+            if let Some(op) = case.get("splitAt") {
+                applied += 1;
+                let at = op["outputMs"].as_u64().expect("outputMs");
+                assert_eq!(
+                    t.split_at(at).segments,
+                    segments_of(&op["segments"]),
+                    "split_at({at}) disagrees for {name}"
+                );
+            }
+            if let Some(op) = case.get("delete") {
+                applied += 1;
+                let index = op["index"].as_u64().expect("index") as usize;
+                assert_eq!(
+                    t.delete(index).segments,
+                    segments_of(&op["segments"]),
+                    "delete({index}) disagrees for {name}"
+                );
+            }
+            if let Some(op) = case.get("reorder") {
+                applied += 1;
+                let from = op["from"].as_u64().expect("from") as usize;
+                let to = op["to"].as_u64().expect("to") as usize;
+                assert_eq!(
+                    t.reorder(from, to).segments,
+                    segments_of(&op["segments"]),
+                    "reorder({from}, {to}) disagrees for {name}"
+                );
+            }
+        }
+        // Without this, a table whose operation rows were all renamed or
+        // dropped would pass by asserting nothing at all.
+        assert_eq!(applied, 6, "the shared table lost an operation row");
+    }
+
+    // The predicate the retired phase-5 export's fast path keyed on, and the
+    // staged list's "edited" label still does. It lives in the shared table
+    // so a case reshaped later cannot quietly stop exercising it.
+    #[test]
+    fn shared_fixture_table_pins_is_untouched() {
+        let table: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tests/fixtures/timeline-cases.json"))
+                .expect("fixture table parses");
+        let cases = table["cases"].as_array().expect("cases is an array");
+        assert!(!cases.is_empty(), "the fixture table is empty");
+        let mut checked = 0usize;
+        for case in cases {
+            let name = case["name"].as_str().unwrap_or("<unnamed>");
+            let timeline = Timeline {
+                segments: case["segments"]
+                    .as_array()
+                    .expect("segments is an array")
+                    .iter()
+                    .map(|s| Segment {
+                        source_start_ms: s["sourceStartMs"].as_u64().expect("sourceStartMs"),
+                        source_end_ms: s["sourceEndMs"].as_u64().expect("sourceEndMs"),
+                    })
+                    .collect(),
+            };
+            let rows = case["isUntouched"]
+                .as_array()
+                .unwrap_or_else(|| panic!("case {name:?} declares no isUntouched rows"));
+            assert!(
+                !rows.is_empty(),
+                "case {name:?} has an empty isUntouched list"
+            );
+            for row in rows {
+                let duration = row[0].as_u64().expect("sourceDurationMs");
+                let expected = row[1].as_bool().expect("expected");
+                assert_eq!(
+                    timeline.is_untouched(duration),
+                    expected,
+                    "case {name:?} at source duration {duration}"
+                );
+                checked += 1;
+            }
+        }
+        // Vacuity guard: if a refactor ever makes `rows` empty everywhere,
+        // the loop above passes while asserting nothing.
+        assert!(
+            checked >= 10,
+            "only {checked} isUntouched rows were checked"
+        );
+    }
+
+    /// GAP-135. The on-disk timeline was written by the phase-4 editor
+    /// (retired by Task 59) and is read back by `from_sidecar_value` for the
+    /// migration, whose correctness depends on the two agreeing about four
+    /// key names.
+    ///
+    /// The JSON below is a LITERAL, spelled the way the shipped editor writes
+    /// it — deliberately not a re-serialize of this struct, which would agree
+    /// with itself under any renaming and prove nothing. Dropping
+    /// `rename_all = "camelCase"` makes this fail, which is the exact defect
+    /// GAP-135 predicted: the reader stops parsing every timeline the editor
+    /// has ever written, and `from_sidecar_value` degrades silently to the
+    /// whole capture — migrating footage the user deleted back in.
+    #[test]
+    fn the_on_disk_timeline_parses_from_the_spelling_the_editor_writes() {
+        let on_disk = r#"{"segments":[{"sourceStartMs":0,"sourceEndMs":2000},{"sourceStartMs":5000,"sourceEndMs":6000}]}"#;
+        let parsed: Timeline = serde_json::from_str(on_disk).expect("the editor's own spelling");
+        assert_eq!(
+            parsed,
+            Timeline {
+                segments: vec![
+                    Segment {
+                        source_start_ms: 0,
+                        source_end_ms: 2000
+                    },
+                    Segment {
+                        source_start_ms: 5000,
+                        source_end_ms: 6000
+                    },
+                ]
+            }
+        );
+
+        // And back out under the same names, so a WRITER added later cannot
+        // emit snake_case into a file the editor then fails to read.
+        assert_eq!(serde_json::to_string(&parsed).expect("serializes"), on_disk);
+    }
+
+    /// The snake_case spelling must NOT be accepted. Without this, a
+    /// `rename_all` that is dropped and then "fixed" by teaching the editor
+    /// to write snake_case would pass the test above while silently
+    /// abandoning every timeline already on disk.
+    #[test]
+    fn the_rust_field_spelling_is_not_accepted_from_disk() {
+        let wrong = r#"{"segments":[{"source_start_ms":0,"source_end_ms":2000}]}"#;
+        assert!(serde_json::from_str::<Timeline>(wrong).is_err());
+    }
+}

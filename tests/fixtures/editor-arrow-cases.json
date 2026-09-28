@@ -1,0 +1,54 @@
+{
+  "comment": "Shared arrow geometry (tutorial-editor Task 35; F-28). Read by tests/cueGeometry.test.ts now and by screen::render::ass (Task 43, include_str!) later, so the preview's SVG arrow and the rendered ASS arrow are the SAME polygons. Inputs: x,y (tail) and x2,y2 (tip) are normalized fractions of the canvas; stroke is in canvas px. Outputs are canvas px, rounded half away from zero to 2 decimals. Rule: P0=(x*W,y*H), P1=(x2*W,y2*H), d=P1-P0, len=sqrt(dx^2+dy^2) (sqrt, not hypot: IEEE-exact in both languages); len==0 -> expected null. u=d/len, n=(-u.y,u.x). headLength=3*stroke+12, headHalfWidth=2*stroke+5; when len<headLength both scale by len/headLength. B=P1-u*headLength. shaft=[P0+n*s/2, B+n*s/2, B-n*s/2, P0-n*s/2] (s=stroke); head=[P1, B+n*headHalfWidth, B-n*headHalfWidth]. Every expected number below was computed by hand from this rule, not captured from the implementation.",
+  "cases": [
+    {
+      "name": "diagonal 3-4-5 arrow on the landscape canvas",
+      "canvas": { "width": 1280, "height": 720 },
+      "x": 0.1,
+      "y": 0.1,
+      "x2": 0.4,
+      "y2": 0.5,
+      "stroke": 5,
+      "expected": {
+        "shaft": [[126.5, 74], [488.9, 345.8], [491.9, 341.8], [129.5, 70]],
+        "head": [[512, 360], [481.4, 355.8], [499.4, 331.8]]
+      }
+    },
+    {
+      "name": "vertical upward arrow on the portrait canvas",
+      "canvas": { "width": 720, "height": 1280 },
+      "x": 0.5,
+      "y": 0.75,
+      "x2": 0.5,
+      "y2": 0.25,
+      "stroke": 8,
+      "expected": {
+        "shaft": [[364, 960], [364, 356], [356, 356], [356, 960]],
+        "head": [[360, 320], [381, 356], [339, 356]]
+      }
+    },
+    {
+      "name": "leftward arrow shorter than its head on the 4:3 canvas (head scaled down to the length)",
+      "canvas": { "width": 960, "height": 720 },
+      "x": 0.5,
+      "y": 0.5,
+      "x2": 0.48,
+      "y2": 0.5,
+      "stroke": 4,
+      "expected": {
+        "shaft": [[480, 358], [480, 358], [480, 362], [480, 362]],
+        "head": [[460.8, 360], [480, 349.6], [480, 370.4]]
+      }
+    },
+    {
+      "name": "zero-length arrow draws nothing",
+      "canvas": { "width": 1280, "height": 720 },
+      "x": 0.3,
+      "y": 0.6,
+      "x2": 0.3,
+      "y2": 0.6,
+      "stroke": 5,
+      "expected": null
+    }
+  ]
+}

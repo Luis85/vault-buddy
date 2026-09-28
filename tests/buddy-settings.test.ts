@@ -506,4 +506,24 @@ describe("BuddySettings panel size", () => {
     ).toBe("true");
     clearMocks();
   });
+  // GAP-144: the Record Screen ffmpeg notice deep-links to the card, and a
+  // route that only reached the VIEW would land the user on the Buddy tab
+  // with the card they were sent to fetch still a click away — which is the
+  // gap's own failure scenario ("follows the message into Buddy settings,
+  // finds nothing, concludes the app is broken").
+  it("opens on the tab a route deep-linked, and on Buddy when none did", () => {
+    mockIPC(() => undefined);
+    const vaults = useVaultsStore();
+    vaults.openSettings("integrations");
+    const deep = mount(BuddySettings);
+    expect(deep.get('[data-testid="tab-integrations"]').attributes("aria-selected")).toBe("true");
+    expect(deep.get('[data-testid="tab-buddy"]').attributes("aria-selected")).toBe("false");
+    // And the ffmpeg card really is the thing that tab shows.
+    expect(deep.get('[data-testid="panel-integrations"]').text()).toContain("ffmpeg");
+
+    vaults.openSettings();
+    const plain = mount(BuddySettings);
+    expect(plain.get('[data-testid="tab-buddy"]').attributes("aria-selected")).toBe("true");
+    clearMocks();
+  });
 });

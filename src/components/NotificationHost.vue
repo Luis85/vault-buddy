@@ -2,6 +2,19 @@
 import { logWarning } from "../logging";
 import type { Notification } from "../stores/notifications";
 import { useNotificationsStore } from "../stores/notifications";
+import NotificationItem from "./NotificationItem.vue";
+
+// `variant="editor"` (visual-parity Task 6, concept-spec §9.12) restyles the
+// toast for the tutorial editor window — fixed, centred, bottom 43px, a
+// single `raised` card, no low-alpha panel-window kind colours — WITHOUT
+// touching the panel window's own look, which every existing caller (and
+// `notification-host.test.ts`) keeps testing with no `variant` at all.
+// Two template branches, not one class map switched by variant: the panel
+// branch is left byte-for-byte so nothing here can leak into it by accident.
+// `NotificationItem` carries the one copy of an item's own markup either
+// branch renders, so this file stays a thin container/positioning switch.
+withDefaults(defineProps<{ variant?: "panel" | "editor" }>(), { variant: "panel" });
+
 const notifications = useNotificationsStore();
 
 // Run a toast's call-to-action (e.g. "Open" the imported note), then dismiss
@@ -19,62 +32,55 @@ async function runAction(item: Notification) {
     notifications.dismiss(item.id);
   }
 }
-// Solid, high-contrast backgrounds — NOT the old low-alpha tints
-// (bg-red-500/20 etc.). The panel window is transparent, so a ~15-20% tint
-// left the toast text barely legible ("not readable due to its transparency").
-// An opaque background makes each toast readable regardless of what shows
-// through the panel behind it.
-const cls: Record<string, string> = {
-  error: "bg-red-900 text-red-50 ring-1 ring-red-500/50",
-  warning: "bg-amber-900 text-amber-50 ring-1 ring-amber-500/50",
-  success: "bg-emerald-900 text-emerald-50 ring-1 ring-emerald-500/50",
-  info: "bg-slate-800 text-fg ring-1 ring-white/15",
-};
 </script>
 <template>
   <div
-    v-if="notifications.items.length"
+    v-if="notifications.items.length && variant === 'panel'"
     data-testid="notification-host"
     class="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex flex-col gap-1"
   >
-    <div
+    <NotificationItem
       v-for="item in notifications.items"
       :key="item.id"
-      data-testid="notification"
-      :role="item.kind === 'error' ? 'alert' : 'status'"
-      :aria-live="item.kind === 'error' ? 'assertive' : 'polite'"
-      :class="['pointer-events-auto flex items-start justify-between gap-2 rounded-control px-2 py-1 text-xs shadow-lg', cls[item.kind]]"
-    >
-      <span class="min-w-0 break-words">{{ item.message }}</span>
-      <button
-        v-if="item.action"
-        type="button"
-        data-testid="notification-action"
-        class="shrink-0 cursor-pointer rounded bg-white/15 px-1.5 py-0.5 font-medium hover:bg-white/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
-        @click="runAction(item)"
-      >
-        {{ item.action.label }}
-      </button>
-      <button
-        type="button"
-        data-testid="notification-dismiss"
-        aria-label="Dismiss"
-        class="shrink-0 cursor-pointer rounded p-0.5 hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
-        @click="notifications.dismiss(item.id)"
-      >
-        <svg
-          width="10"
-          height="10"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="3"
-          stroke-linecap="round"
-          aria-hidden="true"
-        >
-          <path d="M18 6 6 18M6 6l12 12" />
-        </svg>
-      </button>
-    </div>
+      :item="item"
+      variant="panel"
+      @run="runAction(item)"
+      @dismiss="notifications.dismiss(item.id)"
+    />
   </div>
+
+  <!-- concept-spec §9.12: fixed, centred, bottom 43px, `raised`, radius 8,
+       11/17 padding, 12px text, sliding up 15px over .16s — the global
+       `prefers-reduced-motion` rule in style.css already zeroes that
+       transition, so there is nothing extra to gate here. -->
+  <TransitionGroup
+    v-else-if="notifications.items.length"
+    tag="div"
+    name="vb-toast"
+    data-testid="notification-host"
+    class="pointer-events-none fixed inset-x-0 bottom-[43px] z-50 flex flex-col items-center gap-2"
+  >
+    <NotificationItem
+      v-for="item in notifications.items"
+      :key="item.id"
+      :item="item"
+      variant="editor"
+      @run="runAction(item)"
+      @dismiss="notifications.dismiss(item.id)"
+    />
+  </TransitionGroup>
 </template>
+
+<style scoped>
+.vb-toast-enter-active,
+.vb-toast-leave-active {
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+.vb-toast-enter-from,
+.vb-toast-leave-to {
+  opacity: 0;
+  transform: translateY(15px);
+}
+</style>

@@ -18,7 +18,7 @@ tauri-build = { version = "2", features = [] }
 gpu = ["vault_buddy_transcribe/whisper-vulkan"]
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-window-state = "2"
@@ -36,6 +36,7 @@ vault_buddy_core = { path = "core" }
 vault_buddy_capture = { path = "capture" }
 vault_buddy_transcribe = { path = "transcribe", features = ["whisper"] }
 vault_buddy_mcp = { path = "mcp" }
+vault_buddy_screen = { path = "screen" }
 crash-handler = "0.7.0"
 
 # GetKeyState for the start_buddy_drag stale-request guard. windows-sys is
@@ -47,6 +48,11 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"]
 # so Recheck sees a just-installed Pandoc without an app restart.
 winreg = "0.52"
 
+[dev-dependencies]
+# editor_commands.rs's staging-directory tests need real files on disk
+# (the screen crate's own staging.rs tests already use this).
+tempfile = "3"
+
 [workspace]
 resolver = "2"
-members = ["core", "capture", "transcribe", "mcp"]
+members = ["core", "capture", "transcribe", "mcp", "screen"]

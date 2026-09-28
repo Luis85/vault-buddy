@@ -1,6 +1,7 @@
 <!-- src/components/ui/AppButton.vue -->
 <script setup lang="ts">
-// Text button with the shared variants. Primary = accent fill; secondary =
+// Text button with the shared variants. Primary = the STRONG accent fill
+// (white on violet-500 read 4.40:1; on violet-600 5.7:1, Task 58); secondary =
 // bordered glass; ghost = text-only; danger = danger fill.
 withDefaults(
   defineProps<{
@@ -14,7 +15,7 @@ withDefaults(
 defineEmits<{ (e: "click", ev: MouseEvent): void }>();
 
 const VARIANT: Record<string, string> = {
-  primary: "bg-accent text-white hover:bg-accent-strong",
+  primary: "bg-accent-strong text-white hover:bg-accent-strong/90",
   secondary: "border border-white/10 bg-white/5 text-fg hover:bg-white/10",
   ghost: "text-fg-muted hover:bg-white/10 hover:text-fg",
   danger: "bg-danger text-white hover:opacity-90",

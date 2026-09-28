@@ -3,12 +3,14 @@
 //! empty / `/` / `\` / a leading dot, and hand-created folders skip it), and
 //! wikilinks have no escape for them — so those paths fall back to a
 //! percent-encoded markdown link whose LABEL is also escaped.
+//!
+//! The character set and the label escape live in `crate::obsidian_link`,
+//! shared with `screen_note`'s video embed, which hit the same problem from
+//! the other direction (a file named from a scraped window title).
 
 use std::path::Path;
 
-/// Characters that change a wikilink's meaning: `#` starts a heading target,
-/// `|` an alias, `[`/`]` can terminate it, `^` a block ref.
-const WIKILINK_UNSAFE: [char; 5] = ['#', '|', '[', ']', '^'];
+use crate::obsidian_link::{escape_label, is_wikilink_safe};
 
 /// `child_path` is the file the link will be WRITTEN INTO — needed only by the
 /// markdown fallback, whose destination Obsidian resolves relative to the
@@ -20,7 +22,7 @@ pub fn compose(
     parent_title: &str,
 ) -> Option<String> {
     let rel_no_ext = crate::uri::vault_relative_no_ext(parent_path, vault_root)?;
-    if !rel_no_ext.contains(WIKILINK_UNSAFE) {
+    if is_wikilink_safe(&rel_no_ext) {
         // Wikilinks resolve by vault-wide name/path lookup, never relative to the
         // containing note — no child context needed.
         return Some(format!("[[{rel_no_ext}]]"));
@@ -43,20 +45,6 @@ pub fn compose(
             .join("/"),
     );
     Some(format!("[{}]({dest}.md)", escape_label(parent_title)))
-}
-
-/// Backslash-escape the characters that would break a markdown link label.
-/// YAML quoting protects the surrounding scalar, not the Markdown parsed after
-/// YAML decoding.
-fn escape_label(title: &str) -> String {
-    let mut out = String::with_capacity(title.len());
-    for c in title.chars() {
-        if matches!(c, '\\' | '[' | ']') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
 }
 
 #[cfg(test)]

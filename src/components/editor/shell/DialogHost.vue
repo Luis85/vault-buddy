@@ -1,0 +1,243 @@
+<script setup lang="ts">
+/**
+ * The tutorial editor's focus-safe dialog host (Task 19; F-48/F-49;
+ * ARCHITECTURE-AND-STACK.md: "`ContextMenu` / `DialogHost` / `LearningCenter`
+ * / `GuideOverlay`"; ONBOARDING.md: "A modal dialog suspends the coach;
+ * closing it resumes the same lesson and restores appropriate focus … No
+ * hidden focus trap may make the editor unreachable.").
+ *
+ * A controlled component (`ContextMenu.vue`'s own contract, reused here):
+ * the caller owns `open` and this component owns focus while it is —
+ * trapping Tab inside its content, closing on Escape/backdrop only when
+ * `closable`, and restoring focus to whatever was focused the instant it
+ * opened. It never closes ITSELF; it only asks (`emit("close")`), the same
+ * "the caller flips the prop" discipline `ContextMenu` uses, so a caller
+ * that ignores the request (e.g. a Render dialog mid an unbounded
+ * operation) simply keeps the dialog open rather than fighting a second
+ * source of truth.
+ *
+ * It registers on the shared `dialogs.ts` stack (`pushDialog`/`popDialog`)
+ * so a SECOND `DialogHost` opened from inside this one's own content (a
+ * nested confirm) becomes the one Tab/Escape answers to — this instance's
+ * trap goes inert, via `isTopDialog`, until the inner one closes. Nothing
+ * here hides this instance's content while suspended; a caller that wants
+ * visual dimming for a background dialog composes that itself.
+ *
+ * `suspend`/`resume` fire exactly once per open/close pair, and the same
+ * two moments suspend and resume the guide's coach (Task 56;
+ * ONBOARDING.md: "a modal dialog suspends the coach; closing it resumes
+ * the same lesson"): `editorOnboarding.suspend()`/`resume()` count, so a
+ * confirm stacked on a dialog keeps the coach suspended until the last one
+ * closes. Focus goes back to the opener exactly as before — the coach does
+ * not take it on resume.
+ *
+ * **Shared chrome** (visual-parity Task 6; concept-spec §9): four named
+ * slots — `title`, `subtitle`, the default (body) and `footer` — over one
+ * header/body/footer frame. The header (and its ✕) render ONLY when a
+ * caller supplies `title`, so a bare confirm built straight from the
+ * default slot (this file's own generic tests) renders exactly as before —
+ * no header, no ✕, the slot content's own first control keeps initial
+ * focus. The body is the only region that scrolls (`overflow-y-auto`);
+ * header and footer are `shrink-0` flex siblings, never inside it, so
+ * neither can scroll out of view. The ✕'s accessible name is always the
+ * literal "Close" — `closeReason` only changes its tooltip, so a refusal
+ * (a publish or render in flight) is a disabled button with a reason, never
+ * a silently vanished one.
+ */
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+
+import { isTopDialog, nextDialogId, popDialog, pushDialog } from "../../../editor/dialogs";
+import { useEditorOnboardingStore } from "../../../stores/editorOnboarding";
+import DialogCloseButton from "../dialogs/DialogCloseButton.vue";
+
+const props = withDefaults(
+  defineProps<{
+    open: boolean;
+    /** An accessible name for the dialog region (`aria-label`). */
+    label: string;
+    /** Whether Escape/backdrop may close this dialog. A dialog mid an
+     * irreversible operation (a render/export in flight) passes `false` and
+     * offers its own explicit way out instead. */
+    closable?: boolean;
+    /** The dialog's own width in px (concept §9's shared chrome: `560`
+     * default, `680` checks, `960` webcam, `660` session, `870` learning
+     * center); always clamped to `95vw` so it never overflows a narrow
+     * window. */
+    width?: number;
+    /** The `data-testid` on the header's ✕ button — each migrated dialog
+     * keeps the testid its own former close control carried. */
+    closeTestid?: string;
+    /** Why the ✕ is disabled right now (`closable === false`), shown as its
+     * `title` tooltip so a caller's refusal is never a silent no-op. The
+     * accessible name stays the literal "Close" either way. */
+    closeReason?: string | null;
+    /** The body without its 20px padding and 16px gap: a dialog that draws
+     * its own regions edge to edge (the learning center, concept §9.3). */
+    flush?: boolean;
+  }>(),
+  { closable: true, width: 560, closeTestid: "dialog-close", closeReason: null, flush: false },
+);
+const emit = defineEmits<{
+  (e: "close"): void;
+  (e: "suspend"): void;
+  (e: "resume"): void;
+}>();
+
+const id = nextDialogId();
+const guide = useEditorOnboardingStore();
+const content = ref<HTMLElement | null>(null);
+/** Whatever had focus the instant this dialog opened — captured
+ * automatically, `ContextMenu.vue`'s own `invoker` precedent, rather than
+ * taken as a prop that could drift from what was actually focused. */
+let opener: HTMLElement | null = null;
+
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+function focusablesIn(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+}
+
+async function activate(): Promise<void> {
+  pushDialog({ id, closable: props.closable });
+  opener = document.activeElement as HTMLElement | null;
+  guide.suspend();
+  emit("suspend");
+  // Vue hasn't painted the `v-if="open"` content yet on the same tick this
+  // runs (the watch below fires synchronously on the prop change) — wait
+  // for it, the `ContextMenu.vue` open-watcher's own `nextTick` before
+  // reading `content`.
+  await nextTick();
+  const first = content.value ? focusablesIn(content.value)[0] : null;
+  (first ?? content.value)?.focus();
+}
+
+function deactivate(): void {
+  popDialog(id);
+  guide.resume();
+  emit("resume");
+  opener?.focus();
+  opener = null;
+}
+
+watch(
+  () => props.open,
+  (isOpen) => {
+    if (isOpen) void activate();
+    else deactivate();
+  },
+);
+onMounted(() => {
+  // The watch above only fires on a CHANGE, so a dialog that starts open
+  // (rare, but not forbidden by the contract) needs its own activation.
+  if (props.open) void activate();
+});
+onBeforeUnmount(() => {
+  // A parent that removes this component outright, without first flipping
+  // `open` to false, must not leave a dead entry on the shared stack or an
+  // un-resumed guide.
+  if (props.open) deactivate();
+});
+
+function requestClose(): void {
+  if (!props.closable || !isTopDialog(id)) return;
+  emit("close");
+}
+
+/** The Tab half of the focus trap, split out of `onKeydown` so neither
+ * function's own branching (this repo's fallow complexity ratchet) grows
+ * past the fold — Escape-vs-Tab dispatch stays in `onKeydown`, cycling the
+ * two ends of the focusable list lives here. */
+function trapTab(event: KeyboardEvent, root: HTMLElement): void {
+  const focusables = focusablesIn(root);
+  if (focusables.length === 0) {
+    // Nothing to cycle through — keep focus pinned inside the dialog rather
+    // than letting Tab escape to whatever sits behind it.
+    event.preventDefault();
+    root.focus();
+    return;
+  }
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function onKeydown(event: KeyboardEvent): void {
+  if (!isTopDialog(id)) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    requestClose();
+    return;
+  }
+  if (event.key === "Tab" && content.value) trapTab(event, content.value);
+}
+
+function onBackdrop(): void {
+  requestClose();
+}
+</script>
+
+<template>
+  <div
+    v-if="open"
+    data-testid="dialog-host"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-backdrop backdrop-blur-sm"
+    @mousedown.self="onBackdrop"
+  >
+    <div
+      ref="content"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="label"
+      data-testid="dialog-host-content"
+      tabindex="-1"
+      :style="{ width: `${width}px`, maxWidth: '95vw' }"
+      class="flex max-h-[90dvh] flex-col overflow-hidden rounded-[13px] border border-line bg-panel text-fg shadow-[var(--editor-shadow)] focus:outline-none"
+      @keydown="onKeydown"
+    >
+      <header
+        v-if="$slots.title"
+        class="flex shrink-0 items-start justify-between gap-3 border-b border-line px-5 pb-[13px] pt-[18px]"
+      >
+        <div class="min-w-0">
+          <h2 class="text-base font-semibold leading-[1.4] text-fg">
+            <slot name="title" />
+          </h2>
+          <p
+            v-if="$slots.subtitle"
+            class="mt-0.5 text-[11px] text-fg-muted"
+          >
+            <slot name="subtitle" />
+          </p>
+        </div>
+        <DialogCloseButton
+          label="Close"
+          :reason="closable ? null : (closeReason ?? 'Finish what is running first.')"
+          :data-testid="closeTestid"
+          @click="requestClose"
+        />
+      </header>
+
+      <div
+        data-testid="dialog-host-body"
+        class="flex min-h-0 flex-1 flex-col overflow-y-auto"
+        :class="flush ? '' : 'gap-4 p-5'"
+      >
+        <slot />
+      </div>
+
+      <footer
+        v-if="$slots.footer"
+        class="sticky bottom-0 flex shrink-0 items-center justify-end gap-2 border-t border-line bg-panel px-5 py-[13px] shadow-[0_-7px_12px_color-mix(in_srgb,var(--color-panel)_85%,transparent)]"
+      >
+        <slot name="footer" />
+      </footer>
+    </div>
+  </div>
+</template>

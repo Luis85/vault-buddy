@@ -1,0 +1,551 @@
+//! Save, list and reopen tutorial projects (F-40, F-44) — the durable half
+//! of the editor's session lifecycle. `editor/session_commands.rs` opens a
+//! staged capture into a session and applies commands to it, but nothing
+//! there writes `project.json` past `create_project`'s one-time mint; this
+//! module is what turns a session's in-memory edits into a persisted
+//! revision, lists what is on disk, and reopens a project by id once its
+//! session has closed.
+//!
+//! Every `#[tauri::command]` here takes `window: WebviewWindow` and calls
+//! `authz::require_editor_window(&window)?` FIRST (R8) — `authz_guard.rs`
+//! fails naming any that does not. As in `session_commands.rs`, the logic
+//! behind each command lives in an `AppHandle`-free function
+//! (`save_project_in`/`open_project_session`) so it is unit-testable on a
+//! tempdir.
+
+use std::collections::BTreeMap;
+use std::io;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use serde::Serialize;
+use tauri::{AppHandle, Manager, WebviewWindow};
+use vault_buddy_core::editor::{
+    self, sanitize, EditorError, EditorErrorCode, EditorOpenResult, EditorProjection,
+    EditorSession, Map, Record, Workspace, WorkspaceEnvelope,
+};
+use vault_buddy_core::sync_util::lock_ignoring_poison;
+
+use super::authz::{require_editor_window, require_session};
+use super::errors::internal;
+use super::journal_quarantine::note_unresumed_predecessor;
+use super::prefs_commands::{local_data, read_workspace};
+use super::project_store::SourceRecord;
+use super::recovery::load_journal;
+use super::session_commands::{missing_media, register_session_with};
+use super::store_io::{
+    self, commit_project, load_project, project_file_exists, source_base_of, ProjectSummaryDto,
+    ProjectWriter, RealWriter,
+};
+use super::webcam_finish::{FfmpegTakeIo, TakeIo};
+use super::webcam_recover::recover_after_open;
+use super::EditorState;
+
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, EditorError> + Send + 'static,
+) -> Result<T, EditorError> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| internal(format!("The editor task failed: {e}")))?
+}
+
+/// `editor_save_project`'s result (Contract reference `SaveReceipt`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveReceipt {
+    pub session_id: String,
+    pub saved_revision: u64,
+    pub project_file_id: String,
+}
+
+/// Maps a `project.json` write's `io::Error` to a wire code the frontend
+/// can act on distinctly from every other failure: **disk full** and
+/// **permission denied** are the two ordinary states a save can hit on a
+/// real machine. The disk-full test is `io_errors::is_disk_full` (GAP-216:
+/// one home for the "`StorageFull` or Windows' raw 112" question, shared
+/// with `publish::copy_error`, `media_import::copy_error`,
+/// `guide_commands::map_prefs_write_error` and `errors::write_error`).
+/// Anything else (a vanished volume, a path that became invalid mid-write,
+/// …) degrades to `internal` — this task has no test evidence to classify
+/// it more precisely.
+pub(crate) fn map_write_error(e: io::Error) -> EditorError {
+    if vault_buddy_core::editor::io_errors::is_disk_full(&e) {
+        EditorError::new(
+            EditorErrorCode::DiskFull,
+            format!("Not enough disk space to save the project: {e}"),
+        )
+    } else if e.kind() == io::ErrorKind::FileTooLarge {
+        // `store_io::commit_project`'s refusal of a file `load_project`
+        // could not read back (fix round 1): typed, and nothing written.
+        EditorError::new(
+            EditorErrorCode::InvalidProject,
+            format!("The project is too large to save: {e}"),
+        )
+    } else if e.kind() == io::ErrorKind::PermissionDenied {
+        EditorError::new(
+            EditorErrorCode::WriteDenied,
+            format!("Permission denied while saving the project: {e}"),
+        )
+    } else {
+        EditorError::new(
+            EditorErrorCode::Internal,
+            format!("Could not save the project: {e}"),
+        )
+    }
+}
+
+/// The per-session save lock (`EditorState::save_locks`'s own doc): finds
+/// — or, on a session's first save, mints — the `Arc<Mutex<()>>` keyed on
+/// `session_id`. The map mutex is held only for this lookup/insert, never
+/// across the save itself; the returned `Arc` is what the caller then locks
+/// and holds for its whole read-revision-through-commit-through-mark_saved
+/// sequence. `close_in`'s `discardProject` (`session_close.rs`) takes
+/// the SAME lock for the same reason — it must not remove the project
+/// directory out from under an in-flight save (Task 12 fix round 2,
+/// finding 2).
+///
+/// **Refuses `sessionGone` BEFORE minting anything** (fix round 2, finding
+/// 4): a lock entry created for a session id that turns out not to exist
+/// would never be pruned by `drop_session` (which only removes an entry for
+/// a session it is ACTUALLY closing), so the map would grow with every
+/// stale/bogus/already-closed id a caller ever passes. Checking first, via
+/// the same `require_session` every other caller uses, means a save (or a
+/// discard) on an unknown session leaves `save_locks` untouched.
+///
+/// **Check, insert, RE-check** (Task 12 review, carried to Task 37): the
+/// session can be dropped between the first check and the insert —
+/// `drop_session` prunes `save_locks` only for an entry that already
+/// exists, so an insert landing after its prune would be an entry nothing
+/// ever removes. Re-checking after the insert closes that: a session gone
+/// by then has its fresh entry removed here and the caller gets
+/// `sessionGone`. Neither lock is held while the other is taken, so this
+/// adds no lock-ordering rule (`drop_session` takes `sessions` then the
+/// `save_locks` map; this takes them one at a time).
+pub(crate) fn session_save_lock(
+    state: &EditorState,
+    session_id: &str,
+) -> Result<Arc<Mutex<()>>, EditorError> {
+    session_save_lock_observed(state, session_id, || {})
+}
+
+/// `session_save_lock` with `past_check` run between the first check and
+/// the insert: the window the race test opens on purpose (hardening Task
+/// 21, T-7), where a 200 ms sleep only hoped the thread had reached it.
+pub(crate) fn session_save_lock_observed(
+    state: &EditorState,
+    session_id: &str,
+    past_check: impl FnOnce(),
+) -> Result<Arc<Mutex<()>>, EditorError> {
+    drop(require_session(state, session_id)?);
+    past_check();
+    let lock = lock_ignoring_poison(&state.save_locks)
+        .entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone();
+    if let Err(gone) = require_session(state, session_id).map(drop) {
+        lock_ignoring_poison(&state.save_locks).remove(session_id);
+        return Err(gone);
+    }
+    Ok(lock)
+}
+
+/// The `AppHandle`-free half of `editor_save_project`, injectable with a
+/// `ProjectWriter` so tests can simulate a disk-full/permission-denied
+/// write without touching the real filesystem's own failure modes.
+///
+/// **Order is the whole atomicity guarantee this task's mutation check
+/// exists to pin**: the envelope is built and written FIRST, and
+/// `mark_saved` runs only once `commit_project` returns `Ok` — a save that
+/// fails must leave the session's `persistedRevision` exactly where it was,
+/// never claim a revision that was never actually written to disk.
+///
+/// **Fix round 1, finding 2**: the WHOLE function body runs under
+/// `session_save_lock`, held for the entire read-revision → commit →
+/// mark_saved sequence — without it, two concurrent saves on the SAME
+/// session can interleave (A reads revision 2, an edit advances the
+/// session to 3, B reads revision 3, and depending on which write and
+/// which `mark_saved` lands last, `persistedRevision` can end up claiming
+/// a revision that disagrees with what is actually on disk). The
+/// `sessions` mutex itself is still taken only twice, briefly, INSIDE that
+/// lock: once to read the project + confirm the revision, once afterward
+/// to mark it saved — never across the write. A revision mismatch is
+/// `revisionConflict` — the same check `EditorSession::execute` makes,
+/// applied to the save request instead of a command.
+pub(crate) fn save_project_with(
+    writer: &dyn ProjectWriter,
+    state: &EditorState,
+    root: &Path,
+    session_id: &str,
+    expected_revision: u64,
+) -> Result<SaveReceipt, EditorError> {
+    let session_lock = session_save_lock(state, session_id)?;
+    let _save_guard = lock_ignoring_poison(&session_lock);
+
+    let (project, revision) = {
+        let sessions = require_session(state, session_id)?;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| internal("session vanished under its own lock"))?;
+        let snap = session.snapshot();
+        if snap.revision != expected_revision {
+            return Err(EditorError::new(
+                EditorErrorCode::RevisionConflict,
+                format!(
+                    "expected revision {expected_revision} but the session is at {}",
+                    snap.revision
+                ),
+            ));
+        }
+        (session.project().clone(), snap.revision)
+    };
+    let project_id = project.id.clone();
+
+    // The record's `createdAt` is not owned by the in-memory session at
+    // all -- it lives only in the last saved envelope, so this reads it
+    // back rather than inventing it.
+    //
+    // Fix round 1, finding 1 (narrowed further in fix round 2, finding 1):
+    // a `load_project` failure is NOT one thing. Round 1 only special-cased
+    // `invalidProject`, which still left every OTHER failure -- a
+    // `project.json` that exists but cannot be READ (`PermissionDenied`, a
+    // Windows sharing violation), or a missing/unreadable/corrupt
+    // `sources.json` beside a perfectly valid `project.json` -- degrading
+    // and silently overwriting a file that IS there. The only condition
+    // that may still degrade is `project.json` being GENUINELY ABSENT,
+    // checked EXPLICITLY and FIRST via `project_file_exists` rather than
+    // inferred from `load_project`'s error shape: every other failure
+    // refuses the save with that error, unmodified, before anything is
+    // written. The one remaining degrade is still logged rather than
+    // swallowed (AGENTS.md's "no swallowed error" diagnostics invariant).
+    let now = chrono::Local::now().to_rfc3339();
+    let created_at = if project_file_exists(root, &project_id).map_err(|e| {
+        internal(format!(
+            "Could not save the project: could not check whether it was saved before: {e}"
+        ))
+    })? {
+        match load_project(root, &project_id) {
+            Ok((envelope, _sources)) => envelope.record.created_at,
+            Err(e) => return Err(e),
+        }
+    } else {
+        log::warn!(
+            "editor_save_project: no last-saved envelope for project {project_id:?} \
+             (project.json is absent), stamping createdAt fresh"
+        );
+        now.clone()
+    };
+
+    // Task 18 (F17): the envelope's `workspace` field is the sanitized LIVE
+    // `workspace.json` this task introduced, read through the same helper
+    // `editor_get_workspace` uses -- never a raw file read, and never the
+    // stale "last saved envelope's own workspace" this used to carry
+    // forward. `read_workspace` already degrades a missing/malformed file
+    // to the sanitized empty blob, so a project with no saved preferences
+    // yet still saves cleanly.
+    // Task 18 fix round 1, finding 2: a transient `workspace.json` read
+    // failure must not refuse the user's PROJECT save -- only
+    // `editor_get_workspace`'s own path keeps the hard error.
+    // `read_workspace` already degrades a missing/malformed file
+    // internally; this degrades every OTHER failure (permission denied, a
+    // Windows sharing violation -- exactly the class a debounced
+    // `editor_save_workspace` write racing this very read can produce,
+    // GAP-169) the same way: to the sanitized empty blob, logged rather
+    // than swallowed (AGENTS.md's diagnostics invariant), never propagated
+    // through the `?` that used to sit here.
+    let workspace = read_workspace(root, &project_id).unwrap_or_else(|e| {
+        log::warn!(
+            "editor_save_project: could not read workspace.json for project {project_id:?}, \
+             embedding the sanitized empty blob instead of refusing the project save: {}",
+            e.message
+        );
+        serde_json::json!({})
+    });
+
+    // Task 46 (ADR R5): `record.products` is assembled from the product
+    // LEDGER, which each render commits on its own. A damaged ledger
+    // refuses the save (read under this same save lock a render publishes
+    // under) rather than writing a project whose products were dropped.
+    //
+    // WITHOUT their snapshots (fix round 1): each snapshot is a whole
+    // project, so copying them made `project.json` grow with every render
+    // until it passed the load bound and the saved project could not be
+    // reopened. The schema makes `snapshot` optional and the ledger keeps
+    // every one; a package export still carries them (A17's collector).
+    let products = super::render_jobs::read_ledger(root, &project_id)?
+        .into_iter()
+        .map(|mut p| {
+            p.snapshot = None;
+            p
+        })
+        .collect();
+
+    let envelope = WorkspaceEnvelope {
+        schema: editor::WORKSPACE_SCHEMA.to_string(),
+        project,
+        workspace,
+        record: Record {
+            id: project_id.clone(),
+            revision,
+            created_at,
+            updated_at: now.clone(),
+            products,
+            extra: Map::new(),
+        },
+        saved_at: now,
+        extra: Map::new(),
+    };
+
+    commit_project(writer, root, &project_id, &envelope).map_err(map_write_error)?;
+
+    // MUTATION CHECK: calling `mark_saved` before the write above (or
+    // unconditionally, ignoring the write's Result) makes
+    // `a_failed_write_never_marks_the_session_saved` fail — the session
+    // would report a revision as persisted that a failed write never
+    // actually landed on disk.
+    let current = lock_ignoring_poison(&state.sessions)
+        .get_mut(session_id)
+        .map(|session| {
+            session.mark_saved(revision);
+            session.snapshot().revision
+        });
+    #[cfg(test)]
+    after_revision_read::run();
+    // Task 37: a save of the session's CURRENT revision leaves nothing to
+    // recover, so its journal goes (still under the save lock, so no
+    // journal write can land after this delete). A save of an OLDER
+    // revision (an edit landed during the write) keeps it: that edit exists
+    // only in memory and in the journal.
+    //
+    // The pending journal entry is deliberately NOT forgotten here (fix
+    // round 1): `editor_execute` takes no save lock, so an edit can be
+    // acknowledged and scheduled right after `current` was read above, and
+    // forgetting would drop THAT edit's only journal write. A leftover entry
+    // for a session that really is clean costs nothing — the worker takes it
+    // under this same save lock and `write_locked` writes nothing for a
+    // clean session.
+    //
+    // An unreadable journal this session never wrote is set aside, never
+    // deleted (R7; hardening Task 18 fix round 1: `remove_after_save`).
+    if current == Some(revision) {
+        let removed =
+            super::journal_quarantine::remove_after_save(state, session_id, root, &project_id);
+        if let Err(e) = removed {
+            log::warn!(
+                "editor_save_project: saved {project_id:?} but could not remove its \
+                 recovery journal: {e}"
+            );
+        }
+    }
+    Ok(SaveReceipt {
+        session_id: session_id.to_string(),
+        saved_revision: revision,
+        project_file_id: project_id,
+    })
+}
+
+/// Test-only seam (Task 37 fix round 1): runs once, on the saving thread,
+/// right after the save has read the session's current revision and
+/// released `sessions` — the exact gap an `editor_execute` can land in,
+/// since execute takes no save lock.
+#[cfg(test)]
+pub(crate) mod after_revision_read {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    pub(crate) fn set(hook: impl FnOnce() + 'static) {
+        HOOK.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn run() {
+        if let Some(hook) = HOOK.with(|h| h.borrow_mut().take()) {
+            hook();
+        }
+    }
+}
+
+pub(crate) fn save_project_in(
+    state: &EditorState,
+    root: &Path,
+    session_id: &str,
+    expected_revision: u64,
+) -> Result<SaveReceipt, EditorError> {
+    save_project_with(&RealWriter, state, root, session_id, expected_revision)
+}
+
+/// The `AppHandle`-free half of `editor_open_project`: load an existing
+/// project by id and register — or reuse — a session over it. Held under
+/// the SAME `open` lock and live-session reuse as `open_staged_session`
+/// (`session_commands.rs`'s module doc): two callers opening the same
+/// project by id must land on one session, not two racing ones, exactly
+/// the reason that lock exists for the staged-capture path.
+pub(crate) fn open_project_session(
+    state: &EditorState,
+    root: &Path,
+    project_file_id: &str,
+    use_recovery: bool,
+) -> Result<EditorOpenResult, EditorError> {
+    let io = FfmpegTakeIo::default();
+    open_project_session_with(state, root, project_file_id, use_recovery, &io)
+}
+
+/// `open_project_session` with the ffmpeg seam an interrupted webcam take's
+/// recovery uses (`webcam_recover`, GAP-197) supplied — the tests' fake.
+pub(crate) fn open_project_session_with(
+    state: &EditorState,
+    root: &Path,
+    project_file_id: &str,
+    use_recovery: bool,
+    io: &dyn TakeIo,
+) -> Result<EditorOpenResult, EditorError> {
+    let opened = open_project_locked(state, root, project_file_id, use_recovery)?;
+    // After `open` is released (review I1): a recovery can remux for minutes.
+    let projection = recover_after_open(
+        state,
+        root,
+        opened.projection,
+        opened.minted,
+        use_recovery,
+        io,
+    );
+    let missing = missing_media(root, &projection.project, &opened.sources);
+    Ok(EditorOpenResult {
+        snapshot: projection.snapshot,
+        project: projection.project,
+        workspace: opened.workspace,
+        missing,
+        source_base: source_base_of(&opened.sources),
+        recovered: opened.recovered,
+    })
+}
+
+/// What `open_project_session` does under `open`: load, then find or mint
+/// the session.
+struct LockedOpen {
+    projection: EditorProjection,
+    /// The session was minted by this open (not a live one reused).
+    minted: bool,
+    /// The session was minted from the journal (`EditorOpenResult::recovered`).
+    recovered: bool,
+    workspace: Workspace,
+    sources: BTreeMap<String, SourceRecord>,
+}
+
+fn open_project_locked(
+    state: &EditorState,
+    root: &Path,
+    project_file_id: &str,
+    use_recovery: bool,
+) -> Result<LockedOpen, EditorError> {
+    let _open = lock_ignoring_poison(&state.open);
+    super::discard::refuse_if_project_closing(state, project_file_id)?;
+    // R7 (hardening Task 10 fix round 1): open time never touches
+    // `recovery.json`, whichever way `use_recovery` goes -- the ordinary
+    // panel open passes `false` too, and quarantining here silently erased
+    // `hasRecovery` (and this whole dialog) before the user ever saw it. An
+    // unreadable journal is set aside only by the journal writer's first
+    // write or by an explicit `discardRecovery` (`recovery.rs`'s module
+    // doc) -- and so is a readable one this open does not resume (R12,
+    // below).
+    let (envelope, sources) = load_project(root, project_file_id)?;
+    let workspace = sanitize(&envelope.workspace);
+    let committed = envelope.record.revision;
+    let (projection, minted, recovered) = if use_recovery {
+        // Task 37: the journal is the working copy; the store's committed
+        // revision stays the persisted one, so the session opens DIRTY. The
+        // working revision never falls to or below the committed one (a
+        // journal older than the last save must not make time run
+        // backwards, the Task 12 monotonic-revision ruling).
+        let journal = load_journal(root, project_file_id)?;
+        let revision = journal.session_revision.max(committed + 1);
+        let (projection, minted) = register_session_with(state, journal.project, |id, project| {
+            EditorSession::resume_recovered(id, project, revision, committed)
+        });
+        (projection, minted, minted)
+    } else {
+        let (projection, minted) = register_session_with(state, envelope.project, |id, p| {
+            EditorSession::resume(id, p, committed)
+        });
+        // R12 (final review I-2): a session minted WITHOUT resuming the
+        // journal must never replace or delete it, even a readable one --
+        // the only way here past a readable journal is a Resume that failed
+        // for a transient reason, and the dialog says its file is kept.
+        if minted {
+            let session_id = &projection.snapshot.session_id;
+            note_unresumed_predecessor(state, root, session_id, project_file_id);
+        }
+        (projection, minted, false)
+    };
+    Ok(LockedOpen {
+        projection,
+        minted,
+        recovered,
+        workspace,
+        sources,
+    })
+}
+
+/// ASYNC: reads (and, on success, rewrites) `project.json` off the main
+/// thread.
+#[tauri::command]
+pub async fn editor_save_project(
+    window: WebviewWindow,
+    app: AppHandle,
+    session_id: String,
+    expected_revision: u64,
+) -> Result<SaveReceipt, EditorError> {
+    require_editor_window(&window)?;
+    let root = local_data(&app)?;
+    blocking(move || {
+        save_project_in(
+            &app.state::<EditorState>(),
+            &root,
+            &session_id,
+            expected_revision,
+        )
+    })
+    .await
+}
+
+/// ASYNC: a `read_dir` of the store plus one `project.json` parse per
+/// project — `store_io::list_projects`, already sorted `updatedAt` desc.
+#[tauri::command]
+pub async fn editor_list_projects(
+    window: WebviewWindow,
+    app: AppHandle,
+) -> Result<Vec<ProjectSummaryDto>, EditorError> {
+    require_editor_window(&window)?;
+    let root = local_data(&app)?;
+    blocking(move || Ok(store_io::list_projects(&root))).await
+}
+
+/// ASYNC: reads `project.json` (and, with `use_recovery`, `recovery.json`
+/// as the working copy — Task 37) and registers (or reuses) a session.
+#[tauri::command]
+pub async fn editor_open_project(
+    window: WebviewWindow,
+    app: AppHandle,
+    project_file_id: String,
+    use_recovery: bool,
+) -> Result<EditorOpenResult, EditorError> {
+    require_editor_window(&window)?;
+    let root = local_data(&app)?;
+    let opened = blocking(move || {
+        open_project_session(
+            &app.state::<EditorState>(),
+            &root,
+            &project_file_id,
+            use_recovery,
+        )
+    })
+    .await?;
+    // GAP-208: a reload of the editor webview reopens this project.
+    crate::editor_commands::note_editor_opened(&window, &opened.snapshot.project_id);
+    Ok(opened)
+}
+
+#[cfg(test)]
+#[path = "save_commands_tests.rs"]
+mod tests;

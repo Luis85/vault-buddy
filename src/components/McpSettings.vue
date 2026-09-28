@@ -31,8 +31,9 @@ onMounted(async () => {
   } catch (e) {
     // not running under Tauri (unit tests) or IPC failure — leave the card
     // empty. Warn-level like every other degraded-but-continuing component
-    // path (CaptureSettings/Tasks); logError is reserved for main.ts's
-    // uncaught-vue-error hook.
+    // path (CaptureSettings/Tasks); logError is module-private to
+    // src/logging.ts — main.ts's uncaught-vue-error hook calls the exported
+    // logVueError instead.
     logWarning(`mcp settings: get_mcp_config failed: ${String(e)}`);
   }
   try {

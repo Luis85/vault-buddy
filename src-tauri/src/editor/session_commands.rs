@@ -1,0 +1,675 @@
+//! The editor's session lifecycle over IPC (F-01, F-13): open a staged
+//! capture into a project + session, fetch a snapshot, execute a command,
+//! close the session, hide the window.
+//!
+//! Every `#[tauri::command]` here takes `window: WebviewWindow` and calls
+//! `authz::require_editor_window(&window)?` FIRST (R8) — `authz_guard.rs`
+//! fails naming any that does not. The logic behind each command lives in
+//! an `AppHandle`-free function (`open_staged_in`, `execute_in`, …) so it
+//! is unit-testable on a tempdir, the `clear_staged` / `discard_conflict`
+//! precedent.
+//!
+//! **Lock order**: `open` (outermost, held across an open's disk I/O by
+//! design), then `by_project`, then `sessions`. The two maps are never held
+//! across disk I/O: every function here does its disk work first and takes
+//! them only for the in-memory register/apply/remove.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+use serde::Deserialize;
+use tauri::{AppHandle, Manager, WebviewWindow};
+use vault_buddy_core::editor::commands::CommandContext;
+use vault_buddy_core::editor::{
+    migrate, new_entity_id, new_project_id, sanitize, validate_project, EditorCommand, EditorError,
+    EditorErrorCode, EditorOpenResult, EditorProjection, EditorSession, ExecuteRequest,
+    MissingMedia, Project, WorkspaceEnvelope,
+};
+use vault_buddy_core::sync_util::lock_ignoring_poison;
+use vault_buddy_screen::{staging, staging_files};
+
+use super::authz::{require_editor_window, require_session};
+use super::errors::{err, internal};
+use super::prefs_commands::{local_data, project_id_for};
+use super::project_store::{
+    pin_staged, pinned_project, project_dir, resolve_source, SourceLocator, SourceMediaKind,
+    SourceRecord,
+};
+use super::recovery;
+use super::redact::redact_name;
+use super::store_io::{create_project, list_projects, load_project, load_sources};
+use super::webcam_finish::{FfmpegTakeIo, TakeIo};
+use super::webcam_recover::recover_after_open;
+use super::EditorState;
+use crate::editor_commands::{is_safe_base, unsafe_base_reason};
+
+/// The asset id `migrate::from_staged` gives the capture itself, and so the
+/// key its `sources.json` entry lives under.
+const STAGED_ASSET_ID: &str = "src";
+
+/// F7's refusal, verbatim from the brief.
+const UNKNOWN_LENGTH: &str = "This recording's original data is gone — its length is unknown, \
+     so it cannot be edited. You can still discard it.";
+
+/// A project on disk, as `open_staged_in` found or made it.
+pub(crate) struct OpenedProject {
+    pub envelope: WorkspaceEnvelope,
+    pub sources: BTreeMap<String, SourceRecord>,
+}
+
+/// Find — or, failing that, mint — the project editing staged capture
+/// `base` (R6). `root` is the app's local data dir (the store lives at
+/// `root/editor-projects`); `staging_dir` is the staging directory.
+///
+/// In order, and every refusal lands BEFORE anything is created or pinned:
+/// an unsafe base, a missing sidecar, a sidecar whose own `base` disagrees
+/// with the name it was read from, and (F7) a recovered or zero-length
+/// capture — migrated as-is it would become an empty project, pinned for
+/// good, whose capture nobody could ever discard again.
+///
+/// Then: a pin naming a project that still exists reopens it (a duplicated
+/// `editor:open` never mints a second project); otherwise a project whose
+/// `sources.json` already names this capture is ADOPTED and re-pinned — the
+/// crash-between-create-and-pin case, where the project landed and the pin
+/// did not; only if neither exists is a new one migrated, created, and THEN
+/// pinned.
+pub(crate) fn open_staged_in(
+    root: &Path,
+    staging_dir: &Path,
+    base: &str,
+) -> Result<OpenedProject, EditorError> {
+    if !is_safe_base(base) {
+        // The reason is a fixed category, never the name itself.
+        let reason = unsafe_base_reason(base).unwrap_or("unsafe");
+        log::warn!(
+            "editor_open_staged: refused an unsafe capture name ({reason}) {}",
+            redact_name(base)
+        );
+        return Err(err(
+            EditorErrorCode::InvalidRequest,
+            "That capture name is not one of ours.",
+        ));
+    }
+    let sidecar = staging::read_sidecar(&staging_dir.join(staging::sidecar_file_name(base)))
+        .ok_or_else(|| {
+            err(
+                EditorErrorCode::SourceMissing,
+                "That staged capture is no longer on disk.",
+            )
+        })?;
+    if sidecar.base != base {
+        return Err(err(
+            EditorErrorCode::InvalidRequest,
+            "That capture's details do not match its name.",
+        ));
+    }
+    if crate::staged_commands::summary_is_recovered(&sidecar.extra) || sidecar.duration_ms == 0 {
+        return Err(err(EditorErrorCode::InvalidRequest, UNKNOWN_LENGTH));
+    }
+
+    if let Some(pid) = pinned_project(&sidecar) {
+        if project_dir(root, &pid).is_some_and(|d| d.is_dir()) {
+            // Final review I3: a pinned project that cannot be this
+            // capture's (damaged files, or a hand-edited pin naming another
+            // capture's project) must not strand the capture — the pin
+            // would refuse its Discard for good. It is left in place (the
+            // editor's "Discard this project" removes it) and the capture
+            // is adopted or migrated below, which re-pins it.
+            match load_opened(root, &pid).and_then(|o| ensure_sources_name(o, base)) {
+                Ok(opened) => return Ok(opened),
+                Err(e) if e.code == EditorErrorCode::InvalidProject => log::warn!(
+                    "editor_open_staged: {} is pinned to project {pid:?}, which cannot open it \
+                     ({}); giving it a project of its own",
+                    redact_name(base),
+                    e.message
+                ),
+                Err(e) => return Err(e),
+            }
+        } else {
+            log::warn!(
+                "editor_open_staged: {} is pinned to missing project {pid:?}; re-adopting",
+                redact_name(base)
+            );
+        }
+    }
+
+    if let Some(orphan) = list_projects(root)
+        .into_iter()
+        .find(|p| p.source_base.as_deref() == Some(base))
+    {
+        let opened = load_opened(root, &orphan.project_file_id)?;
+        pin(staging_dir, base, &orphan.project_file_id)?;
+        return Ok(opened);
+    }
+
+    let project_id = new_project_id();
+    let webcam = staged_webcam(staging_dir, &sidecar);
+    let (stems, stem_sources) = staged_stems(staging_dir, &sidecar);
+    let migration = migrate::from_staged(
+        &migrate::StagedInput {
+            base,
+            vault_id: &sidecar.vault_id,
+            source_title: &sidecar.source_title,
+            duration_ms: sidecar.duration_ms,
+            width: sidecar.width,
+            height: sidecar.height,
+            has_audio: !sidecar.inputs.is_empty(),
+            legacy_timeline: sidecar.timeline.as_ref(),
+            stems: &stems,
+            input_count: sidecar.inputs.len(),
+            webcam: webcam.as_ref().map(|(input, _)| input.clone()),
+        },
+        &project_id,
+    );
+    if migration.dropped_segments > 0 {
+        log::warn!(
+            "editor_open_staged: {} had {} backwards segment(s), dropped in migration",
+            redact_name(base),
+            migration.dropped_segments
+        );
+    }
+    validate_project(&migration.project)?;
+    let size = std::fs::metadata(staging_dir.join(staging::mp4_file_name(base)))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let mut sources = BTreeMap::new();
+    sources.insert(
+        STAGED_ASSET_ID.to_string(),
+        SourceRecord {
+            locator: SourceLocator::Staging {
+                base: base.to_string(),
+            },
+            sha256: None,
+            size,
+            duration_ms: sidecar.duration_ms,
+            width: Some(sidecar.width),
+            height: Some(sidecar.height),
+            has_audio: !sidecar.inputs.is_empty(),
+            has_video: true,
+            media_kind: SourceMediaKind::Video,
+            replaced_from: None,
+        },
+    );
+    if let Some((_, record)) = webcam {
+        sources.insert(migrate::WEBCAM_ASSET_ID.to_string(), record);
+    }
+    // Only the stems migration PLACED (all of them, or none).
+    sources.extend(
+        stem_sources
+            .into_iter()
+            .filter(|(id, _)| migration.project.assets.iter().any(|a| &a.id == id)),
+    );
+    create_project(root, &migration.project, &sources)
+        .map_err(|e| internal(format!("Could not create the project: {e}")))?;
+    pin(staging_dir, base, &project_id)?;
+    load_opened(root, &project_id)
+}
+
+/// The capture's synchronized webcam track (F-22, F26) as migration input,
+/// with the `StagingFile` source record that makes its file resolvable —
+/// or `None`: no `webcam` block, a block naming any file but this
+/// capture's own `<base>.webcam.mp4` (the sidecar is hand-editable, and a
+/// record that could never resolve is worse than no webcam), or no length.
+///
+/// Its length is the block's MEASURED `duration_ms` (GAP-199: a webcam that
+/// vanished mid-capture finalized early, and deriving its length from the
+/// capture would run the clip past the media's end). A block written before
+/// that field existed falls back to the capture's length from `offset_ms`
+/// on: both streams stamp from the one `CaptureClock` and stop on the one
+/// Stop (ADR §4).
+fn staged_webcam(
+    staging_dir: &Path,
+    sidecar: &staging::StagedSidecar,
+) -> Option<(migrate::WebcamInput, SourceRecord)> {
+    let webcam = sidecar.webcam.as_ref()?;
+    if webcam.file != staging::webcam_file_name(&sidecar.base) {
+        log::warn!(
+            "editor_open_staged: {}'s webcam block names {}, not its own webcam file; ignored",
+            redact_name(&sidecar.base),
+            redact_name(&webcam.file)
+        );
+        return None;
+    }
+    let length = match webcam.duration_ms {
+        Some(measured) => i128::from(measured),
+        None => i128::from(sidecar.duration_ms) - i128::from(webcam.offset_ms),
+    };
+    let Some(duration_ms) = u64::try_from(length).ok().filter(|ms| *ms > 0) else {
+        log::warn!(
+            "editor_open_staged: {}'s webcam starts at {} ms, not before the capture ends at {} ms; ignored",
+            redact_name(&sidecar.base),
+            webcam.offset_ms,
+            sidecar.duration_ms
+        );
+        return None;
+    };
+    // An unreadable size is recorded as 0 ("unknown", GAP-182's posture) —
+    // the record still resolves, and `missing_media` reports a file that is
+    // really gone — but never silently.
+    let size = match std::fs::metadata(staging_dir.join(&webcam.file)) {
+        Ok(meta) => meta.len(),
+        Err(e) => {
+            log::warn!(
+                "editor_open_staged: cannot read {}'s webcam file {}: {e}",
+                redact_name(&sidecar.base),
+                redact_name(&webcam.file)
+            );
+            0
+        }
+    };
+    let input = migrate::WebcamInput {
+        duration_ms,
+        width: webcam.width,
+        height: webcam.height,
+        file: webcam.file.clone(),
+        offset_ms: webcam.offset_ms,
+    };
+    let record = SourceRecord {
+        locator: SourceLocator::StagingFile {
+            base: sidecar.base.clone(),
+            file: webcam.file.clone(),
+        },
+        sha256: None,
+        size,
+        duration_ms,
+        width: Some(webcam.width),
+        height: Some(webcam.height),
+        // The webcam sink is video-only (ADR §4); the capture's sound lives
+        // on the screen track.
+        has_audio: false,
+        has_video: true,
+        media_kind: SourceMediaKind::Video,
+        replaced_from: None,
+    };
+    Some((input, record))
+}
+
+/// The capture's per-input audio stems (Task 53; F-05, F26) as migration
+/// input, each with the `StagingFile` source record that makes its file
+/// resolvable. The sidecar's list is hand-editable, so an entry is kept only
+/// when its file is one the capture OWNS (`capture_file_names` over that
+/// same list — which admits only this base's own stem shape), is the FIRST
+/// entry for its index AND its file, and is a plain file on disk (review fix
+/// round 1: a missing or doubled file must not stand in for an input). A stem
+/// spans the whole mixed track (only complete stems are published), so its
+/// length is the capture's. Migration places them only if they cover every
+/// input; the caller registers only the ones it placed.
+fn staged_stems(
+    staging_dir: &Path,
+    sidecar: &staging::StagedSidecar,
+) -> (Vec<migrate::StemInput>, Vec<(String, SourceRecord)>) {
+    let owned = staging_files::capture_file_names(&sidecar.base, &sidecar.stem_files());
+    let mut seen = BTreeSet::new();
+    let mut seen_files = BTreeSet::new();
+    let mut inputs = Vec::new();
+    let mut records = Vec::new();
+    for stem in &sidecar.stems {
+        if !owned.contains(&stem.file)
+            || !seen.insert(stem.index)
+            || !seen_files.insert(stem.file.as_str())
+        {
+            log::warn!(
+                "editor_open_staged: {}'s stem entry {} names {}, which it does not own; ignored",
+                redact_name(&sidecar.base),
+                stem.index,
+                redact_name(&stem.file)
+            );
+            continue;
+        }
+        // No-follow: a link wearing a stem's name is not the capture's file.
+        let size = match std::fs::symlink_metadata(staging_dir.join(&stem.file)) {
+            Ok(meta) if meta.file_type().is_file() => meta.len(),
+            other => {
+                log::warn!(
+                    "editor_open_staged: stem {} is not a file on disk ({:?}); not registered",
+                    redact_name(&stem.file),
+                    other.err().map(|e| e.kind())
+                );
+                continue;
+            }
+        };
+        inputs.push(migrate::StemInput {
+            index: stem.index,
+            input: stem.input.clone(),
+            file: stem.file.clone(),
+        });
+        let record = SourceRecord {
+            locator: SourceLocator::StagingFile {
+                base: sidecar.base.clone(),
+                file: stem.file.clone(),
+            },
+            sha256: None,
+            size,
+            duration_ms: sidecar.duration_ms,
+            width: None,
+            height: None,
+            has_audio: true,
+            has_video: false,
+            media_kind: SourceMediaKind::Audio,
+            replaced_from: None,
+        };
+        records.push((migrate::stem_asset_id(stem.index), record));
+    }
+    (inputs, records)
+}
+
+/// The pin is a claim made by a hand-editable sidecar: refuse a project
+/// whose own `sources.json` names a DIFFERENT staged capture (or none), so
+/// opening one capture can never open — and later edit or discard — another
+/// capture's project.
+fn ensure_sources_name(opened: OpenedProject, base: &str) -> Result<OpenedProject, EditorError> {
+    let staged: Vec<&str> = opened
+        .sources
+        .values()
+        .filter_map(|r| match &r.locator {
+            SourceLocator::Staging { base } => Some(base.as_str()),
+            _ => None,
+        })
+        .collect();
+    if staged.contains(&base) {
+        return Ok(opened);
+    }
+    Err(err(
+        EditorErrorCode::InvalidProject,
+        "This capture is linked to a project that edits a different capture.",
+    ))
+}
+
+fn load_opened(root: &Path, id: &str) -> Result<OpenedProject, EditorError> {
+    let (envelope, sources) = load_project(root, id)?;
+    Ok(OpenedProject { envelope, sources })
+}
+
+fn pin(staging_dir: &Path, base: &str, project_id: &str) -> Result<(), EditorError> {
+    pin_staged(staging_dir, base, project_id)
+        .map_err(|e| internal(format!("Could not link the capture to its project: {e}")))
+}
+
+/// The sources a project references whose file is not on disk. A `Builtin`
+/// source has no file by design and is never "missing".
+pub(crate) fn missing_media(
+    root: &Path,
+    project: &Project,
+    sources: &BTreeMap<String, SourceRecord>,
+) -> Vec<MissingMedia> {
+    sources
+        .iter()
+        .filter(|(_, r)| r.locator != SourceLocator::Builtin)
+        .filter(|(_, r)| !resolve_source(root, &project.id, r).is_some_and(|p| p.is_file()))
+        .map(|(asset_id, r)| MissingMedia {
+            asset_id: asset_id.clone(),
+            name: project
+                .assets
+                .iter()
+                .find(|a| &a.id == asset_id)
+                .map_or_else(|| asset_id.clone(), |a| a.name.clone()),
+            expected_size: r.size,
+            expected_duration_ms: r.duration_ms,
+        })
+        .collect()
+}
+
+/// Register a session over `project`, or return the LIVE one already open on
+/// it — a second open must not fork the project into two sessions whose
+/// saves would race. A freshly minted session RESUMES at `revision` — the
+/// on-disk envelope's own `record.revision` the caller just read (Task 12
+/// fix round 1, controller ruling): `record.revision` is monotonic across a
+/// project's WHOLE life, not just one session's, so reopening a project
+/// saved at revision 3 must resume its session AT 3, never reset to 1. A
+/// freshly MINTED project's own envelope (via `create_project`) also
+/// carries `record.revision: 1`, so callers pass that same on-disk value
+/// uniformly for both cases — there is no separate "fresh" path here.
+/// `persisted_revision` starts at `Some(revision)`: what is in memory is
+/// exactly what was just read off disk.
+pub(crate) fn register_session(
+    state: &EditorState,
+    project: Project,
+    revision: u64,
+) -> EditorProjection {
+    register_session_with(state, project, |id, project| {
+        EditorSession::resume(id, project, revision)
+    })
+    .0
+}
+
+/// `register_session`'s find-or-mint, with the session a fresh mint starts
+/// as supplied by `make` (Task 37: a recovered open starts DIRTY). The
+/// boolean is whether `make` ran — `false` means a live session was reused.
+pub(crate) fn register_session_with(
+    state: &EditorState,
+    project: Project,
+    make: impl FnOnce(String, Project) -> EditorSession,
+) -> (EditorProjection, bool) {
+    let mut by_project = lock_ignoring_poison(&state.by_project);
+    let mut sessions = lock_ignoring_poison(&state.sessions);
+    if let Some(live) = by_project
+        .get(&project.id)
+        .and_then(|sid| sessions.get(sid))
+    {
+        return (EditorProjection::of(live), false);
+    }
+    let session_id = new_entity_id("ses");
+    let project_id = project.id.clone();
+    let session = make(session_id.clone(), project);
+    let projection = EditorProjection::of(&session);
+    sessions.insert(session_id.clone(), session);
+    by_project.insert(project_id, session_id);
+    (projection, true)
+}
+
+/// `open_staged_in` + `register_session` + the open result.
+pub(crate) fn open_staged_session(
+    state: &EditorState,
+    root: &Path,
+    staging_dir: &Path,
+    base: &str,
+) -> Result<EditorOpenResult, EditorError> {
+    open_staged_session_with(state, root, staging_dir, base, &FfmpegTakeIo::default())
+}
+
+/// `open_staged_session` with the ffmpeg seam an interrupted webcam take's
+/// recovery uses (`webcam_recover`, GAP-197) supplied — the tests' fake.
+pub(crate) fn open_staged_session_with(
+    state: &EditorState,
+    root: &Path,
+    staging_dir: &Path,
+    base: &str,
+    io: &dyn TakeIo,
+) -> Result<EditorOpenResult, EditorError> {
+    let (projection, minted, workspace, sources) = {
+        // Held until the session is registered: the open lock (outermost;
+        // see `EditorState`) serializes find-or-mint + pin + register.
+        let _open = lock_ignoring_poison(&state.open);
+        let opened = open_staged_in(root, staging_dir, base)?;
+        super::discard::refuse_if_project_closing(state, &opened.envelope.project.id)?;
+        let workspace = sanitize(&opened.envelope.workspace);
+        let revision = opened.envelope.record.revision;
+        let (projection, minted) =
+            register_session_with(state, opened.envelope.project, |id, project| {
+                EditorSession::resume(id, project, revision)
+            });
+        // R12: this open never resumes a journal the project may still hold.
+        if minted {
+            let (sid, pid) = (&projection.snapshot.session_id, &projection.project.id);
+            super::journal_quarantine::note_unresumed_predecessor(state, root, sid, pid);
+        }
+        (projection, minted, workspace, opened.sources)
+    };
+    // After `open` is released (review I1): a recovery can remux for minutes.
+    let projection = recover_after_open(state, root, projection, minted, false, io);
+    let missing = missing_media(root, &projection.project, &sources);
+    Ok(EditorOpenResult {
+        snapshot: projection.snapshot,
+        project: projection.project,
+        workspace,
+        missing,
+        source_base: Some(base.to_string()),
+        recovered: false,
+    })
+}
+
+/// The ids of every asset whose `sources.json` record has an audio stream
+/// — `CommandContext::assets_with_audio` (Task 27, F15), the ONE place a
+/// shell fact crosses into a core call. A staged capture's record says
+/// what its sidecar recorded (`hasAudio` = it had audio inputs), an
+/// imported file's what ffprobe found, so a detach agrees with the media
+/// either way.
+///
+/// Read only for a command that consults it (today `detachAudio`): every
+/// other edit keeps working when `sources.json` is unreadable, and a
+/// detach against an unreadable one is refused with the read's own error
+/// rather than a misleading "no audio".
+fn assets_with_audio(
+    root: &Path,
+    project_id: &str,
+    command: &EditorCommand,
+) -> Result<BTreeSet<String>, EditorError> {
+    if !matches!(command, EditorCommand::DetachAudio(_)) {
+        return Ok(BTreeSet::new());
+    }
+    Ok(load_sources(root, project_id)?
+        .into_iter()
+        .filter(|(_, record)| record.has_audio)
+        .map(|(id, _)| id)
+        .collect())
+}
+
+/// The apply behind `editor_execute`: `sources.json` is read (when the
+/// command needs it) BEFORE the session mutex is taken, which is then held
+/// for the apply and the projection clone, nothing else.
+pub(crate) fn execute_in(
+    state: &EditorState,
+    root: &Path,
+    request: &ExecuteRequest,
+) -> Result<EditorProjection, EditorError> {
+    let project_id = project_id_for(state, &request.session_id)?;
+    let with_audio = assets_with_audio(root, &project_id, &request.command)?;
+    let ctx = CommandContext {
+        assets_with_audio: &with_audio,
+    };
+    let mut sessions = require_session(state, &request.session_id)?;
+    let session = sessions
+        .get_mut(&request.session_id)
+        .ok_or_else(|| internal("session vanished under its own lock"))?;
+    session.execute(request, &ctx)?;
+    let projection = EditorProjection::of(session);
+    drop(sessions);
+    // Task 37: every acknowledged command schedules the recovery journal.
+    recovery::note_acknowledged(state, root, &request.session_id);
+    Ok(projection)
+}
+
+pub(crate) fn snapshot_in(
+    state: &EditorState,
+    session_id: &str,
+) -> Result<EditorProjection, EditorError> {
+    let sessions = require_session(state, session_id)?;
+    let session = sessions
+        .get(session_id)
+        .ok_or_else(|| internal("session vanished under its own lock"))?;
+    Ok(EditorProjection::of(session))
+}
+
+/// How `editor_close_session` leaves the project behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CloseDisposition {
+    Keep,
+    DiscardRecovery,
+    DiscardProject,
+}
+
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, EditorError> + Send + 'static,
+) -> Result<T, EditorError> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| internal(format!("The editor task failed: {e}")))?
+}
+
+/// ASYNC: reads a sidecar and may create a project directory, write two
+/// files and rewrite the sidecar.
+#[tauri::command]
+pub async fn editor_open_staged(
+    window: WebviewWindow,
+    app: AppHandle,
+    staged_base: String,
+) -> Result<EditorOpenResult, EditorError> {
+    require_editor_window(&window)?;
+    let root = local_data(&app)?;
+    let opened = blocking(move || {
+        let staging_dir = staging::staging_dir(&root);
+        open_staged_session(
+            &app.state::<EditorState>(),
+            &root,
+            &staging_dir,
+            &staged_base,
+        )
+    })
+    .await?;
+    // GAP-208: a reload of the editor webview reopens this capture's project.
+    crate::editor_commands::note_editor_opened(&window, &opened.snapshot.project_id);
+    Ok(opened)
+}
+
+/// `knownRevision` is accepted for the contract (a later task may answer
+/// "unchanged" without the graph); today the full projection is returned.
+#[tauri::command]
+pub async fn editor_get_snapshot(
+    window: WebviewWindow,
+    app: AppHandle,
+    session_id: String,
+    known_revision: Option<u64>,
+) -> Result<EditorProjection, EditorError> {
+    require_editor_window(&window)?;
+    let _ = known_revision;
+    snapshot_in(&app.state::<EditorState>(), &session_id)
+}
+
+/// ASYNC on the blocking pool: apply + validate can walk a large graph.
+#[tauri::command]
+pub async fn editor_execute(
+    window: WebviewWindow,
+    app: AppHandle,
+    request: ExecuteRequest,
+) -> Result<EditorProjection, EditorError> {
+    require_editor_window(&window)?;
+    let root = local_data(&app)?;
+    blocking(move || execute_in(&app.state::<EditorState>(), &root, &request)).await
+}
+
+/// ASYNC: `discardProject` unlinks a project directory.
+#[tauri::command]
+pub async fn editor_close_session(
+    window: WebviewWindow,
+    app: AppHandle,
+    session_id: String,
+    disposition: CloseDisposition,
+) -> Result<(), EditorError> {
+    require_editor_window(&window)?;
+    let root = local_data(&app)?;
+    let closed = blocking(move || {
+        let state = app.state::<EditorState>();
+        let project_id = project_id_for(&state, &session_id)?;
+        let staging_dir = staging::staging_dir(&root);
+        super::session_close::close_in(&state, &root, &staging_dir, &session_id, disposition)?;
+        Ok(project_id)
+    })
+    .await?;
+    // GAP-208: a closed project is not what a reload reopens.
+    crate::editor_commands::note_editor_closed(&window, &closed);
+    Ok(())
+}
+
+/// SYNC: a window call, so it runs on the main thread; it never blocks.
+#[tauri::command]
+pub fn editor_hide_window(window: WebviewWindow) -> Result<(), EditorError> {
+    require_editor_window(&window)?;
+    window
+        .hide()
+        .map_err(|e| internal(format!("Could not hide the editor: {e}")))
+}
+
+#[cfg(test)]
+#[path = "session_commands_tests.rs"]
+mod tests;

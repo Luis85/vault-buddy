@@ -553,9 +553,8 @@ mod tests {
         if bypassed {
             let _ = Command::new("chattr").arg("-i").arg(&team).status();
             let _ = std::fs::remove_file(team.join(".probe"));
-            eprintln!(
-                "SKIPPED delete_task_list_repairs_a_landed_child_despite_a_propagated_removal_failure: \
-                 chattr +i had no effect here (unsupported filesystem or missing chattr)"
+            crate::services::tasks::test_announce::announce_skip(
+                "chattr +i had no effect here (unsupported filesystem or missing chattr)",
             );
             return;
         }

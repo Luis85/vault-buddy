@@ -8,7 +8,9 @@ describe("AppButton", () => {
     const w = mount(AppButton, { slots: { default: "Save" } });
     expect(w.text()).toBe("Save");
     expect(w.get("button").attributes("type")).toBe("button");
-    expect(w.get("button").classes()).toContain("bg-accent");
+    // The STRONG accent: white on violet-500 read 4.40:1 (Task 58, GAP-209).
+    expect(w.get("button").classes()).toContain("bg-accent-strong");
+    expect(w.get("button").classes()).not.toContain("bg-accent");
   });
 
   it("applies the secondary variant classes", () => {

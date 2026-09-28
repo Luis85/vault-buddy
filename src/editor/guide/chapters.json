@@ -1,0 +1,44 @@
+[
+  {
+    "id": "orient",
+    "title": "Find your way",
+    "subtitle": "Media, preview & timeline",
+    "icon": "compass"
+  },
+  {
+    "id": "edit",
+    "title": "Make the first edit",
+    "subtitle": "Select, split, undo & arrange",
+    "icon": "scissors"
+  },
+  {
+    "id": "layers",
+    "title": "Build your scene",
+    "subtitle": "Tracks, webcam & layout",
+    "icon": "layers"
+  },
+  {
+    "id": "polish",
+    "title": "Smooth the edges",
+    "subtitle": "Fades & audio levels",
+    "icon": "fade"
+  },
+  {
+    "id": "teach",
+    "title": "Make it easy to follow",
+    "subtitle": "Callouts, captions & chapters",
+    "icon": "text"
+  },
+  {
+    "id": "finish",
+    "title": "Save your work. Share a video.",
+    "subtitle": "Checks, editable projects & outputs",
+    "icon": "save"
+  },
+  {
+    "id": "return",
+    "title": "Come back anytime",
+    "subtitle": "Your projects & this guide",
+    "icon": "bookmark"
+  }
+]

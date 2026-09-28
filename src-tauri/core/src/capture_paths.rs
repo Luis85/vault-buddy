@@ -383,34 +383,34 @@ fn rename_noreplace_fallback(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::rename(from, to)
 }
 
-/// Atomic non-replacing move: hard_link + remove_file fails with
-/// AlreadyExists if `to` exists — unlike std::fs::rename, which
-/// replaces on both Unix and Windows.
+/// Atomic non-replacing move: hard_link + remove_file fails with AlreadyExists
+/// if `to` exists — unlike std::fs::rename, which replaces on both Unix and Windows.
 ///
 /// Two deliberate leniencies, both biased toward never losing audio:
 ///
 /// - If `hard_link` succeeds but the follow-up `remove_file(from)` fails
-///   (e.g. a Windows AV/indexer holding the source open), we still
-///   return `Ok(())` and just log a warning. The save already succeeded
-///   at `to`; the leftover `from` is at worst re-finalized later as a
-///   `(recovered)` duplicate. Returning `Err` here while `to` exists
-///   would send callers that retry-on-error (like
-///   `rename_into_reserved`) into an endless suffix-minting loop, since
-///   `to` existing looks like a fresh collision on every retry.
+///   (e.g. a Windows AV/indexer holding the source open), we still return
+///   `Ok(())` and just log a warning (both paths redacted, hardening Task 11).
+///   The save already succeeded at `to`; the leftover `from` is at worst
+///   re-finalized later as a `(recovered)` duplicate. Returning `Err` here while
+///   `to` exists would send callers that retry-on-error (like `rename_into_reserved`)
+///   into an endless suffix-minting loop, since `to` existing looks like a fresh
+///   collision on every retry.
 /// - Any `hard_link` error *except* `AlreadyExists`/`NotFound` (see
 ///   `hard_link_error_is_decisive`) falls back to the platform's native
-///   non-replacing move on Windows (MoveFileExW without
-///   MOVEFILE_REPLACE_EXISTING); the pre-check-guarded rename elsewhere.
-///   This covers exFAT/FAT32/SMB filesystems that report all sorts of
-///   "can't hard link" codes, not just the ones we happen to have
-///   enumerated. NTFS/ext4 keep the atomic hard-link path.
+///   non-replacing move on Windows (MoveFileExW without MOVEFILE_REPLACE_EXISTING);
+///   the pre-check-guarded rename elsewhere. This covers exFAT/FAT32/SMB
+///   filesystems that report all sorts of "can't hard link" codes, not just the
+///   ones we happen to have enumerated. NTFS/ext4 keep the atomic hard-link path.
 pub fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
     match std::fs::hard_link(from, to) {
         Ok(()) => {
             if let Err(e) = std::fs::remove_file(from) {
                 log::warn!(
-                    "rename_noreplace: linked {from:?} to {to:?} but could not remove the \
-                     source ({e}); leaving it behind for a later (recovered) finalize"
+                    "rename_noreplace: linked {} to {} but could not remove the source \
+                     ({e}); leaving it behind for a later (recovered) finalize",
+                    crate::editor::redact::redact_path(from),
+                    crate::editor::redact::redact_path(to)
                 );
             }
             Ok(())

@@ -1,0 +1,390 @@
+{
+  "schema": "vault-buddy-workspace/1",
+  "project": {
+    "schema": "vault-buddy-video-project/3",
+    "id": "tutorial-multitrack-demo",
+    "title": "Create your first project",
+    "canvas": {
+      "width": 1280,
+      "height": 720,
+      "fps": 30
+    },
+    "master_gain": 0.8,
+    "assets": [
+      {
+        "id": "presenter",
+        "kind": "video",
+        "builtin": "presenter",
+        "name": "Presenter \u00b7 demo",
+        "duration_ms": 33500,
+        "width": 1280,
+        "height": 720
+      },
+      {
+        "id": "screen",
+        "kind": "video",
+        "builtin": "screen",
+        "name": "Getting started.capture",
+        "duration_ms": 36000,
+        "width": 1280,
+        "height": 720
+      },
+      {
+        "id": "detail",
+        "kind": "video",
+        "builtin": "detail",
+        "name": "Project detail.capture",
+        "duration_ms": 18000,
+        "width": 1280,
+        "height": 720
+      },
+      {
+        "id": "cues",
+        "kind": "audio",
+        "builtin": "cues",
+        "name": "Guide cues \u00b7 synthesized",
+        "duration_ms": 36000
+      },
+      {
+        "id": "ambient",
+        "kind": "audio",
+        "builtin": "ambient",
+        "name": "Ambient bed \u00b7 synthesized",
+        "duration_ms": 36000
+      }
+    ],
+    "tracks": [
+      {
+        "id": "v3",
+        "kind": "video",
+        "name": "Webcam \u00b7 presenter",
+        "visible": true,
+        "muted": true,
+        "solo": false,
+        "locked": false,
+        "volume": 1
+      },
+      {
+        "id": "v2",
+        "kind": "video",
+        "name": "Detail overlay",
+        "visible": true,
+        "muted": true,
+        "solo": false,
+        "locked": false,
+        "volume": 1
+      },
+      {
+        "id": "v1",
+        "kind": "video",
+        "name": "Screen recording",
+        "visible": true,
+        "muted": false,
+        "solo": false,
+        "locked": false,
+        "volume": 1
+      },
+      {
+        "id": "a1",
+        "kind": "audio",
+        "name": "Guide cues",
+        "visible": true,
+        "muted": false,
+        "solo": false,
+        "locked": false,
+        "volume": 0.7
+      },
+      {
+        "id": "a2",
+        "kind": "audio",
+        "name": "Ambient bed",
+        "visible": true,
+        "muted": false,
+        "solo": false,
+        "locked": false,
+        "volume": 0.38
+      }
+    ],
+    "clips": [
+      {
+        "id": "presenter1",
+        "asset_id": "presenter",
+        "track_id": "v3",
+        "name": "Presenter \u00b7 demo",
+        "start_ms": 1500,
+        "in_ms": 0,
+        "out_ms": 32000,
+        "fade_in_ms": 600,
+        "fade_out_ms": 600,
+        "fade_curve": "smooth",
+        "opacity": 1,
+        "volume": 1,
+        "muted": false,
+        "x": 0.775,
+        "y": 0.06,
+        "w": 0.19,
+        "h": 0.3377777777777778,
+        "frame_shape": "circle",
+        "fit": "cover"
+      },
+      {
+        "id": "c1",
+        "asset_id": "screen",
+        "track_id": "v1",
+        "name": "Open your workspace",
+        "start_ms": 0,
+        "in_ms": 0,
+        "out_ms": 9500,
+        "fade_in_ms": 800,
+        "fade_out_ms": 0,
+        "fade_curve": "smooth",
+        "opacity": 1,
+        "volume": 1,
+        "muted": false,
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 1
+      },
+      {
+        "id": "c2",
+        "asset_id": "screen",
+        "track_id": "v1",
+        "name": "Create a project",
+        "start_ms": 9500,
+        "in_ms": 10500,
+        "out_ms": 24500,
+        "fade_in_ms": 0,
+        "fade_out_ms": 0,
+        "fade_curve": "smooth",
+        "opacity": 1,
+        "volume": 1,
+        "muted": false,
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 1
+      },
+      {
+        "id": "c3",
+        "asset_id": "screen",
+        "track_id": "v1",
+        "name": "Save to your vault",
+        "start_ms": 23500,
+        "in_ms": 26000,
+        "out_ms": 36000,
+        "fade_in_ms": 0,
+        "fade_out_ms": 1000,
+        "fade_curve": "smooth",
+        "opacity": 1,
+        "volume": 1,
+        "muted": false,
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 1
+      },
+      {
+        "id": "detail1",
+        "asset_id": "detail",
+        "track_id": "v2",
+        "name": "A closer look",
+        "start_ms": 11200,
+        "in_ms": 0,
+        "out_ms": 7200,
+        "fade_in_ms": 1000,
+        "fade_out_ms": 1000,
+        "fade_curve": "smooth",
+        "opacity": 1,
+        "volume": 1,
+        "muted": true,
+        "x": 0.075,
+        "y": 0.59,
+        "w": 0.27,
+        "h": 0.27
+      },
+      {
+        "id": "cue1",
+        "asset_id": "cues",
+        "track_id": "a1",
+        "name": "Chapter cues \u00b7 demo",
+        "start_ms": 300,
+        "in_ms": 0,
+        "out_ms": 32800,
+        "fade_in_ms": 250,
+        "fade_out_ms": 650,
+        "fade_curve": "equal-power",
+        "opacity": 1,
+        "volume": 1,
+        "muted": false,
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 1
+      },
+      {
+        "id": "music1",
+        "asset_id": "ambient",
+        "track_id": "a2",
+        "name": "A quiet backdrop \u00b7 demo",
+        "start_ms": 0,
+        "in_ms": 0,
+        "out_ms": 33500,
+        "fade_in_ms": 2000,
+        "fade_out_ms": 2500,
+        "fade_curve": "equal-power",
+        "opacity": 1,
+        "volume": 1,
+        "muted": false,
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 1
+      }
+    ],
+    "effects": [
+      {
+        "id": "e-intro",
+        "clip_id": "c1",
+        "kind": "text",
+        "start_ms": 500,
+        "end_ms": 6500,
+        "x": 0.32,
+        "y": 0.83,
+        "w": 0.6,
+        "h": 0.074,
+        "text": "A little structure. A lot more clarity.",
+        "fontSize": 29,
+        "color": "#ffffff",
+        "background": true
+      },
+      {
+        "id": "e-highlight",
+        "clip_id": "c1",
+        "kind": "highlight",
+        "start_ms": 2700,
+        "end_ms": 7800,
+        "x": 0.773,
+        "y": 0.21,
+        "w": 0.127,
+        "h": 0.058,
+        "color": "#ffd279",
+        "stroke": 4
+      },
+      {
+        "id": "e-arrow",
+        "clip_id": "c2",
+        "kind": "arrow",
+        "start_ms": 11500,
+        "end_ms": 18300,
+        "x": 0.62,
+        "y": 0.6,
+        "x2": 0.72,
+        "y2": 0.737,
+        "color": "#ffd279",
+        "stroke": 5
+      },
+      {
+        "id": "e-text",
+        "clip_id": "c2",
+        "kind": "text",
+        "start_ms": 11500,
+        "end_ms": 18300,
+        "x": 0.28,
+        "y": 0.853,
+        "w": 0.69,
+        "h": 0.074,
+        "text": "Give your project a name. Make it yours.",
+        "fontSize": 29,
+        "color": "#ffffff",
+        "background": true
+      },
+      {
+        "id": "e-zoom",
+        "clip_id": "c2",
+        "kind": "zoom",
+        "start_ms": 19000,
+        "end_ms": 24000,
+        "x": 0.675,
+        "y": 0.525,
+        "factor": 1.65,
+        "easing": 600,
+        "color": "#a590d1"
+      },
+      {
+        "id": "e-step",
+        "clip_id": "c3",
+        "kind": "step",
+        "start_ms": 26700,
+        "end_ms": 32600,
+        "x": 0.66,
+        "y": 0.84,
+        "w": 0.17,
+        "h": 0.05,
+        "number": 3,
+        "text": "Ready to find.",
+        "color": "#ffd279",
+        "fontSize": 26
+      }
+    ],
+    "markers": [
+      {
+        "id": "m1",
+        "clip_id": "c1",
+        "source_ms": 0,
+        "title": "Open your workspace"
+      },
+      {
+        "id": "m2",
+        "clip_id": "c2",
+        "source_ms": 10500,
+        "title": "Create a project"
+      },
+      {
+        "id": "m3",
+        "clip_id": "c3",
+        "source_ms": 26000,
+        "title": "Save to your vault"
+      }
+    ],
+    "transitions": [],
+    "destination": {
+      "vault": "Product knowledge",
+      "folder": "Intake/Screen",
+      "dated": false
+    }
+  },
+  "workspace": {
+    "selection_clip_ids": [
+      "presenter1"
+    ],
+    "caption_settings_open": false,
+    "playhead_ms": 13400,
+    "selected": {
+      "type": "clip",
+      "id": "presenter1"
+    },
+    "library_tab": "media",
+    "property_tab": "layout",
+    "timeline_zoom": 1,
+    "timeline_height": 400,
+    "timeline_scroll_left": 0,
+    "timeline_scroll_top": 0,
+    "snap": true,
+    "delete_mode": "gap",
+    "monitor_muted": false,
+    "playback_rate": 1,
+    "library_hidden": false,
+    "properties_hidden": false,
+    "properties_open": false,
+    "focus_preview": false
+  },
+  "record": {
+    "id": "tutorial-multitrack-demo",
+    "revision": 1,
+    "created_at": "2026-09-19T13:39:29.259Z",
+    "updated_at": "2026-09-19T13:39:29.261Z",
+    "products": []
+  },
+  "saved_at": "2026-09-19T13:39:31.763Z"
+}

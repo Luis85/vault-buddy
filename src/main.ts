@@ -4,7 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createPinia } from "pinia";
 import { createApp } from "vue";
 
-import { initLogging, logError } from "./logging";
+import { initLogging, logVueError } from "./logging";
 import { rootFor } from "./roots";
 
 initLogging();
@@ -19,11 +19,6 @@ try {
 const app = createApp(rootFor(label));
 // Vue swallows component errors before window.onerror can see them —
 // route them into the persistent log with the component context Vue gives us.
-app.config.errorHandler = (err, _instance, info) => {
-  // Vue's default console logging is replaced once a custom errorHandler is
-  // set — without this, a plain browser dev session (no logError sink) sees
-  // the error vanish instead of the usual console trace.
-  console.error(err);
-  logError(`vue error (${info}): ${String(err)}`);
-};
+// logVueError also restores the console trace a custom handler disables.
+app.config.errorHandler = (err, _instance, info) => logVueError(err, info);
 app.use(createPinia()).mount("#app");

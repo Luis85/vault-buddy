@@ -8,7 +8,7 @@ import { markRaw } from "vue";
 import { logWarning } from "../logging";
 import { useVaultsStore } from "./vaults";
 
-export type UpdatePhase =
+type UpdatePhase =
   | "idle"
   | "checking"
   | "upToDate"
@@ -93,13 +93,24 @@ export const useUpdatesStore = defineStore("updates", {
         return;
       }
       const vaults = useVaultsStore();
+      // Whether `prepare_update_install` got far enough to stamp the run
+      // marker "clean". A REFUSAL returns before that (see the catch).
+      let prepared = false;
       try {
         // Close the panel window before handing off to the installer, which
         // exits the process. `prepare_update_install` also closes it; this
         // gets the UI out of the way first. The buddy window never shifts,
         // so there is no home position to restore anymore.
         await invoke("close_panel").catch(() => {});
-        await invoke("prepare_update_install").catch(() => {});
+        // Deliberately NOT `.catch(() => {})`. Rust refuses this call while a
+        // recording, a screen capture or an export is in flight (GAP-160) —
+        // installing under one strands a `.part`, or kills the vault write an
+        // export is mid-way through and orphans its ffmpeg child. Swallowing
+        // the refusal would install anyway and destroy the very thing the
+        // refusal exists to protect, so let it throw: the catch below aborts
+        // before `install()` and puts the message on screen.
+        await invoke("prepare_update_install");
+        prepared = true;
         await this.available.install();
         // Tauri's signature check has already verified the payload; hand
         // over to the new version.
@@ -118,13 +129,21 @@ export const useUpdatesStore = defineStore("updates", {
         this.error = String(e);
         this.phase = "error";
         logWarning(`update install failed: ${String(e)}`);
-        // prepare_update_install already stamped the run marker "clean" and
-        // latched crash detection off, expecting the process to exit
-        // moments later. It didn't — install() threw — so the session
-        // keeps running with detection permanently disabled unless we tell
-        // Rust to re-arm it. Fire-and-forget: this must never block or
-        // fail the retry path.
-        void invoke("rearm_crash_detection").catch(() => {});
+        if (prepared) {
+          // prepare_update_install already stamped the run marker "clean" and
+          // latched crash detection off, expecting the process to exit
+          // moments later. It didn't — install() threw — so the session
+          // keeps running with detection permanently disabled unless we tell
+          // Rust to re-arm it. Fire-and-forget: this must never block or
+          // fail the retry path.
+          //
+          // Guarded because a REFUSAL never got there: the Rust side checks
+          // the shutdown gate before `mark_clean_shutdown`, so nothing was
+          // latched and there is nothing to re-arm. Re-arming anyway would be
+          // harmless but would say, in the log and in this code, that an
+          // install had begun when none had.
+          void invoke("rearm_crash_detection").catch(() => {});
+        }
       }
     },
   },

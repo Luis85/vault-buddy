@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "cases": [
+    { "name": "linear_start", "curve": "linear", "u": 0, "gain": 0 },
+    { "name": "linear_end", "curve": "linear", "u": 1, "gain": 1 },
+    { "name": "linear_quarter", "curve": "linear", "u": 0.25, "gain": 0.25 },
+    { "name": "smooth_quarter", "curve": "smooth", "u": 0.25, "gain": 0.15625 },
+    { "name": "smooth_three_quarter", "curve": "smooth", "u": 0.75, "gain": 0.84375 },
+    { "name": "equal_power_midpoint", "curve": "equal-power", "u": 0.5, "gain": 0.7071067811865476 }
+  ]
+}

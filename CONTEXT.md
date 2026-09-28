@@ -20,13 +20,73 @@ _Avoid_: Journal entry, today's note
 The act of recording a piece of knowledge (voice, screenshot, clipboard, meeting, etc.) as the first stage of the Knowledge Lifecycle, before it has been turned into structured knowledge.
 _Avoid_: Recording — a Capture is not necessarily audio
 
-**Dated layout**:
-Vault Buddy's default on-disk layout for a capture/import domain: files land under `<folder>/YYYY/MM/`. The timestamped base name still encodes the full date, so the year/month folders are organizational, not identifying.
-_Avoid_: Archive structure — the folders exist for browsing, not retention policy
+**Staged Capture**:
+A screen recording that has been made but not yet published into a Vault: an `.mp4` plus a `.json` sidecar (source, duration, and — for a capture edited before the tutorial editor — the phase-4 editor's saved timeline) living in the app's own staging directory, deliberately **outside every Vault**. An unedited, unapproved capture is not knowledge, so Discarding one must leave no litter in the user's notes. It stays staged until it is Discarded — Publishing a Render of it never removes it — and a crash leaves it recoverable rather than lost. A tutorial project that has opened it *pins* it, and a pinned Staged Capture cannot be Discarded until that project is discarded.
+_Avoid_: Draft, temp file — a Staged Capture is the user's footage, not scratch
+
+**Stem**:
+One audio input of a Staged Capture kept as its own mono file (`<base>.stem-<n>.m4a`) beside the capture's MIXED track, when the vault keeps them (off by default; new recordings only). A Stem is cut from the very samples the mix is made of, so the two cannot drift; it belongs to its capture only when the capture's sidecar lists it, and it is discarded with the capture. In the editor each Stem is its own audio track and the mix is muted.
+_Avoid_: Track (the editor's timeline word), channel (a stem is a whole device's input, downmixed), separate recording — nothing is recorded twice
+
+**Export** *(superseded)*:
+The phase-5 act of turning a Staged Capture straight into a `.mp4` plus a companion note inside a Vault, and removing the Staged Capture afterwards. Retired by the tutorial editor (Task 59): the same outcome is now a **Render** followed by a **Publish**, and the Staged Capture is kept. Use the word only for that history — and for the editor's own file exports (a project file, subtitles, diagnostics), which write outside every Vault.
+_Avoid_: Save (the phase-5 UI's word for it) — a tutorial project is *saved*, a Product (a Render's output) is *published*
+
+**Render**:
+Producing a playable video (a **Product**) from a tutorial project's current edit, inside the project's own folder, never a Vault. An untouched Staged Capture renders as a lossless remux; any edit re-encodes exactly what the timeline shows. Repeatable and cancellable, because the project is kept.
+_Avoid_: Export, save — nothing reaches a Vault by rendering
+
+**Publish**:
+Copying one Product (a Render's output video), plus a companion note, into a Vault — the tenth sanctioned vault write. Never moves or deletes the Product or the Staged Capture it came from.
+_Avoid_: Export, upload — nothing leaves the machine
+
+**Discard**:
+Permanently deleting a Staged Capture — its video and its sidecar — from staging. Always confirm-gated, because it destroys the only copy of a recording that has not been Published. The only way a Staged Capture's life ends. Discarding a tutorial *project* is a different act: it deletes the project's edits and Renders and unpins its Staged Capture, and never deletes the recording.
+_Avoid_: Cancel (that stops a Render in flight and keeps the footage), Archive (nothing is kept), Delete (reserved for the Task domain's own destructive write)
+
+**Tutorial Project**:
+The tutorial editor's editable document: Tracks of Clips, Teaching Cues, captions, chapters and a destination Vault, kept in the app's own project store (`editor-projects\<projectId>\`), **outside every Vault**. It refers to its media (a Staged Capture it pins, imported copies, Takes) and is never itself a vault file; *Save project* commits it there, and a portable or lightweight project file is an export of it. `project` stays the field and module name inside the editor's code, where the scope disambiguates it.
+_Avoid_: Project (that is Task metadata), timeline (one view of it), draft
+
+**Track**:
+One layer of a Tutorial Project's timeline — video or audio — holding Clips that never overlap except across a transition. Video Tracks composite top over bottom; each Track can be hidden, locked, muted or soloed.
+_Avoid_: Layer (the render's word for one drawn Clip), Stem (a recorded audio input, which the editor puts on its own Track)
+
+**Clip**:
+One placed use of a media source on a Track: which part of the source (its in and out points) plays when, at what speed, where in the frame and how loud. Cutting, trimming, moving and fading all act on Clips; the source file is never changed.
+_Avoid_: Segment (the retired phase-4 editor's word), asset (the source a Clip plays from)
+
+**Teaching Cue**:
+An instructional overlay attached to a Clip in the Clip's SOURCE time, so it stays on the moment it explains when the Clip is cut, moved or sped up: a text callout, an arrow, a highlight, a spotlight, a zoom, a numbered step or a privacy cover.
+_Avoid_: Annotation, effect (the code's wire word for it), sticker
+
+**Take**:
+A webcam recording made inside the editor (camera and microphone in the editor window), streamed into the Tutorial Project's own `takes\` folder and added to the project as a new source. A Take is independent of any Staged Capture; only a webcam recorded **with** a screen capture is synchronized with it.
+_Avoid_: Recording (a Capture), webcam track (the synchronized one that belongs to a Staged Capture)
+
+**Rendered Product** (or just **Product**, in the editor):
+The immutable video a Render produces, kept in the Tutorial Project's `products\` folder with a record of the exact edit it was made from, which can be watched, restored as the current edit, and Published. Nothing ever writes to a Product after it lands.
+_Avoid_: Export, output file, render (the act, not its result)
+
+**Review**:
+A short, disposable Render of part of the timeline — the selection, or a few seconds either side of the playhead — made to check how a moment will really look and sound. Kept only in the project's cache, never recorded as a Product and never Published; the next Review or closing the project removes it.
+_Avoid_: Preview (the live, approximate playback in the editor), Product (a Review is never one)
+
+**Check** (and its **Finding**):
+The before-you-share checks run over a Tutorial Project on request: each problem they report is a **Finding** — blocking, a warning or a note — naming what it concerns and, usually, a button that reveals it. Only a blocking Finding (a missing file the Render reads, an empty timeline) stops a Render; there is no score.
+_Avoid_: Lint, validation (that is what the editor does to every command), warning (one severity of Finding)
+
+**Guide** (its **Lessons**, the **Walkthrough**):
+The editor's built-in onboarding. A **Lesson** is one step of it, pointing at one control; the **Walkthrough** is taking the Lessons in order with the coach card on screen; the **Guide** is the whole of it, including its progress, which is kept per user, apart from every project and from Undo.
+_Avoid_: Tutorial (that is what the user makes), tour, help (the Help menu leads to the Guide, it is not the Guide)
 
 **Flat layout**:
-The opt-in alternative to the Dated layout: files live directly in `<folder>`, with no year/month subfolders. It is a per-domain, per-vault choice (Recording and Document Import each have their own toggle) that changes only where **new** files are written — a domain's existing files stay exactly where they are and are still found regardless of which layout is active.
+Vault Buddy's **default** on-disk layout for a capture/import domain: files live directly in `<folder>`, with no year/month subfolders. The timestamped base name encodes the full date, so the folders were never what identified a file.
 _Avoid_: Migration — switching layouts never moves or rewrites existing files
+
+**Dated layout**:
+The opt-in alternative to the Flat layout: files land under `<folder>/YYYY/MM/`, where the year/month folders are organizational, not identifying. It is a per-domain, per-vault choice — Recording, Document Import and Screen Capture each have their own toggle, all three defaulting to Flat — that changes only where **new** files are written; a domain's existing files stay exactly where they are and are still found regardless of which layout is active.
+_Avoid_: Archive structure — the folders exist for browsing, not retention policy
 
 **Knowledge Lifecycle**:
 The seven-stage journey every piece of information follows inside Vault Buddy: Capture → Process → Organize → Act → Retrieve → Automate → Learn. Completing an action produces new knowledge, making the journey continuous.
@@ -86,7 +146,7 @@ _Avoid_: Today (the broader Plan bucket), Dashboard, Agenda
 
 **Project**:
 Task metadata linking a Task to the larger body of notes or work it belongs to.
-_Avoid_: Epic, initiative
+_Avoid_: Epic, initiative — and the tutorial editor's document, which is a **Tutorial Project**
 
 **Runtime**:
 The local service layer (Knowledge Engine, Task Engine, Workflow Engine, and peers) that owns all business logic. The desktop UI, the MCP Server, and Workflows are all just clients of the Runtime — none of them re-implement its logic.

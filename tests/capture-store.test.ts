@@ -1,6 +1,6 @@
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { flushPromises } from "@vue/test-utils";
-import { createPinia,setActivePinia } from "pinia";
+import { createPinia, getActivePinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
@@ -22,7 +22,11 @@ vi.mock("../src/logging", () => ({
 }));
 
 import { logWarning } from "../src/logging";
-import { MAX_FINISHED, useCaptureStore } from "../src/stores/capture";
+import {
+  MAX_FINISHED,
+  RENAME_PROMPT_MS,
+  useCaptureStore,
+} from "../src/stores/capture";
 import { useNotificationsStore } from "../src/stores/notifications";
 
 describe("capture store", () => {
@@ -861,10 +865,10 @@ describe("capture store", () => {
     // the shownNonce watcher used to dismiss it before it ever rendered.
     const store = useCaptureStore();
     store.lastSaved = { mp3: "/v/2026-07-10 1200 Meeting.mp3", note: null };
-    store.lastSavedAtMs = Date.now() - 5_000; // 5 s old — fresh
+    store.lastSavedAtMs = Date.now() - RENAME_PROMPT_MS / 6; // fresh
     store.dismissRenameIfStale();
     expect(store.lastSaved).not.toBeNull();
-    store.lastSavedAtMs = Date.now() - 31_000; // past RENAME_PROMPT_MS — stale
+    store.lastSavedAtMs = Date.now() - (RENAME_PROMPT_MS + 1_000); // stale
     store.dismissRenameIfStale();
     expect(store.lastSaved).toBeNull();
   });
@@ -1073,5 +1077,32 @@ describe("capture store", () => {
     ]);
     expect(store.lastSavedFile).toBe("/v/2026-07-04 1405 Standup.mp3");
     expect(store.lastSaved).toBeNull();
+  });
+
+  // Pinia's action wrapper calls setActivePinia(store's own pinia). A rename
+  // prompt's 30 s expiry that called the dismissRename ACTION therefore
+  // re-activated this test's pinia in the middle of whatever LATER test was
+  // running when it fired, and every useXStore() there read stale stores.
+  it("a rename-prompt expiry never re-activates the pinia it was armed in", () => {
+    vi.useFakeTimers();
+    try {
+      const store = useCaptureStore();
+      store.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
+      store.lastSavedAtMs = Date.now();
+      store.renameError = "boom";
+      store.armRenameExpiry();
+
+      const later = createPinia();
+      setActivePinia(later);
+      vi.advanceTimersByTime(RENAME_PROMPT_MS);
+
+      expect(getActivePinia()).toBe(later);
+      expect(store.lastSaved).toBeNull();
+      expect(store.lastSavedAtMs).toBeNull();
+      expect(store.renameError).toBeNull();
+      expect(store.renameTimer).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

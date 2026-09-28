@@ -717,14 +717,19 @@ mod tests {
         }
         std::thread::sleep(Duration::from_millis(400));
         session.pause();
-        // 2.2 s of wall time that must NOT appear in the duration; samples
+        // ~2.8 s of wall time that must NOT appear in the duration; samples
         // arriving while paused are discarded (the gap is skipped, not
-        // recorded as silence)
+        // recorded as silence). The worker timestamps the pause when it
+        // PROCESSES the message and as_secs() truncates, so the assertion
+        // below really tests measured_ms >= 2000 and the margin is whatever
+        // we sleep past 2 s. At 2_000 ms it measured 2_201 — a 201 ms margin
+        // that llvm-cov's slower loop body ate, truncating to 1 (CI flake).
+        // 2_600 ms puts the margin at ~800 ms.
         std::thread::sleep(Duration::from_millis(200));
         for chunk in sine_chunks(44_100, 0.5) {
             tx.send(SourceMsg::Samples(chunk)).unwrap();
         }
-        std::thread::sleep(Duration::from_millis(2_000));
+        std::thread::sleep(Duration::from_millis(2_600));
         session.resume();
         std::thread::sleep(Duration::from_millis(300));
         let outcome = session.stop().unwrap();
@@ -762,7 +767,11 @@ mod tests {
         tx.send(SourceMsg::Samples(vec![0.1f32; 4410])).unwrap();
         std::thread::sleep(Duration::from_millis(300));
         session.pause();
-        std::thread::sleep(Duration::from_millis(1_100));
+        // 1_800 not 1_100: same truncation trap the sibling pause test
+        // above documents, so this asserts measured >= 1_000 ms. 1_100 left
+        // ~100 ms -- half the margin already PROVEN to flake there, and it
+        // duly failed in CI. ~800 ms matches the fix made there.
+        std::thread::sleep(Duration::from_millis(1_800));
         // pause never blocks shutdown: stop while paused saves normally
         let outcome = session.stop().unwrap();
         assert!(outcome.mp3.exists());
